@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# New Social Network
 
-## Getting Started
+Story-first social network prototype with:
 
-First, run the development server:
+- stories as the only content type
+- no follower counts
+- handle-based identity
+- an algorithmic `For You` feed
+- built-in branded-content payouts
+- ad-share participation for active users
+- public landing page plus authenticated app flow
+
+## Stack
+
+- Next.js App Router
+- TypeScript
+- Tailwind CSS v4
+- shadcn/ui
+- Drizzle ORM
+- Postgres
+
+Recommended production integrations for the first serious build:
+
+- Neon for Postgres
+- Cloudflare Stream for story video
+- Stripe Connect for payouts
+
+## Stripe setup
+
+This repo uses Stripe server-side only:
+
+- creator payout onboarding: Stripe Connect Accounts v2 and hosted account links
+- advertiser funding: Stripe Checkout Sessions
+- payment reconciliation: signed Stripe webhooks at `/api/stripe/webhook`
+
+Set these environment variables before using live Stripe flows:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+For local webhook testing:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Use the printed webhook signing secret as `STRIPE_WEBHOOK_SECRET`.
 
-## Learn More
+## Project layout
 
-To learn more about Next.js, take a look at the following resources:
+- [app/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/page.tsx): public landing page
+- [app/(auth)/login/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(auth)/login/page.tsx): sign-in page
+- [app/(auth)/signup/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(auth)/signup/page.tsx): sign-up page
+- [app/(protected)/feed/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(protected)/feed/page.tsx): authenticated feed
+- [lib/auth.ts](/Users/griffinaste/Desktop/New-Social-Network/lib/auth.ts): cookie session utilities
+- [lib/user-store.ts](/Users/griffinaste/Desktop/New-Social-Network/lib/user-store.ts): Neon-backed user auth store
+- [docs/architecture.md](/Users/griffinaste/Desktop/New-Social-Network/docs/architecture.md): architecture and rollout plan
+- [lib/db/schema.ts](/Users/griffinaste/Desktop/New-Social-Network/lib/db/schema.ts): initial relational model
+- [app/api/health/route.ts](/Users/griffinaste/Desktop/New-Social-Network/app/api/health/route.ts): basic route handler
+- [.env.example](/Users/griffinaste/Desktop/New-Social-Network/.env.example): environment template
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Local development
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm install
+npm run dev
+```
 
-## Deploy on Vercel
+Open `http://localhost:3000`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Set `DATABASE_URL` to your Neon connection string before using sign up or sign in. Auth users are now stored in the Neon `users` table.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Database commands
+
+```bash
+npm run db:check
+npm run db:generate
+npm run db:migrate
+npm run db:push
+```
+
+Use `npm run db:generate` after editing [lib/db/schema.ts](/Users/griffinaste/Desktop/New-Social-Network/lib/db/schema.ts), review the generated SQL in [drizzle](/Users/griffinaste/Desktop/New-Social-Network/drizzle), then apply the locked migration files with `npm run db:migrate`.
+
+Reserve `npm run db:push` for local development or intentionally syncing a disposable database. Production should run `db:migrate` against the production `DATABASE_URL` so the deployed schema matches the checked-in migration history.
+
+The [database migration workflow](/Users/griffinaste/Desktop/New-Social-Network/.github/workflows/database-migrations.yml) checks migration drift on pull requests and can be run manually against a GitHub environment that provides `DATABASE_URL`.

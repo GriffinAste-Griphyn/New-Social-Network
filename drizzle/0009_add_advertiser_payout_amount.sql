@@ -1,0 +1,1 @@
+ALTER TABLE "brand_funding_profiles" ADD COLUMN "payout_amount_cents" integer;

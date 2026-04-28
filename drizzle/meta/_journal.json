@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1776639492547,
+      "tag": "0000_loose_marvex",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776656590833,
+      "tag": "0001_aspiring_winter_soldier",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777063579085,
+      "tag": "0002_breezy_quasar",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777063986259,
+      "tag": "0003_closed_mad_thinker",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777148807870,
+      "tag": "0004_strange_rachel_grey",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777156850693,
+      "tag": "0005_loving_firedrake",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777345442091,
+      "tag": "0006_chemical_joshua_kane",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777347302438,
+      "tag": "0007_bumpy_dust",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777396732895,
+      "tag": "0008_repair_nullable_user_profile_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777397816501,
+      "tag": "0009_add_advertiser_payout_amount",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777398824547,
+      "tag": "0010_whole_veda",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777407236793,
+      "tag": "0011_greedy_rage",
+      "breakpoints": true
+    }
+  ]
+}

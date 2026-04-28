@@ -1,0 +1,55 @@
+name: Database migrations
+
+on:
+  pull_request:
+    paths:
+      - "drizzle/**"
+      - "lib/db/schema.ts"
+      - "drizzle.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/database-migrations.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "GitHub environment that contains DATABASE_URL"
+        required: true
+        default: "production"
+        type: string
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:check
+      - run: npm run db:generate
+      - name: Ensure generated migrations are checked in
+        run: git diff --exit-code drizzle
+
+  migrate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: database-migrations-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:check
+      - run: npm run db:migrate

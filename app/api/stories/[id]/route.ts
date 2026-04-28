@@ -1,0 +1,126 @@
+import { revalidatePath } from "next/cache"
+import { NextResponse } from "next/server"
+
+import { getSession, isProfileComplete } from "@/lib/auth"
+import {
+  removeStoryForOwner,
+  updateStoryForOwner,
+} from "@/lib/story-store"
+import { removeStoryAsset } from "@/lib/story-storage"
+import {
+  parseBrandTags,
+  parseStoryCaption,
+  parseStoryElements,
+} from "@/lib/story-validators"
+
+export const runtime = "nodejs"
+
+function redirectToMyStory(request: Request, searchParams?: Record<string, string>) {
+  const url = new URL("/stories/me", request.url)
+
+  Object.entries(searchParams ?? {}).forEach(([key, value]) => {
+    url.searchParams.set(key, value)
+  })
+
+  return NextResponse.redirect(url, { status: 303 })
+}
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const session = await getSession()
+
+  if (!session) {
+    return NextResponse.redirect(new URL("/login?next=%2Fstories%2Fme", request.url), {
+      status: 303,
+    })
+  }
+
+  if (!isProfileComplete(session)) {
+    return NextResponse.redirect(
+      new URL("/onboarding/profile?next=%2Fstories%2Fme", request.url),
+      {
+        status: 303,
+      },
+    )
+  }
+
+  const { id } = await context.params
+
+  try {
+    const formData = await request.formData()
+    const action = formData.get("action")
+
+    if (action === "delete") {
+      const mediaUrl = await removeStoryForOwner(id, session.id)
+
+      await removeStoryAsset(mediaUrl)
+      revalidatePath("/feed")
+      revalidatePath("/stories/me")
+
+      return redirectToMyStory(request, {
+        story: "deleted",
+      })
+    }
+
+    if (action === "update") {
+      await updateStoryForOwner({
+        storyId: id,
+        ownerId: session.id,
+        caption: parseStoryCaption(formData.get("caption")),
+        explicitBrandTags: parseBrandTags(formData.get("brandTags")),
+        elements: parseStoryElements(formData),
+      })
+
+      revalidatePath("/feed")
+      revalidatePath("/stories/me")
+
+      return redirectToMyStory(request, {
+        story: "updated",
+      })
+    }
+
+    return redirectToMyStory(request, {
+      error: "Choose a valid story action.",
+    })
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Could not update this story."
+
+    return redirectToMyStory(request, {
+      error: message,
+    })
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const session = await getSession()
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  if (!isProfileComplete(session)) {
+    return NextResponse.json({ error: "Profile setup required." }, { status: 403 })
+  }
+
+  const { id } = await context.params
+
+  try {
+    const mediaUrl = await removeStoryForOwner(id, session.id)
+
+    await removeStoryAsset(mediaUrl)
+    revalidatePath("/feed")
+    revalidatePath("/stories/me")
+
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not delete story."
+
+    return NextResponse.json({ error: message }, { status: 400 })
+  }
+}
