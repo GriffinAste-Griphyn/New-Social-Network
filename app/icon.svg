@@ -1,0 +1,11 @@
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="UBEYE eye icon">
+  <path
+    d="M15 90C33 50 60 30 90 30C120 30 147 50 165 90C147 130 120 150 90 150C60 150 33 130 15 90Z"
+    stroke="#000000"
+    stroke-width="10"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="90" cy="90" r="34" stroke="#000000" stroke-width="10" />
+  <circle cx="90" cy="90" r="18" fill="#000000" />
+</svg>
