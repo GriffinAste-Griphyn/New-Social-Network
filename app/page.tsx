@@ -9,7 +9,6 @@ import {
   Play,
   Radio,
   ShieldCheck,
-  Sparkles,
   Users,
 } from "lucide-react"
 
@@ -155,8 +154,7 @@ export default function HomePage() {
                 <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(247,245,239,0.06),rgba(247,245,239,0)_24%,rgba(8,14,20,0.08)_58%,rgba(8,14,20,0.54)_100%)]" />
 
                 <div className="relative flex min-h-[34rem] flex-col justify-between px-6 pb-6 pt-24 sm:min-h-[32rem] sm:px-8 sm:pb-8 sm:pt-7 lg:min-h-[40rem] lg:px-12 lg:pb-12 lg:pt-10">
-                  <p className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-white/14 bg-white/8 px-3 py-1.5 text-[0.62rem] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/78 backdrop-blur-sm sm:px-4 sm:text-[0.68rem] sm:tracking-[0.28em]">
-                    <Sparkles className="size-3.5" />
+                  <p className="inline-flex w-fit max-w-full items-center rounded-full border border-white/14 bg-white/8 px-3 py-1.5 text-[0.62rem] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/78 backdrop-blur-sm sm:px-4 sm:text-[0.68rem] sm:tracking-[0.28em]">
                     A social experiment in wealth redistribution
                   </p>
 
