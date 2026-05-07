@@ -14,8 +14,8 @@ import {
 
 import { Button } from "@/components/ui/button"
 
-const signInHref = "/login?next=%2Ffeed"
-const getStartedHref = "/signup"
+const mobileAppHref = "/app"
+const advertiserSignInHref = "/login?next=%2Fadvertiser"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
@@ -92,10 +92,10 @@ function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <Button asChild variant="ghost" className="h-9 rounded-full px-4 text-sm text-black/64">
-            <Link href={signInHref}>Sign in</Link>
+            <Link href={advertiserSignInHref}>Advertiser sign in</Link>
           </Button>
           <Button asChild className="h-9 rounded-full bg-black px-4 text-sm text-white hover:bg-black/84">
-            <Link href={getStartedHref}>Get started</Link>
+            <Link href={mobileAppHref}>Get the app</Link>
           </Button>
         </div>
       </div>
@@ -110,14 +110,14 @@ function MobileHeroNav() {
         UBEYE
       </Link>
       <div className="flex items-center gap-5">
-        <Link href={signInHref} className="text-sm font-medium text-white/88">
-          Sign in
+        <Link href="/advertise" className="text-sm font-medium text-white/88">
+          Advertisers
         </Link>
         <Link
-          href={getStartedHref}
+          href={mobileAppHref}
           className="inline-flex min-h-11 items-center rounded-full bg-white px-5 text-sm font-semibold text-black"
         >
-          Join
+          Get app
         </Link>
       </div>
     </div>
@@ -176,8 +176,8 @@ export default function HomePage() {
                     asChild
                     className="h-11 justify-between rounded-full bg-black px-6 text-sm text-white hover:bg-black/84 sm:justify-center"
                   >
-                    <Link href={getStartedHref}>
-                      Join the experiment
+                    <Link href={mobileAppHref}>
+                      Get the mobile app
                       <ArrowRight className="size-4" />
                     </Link>
                   </Button>
