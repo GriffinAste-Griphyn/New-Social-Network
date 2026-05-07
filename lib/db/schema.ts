@@ -483,6 +483,42 @@ export const advertiserWalletTransactions = pgTable(
   ],
 )
 
+export const advertiserPaymentMethods = pgTable(
+  "advertiser_payment_methods",
+  {
+    id: text("id").primaryKey(),
+    advertiserAccountId: text("advertiser_account_id")
+      .notNull()
+      .references(() => advertiserAccounts.id),
+    stripeCustomerId: text("stripe_customer_id").notNull(),
+    stripePaymentMethodId: text("stripe_payment_method_id").notNull(),
+    type: text("type").notNull(),
+    brand: text("brand"),
+    last4: text("last4"),
+    expMonth: integer("exp_month"),
+    expYear: integer("exp_year"),
+    billingName: text("billing_name"),
+    billingEmail: text("billing_email"),
+    status: text("status").notNull().default("active"),
+    isDefault: boolean("is_default").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("advertiser_payment_methods_account_idx").on(
+      table.advertiserAccountId,
+      table.createdAt,
+    ),
+    uniqueIndex("advertiser_payment_methods_stripe_pm_idx").on(
+      table.stripePaymentMethodId,
+    ),
+  ],
+)
+
 export const brandFundingProfiles = pgTable(
   "brand_funding_profiles",
   {

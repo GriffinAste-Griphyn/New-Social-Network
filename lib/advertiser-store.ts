@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db"
 import {
   advertiserAccounts,
   advertiserMembers,
+  advertiserPaymentMethods,
   advertiserWalletTransactions,
   brandMatchEvents,
   brandFundingProfiles,
@@ -19,6 +20,8 @@ type DbNumber = bigint | number | string | null
 export type AdvertiserAccount = typeof advertiserAccounts.$inferSelect
 export type BrandFundingProfile = typeof brandFundingProfiles.$inferSelect
 export type BrandFundingTarget = typeof brandFundingTargets.$inferSelect
+export type AdvertiserPaymentMethod =
+  typeof advertiserPaymentMethods.$inferSelect
 export type AdvertiserWalletTransaction =
   typeof advertiserWalletTransactions.$inferSelect
 export type AdvertiserPayoutReport = {
@@ -40,6 +43,7 @@ export type AdvertiserWorkspace = {
   balanceCents: number
   pendingCents: number
   totalPaidCents: number
+  paymentMethod: AdvertiserPaymentMethod | null
   transactions: AdvertiserWalletTransaction[]
   payoutReports: AdvertiserPayoutReport[]
 }
@@ -102,52 +106,70 @@ export async function getAdvertiserWorkspaceForUser(
       ),
     )
 
-  const [paidTotal, targets, transactions, payoutReports] = await Promise.all([
-    db
-      .select({
-        amountCents: sql<DbNumber>`coalesce(sum(${brandMatchEvents.systemPricedAmountCents}), 0)::int`,
-      })
-      .from(brandMatchEvents)
-      .where(
-        and(
-          eq(brandMatchEvents.advertiserAccountId, advertiserAccount.id),
-          eq(brandMatchEvents.status, "paid"),
+  const [paidTotal, paymentMethod, targets, transactions, payoutReports] =
+    await Promise.all([
+      db
+        .select({
+          amountCents: sql<DbNumber>`coalesce(sum(${brandMatchEvents.systemPricedAmountCents}), 0)::int`,
+        })
+        .from(brandMatchEvents)
+        .where(
+          and(
+            eq(brandMatchEvents.advertiserAccountId, advertiserAccount.id),
+            eq(brandMatchEvents.status, "paid"),
+          ),
         ),
-      ),
-    profile
-      ? db
-          .select()
-          .from(brandFundingTargets)
-          .where(eq(brandFundingTargets.profileId, profile.id))
-          .orderBy(desc(brandFundingTargets.createdAt))
-      : Promise.resolve([]),
-    db
-      .select()
-      .from(advertiserWalletTransactions)
-      .where(
-        eq(advertiserWalletTransactions.advertiserAccountId, advertiserAccount.id),
-      )
-      .orderBy(desc(advertiserWalletTransactions.createdAt))
-      .limit(12),
-    db
-      .select({
-        id: brandMatchEvents.id,
-        creatorId: users.id,
-        creatorName: users.displayName,
-        creatorHandle: users.handle,
-        storyId: stories.id,
-        storyCaption: stories.caption,
-        amountCents: brandMatchEvents.systemPricedAmountCents,
-        status: brandMatchEvents.status,
-        createdAt: brandMatchEvents.createdAt,
-      })
-      .from(brandMatchEvents)
-      .innerJoin(users, eq(users.id, brandMatchEvents.creatorId))
-      .innerJoin(stories, eq(stories.id, brandMatchEvents.storyId))
-      .where(eq(brandMatchEvents.advertiserAccountId, advertiserAccount.id))
-      .orderBy(desc(brandMatchEvents.createdAt))
-      .limit(12),
-  ])
+      db
+        .select()
+        .from(advertiserPaymentMethods)
+        .where(
+          and(
+            eq(
+              advertiserPaymentMethods.advertiserAccountId,
+              advertiserAccount.id,
+            ),
+            eq(advertiserPaymentMethods.status, "active"),
+          ),
+        )
+        .orderBy(desc(advertiserPaymentMethods.updatedAt))
+        .limit(1),
+      profile
+        ? db
+            .select()
+            .from(brandFundingTargets)
+            .where(eq(brandFundingTargets.profileId, profile.id))
+            .orderBy(desc(brandFundingTargets.createdAt))
+        : Promise.resolve([]),
+      db
+        .select()
+        .from(advertiserWalletTransactions)
+        .where(
+          eq(
+            advertiserWalletTransactions.advertiserAccountId,
+            advertiserAccount.id,
+          ),
+        )
+        .orderBy(desc(advertiserWalletTransactions.createdAt))
+        .limit(12),
+      db
+        .select({
+          id: brandMatchEvents.id,
+          creatorId: users.id,
+          creatorName: users.displayName,
+          creatorHandle: users.handle,
+          storyId: stories.id,
+          storyCaption: stories.caption,
+          amountCents: brandMatchEvents.systemPricedAmountCents,
+          status: brandMatchEvents.status,
+          createdAt: brandMatchEvents.createdAt,
+        })
+        .from(brandMatchEvents)
+        .innerJoin(users, eq(users.id, brandMatchEvents.creatorId))
+        .innerJoin(stories, eq(stories.id, brandMatchEvents.storyId))
+        .where(eq(brandMatchEvents.advertiserAccountId, advertiserAccount.id))
+        .orderBy(desc(brandMatchEvents.createdAt))
+        .limit(12),
+    ])
 
   return {
     account: advertiserAccount,
@@ -156,6 +178,7 @@ export async function getAdvertiserWorkspaceForUser(
     balanceCents: toNumber(postedBalance?.amountCents),
     pendingCents: toNumber(pendingBalance?.amountCents),
     totalPaidCents: toNumber(paidTotal[0]?.amountCents),
+    paymentMethod: paymentMethod[0] ?? null,
     transactions,
     payoutReports: payoutReports.map((report) => ({
       ...report,
@@ -163,6 +186,71 @@ export async function getAdvertiserWorkspaceForUser(
         report.amountCents === null ? null : toNumber(report.amountCents),
     })),
   }
+}
+
+export async function upsertAdvertiserPaymentMethod(input: {
+  advertiserAccountId: string
+  stripeCustomerId: string
+  stripePaymentMethodId: string
+  type: string
+  brand: string | null
+  last4: string | null
+  expMonth: number | null
+  expYear: number | null
+  billingName: string | null
+  billingEmail: string | null
+}) {
+  const db = getDb()
+  const now = new Date()
+
+  await db
+    .update(advertiserPaymentMethods)
+    .set({
+      isDefault: false,
+      updatedAt: now,
+    })
+    .where(
+      eq(
+        advertiserPaymentMethods.advertiserAccountId,
+        input.advertiserAccountId,
+      ),
+    )
+
+  await db
+    .insert(advertiserPaymentMethods)
+    .values({
+      id: `advertiser-payment-method-${randomUUID()}`,
+      advertiserAccountId: input.advertiserAccountId,
+      stripeCustomerId: input.stripeCustomerId,
+      stripePaymentMethodId: input.stripePaymentMethodId,
+      type: input.type,
+      brand: input.brand,
+      last4: input.last4,
+      expMonth: input.expMonth,
+      expYear: input.expYear,
+      billingName: input.billingName,
+      billingEmail: input.billingEmail,
+      status: "active",
+      isDefault: true,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: advertiserPaymentMethods.stripePaymentMethodId,
+      set: {
+        advertiserAccountId: input.advertiserAccountId,
+        stripeCustomerId: input.stripeCustomerId,
+        type: input.type,
+        brand: input.brand,
+        last4: input.last4,
+        expMonth: input.expMonth,
+        expYear: input.expYear,
+        billingName: input.billingName,
+        billingEmail: input.billingEmail,
+        status: "active",
+        isDefault: true,
+        updatedAt: now,
+      },
+    })
 }
 
 export async function createAdvertiserAccount(input: {

@@ -85,6 +85,13 @@
       "when": 1777407236793,
       "tag": "0011_greedy_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1778180149925,
+      "tag": "0013_add_advertiser_payment_methods",
+      "breakpoints": true
     }
   ]
 }

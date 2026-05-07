@@ -2,14 +2,24 @@ import { NextResponse } from "next/server"
 import type Stripe from "stripe"
 
 import { env } from "@/lib/env"
-import { postWalletFundingFromStripe } from "@/lib/advertiser-store"
+import {
+  postWalletFundingFromStripe,
+  upsertAdvertiserPaymentMethod,
+} from "@/lib/advertiser-store"
 import { getStripeClient } from "@/lib/stripe"
 import { syncCreatorStripeAccountFromWebhook } from "@/lib/stripe-connect"
 
 export const runtime = "nodejs"
 
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+async function handleCheckoutCompleted(
+  stripe: NonNullable<ReturnType<typeof getStripeClient>>,
+  session: Stripe.Checkout.Session,
+) {
   if (session.metadata?.flow !== "advertiser_wallet_funding") {
+    if (session.metadata?.flow === "advertiser_payment_method_setup") {
+      await handlePaymentMethodSetupCompleted(stripe, session)
+    }
+
     return
   }
 
@@ -29,6 +39,54 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       typeof session.payment_intent === "string"
         ? session.payment_intent
         : session.payment_intent?.id ?? null,
+  })
+}
+
+async function handlePaymentMethodSetupCompleted(
+  stripe: NonNullable<ReturnType<typeof getStripeClient>>,
+  session: Stripe.Checkout.Session,
+) {
+  const advertiserAccountId = session.metadata?.advertiserAccountId
+  const stripeCustomerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id
+  const setupIntentId =
+    typeof session.setup_intent === "string"
+      ? session.setup_intent
+      : session.setup_intent?.id
+
+  if (!advertiserAccountId || !stripeCustomerId || !setupIntentId) {
+    throw new Error("Stripe session is missing payment method setup metadata.")
+  }
+
+  const setupIntent = await stripe.setupIntents.retrieve(setupIntentId, {
+    expand: ["payment_method"],
+  })
+  const paymentMethod =
+    typeof setupIntent.payment_method === "string"
+      ? await stripe.paymentMethods.retrieve(setupIntent.payment_method)
+      : setupIntent.payment_method
+
+  if (!paymentMethod) {
+    throw new Error("Stripe setup intent did not include a payment method.")
+  }
+
+  await stripe.customers.update(stripeCustomerId, {
+    invoice_settings: {
+      default_payment_method: paymentMethod.id,
+    },
+  })
+
+  await upsertAdvertiserPaymentMethod({
+    advertiserAccountId,
+    stripeCustomerId,
+    stripePaymentMethodId: paymentMethod.id,
+    type: paymentMethod.type,
+    brand: paymentMethod.card?.brand ?? null,
+    last4: paymentMethod.card?.last4 ?? null,
+    expMonth: paymentMethod.card?.exp_month ?? null,
+    expYear: paymentMethod.card?.exp_year ?? null,
+    billingName: paymentMethod.billing_details.name ?? null,
+    billingEmail: paymentMethod.billing_details.email ?? null,
   })
 }
 
@@ -73,7 +131,7 @@ export async function POST(request: Request) {
   const stripeObject = event.data.object as { object?: string }
 
   if (event.type === "checkout.session.completed") {
-    await handleCheckoutCompleted(event.data.object)
+    await handleCheckoutCompleted(stripe, event.data.object)
   }
 
   if (stripeObject.object === "v2.core.account") {

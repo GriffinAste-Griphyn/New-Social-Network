@@ -341,8 +341,8 @@ export async function startAdvertiserPaymentMethodAction() {
   const checkoutSession = await stripe.checkout.sessions.create({
     mode: "setup",
     customer: customerId,
-    success_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?payment_method=success`,
-    cancel_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?payment_method=cancelled`,
+    success_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?tab=wallet&payment_method=success`,
+    cancel_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?tab=wallet&payment_method=cancelled`,
     client_reference_id: workspace.account.id,
     metadata: {
       flow: "advertiser_payment_method_setup",

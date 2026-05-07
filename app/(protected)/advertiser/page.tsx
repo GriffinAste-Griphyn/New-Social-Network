@@ -12,6 +12,7 @@ import {
   FileText,
   Landmark,
   ListFilter,
+  LogOut,
   Plus,
   ReceiptText,
   Save,
@@ -33,7 +34,9 @@ import {
   startAdvertiserFundingAction,
   startAdvertiserPaymentMethodAction,
 } from "@/lib/advertiser-actions"
+import { logoutAction } from "@/lib/auth-actions"
 import type {
+  AdvertiserPaymentMethod,
   AdvertiserPayoutReport,
   AdvertiserWalletTransaction,
   BrandFundingProfile,
@@ -148,7 +151,9 @@ function Flash({
       : funding === "cancelled"
         ? "Funding was cancelled."
         : paymentMethod === "success"
-          ? "Payment method setup completed."
+          ? "Payment method setup completed. It can take a moment to appear."
+          : paymentMethod === "cancelled"
+            ? "Payment method setup was cancelled."
           : saved === "preferences"
             ? "Funding rules saved."
             : saved === "account"
@@ -162,7 +167,7 @@ function Flash({
   return (
     <div
       className={
-        error || funding === "cancelled"
+        error || funding === "cancelled" || paymentMethod === "cancelled"
           ? "rounded-[8px] border border-[#fecdd3] bg-[#fff1f2] px-4 py-3 text-sm text-[#be123c]"
           : "rounded-[8px] border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-sm text-[#166534]"
       }
@@ -332,6 +337,7 @@ export default async function AdvertiserPage({
     account,
     balanceCents,
     pendingCents,
+    paymentMethod,
     profile,
     payoutReports,
     targets,
@@ -418,6 +424,7 @@ export default async function AdvertiserPage({
               <WalletTab
                 balanceCents={balanceCents}
                 pendingCents={pendingCents}
+                paymentMethod={paymentMethod}
                 transactions={transactions}
               />
             ) : null}
@@ -531,6 +538,16 @@ function AdvertiserSidebar({
         })}
       </nav>
 
+      <form action={logoutAction} className="mt-4">
+        <button
+          type="submit"
+          className="flex h-11 w-full items-center gap-3 rounded-[8px] px-3 text-left text-sm font-medium text-[#52525b] hover:bg-[#f4f4f5] hover:text-[#18181b]"
+        >
+          <LogOut className="size-4" />
+          Sign out
+        </button>
+      </form>
+
       <div className="mt-auto rounded-[8px] border border-[#d9f99d] bg-[#f7fee7] p-4 text-sm text-[#3f6212]">
         <ShieldCheck className="mb-3 size-5" />
         Funds are debited only when matching logic creates an auditable creator
@@ -643,10 +660,12 @@ function OverviewTab({
 function WalletTab({
   balanceCents,
   pendingCents,
+  paymentMethod,
   transactions,
 }: {
   balanceCents: number
   pendingCents: number
+  paymentMethod: AdvertiserPaymentMethod | null
   transactions: AdvertiserWalletTransaction[]
 }) {
   return (
@@ -709,15 +728,31 @@ function WalletTab({
           </Button>
         </form>
 
-        <form action={startAdvertiserPaymentMethodAction} className="mt-3">
+        <form action={startAdvertiserPaymentMethodAction} className="mt-5">
           <Button
             type="submit"
-            variant="ghost"
-            className="h-10 rounded-[8px] px-3 text-[#52525b]"
+            variant="outline"
+            className="h-11 rounded-[8px] border-[#d4d4d8] bg-white px-4 text-[#18181b]"
           >
             <Landmark className="size-4" />
-            Set up payment method
+            {paymentMethod ? "Update payment method" : "Set up payment method"}
           </Button>
+          {paymentMethod ? (
+            <p className="mt-3 text-sm text-[#71717a]">
+              Default payment method:{" "}
+              <span className="font-medium capitalize text-[#18181b]">
+                {paymentMethod.brand ?? paymentMethod.type}
+              </span>
+              {paymentMethod.last4 ? ` ending in ${paymentMethod.last4}` : ""}
+              {paymentMethod.expMonth && paymentMethod.expYear
+                ? `, expires ${String(paymentMethod.expMonth).padStart(2, "0")}/${paymentMethod.expYear}`
+                : ""}
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-[#71717a]">
+              Add a reusable payment method for faster wallet funding.
+            </p>
+          )}
         </form>
       </section>
 
