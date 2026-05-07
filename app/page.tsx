@@ -270,7 +270,7 @@ export default function HomePage() {
                 Distribution
               </p>
               <h2 className="mt-5 max-w-4xl text-5xl font-semibold leading-[0.98] tracking-[-0.07em] md:text-7xl">
-                The feed is the redistribution engine.
+                Stories are the redistribution engine.
               </h2>
               <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
                 Stories create attention. Attention creates signal. Signal
