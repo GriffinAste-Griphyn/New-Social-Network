@@ -9,6 +9,7 @@ import {
   createAdvertiserAccount,
   createPendingWalletFunding,
   getAdvertiserWorkspaceForUser,
+  updateAdvertiserAccount,
   updateAdvertiserStripeCustomer,
   updateBrandFundingProfile,
 } from "@/lib/advertiser-store"
@@ -149,6 +150,38 @@ export async function createAdvertiserAccountAction(formData: FormData) {
 
   revalidatePath("/advertiser")
   redirect("/advertiser")
+}
+
+export async function saveAdvertiserAccountAction(formData: FormData) {
+  const session = await requireSession()
+  const workspace = await getAdvertiserWorkspaceForUser(session.id)
+
+  if (!workspace) {
+    redirect(buildErrorUrl("Create an advertiser account before saving account details."))
+  }
+
+  const parsed = accountSchema.safeParse({
+    name: formData.get("name"),
+    websiteUrl: formData.get("websiteUrl"),
+    billingEmail: formData.get("billingEmail"),
+  })
+
+  if (!parsed.success) {
+    const message =
+      parsed.error.issues[0]?.message ?? "Check the advertiser account details."
+
+    redirect(buildErrorUrl(message))
+  }
+
+  await updateAdvertiserAccount({
+    advertiserAccountId: workspace.account.id,
+    name: parsed.data.name,
+    websiteUrl: parsed.data.websiteUrl,
+    billingEmail: parsed.data.billingEmail,
+  })
+
+  revalidatePath("/advertiser")
+  redirect("/advertiser?tab=account&saved=account")
 }
 
 export async function saveBrandFundingProfileAction(formData: FormData) {

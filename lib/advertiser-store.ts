@@ -218,6 +218,25 @@ export async function updateAdvertiserStripeCustomer(input: {
     .where(eq(advertiserAccounts.id, input.advertiserAccountId))
 }
 
+export async function updateAdvertiserAccount(input: {
+  advertiserAccountId: string
+  name: string
+  websiteUrl: string | null
+  billingEmail: string
+}) {
+  const db = getDb()
+
+  await db
+    .update(advertiserAccounts)
+    .set({
+      name: input.name,
+      websiteUrl: input.websiteUrl,
+      billingEmail: input.billingEmail,
+      updatedAt: new Date(),
+    })
+    .where(eq(advertiserAccounts.id, input.advertiserAccountId))
+}
+
 export async function updateBrandFundingProfile(input: {
   profileId: string
   advertiserAccountId: string

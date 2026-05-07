@@ -3,13 +3,16 @@
 import { useFormStatus } from "react-dom"
 
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 
 type AuthSubmitButtonProps = {
+  className?: string
   idleLabel: string
   pendingLabel: string
 }
 
 export function AuthSubmitButton({
+  className,
   idleLabel,
   pendingLabel,
 }: AuthSubmitButtonProps) {
@@ -18,7 +21,10 @@ export function AuthSubmitButton({
   return (
     <Button
       type="submit"
-      className="h-11 w-full rounded-full bg-black text-base text-white hover:bg-black/82"
+      className={cn(
+        "h-11 w-full rounded-full bg-black text-base text-white hover:bg-black/82",
+        className,
+      )}
       disabled={pending}
     >
       {pending ? pendingLabel : idleLabel}

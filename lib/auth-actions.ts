@@ -15,7 +15,6 @@ import {
   passwordResetRequestSchema,
   passwordResetSchema,
   profileSetupSchema,
-  signupAccountTypeSchema,
   signupFlowSchema,
 } from "@/lib/auth-validators"
 import { sendUserVerificationEmail } from "@/lib/email-verification"
@@ -28,21 +27,8 @@ import {
   resetPassword,
 } from "@/lib/user-store"
 
-function resolveSignupNextPath(
-  accountType: FormDataEntryValue | null,
-  fallbackNext: FormDataEntryValue | null,
-) {
-  const parsedAccountType = signupAccountTypeSchema.safeParse(accountType)
-
-  if (parsedAccountType.success) {
-    return parsedAccountType.data === "advertiser" ? "/advertiser" : "/feed"
-  }
-
-  return resolveNextPath(fallbackNext, "/feed")
-}
-
 export async function loginAction(formData: FormData) {
-  const nextPath = resolveNextPath(formData.get("next"), "/feed")
+  const nextPath = resolveNextPath(formData.get("next"), "/advertiser")
   const parsed = loginSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
@@ -82,14 +68,11 @@ export async function loginAction(formData: FormData) {
 }
 
 export async function signupAction(formData: FormData) {
-  const nextPath = resolveSignupNextPath(
-    formData.get("accountType"),
-    formData.get("next"),
-  )
+  const nextPath = "/advertiser"
   const parsed = signupFlowSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
-    accountType: formData.get("accountType"),
+    accountType: "advertiser",
   })
 
   if (!parsed.success) {
