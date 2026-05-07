@@ -9,9 +9,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "New Social Network",
+  title: "UBEYE",
   description:
-    "Post stories, follow people, and earn through built-in monetization for every account.",
+    "A social network and wealth redistribution experiment where people participate in the value their attention creates.",
 };
 
 export default function RootLayout({

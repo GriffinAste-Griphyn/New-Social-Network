@@ -1,12 +1,15 @@
-import Image from "next/image"
 import Link from "next/link"
 import type { Metadata } from "next"
 import {
   ArrowRight,
-  Camera,
-  CircleDollarSign,
+  BadgeDollarSign,
   Eye,
+  Megaphone,
+  MessageCircle,
+  Play,
   Radio,
+  ShieldCheck,
+  Sparkles,
   Users,
 } from "lucide-react"
 
@@ -14,102 +17,86 @@ import { Button } from "@/components/ui/button"
 
 const signInHref = "/login?next=%2Ffeed"
 const getStartedHref = "/signup"
+const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
+const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
 export const metadata: Metadata = {
-  title: "New Social Network",
+  title: "UBEYE | A social experiment in wealth redistribution",
   description:
-    "Post stories, follow people, earn through built-in monetization, and fund qualified creator moments.",
+    "UBEYE is a social network where people post, watch, engage, and participate in the value their attention creates.",
 }
 
 const navLinks = [
-  { label: "What it does", href: "#what-it-does" },
-  { label: "Who earns", href: "#earning" },
+  { label: "The experiment", href: "#experiment" },
   { label: "How it works", href: "#how-it-works" },
   { label: "Advertisers", href: "/advertise" },
 ]
 
-const feedCards = [
+const incomeCards = [
   {
-    label: "Post",
-    metric: "Story post",
-    src: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=900&q=82",
-    alt: "Creator holding a camera",
+    eyebrow: "01",
+    title: "Post",
+    copy: "Share stories from the world around you. Culture, taste, work, fashion, food, campus, city life, product discoveries, and the moments people actually watch.",
+    icon: Play,
   },
   {
-    label: "Discover",
-    metric: "Engagement signal",
-    src: "https://images.unsplash.com/photo-1492724441997-5dc865305da7?auto=format&fit=crop&w=900&q=82",
-    alt: "Phone and laptop on a minimal desk",
+    eyebrow: "02",
+    title: "Pay attention",
+    copy: "Watch what moves through the network. Your attention is no longer treated like free inventory.",
+    icon: Eye,
   },
   {
-    label: "Earn",
-    metric: "Built-in payout",
-    src: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=82",
-    alt: "Laptop screen in a clean workspace",
-  },
-]
-
-const earningModes = [
-  {
-    icon: Camera,
-    title: "Post stories",
-    headline: "Share stories that can monetize.",
-    copy: "Every account can publish photos, videos, and updates with earning tools already connected to the feed.",
-    stat: "$128.40",
-    statLabel: "story payout",
-  },
-  {
-    icon: Users,
+    eyebrow: "03",
     title: "Participate",
-    headline: "Get rewarded for useful engagement.",
-    copy: "People can earn by discovering, following, replying, and helping valuable content move through the network.",
-    stat: "+$6.80",
-    statLabel: "user rewards",
+    copy: "Reply, follow, save, and help useful signal move. UBEYE treats participation as part of the value creation loop.",
+    icon: MessageCircle,
   },
 ]
 
-const howItWorks = [
-  "Create an account and claim a handle.",
-  "Post stories or follow accounts you care about.",
-  "Earn through the monetization tools built into the feed.",
+const payoutRows = [
+  {
+    label: "For users",
+    value: "Post, watch, engage, and participate in the upside.",
+    icon: Users,
+  },
+  {
+    label: "For creators",
+    value: "Stories can qualify for brand-backed payouts when they create real demand.",
+    icon: BadgeDollarSign,
+  },
+  {
+    label: "For advertisers",
+    value: "Fund attention that people choose instead of forcing placements into the feed.",
+    icon: Megaphone,
+  },
 ]
 
 function SiteHeader() {
   return (
-    <header className="absolute inset-x-0 top-0 z-20">
-      <div className="relative mx-auto flex h-20 w-full max-w-[1440px] items-center justify-between px-5 sm:px-8">
-        <Link
-          href="/"
-          className="text-sm font-semibold uppercase tracking-[0.24em] text-white"
-          aria-label="New Social Network home"
-        >
-          NSN
+    <header className="hidden border-b border-black/10 bg-[#f4f2ec]/82 backdrop-blur-xl md:block">
+      <div className="mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between px-4">
+        <Link href="/" className="text-xl font-semibold tracking-[-0.04em]" aria-label="UBEYE home">
+          UBEYE
         </Link>
 
-        <nav
-          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-8 text-sm font-medium text-white/70 md:flex"
-          aria-label="Primary"
-        >
+        <nav className="flex items-center gap-2 text-sm text-black/58" aria-label="Primary">
           {navLinks.map((link) => (
-            <Link key={link.label} href={link.href} className="transition hover:text-white">
+            <Link
+              key={link.label}
+              href={link.href}
+              className="rounded-full px-4 py-2 transition hover:bg-black/5 hover:text-black"
+            >
               {link.label}
             </Link>
           ))}
         </nav>
 
         <div className="flex items-center gap-2">
-          <Button
-            asChild
-            variant="ghost"
-            className="hidden h-10 rounded-full px-4 text-sm text-white hover:bg-white/10 hover:text-white sm:inline-flex"
-          >
+          <Button asChild variant="ghost" className="h-9 rounded-full px-4 text-sm text-black/64">
             <Link href={signInHref}>Sign in</Link>
           </Button>
-          <Button
-            asChild
-            className="h-10 rounded-full bg-white px-4 text-sm text-black hover:bg-white/86"
-          >
-            <Link href={getStartedHref}>Create account</Link>
+          <Button asChild className="h-9 rounded-full bg-black px-4 text-sm text-white hover:bg-black/84">
+            <Link href={getStartedHref}>Get started</Link>
           </Button>
         </div>
       </div>
@@ -117,215 +104,232 @@ function SiteHeader() {
   )
 }
 
+function MobileHeroNav() {
+  return (
+    <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] text-white md:hidden">
+      <Link href="/" className="text-[2rem] font-semibold tracking-[-0.08em]">
+        UBEYE
+      </Link>
+      <div className="flex items-center gap-5">
+        <Link href={signInHref} className="text-sm font-medium text-white/88">
+          Sign in
+        </Link>
+        <Link
+          href={getStartedHref}
+          className="inline-flex min-h-11 items-center rounded-full bg-white px-5 text-sm font-semibold text-black"
+        >
+          Join
+        </Link>
+      </div>
+    </div>
+  )
+}
+
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-[#f5f6f1] text-black">
+    <div className="min-h-screen bg-[#f4f2ec] text-black">
       <SiteHeader />
 
-      <main>
-        <section className="relative min-h-[92vh] overflow-hidden">
-          <Image
-            src="https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?auto=format&fit=crop&w=2200&q=86"
-            alt="Person using a smartphone"
-            fill
-            priority
-            sizes="100vw"
-            className="object-cover"
-          />
-          <div className="absolute inset-0 bg-black/46" />
-          <div className="absolute inset-x-0 bottom-0 h-52 bg-gradient-to-t from-black/64 to-transparent" />
+      <main className="overflow-hidden">
+        <section className="border-b border-black/10">
+          <div className="mx-auto md:max-w-[1180px] md:px-4 md:py-10">
+            <div className="overflow-hidden bg-[#faf9f5] md:rounded-[2.5rem] md:border md:border-black/10 md:shadow-[0_20px_70px_-60px_rgba(15,23,42,0.28)]">
+              <div className="relative min-h-[34rem] overflow-hidden sm:min-h-[32rem] lg:min-h-[40rem]">
+                <MobileHeroNav />
+                <div
+                  className="absolute inset-0 bg-cover bg-center motion-reduce:block"
+                  style={{ backgroundImage: `url(${heroPoster})` }}
+                />
+                <video
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
+                  poster={heroPoster}
+                  className="absolute inset-0 hidden h-full w-full object-cover motion-safe:block [filter:brightness(0.98)_contrast(0.95)_saturate(0.88)]"
+                >
+                  <source src={heroVideo} type="video/mp4" />
+                </video>
+                <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(8,14,20,0.58),rgba(8,14,20,0.28)_44%,rgba(8,14,20,0.12)_74%,rgba(8,14,20,0.08))]" />
+                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(247,245,239,0.06),rgba(247,245,239,0)_24%,rgba(8,14,20,0.08)_58%,rgba(8,14,20,0.54)_100%)]" />
 
-          <div className="relative z-10 mx-auto flex min-h-[92vh] w-full max-w-[1440px] flex-col justify-end px-5 pb-8 pt-28 sm:px-8 lg:pb-10">
-            <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
-              <div>
-                <p className="w-fit rounded-full border border-white/18 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-white/76 backdrop-blur">
-                  Post. Follow. Earn.
+                <div className="relative flex min-h-[34rem] flex-col justify-between px-6 pb-6 pt-24 sm:min-h-[32rem] sm:px-8 sm:pb-8 sm:pt-7 lg:min-h-[40rem] lg:px-12 lg:pb-12 lg:pt-10">
+                  <p className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-white/14 bg-white/8 px-3 py-1.5 text-[0.62rem] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/78 backdrop-blur-sm sm:px-4 sm:text-[0.68rem] sm:tracking-[0.28em]">
+                    <Sparkles className="size-3.5" />
+                    A social experiment in wealth redistribution
+                  </p>
+
+                  <div className="max-w-[22rem] sm:max-w-[31rem] lg:max-w-[62rem]">
+                    <h1 className="text-[3.25rem] font-semibold leading-[0.93] tracking-[-0.06em] text-white sm:text-6xl md:text-7xl lg:text-[6.4rem] lg:leading-[0.94]">
+                      The post-work income social network
+                    </h1>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 border-t border-black/10 px-6 py-6 sm:px-8 sm:py-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10 lg:px-12 lg:py-8">
+                <p className="max-w-2xl text-base leading-8 text-black/62 md:text-lg">
+                  UBEYE is where people post, watch, engage, and earn from the
+                  value their attention creates.
                 </p>
-                <h1 className="mt-7 max-w-[12ch] text-5xl font-semibold leading-[0.96] text-white sm:text-7xl lg:text-8xl">
-                  The social app where every account can earn
-                </h1>
-                <p className="mt-8 max-w-2xl text-lg leading-8 text-white/76">
-                  New Social Network lets people post stories, follow accounts,
-                  discover content, and earn from the value they create or help surface.
+                <div className="flex flex-col gap-3 sm:flex-row lg:justify-end">
+                  <Button
+                    asChild
+                    className="h-11 justify-between rounded-full bg-black px-6 text-sm text-white hover:bg-black/84 sm:justify-center"
+                  >
+                    <Link href={getStartedHref}>
+                      Join the experiment
+                      <ArrowRight className="size-4" />
+                    </Link>
+                  </Button>
+                  <Button
+                    asChild
+                    variant="outline"
+                    className="h-11 justify-between rounded-full border-black/12 bg-transparent px-6 text-sm text-black hover:bg-black/5 sm:justify-center"
+                  >
+                    <Link href="/advertise">Advertise on UBEYE</Link>
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="experiment" className="border-b border-black/10 bg-[#faf9f5]">
+          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
+            <div className="grid gap-10 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-16">
+              <div className="pt-2">
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-black/42">
+                  The premise
+                </p>
+              </div>
+              <div className="max-w-5xl">
+                <p className="text-4xl font-semibold tracking-[-0.07em] text-black md:text-6xl md:leading-[1.01]">
+                  In the pursuit of AGI, human attention and consciousness will
+                  be the new gold.
+                </p>
+                <p className="mt-8 max-w-2xl text-base leading-8 text-black/58 md:text-lg">
+                  UBEYE turns that thesis into a social network. The experiment
+                  is simple: if people create the attention, people should share
+                  in the income.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="how-it-works" className="border-b border-black/10">
+          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
+            <div className="grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-20">
+              <div className="max-w-[25rem]">
+                <p className="text-4xl font-semibold tracking-[-0.07em] text-black md:text-6xl md:leading-[1.01]">
+                  Participate and earn income
+                </p>
+                <p className="mt-8 max-w-md text-base leading-8 text-black/62 md:text-lg">
+                  UBEYE gives people a way to opt in, contribute verified
+                  attention, and participate in the upside of the network.
                 </p>
               </div>
 
-              <div className="grid gap-3 rounded-3xl border border-white/16 bg-black/24 p-3 text-white shadow-[0_24px_80px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                <div className="rounded-2xl bg-white p-4 text-black">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.2em] text-black/42">
-                        Story payout
-                      </p>
-                      <p className="mt-2 text-3xl font-semibold">$128.40</p>
+              <div className="grid gap-4">
+                {incomeCards.map((card) => (
+                  <article
+                    key={card.title}
+                    className="rounded-[2rem] border border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(250,249,245,1))] p-6 shadow-[0_18px_70px_-52px_rgba(15,23,42,0.16)] md:px-7 md:py-7"
+                  >
+                    <div className="flex gap-5 md:gap-7">
+                      <div className="flex size-11 shrink-0 items-center justify-center rounded-full border border-black/10 bg-black text-white">
+                        <card.icon className="size-5" />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-black/36">
+                            {card.eyebrow}
+                          </p>
+                          <h3 className="text-2xl font-semibold tracking-[-0.04em] text-black">
+                            {card.title}
+                          </h3>
+                        </div>
+                        <p className="mt-4 max-w-2xl text-sm leading-7 text-black/58 md:text-base">
+                          {card.copy}
+                        </p>
+                      </div>
                     </div>
-                    <span className="flex size-11 items-center justify-center rounded-full bg-black text-white">
-                      <CircleDollarSign className="size-5" />
-                    </span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-black/10 bg-[#111311] text-white">
+          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_28rem] lg:items-end">
+            <div>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-white/42">
+                Distribution
+              </p>
+              <h2 className="mt-5 max-w-4xl text-5xl font-semibold leading-[0.98] tracking-[-0.07em] md:text-7xl">
+                The feed is the redistribution engine.
+              </h2>
+              <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
+                Stories create attention. Attention creates signal. Signal
+                creates advertiser demand. UBEYE routes that value back toward
+                the people who made the network worth funding.
+              </p>
+            </div>
+
+            <div className="divide-y divide-white/12 border-y border-white/12">
+              {payoutRows.map((row) => (
+                <div key={row.label} className="grid grid-cols-[3rem_1fr] gap-4 py-6">
+                  <div className="flex size-10 items-center justify-center rounded-full bg-white text-black">
+                    <row.icon className="size-5" />
                   </div>
-                  <p className="mt-4 text-sm leading-6 text-black/58">
-                    A story earns while it moves through the feed.
+                  <div>
+                    <p className="text-sm font-semibold text-white">{row.label}</p>
+                    <p className="mt-2 text-sm leading-6 text-white/58">{row.value}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-[#f4f2ec]">
+          <div className="mx-auto max-w-[1180px] px-4 py-16 md:py-24">
+            <div className="grid overflow-hidden rounded-[2rem] border border-black/10 bg-[#faf9f5] md:grid-cols-[1.05fr_0.95fr]">
+              <div className="p-6 sm:p-8 lg:p-10">
+                <p className="inline-flex items-center gap-2 text-sm font-semibold text-black/48">
+                  <Radio className="size-4" />
+                  Advertiser-funded, people-first
+                </p>
+                <h2 className="mt-6 max-w-[11ch] text-4xl font-semibold leading-[1] tracking-[-0.06em] sm:text-6xl">
+                  Fund attention without forcing it.
+                </h2>
+                <p className="mt-7 max-w-xl text-base leading-8 text-black/58 md:text-lg">
+                  Brands can support real moments people choose to watch,
+                  discuss, and share. The advertising layer exists to fund the
+                  redistribution experiment, not interrupt it.
+                </p>
+              </div>
+              <div className="grid content-between gap-8 border-t border-black/10 bg-black p-6 text-white sm:p-8 md:border-l md:border-t-0 lg:p-10">
+                <ShieldCheck className="size-6 text-white/64" />
+                <div>
+                  <p className="text-5xl font-semibold tracking-[-0.07em] sm:text-6xl">
+                    75%
+                  </p>
+                  <p className="mt-3 max-w-sm text-sm leading-6 text-white/56">
+                    Target revenue share routed toward eligible network
+                    participants as the experiment scales.
                   </p>
                 </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-white/14 bg-white/10 p-4">
-                    <Eye className="size-5 text-white/72" />
-                    <p className="mt-5 text-2xl font-semibold">42k</p>
-                    <p className="mt-1 text-xs text-white/58">user signals</p>
-                  </div>
-                  <div className="rounded-2xl border border-white/14 bg-white/10 p-4">
-                    <Users className="size-5 text-white/72" />
-                    <p className="mt-5 text-2xl font-semibold">+18%</p>
-                    <p className="mt-1 text-xs text-white/58">reward pool</p>
-                  </div>
-                </div>
+                <Button asChild className="h-11 w-fit rounded-full bg-white px-6 text-sm text-black hover:bg-white/88">
+                  <Link href="/advertise">
+                    For advertisers
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
               </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="what-it-does" className="border-b border-black/10 bg-[#f5f6f1]">
-          <div className="mx-auto grid w-full max-w-[1440px] gap-12 px-5 py-16 sm:px-8 lg:grid-cols-[0.78fr_1.22fr] lg:items-center lg:py-24">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-black/42">
-                What it does
-              </p>
-              <h2 className="mt-5 max-w-[12ch] text-5xl font-semibold leading-[1] sm:text-6xl">
-                A story feed with earning built into the product.
-              </h2>
-              <p className="mt-7 max-w-md text-lg leading-8 text-black/58">
-                The app combines a familiar social feed with native monetization:
-                create, follow, discover, engage, and get rewarded inside the same system.
-              </p>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              {feedCards.map((card) => (
-                <div
-                  key={card.label}
-                  className="group relative min-h-[26rem] overflow-hidden rounded-3xl border border-black/10 bg-white shadow-[0_20px_50px_rgba(0,0,0,0.07)]"
-                >
-                  <Image
-                    src={card.src}
-                    alt={card.alt}
-                    fill
-                    sizes="(min-width: 1024px) 28vw, (min-width: 640px) 33vw, 100vw"
-                    className="object-cover transition duration-500 group-hover:scale-[1.03]"
-                  />
-                  <div className="absolute inset-0 bg-black/18" />
-                  <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-white/18 bg-white/92 p-4 text-black shadow-[0_14px_40px_rgba(0,0,0,0.16)] backdrop-blur">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-black/42">
-                      {card.label}
-                    </p>
-                    <p className="mt-2 text-xl font-semibold">{card.metric}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="earning" className="border-b border-black/10 bg-white">
-          <div className="mx-auto w-full max-w-[1440px] px-5 py-16 sm:px-8 lg:py-24">
-            <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:items-end">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-black/42">
-                  Who earns
-                </p>
-                <h2 className="mt-5 max-w-[13ch] text-5xl font-semibold leading-[1] sm:text-6xl">
-                  One account can post, participate, and earn.
-                </h2>
-              </div>
-              <p className="max-w-2xl text-lg leading-8 text-black/58">
-                People bring stories, attention, discovery, follows, and engagement.
-                New Social Network keeps those actions in one account so earning
-                does not require switching areas.
-              </p>
-            </div>
-
-            <div className="mt-12 grid gap-4 lg:grid-cols-2">
-              {earningModes.map((mode) => (
-                <div
-                  key={mode.title}
-                  className="grid min-h-[25rem] overflow-hidden rounded-3xl border border-black/10 bg-[#f5f6f1] shadow-[0_20px_50px_rgba(0,0,0,0.05)] sm:grid-cols-[1fr_0.8fr]"
-                >
-                  <div className="flex flex-col justify-between p-6">
-                    <div>
-                      <span className="flex size-11 items-center justify-center rounded-full bg-black text-white">
-                        <mode.icon className="size-5" />
-                      </span>
-                      <p className="mt-8 text-xs font-semibold uppercase tracking-[0.22em] text-black/42">
-                        {mode.title}
-                      </p>
-                      <h3 className="mt-3 max-w-sm text-3xl font-semibold leading-tight">
-                        {mode.headline}
-                      </h3>
-                      <p className="mt-4 text-base leading-7 text-black/58">
-                        {mode.copy}
-                      </p>
-                    </div>
-                    <div className="mt-8 border-t border-black/10 pt-5">
-                      <p className="text-3xl font-semibold">{mode.stat}</p>
-                      <p className="mt-1 text-sm text-black/48">{mode.statLabel}</p>
-                    </div>
-                  </div>
-                  <div className="relative min-h-72 sm:min-h-full">
-                    <Image
-                      src={
-                        mode.title === "Post stories"
-                          ? "https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=900&q=82"
-                          : "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=900&q=82"
-                      }
-                      alt={
-                        mode.title === "Post stories"
-                          ? "Creative team working in a bright studio"
-                          : "People gathered around a laptop reviewing media"
-                      }
-                      fill
-                      sizes="(min-width: 1024px) 24vw, 100vw"
-                      className="object-cover"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="how-it-works" className="bg-[#10110f] text-white">
-          <div className="mx-auto grid w-full max-w-[1440px] gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1fr_0.72fr] lg:items-end lg:py-20">
-            <div>
-              <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-white/44">
-                <Radio className="size-4" />
-                How it works
-              </p>
-              <h2 className="mt-5 max-w-4xl text-5xl font-semibold leading-[1] sm:text-6xl">
-                Use it like a social app. Earn like the value matters.
-              </h2>
-              <p className="mt-7 max-w-2xl text-lg leading-8 text-white/58">
-                No separate creator area, no patched-on reward system. The feed,
-                profiles, follows, stories, and earning tools are designed to work together.
-              </p>
-            </div>
-            <div className="space-y-5">
-              {howItWorks.map((step, index) => (
-                <div key={step} className="flex gap-4 border-t border-white/14 pt-5">
-                  <span className="text-sm font-semibold text-white/44">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <p className="text-lg leading-7 text-white/78">{step}</p>
-                </div>
-              ))}
-              <Button
-                asChild
-                className="h-11 rounded-full bg-white px-5 text-sm text-black hover:bg-white/86"
-              >
-                <Link href={getStartedHref}>
-                  Get started
-                  <ArrowRight className="size-4" />
-                </Link>
-              </Button>
             </div>
           </div>
         </section>
