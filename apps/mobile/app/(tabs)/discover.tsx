@@ -1,7 +1,9 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { useLocalSearchParams, useRouter } from "expo-router"
+import type { RefObject } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
+  FlatList,
   Image,
   Pressable,
   StyleSheet,
@@ -16,7 +18,6 @@ import { useMobileFeed } from "@/lib/mobile-stories-api"
 import {
   DiscoverGrid,
   ScreenFrame,
-  ScreenScroll,
 } from "@/components/social/ui"
 
 type DiscoverSearchResult = {
@@ -87,72 +88,116 @@ export default function DiscoverScreen() {
 
   return (
     <ScreenFrame>
-      <ScreenScroll>
-        <View style={styles.header}>
-          <Text style={styles.title}>Discover</Text>
-          <View style={styles.searchShell}>
-            <Ionicons name="search-outline" size={20} color={colors.subtext} />
-            <TextInput
-              ref={inputRef}
-              autoCapitalize="none"
-              autoCorrect={false}
-              clearButtonMode="while-editing"
-              onChangeText={setQuery}
-              placeholder="Search creators"
-              placeholderTextColor={colors.faint}
-              returnKeyType="search"
-              style={styles.searchInput}
-              value={query}
+      {normalizedQuery ? (
+        <FlatList
+          data={results}
+          keyExtractor={(profile) => profile.id}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            <>
+              <DiscoverSearchHeader
+                inputRef={inputRef}
+                query={query}
+                setQuery={setQuery}
+              />
+              <Text style={styles.sectionTitle}>Results</Text>
+            </>
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={22} color={colors.faint} />
+              <Text style={styles.emptyText}>No results</Text>
+            </View>
+          }
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          renderItem={({ item: profile, index }) => (
+            <CreatorResultRow
+              isFirst={index === 0}
+              isLast={index === results.length - 1}
+              isFollowing={isFollowing(profile.id)}
+              onToggleFollow={() => toggleFollow(profile.id)}
+              profile={profile}
+              onOpenProfile={() => router.push(`/creator/${profile.id}`)}
+              onOpenStory={() => router.push(`/story/${profile.id}`)}
             />
-          </View>
-        </View>
-
-        {normalizedQuery ? (
-          <View style={styles.resultsSection}>
-            <Text style={styles.sectionTitle}>Results</Text>
-            {results.length > 0 ? (
-              <View style={styles.resultList}>
-                {results.map((profile) => (
-                  <CreatorResultRow
-                    key={profile.id}
-                    isFollowing={isFollowing(profile.id)}
-                    onToggleFollow={() => toggleFollow(profile.id)}
-                    profile={profile}
-                    onOpenProfile={() => router.push(`/creator/${profile.id}`)}
-                    onOpenStory={() => router.push(`/story/${profile.id}`)}
-                  />
-                ))}
-              </View>
-            ) : (
-              <View style={styles.emptyState}>
-                <Ionicons name="search-outline" size={22} color={colors.faint} />
-                <Text style={styles.emptyText}>No results</Text>
-              </View>
-            )}
-          </View>
-        ) : (
-          <DiscoverGrid tiles={discoverTiles} />
-        )}
-      </ScreenScroll>
+          )}
+        />
+      ) : (
+        <DiscoverGrid
+          tiles={discoverTiles}
+          ListHeaderComponent={
+            <DiscoverSearchHeader
+              inputRef={inputRef}
+              query={query}
+              setQuery={setQuery}
+            />
+          }
+        />
+      )}
     </ScreenFrame>
   )
 }
 
+function DiscoverSearchHeader({
+  inputRef,
+  query,
+  setQuery,
+}: {
+  inputRef: RefObject<TextInput | null>
+  query: string
+  setQuery: (value: string) => void
+}) {
+  return (
+    <View style={styles.header}>
+      <Text style={styles.title}>Discover</Text>
+      <View style={styles.searchShell}>
+        <Ionicons name="search-outline" size={20} color={colors.subtext} />
+        <TextInput
+          ref={inputRef}
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+          cursorColor={colors.accent}
+          onChangeText={setQuery}
+          placeholder="Search creators"
+          placeholderTextColor={colors.faint}
+          returnKeyType="search"
+          selectionColor={colors.accent}
+          style={styles.searchInput}
+          value={query}
+        />
+      </View>
+    </View>
+  )
+}
+
 function CreatorResultRow({
+  isFirst,
   isFollowing,
+  isLast,
   onOpenProfile,
   onOpenStory,
   onToggleFollow,
   profile,
 }: {
+  isFirst: boolean
   isFollowing: boolean
+  isLast: boolean
   onOpenProfile: () => void
   onOpenStory: () => void
   onToggleFollow: () => void
   profile: DiscoverSearchResult
 }) {
   return (
-    <View style={styles.resultRow}>
+    <View
+      style={[
+        styles.resultRow,
+        isFirst ? styles.resultRowFirst : null,
+        isLast ? styles.resultRowLast : null,
+      ]}
+    >
       <Pressable
         accessibilityLabel={`Open ${profile.name} profile`}
         accessibilityRole="button"
@@ -218,57 +263,69 @@ function CreatorResultRow({
 }
 
 const styles = StyleSheet.create({
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 32,
+    paddingTop: 8,
+  },
   header: {
     gap: 14,
+    marginBottom: 24,
   },
   title: {
     fontSize: 38,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   searchShell: {
-    height: 48,
+    height: 54,
     borderRadius: 8,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 14,
+    gap: 11,
+    paddingLeft: 16,
+    paddingRight: 12,
   },
   searchInput: {
     flex: 1,
     minWidth: 0,
-    padding: 0,
-    fontSize: 17,
-    fontFamily: "Inter_600SemiBold",
+    height: "100%",
+    paddingTop: 0,
+    paddingBottom: 1,
+    paddingHorizontal: 0,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: "600",
     color: colors.text,
-  },
-  resultsSection: {
-    marginTop: 24,
+    textAlignVertical: "center",
   },
   sectionTitle: {
     marginBottom: 12,
     fontSize: 20,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
-  },
-  resultList: {
-    overflow: "hidden",
-    borderRadius: 8,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   resultRow: {
     flexDirection: "row",
     alignItems: "center",
+    backgroundColor: colors.surface,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  resultRowFirst: {
+    borderTopWidth: 1,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+  resultRowLast: {
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
   },
   resultMainAction: {
     flex: 1,
@@ -307,14 +364,12 @@ const styles = StyleSheet.create({
   },
   resultTitle: {
     fontSize: 16,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   resultSubtitle: {
     marginTop: 3,
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   iconButton: {
@@ -352,7 +407,6 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.subtext,
   },

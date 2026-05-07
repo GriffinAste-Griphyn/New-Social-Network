@@ -1,7 +1,8 @@
-import { desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, gte, lte, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import {
+  earningsLedger,
   feedImpressions,
   follows,
   stories,
@@ -26,6 +27,19 @@ export type CreatorStoryStats = {
   averageViewedSeconds: number
   comments: number
   replies: number
+  earningsCents: number
+  pendingEarningsCents: number
+  paidEarningsCents: number
+}
+
+export type CreatorEarningsStats = {
+  totalCents: number
+  pendingCents: number
+  approvedCents: number
+  paidCents: number
+  reversedCents: number
+  availableCents: number
+  nextAvailableAt: string | null
 }
 
 export type CreatorStats = {
@@ -43,6 +57,7 @@ export type CreatorStats = {
   totalViewedSeconds: number
   comments: number
   replies: number
+  earnings: CreatorEarningsStats
   stories: CreatorStoryStats[]
 }
 
@@ -78,8 +93,34 @@ function calculateAverageSeconds(totalViewedMs: number, views: number) {
   return Math.round((totalViewedMs / views / 1000) * 10) / 10
 }
 
-export async function getCreatorStats(creatorId: string): Promise<CreatorStats> {
+export type CreatorStatsRange = {
+  from?: Date
+  to?: Date
+}
+
+export async function getCreatorStats(
+  creatorId: string,
+  range: CreatorStatsRange = {},
+): Promise<CreatorStats> {
   const db = getDb()
+  const storyFilters = [eq(stories.creatorId, creatorId)]
+  const impressionFilters = [eq(stories.creatorId, creatorId)]
+  const interactionFilters = [eq(storyInteractions.creatorId, creatorId)]
+  const earningsFilters = [eq(earningsLedger.userId, creatorId)]
+
+  if (range.from) {
+    storyFilters.push(gte(stories.createdAt, range.from))
+    impressionFilters.push(gte(feedImpressions.createdAt, range.from))
+    interactionFilters.push(gte(storyInteractions.createdAt, range.from))
+    earningsFilters.push(gte(earningsLedger.createdAt, range.from))
+  }
+
+  if (range.to) {
+    storyFilters.push(lte(stories.createdAt, range.to))
+    impressionFilters.push(lte(feedImpressions.createdAt, range.to))
+    interactionFilters.push(lte(storyInteractions.createdAt, range.to))
+    earningsFilters.push(lte(earningsLedger.createdAt, range.to))
+  }
 
   const [
     followerCountRows,
@@ -87,6 +128,8 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
     storyRows,
     impressionRows,
     interactionRows,
+    earningsRows,
+    earningsByStoryRows,
     totalUniqueViewerRows,
   ] = await Promise.all([
     db
@@ -109,7 +152,7 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
         expiresAt: stories.expiresAt,
       })
       .from(stories)
-      .where(eq(stories.creatorId, creatorId))
+      .where(and(...storyFilters))
       .orderBy(desc(stories.createdAt)),
     db
       .select({
@@ -121,7 +164,7 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
       })
       .from(feedImpressions)
       .innerJoin(stories, eq(stories.id, feedImpressions.storyId))
-      .where(eq(stories.creatorId, creatorId))
+      .where(and(...impressionFilters))
       .groupBy(feedImpressions.storyId),
     db
       .select({
@@ -130,15 +173,34 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
         replies: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'reply' then 1 else 0 end), 0)::int`,
       })
       .from(storyInteractions)
-      .where(eq(storyInteractions.creatorId, creatorId))
+      .where(and(...interactionFilters))
       .groupBy(storyInteractions.storyId),
+    db
+      .select({
+        status: earningsLedger.status,
+        amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+        nextAvailableAt: sql<Date | null>`min(${earningsLedger.availableAt}) filter (where ${earningsLedger.status} in ('pending', 'approved') and ${earningsLedger.availableAt} > now())`,
+      })
+      .from(earningsLedger)
+      .where(and(...earningsFilters))
+      .groupBy(earningsLedger.status),
+    db
+      .select({
+        storyId: earningsLedger.storyId,
+        amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+        pendingCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'pending' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+        paidCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'paid' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+      })
+      .from(earningsLedger)
+      .where(and(...earningsFilters))
+      .groupBy(earningsLedger.storyId),
     db
       .select({
         uniqueViewers: sql<DbNumber>`count(distinct ${feedImpressions.viewerId})::int`,
       })
       .from(feedImpressions)
       .innerJoin(stories, eq(stories.id, feedImpressions.storyId))
-      .where(eq(stories.creatorId, creatorId)),
+      .where(and(...impressionFilters)),
   ])
 
   const impressionsByStory = new Map(
@@ -161,6 +223,35 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
       },
     ]),
   )
+  const earningsByStory = new Map(
+    earningsByStoryRows.map((row) => [
+      row.storyId,
+      {
+        amountCents: toNumber(row.amountCents),
+        pendingCents: toNumber(row.pendingCents),
+        paidCents: toNumber(row.paidCents),
+      },
+    ]),
+  )
+
+  const earningsByStatus = new Map(
+    earningsRows.map((row) => [
+      row.status,
+      {
+        amountCents: toNumber(row.amountCents),
+        nextAvailableAt: row.nextAvailableAt,
+      },
+    ]),
+  )
+  const pendingCents = earningsByStatus.get("pending")?.amountCents ?? 0
+  const approvedCents = earningsByStatus.get("approved")?.amountCents ?? 0
+  const paidCents = earningsByStatus.get("paid")?.amountCents ?? 0
+  const reversedCents = earningsByStatus.get("reversed")?.amountCents ?? 0
+  const nextAvailableAt =
+    earningsRows
+      .map((row) => row.nextAvailableAt)
+      .filter((value): value is Date => value instanceof Date)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null
 
   let totalViews = 0
   let completedViews = 0
@@ -178,6 +269,11 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
     const interactions = interactionsByStory.get(story.id) ?? {
       comments: 0,
       replies: 0,
+    }
+    const storyEarnings = earningsByStory.get(story.id) ?? {
+      amountCents: 0,
+      pendingCents: 0,
+      paidCents: 0,
     }
 
     totalViews += impressions.views
@@ -205,6 +301,9 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
       ),
       comments: interactions.comments,
       replies: interactions.replies,
+      earningsCents: storyEarnings.amountCents,
+      pendingEarningsCents: storyEarnings.pendingCents,
+      paidEarningsCents: storyEarnings.paidCents,
     }
   })
 
@@ -223,6 +322,15 @@ export async function getCreatorStats(creatorId: string): Promise<CreatorStats> 
     totalViewedSeconds: Math.round(totalViewedMs / 1000),
     comments,
     replies,
+    earnings: {
+      totalCents: pendingCents + approvedCents + paidCents - reversedCents,
+      pendingCents,
+      approvedCents,
+      paidCents,
+      reversedCents,
+      availableCents: approvedCents,
+      nextAvailableAt: nextAvailableAt?.toISOString() ?? null,
+    },
     stories: storyStats,
   }
 }

@@ -46,6 +46,7 @@ type AuthFlowContextValue = {
   startLogin: () => void
   startSignup: () => void
   submitSignup: (input: { email: string; password: string }) => Promise<boolean>
+  expireSession: () => void
   verifyAccount: () => Promise<boolean>
 }
 
@@ -294,6 +295,15 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
         setPendingEmail(null)
         setPendingPassword("")
         setStage("landing")
+        void removeStoredAccount()
+        setMobileApiAuthToken(null)
+      },
+      expireSession: () => {
+        setAccount(null)
+        setPendingEmail(null)
+        setPendingPassword("")
+        setStage("login")
+        setError("Your session expired. Sign in again.")
         void removeStoredAccount()
         setMobileApiAuthToken(null)
       },

@@ -5,9 +5,11 @@ import type {
   SocialFollowingProfile,
   SocialStoryCard,
 } from "@new-social-network/shared"
-import type { ComponentProps, ReactNode } from "react"
-import { useState } from "react"
+import type { ReactElement, ReactNode } from "react"
+import { useEffect, useState } from "react"
 import {
+  ActivityIndicator,
+  FlatList,
   Image,
   Modal,
   Pressable,
@@ -17,7 +19,10 @@ import {
   TextInput,
   View,
 } from "react-native"
+import type { StyleProp, ViewStyle } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
+
+import { getMobileApi } from "@/lib/mobile-api"
 
 const colors = {
   background: "#f3f4f6",
@@ -36,6 +41,21 @@ const colors = {
 }
 
 const DISCOVER_CARD_HEIGHT = 220
+
+type AccountMenuCreatorStats = {
+  followerCount: number
+  followingCount: number
+  totalViews: number
+  liveStories: number
+  replies: number
+  earnings: {
+    totalCents: number
+    pendingCents: number
+    availableCents: number
+    paidCents: number
+    nextAvailableAt: string | null
+  }
+}
 
 export function ScreenFrame({
   children,
@@ -68,21 +88,61 @@ export function ScreenScroll({
 export function MobileHomeHeader({
   activeStoryCount,
   displayName,
+  email,
   handle,
   unreadReplyCount,
 }: {
   activeStoryCount: number
   displayName: string
+  email?: string | null
   handle: string
   unreadReplyCount: number
 }) {
   const router = useRouter()
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
+  const [creatorStats, setCreatorStats] =
+    useState<AccountMenuCreatorStats | null>(null)
+  const [creatorStatsState, setCreatorStatsState] = useState<
+    "idle" | "loading" | "settled"
+  >("idle")
+  const [creatorStatsError, setCreatorStatsError] = useState<string | null>(null)
 
-  const openRoute = (route: "/profile" | "/post" | "/replies") => {
-    setIsAccountMenuOpen(false)
-    router.push(route)
-  }
+  useEffect(() => {
+    let isMounted = true
+
+    if (!isAccountMenuOpen || creatorStatsState !== "idle") {
+      return
+    }
+
+    setCreatorStatsState("loading")
+    getMobileApi<{ ok: true; stats: AccountMenuCreatorStats }>(
+      "/api/mobile/creator/stats",
+    )
+      .then((payload) => {
+        if (!isMounted) return
+        setCreatorStats(payload.stats)
+        setCreatorStatsError(null)
+      })
+      .catch((error) => {
+        if (!isMounted) return
+        setCreatorStatsError(
+          error instanceof Error
+            ? error.message
+            : "Could not load creator payout information.",
+        )
+      })
+      .finally(() => {
+        if (isMounted) {
+          setCreatorStatsState("settled")
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [creatorStatsState, isAccountMenuOpen])
+
+  const closeAccountMenu = () => setIsAccountMenuOpen(false)
 
   return (
     <View style={styles.topBar}>
@@ -111,61 +171,131 @@ export function MobileHomeHeader({
         animationType="fade"
         transparent
         visible={isAccountMenuOpen}
-        onRequestClose={() => setIsAccountMenuOpen(false)}
+        onRequestClose={closeAccountMenu}
       >
         <View style={styles.accountMenuLayer}>
           <Pressable
             accessibilityLabel="Close account menu"
             accessibilityRole="button"
-            onPress={() => setIsAccountMenuOpen(false)}
+            onPress={closeAccountMenu}
             style={styles.accountMenuBackdrop}
           />
           <View style={styles.accountMenu}>
-            <View style={styles.accountMenuHeader}>
-              <View style={styles.accountMenuAvatar}>
-                <Text style={styles.accountMenuInitials}>
-                  {initials(displayName)}
-                </Text>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.accountMenuScrollContent}
+            >
+              <View style={styles.accountMenuHeader}>
+                <View style={styles.accountMenuAvatar}>
+                  <Text style={styles.accountMenuInitials}>
+                    {initials(displayName)}
+                  </Text>
+                </View>
+                <View style={styles.accountMenuIdentity}>
+                  <Text style={styles.accountMenuName} numberOfLines={1}>
+                    {displayName}
+                  </Text>
+                  <Text style={styles.accountMenuHandle} numberOfLines={1}>
+                    @{handle}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.accountMenuIdentity}>
-                <Text style={styles.accountMenuName} numberOfLines={1}>
-                  {displayName}
-                </Text>
-                <Text style={styles.accountMenuHandle} numberOfLines={1}>
-                  @{handle}
-                </Text>
+
+              <View style={styles.accountSection}>
+                <View style={styles.accountSectionHeader}>
+                  <Text style={styles.accountSectionTitle}>Account</Text>
+                  <View style={styles.accountTypePill}>
+                    <Text style={styles.accountTypeText}>Creator</Text>
+                  </View>
+                </View>
+                <View style={styles.accountMenuDetails}>
+                  <AccountDetail label="Handle" value={`@${handle}`} />
+                  {email ? <AccountDetail label="Email" value={email} /> : null}
+                  <AccountDetail
+                    label="Followers"
+                    value={formatCompactNumber(creatorStats?.followerCount ?? 0)}
+                  />
+                  <AccountDetail
+                    label="Following"
+                    value={formatCompactNumber(creatorStats?.followingCount ?? 0)}
+                  />
+                  <AccountDetail label="Live stories" value={`${activeStoryCount}`} />
+                  <AccountDetail label="Unread replies" value={`${unreadReplyCount}`} />
+                </View>
               </View>
-            </View>
 
-            <View style={styles.accountMenuStats}>
-              <AccountStat label="Account" value="Unified" />
-              <AccountStat
-                label="Stories"
-                value={`${activeStoryCount} live`}
-              />
-              <AccountStat
-                label="Replies"
-                value={`${unreadReplyCount} unread`}
-              />
-            </View>
+              <View style={styles.accountSection}>
+                <View style={styles.accountSectionHeader}>
+                  <Text style={styles.accountSectionTitle}>Creator payouts</Text>
+                  {creatorStatsState === "loading" ? (
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  ) : null}
+                </View>
 
-            <View style={styles.accountMenuActions}>
-              <AccountMenuAction
-                icon="person-circle-outline"
-                label="View profile"
-                onPress={() => openRoute("/profile")}
-              />
-              <AccountMenuAction
-                icon="add-circle-outline"
-                label="Post a story"
-                onPress={() => openRoute("/post")}
-              />
-              <AccountMenuAction
-                icon="file-tray-full-outline"
-                label="Story replies"
-                onPress={() => openRoute("/replies")}
-              />
-            </View>
+                {creatorStatsError ? (
+                  <Text style={styles.accountSectionError}>
+                    {creatorStatsError}
+                  </Text>
+                ) : (
+                  <>
+                    <View style={styles.payoutSummaryGrid}>
+                      <PayoutMetric
+                        label="Available"
+                        value={formatMoney(creatorStats?.earnings.availableCents ?? 0)}
+                        tone="accent"
+                      />
+                      <PayoutMetric
+                        label="Pending"
+                        value={formatMoney(creatorStats?.earnings.pendingCents ?? 0)}
+                      />
+                      <PayoutMetric
+                        label="Paid"
+                        value={formatMoney(creatorStats?.earnings.paidCents ?? 0)}
+                      />
+                      <PayoutMetric
+                        label="Lifetime"
+                        value={formatMoney(creatorStats?.earnings.totalCents ?? 0)}
+                      />
+                    </View>
+                    <View style={styles.payoutDetailCard}>
+                      <AccountDetail
+                        label="Story views"
+                        value={formatCompactNumber(creatorStats?.totalViews ?? 0)}
+                      />
+                      <AccountDetail
+                        label="Story replies"
+                        value={formatCompactNumber(creatorStats?.replies ?? 0)}
+                      />
+                      <AccountDetail
+                        label="Next available"
+                        value={formatAvailability(
+                          creatorStats?.earnings.nextAvailableAt ?? null,
+                        )}
+                      />
+                    </View>
+                  </>
+                )}
+              </View>
+
+              <Pressable
+                accessibilityLabel="Open creator analytics"
+                accessibilityRole="button"
+                onPress={() => {
+                  closeAccountMenu()
+                  router.push("/creator-stats")
+                }}
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  pressed ? styles.accountMenuActionPressed : null,
+                ]}
+              >
+                <Ionicons name="analytics-outline" size={19} color={colors.text} />
+                <Text style={styles.accountMenuActionText}>
+                  View post earnings and payouts
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+              </Pressable>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -173,7 +303,32 @@ export function MobileHomeHeader({
   )
 }
 
-function AccountStat({
+function PayoutMetric({
+  label,
+  tone,
+  value,
+}: {
+  label: string
+  tone?: "accent"
+  value: string
+}) {
+  return (
+    <View style={styles.payoutMetric}>
+      <Text style={styles.payoutMetricLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.payoutMetricValue,
+          tone === "accent" ? styles.payoutMetricValueAccent : null,
+        ]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  )
+}
+
+function AccountDetail({
   label,
   value,
 }: {
@@ -181,38 +336,12 @@ function AccountStat({
   value: string
 }) {
   return (
-    <View style={styles.accountStat}>
-      <Text style={styles.accountStatValue}>{value}</Text>
-      <Text style={styles.accountStatLabel}>{label}</Text>
+    <View style={styles.accountDetail}>
+      <Text style={styles.accountDetailLabel}>{label}</Text>
+      <Text style={styles.accountDetailValue} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
-  )
-}
-
-function AccountMenuAction({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: ComponentProps<typeof Ionicons>["name"]
-  label: string
-  onPress: () => void
-}) {
-  return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.accountMenuAction,
-        pressed ? styles.accountMenuActionPressed : null,
-      ]}
-    >
-      <View style={styles.accountMenuActionIcon}>
-        <Ionicons name={icon} size={18} color={colors.text} />
-      </View>
-      <Text style={styles.accountMenuActionText}>{label}</Text>
-      <Ionicons name="chevron-forward" size={16} color={colors.faint} />
-    </Pressable>
   )
 }
 
@@ -348,9 +477,17 @@ export function FollowingStrip({
   profiles: SocialFollowingProfile[]
 }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.followingStrip}>
-      {profiles.map((profile) => (
-        <View key={profile.id} style={styles.followingBubble}>
+    <FlatList
+      data={profiles}
+      horizontal
+      keyExtractor={(profile) => profile.id}
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.followingStrip}
+      initialNumToRender={6}
+      maxToRenderPerBatch={8}
+      windowSize={5}
+      renderItem={({ item: profile }) => (
+        <View style={styles.followingBubble}>
           <View style={styles.followingRing}>
             <Image source={{ uri: profile.imageUrl }} style={styles.followingImage} />
             <View style={styles.followingBadge}>
@@ -364,8 +501,8 @@ export function FollowingStrip({
             @{profile.handle}
           </Text>
         </View>
-      ))}
-    </ScrollView>
+      )}
+    />
   )
 }
 
@@ -375,11 +512,17 @@ export function StoryRail({
   stories: SocialStoryCard[]
 }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyRail}>
-      {stories.map((story) => (
-        <StoryCard key={story.id} story={story} compact />
-      ))}
-    </ScrollView>
+    <FlatList
+      data={stories}
+      horizontal
+      keyExtractor={(story) => story.id}
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.storyRail}
+      initialNumToRender={4}
+      maxToRenderPerBatch={5}
+      windowSize={5}
+      renderItem={({ item }) => <StoryCard story={item} compact />}
+    />
   )
 }
 
@@ -404,57 +547,56 @@ export function FollowingPreviewRail({
   const hasActiveMyStory = Boolean(myStory?.hasActiveStory)
 
   return (
-    <ScrollView
+    <FlatList
+      data={stories}
       horizontal
+      keyExtractor={(story) => story.id}
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.followingPreviewRail}
-    >
-      <View style={[styles.followingPreviewCard, styles.myStoryPreviewCard]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={
-            hasActiveMyStory ? "Open your story" : "Upload to your story"
-          }
-          onPress={() => router.push(hasActiveMyStory ? "/story/my-story" : "/post")}
-          style={({ pressed }) => [
-            styles.followingPreviewPressable,
-            pressed ? styles.followingPreviewPressed : null,
-          ]}
-        >
-          {myStory?.hasActiveStory && myStory.latestThumbnailUrl ? (
-            <Image
-              source={{ uri: myStory.latestThumbnailUrl }}
-              style={styles.followingPreviewImage}
-            />
-          ) : (
-            <View style={styles.myStoryEmptyPreview}>
-              <View style={styles.myStoryEmptyIcon}>
-                <Ionicons name="add" size={24} color="#fff" />
+      initialNumToRender={4}
+      maxToRenderPerBatch={5}
+      windowSize={5}
+      ListHeaderComponent={hasActiveMyStory ? (
+        <View style={[styles.followingPreviewCard, styles.myStoryPreviewCard]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open your story"
+            onPress={() => router.push("/story/my-story")}
+            style={({ pressed }) => [
+              styles.followingPreviewPressable,
+              pressed ? styles.followingPreviewPressed : null,
+            ]}
+          >
+            {myStory?.latestThumbnailUrl ? (
+              <Image
+                source={{ uri: myStory.latestThumbnailUrl }}
+                style={styles.followingPreviewImage}
+              />
+            ) : (
+              <View style={styles.myStoryEmptyPreview} />
+            )}
+            <View style={styles.followingPreviewOverlay} />
+            <View style={styles.myStoryAddBadge}>
+              <Ionicons name="add" size={16} color="#fff" />
+            </View>
+
+            <View style={styles.followingPreviewFooter}>
+              <View style={[styles.followingPreviewIndicator, styles.myStoryPreviewIndicator]}>
+                <View style={styles.followingPreviewIndicatorDot} />
               </View>
+              <Text
+                style={styles.followingPreviewName}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                allowFontScaling={false}
+              >
+                My Story
+              </Text>
             </View>
-          )}
-          <View style={styles.followingPreviewOverlay} />
-          <View style={styles.myStoryAddBadge}>
-            <Ionicons name="add" size={16} color="#fff" />
-          </View>
-
-          <View style={styles.followingPreviewFooter}>
-            <View style={[styles.followingPreviewIndicator, styles.myStoryPreviewIndicator]}>
-              <View style={styles.followingPreviewIndicatorDot} />
-            </View>
-            <Text
-              style={styles.followingPreviewName}
-              numberOfLines={1}
-              ellipsizeMode="tail"
-              allowFontScaling={false}
-            >
-              My Story
-            </Text>
-          </View>
-        </Pressable>
-      </View>
-
-      {stories.map((story) => {
+          </Pressable>
+        </View>
+      ) : null}
+      renderItem={({ item: story }) => {
         const isMyStory = story.id === "my-story"
 
         return (
@@ -513,31 +655,53 @@ export function FollowingPreviewRail({
             </Pressable>
           </View>
         )
-      })}
-    </ScrollView>
+      }}
+    />
   )
 }
 
 export function StoryList({
+  ListHeaderComponent,
+  contentContainerStyle,
+  showStoryTitle = true,
   stories,
 }: {
+  ListHeaderComponent?: ReactElement
+  contentContainerStyle?: StyleProp<ViewStyle>
+  showStoryTitle?: boolean
   stories: SocialStoryCard[]
 }) {
   return (
-    <View style={styles.storyList}>
-      {stories.map((story) => (
-        <StoryCard key={story.id} story={story} />
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.storyList, contentContainerStyle]}
+      showsVerticalScrollIndicator={false}
+    >
+      {ListHeaderComponent ? (
+        <View style={styles.storyListHeader}>{ListHeaderComponent}</View>
+      ) : null}
+      {stories.map((story, index) => (
+        <View key={story.id}>
+          {index > 0 ? <StoryListSeparator /> : null}
+          <StoryCard story={story} showTitle={showStoryTitle} />
+        </View>
       ))}
-    </View>
+    </ScrollView>
   )
+}
+
+function StoryListSeparator() {
+  return <View style={styles.storyListSeparator} />
 }
 
 function StoryCard({
   story,
   compact = false,
+  showTitle = true,
 }: {
   story: SocialStoryCard
   compact?: boolean
+  showTitle?: boolean
 }) {
   const router = useRouter()
 
@@ -576,9 +740,11 @@ function StoryCard({
       </Pressable>
 
       <View style={styles.storyFooter}>
-        <Text style={styles.storyTitle} numberOfLines={4}>
-          {story.title}
-        </Text>
+        {showTitle ? (
+          <Text style={styles.storyTitle} numberOfLines={4}>
+            {story.title}
+          </Text>
+        ) : null}
         <View style={styles.progressTrack}>
           <View
             style={[
@@ -596,34 +762,77 @@ function StoryCard({
 }
 
 export function DiscoverMosaic({
+  ListHeaderComponent,
+  contentContainerStyle,
   tiles,
 }: {
+  ListHeaderComponent?: ReactElement
+  contentContainerStyle?: StyleProp<ViewStyle>
   tiles: SocialDiscoverTile[]
 }) {
   return (
-    <View style={styles.discoverMosaic}>
-      {tiles.map((tile) => (
-        <View key={tile.id} style={styles.discoverGridItem}>
-          <DiscoverCard tile={tile} height={DISCOVER_CARD_HEIGHT} />
-        </View>
-      ))}
-    </View>
+    <DiscoverTileList
+      ListHeaderComponent={ListHeaderComponent}
+      contentContainerStyle={contentContainerStyle}
+      tiles={tiles}
+    />
   )
 }
 
 export function DiscoverGrid({
+  ListHeaderComponent,
+  contentContainerStyle,
   tiles,
 }: {
+  ListHeaderComponent?: ReactElement
+  contentContainerStyle?: StyleProp<ViewStyle>
   tiles: SocialDiscoverTile[]
 }) {
   return (
-    <View style={styles.discoverGrid}>
-      {tiles.map((tile) => (
-        <View key={tile.id} style={styles.discoverGridItem}>
-          <DiscoverCard tile={tile} height={DISCOVER_CARD_HEIGHT} />
+    <DiscoverTileList
+      ListHeaderComponent={ListHeaderComponent}
+      contentContainerStyle={contentContainerStyle}
+      tiles={tiles}
+    />
+  )
+}
+
+function DiscoverTileList({
+  ListHeaderComponent,
+  contentContainerStyle,
+  tiles,
+}: {
+  ListHeaderComponent?: ReactElement
+  contentContainerStyle?: StyleProp<ViewStyle>
+  tiles: SocialDiscoverTile[]
+}) {
+  const rows: SocialDiscoverTile[][] = []
+
+  for (let index = 0; index < tiles.length; index += 2) {
+    rows.push(tiles.slice(index, index + 2))
+  }
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.discoverListContent, contentContainerStyle]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      {ListHeaderComponent}
+      {rows.map((row) => (
+        <View key={row.map((tile) => tile.id).join(":")} style={styles.discoverGridRow}>
+          {row.map((tile) => (
+            <View key={tile.id} style={styles.discoverGridItem}>
+              <DiscoverCard tile={tile} height={DISCOVER_CARD_HEIGHT} />
+            </View>
+          ))}
+          {row.length === 1 ? (
+            <View style={[styles.discoverGridItem, styles.discoverGridSpacer]} />
+          ) : null}
         </View>
       ))}
-    </View>
+    </ScrollView>
   )
 }
 
@@ -655,9 +864,6 @@ function DiscoverCard({
       />
       <View style={styles.discoverOverlay} />
       <View style={styles.discoverFooter}>
-        {tile.subtitle ? (
-          <Text style={styles.discoverSubtitle}>{tile.subtitle}</Text>
-        ) : null}
         <Text style={styles.discoverTitle} numberOfLines={4}>
           {tile.title}
         </Text>
@@ -829,6 +1035,37 @@ function initials(value: string) {
     .toUpperCase()
 }
 
+function formatMoney(cents: number) {
+  return `$${(cents / 100).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatCompactNumber(value: number) {
+  return Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value)
+}
+
+function formatAvailability(value: string | null) {
+  if (!value) {
+    return "No scheduled payout"
+  }
+
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return "No scheduled payout"
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })
+}
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -881,13 +1118,11 @@ const styles = StyleSheet.create({
   },
   headerInitials: {
     fontSize: 16,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.surface,
   },
   appTitle: {
     fontSize: 24,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     letterSpacing: 0,
     color: colors.text,
@@ -901,37 +1136,38 @@ const styles = StyleSheet.create({
   },
   accountMenu: {
     position: "absolute",
-    right: 16,
+    left: 12,
+    right: 12,
     top: 58,
-    width: 306,
-    maxWidth: "92%",
+    maxHeight: "86%",
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "rgba(17,24,39,0.08)",
     backgroundColor: colors.surface,
-    padding: 14,
     shadowColor: "#111827",
     shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 0.18,
     shadowRadius: 32,
     elevation: 12,
   },
+  accountMenuScrollContent: {
+    padding: 16,
+  },
   accountMenuHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 14,
   },
   accountMenuAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.accent,
   },
   accountMenuInitials: {
-    fontSize: 16,
-    fontFamily: "Inter_700Bold",
+    fontSize: 20,
     fontWeight: "700",
     color: colors.surface,
   },
@@ -940,73 +1176,138 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   accountMenuName: {
-    fontSize: 17,
-    fontFamily: "Inter_700Bold",
+    fontSize: 22,
     fontWeight: "700",
     color: colors.text,
   },
   accountMenuHandle: {
     marginTop: 2,
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
+    fontSize: 17,
     color: colors.subtext,
   },
-  accountMenuStats: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 14,
+  accountSection: {
+    marginTop: 16,
   },
-  accountStat: {
-    flex: 1,
-    minHeight: 58,
+  accountSectionHeader: {
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  accountSectionTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  accountTypePill: {
+    minHeight: 26,
+    borderRadius: 13,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dark,
+  },
+  accountTypeText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.surface,
+  },
+  accountSectionError: {
+    marginTop: 8,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    color: colors.danger,
+    backgroundColor: "rgba(239,68,68,0.08)",
+  },
+  accountMenuDetails: {
+    marginTop: 8,
     borderRadius: 8,
     backgroundColor: colors.mutedSurface,
-    justifyContent: "center",
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
   },
-  accountStatValue: {
-    fontSize: 13,
-    fontFamily: "Inter_700Bold",
+  accountDetail: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(17,24,39,0.08)",
+  },
+  accountDetailLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.subtext,
+  },
+  accountDetailValue: {
+    flexShrink: 1,
+    textAlign: "right",
+    fontSize: 15,
     fontWeight: "700",
     color: colors.text,
   },
-  accountStatLabel: {
-    marginTop: 3,
-    fontSize: 11,
-    fontFamily: "Inter_400Regular",
+  payoutSummaryGrid: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  payoutMetric: {
+    flexBasis: "48%",
+    flexGrow: 1,
+    minHeight: 74,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: "space-between",
+    backgroundColor: colors.surface,
+  },
+  payoutMetricLabel: {
+    fontSize: 12,
+    fontWeight: "700",
     color: colors.subtext,
   },
-  accountMenuActions: {
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 6,
+  payoutMetricValue: {
+    marginTop: 8,
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  payoutMetricValueAccent: {
+    color: colors.accent,
+  },
+  payoutDetailCard: {
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: colors.mutedSurface,
+    paddingHorizontal: 12,
   },
   accountMenuAction: {
-    minHeight: 46,
+    marginTop: 16,
+    minHeight: 50,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.08)",
+    paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    borderRadius: 8,
-    paddingHorizontal: 8,
+    backgroundColor: colors.surface,
   },
   accountMenuActionPressed: {
-    backgroundColor: colors.mutedSurface,
-  },
-  accountMenuActionIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.mutedSurface,
+    opacity: 0.76,
   },
   accountMenuActionText: {
     flex: 1,
     minWidth: 0,
     fontSize: 14,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.text,
   },
   screenHeader: {
@@ -1016,13 +1317,11 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
     marginBottom: 6,
   },
   screenTitle: {
     fontSize: 34,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     letterSpacing: 0,
     color: colors.text,
@@ -1030,7 +1329,6 @@ const styles = StyleSheet.create({
   screenSubtitle: {
     marginTop: 6,
     fontSize: 15,
-    fontFamily: "Inter_400Regular",
     lineHeight: 22,
     color: colors.subtext,
   },
@@ -1060,7 +1358,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     padding: 0,
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     color: colors.text,
   },
   sectionTitleRow: {
@@ -1073,14 +1370,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 28,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     letterSpacing: 0,
     color: colors.text,
   },
   sectionTitleCompact: {
     fontSize: 20,
-    fontFamily: "Inter_400Regular",
   },
   followingStrip: {
     gap: 18,
@@ -1120,14 +1415,12 @@ const styles = StyleSheet.create({
   followingName: {
     marginTop: 14,
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   followingHandle: {
     marginTop: 2,
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     color: colors.faint,
   },
   storyRail: {
@@ -1165,14 +1458,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.mutedSurface,
   },
-  myStoryEmptyIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.dark,
-  },
   myStoryAddBadge: {
     position: "absolute",
     top: 8,
@@ -1188,7 +1473,7 @@ const styles = StyleSheet.create({
   },
   followingPreviewOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(17,24,39,0.18)",
+    backgroundColor: "rgba(17,24,39,0.3)",
   },
   followingPreviewFooter: {
     position: "absolute",
@@ -1219,17 +1504,19 @@ const styles = StyleSheet.create({
   },
   followingPreviewName: {
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     lineHeight: 14,
     fontWeight: "700",
     color: "#fff",
     flex: 1,
-    textShadowColor: "rgba(0,0,0,0.35)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
   storyList: {
-    gap: 14,
+    paddingBottom: 32,
+  },
+  storyListHeader: {
+    marginBottom: 24,
+  },
+  storyListSeparator: {
+    height: 14,
   },
   storyCard: {
     overflow: "hidden",
@@ -1281,7 +1568,6 @@ const styles = StyleSheet.create({
   },
   storyAvatarText: {
     fontSize: 12,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -1293,7 +1579,6 @@ const styles = StyleSheet.create({
   },
   storyTitle: {
     fontSize: 16,
-    fontFamily: "Inter_700Bold",
     lineHeight: 21,
     fontWeight: "700",
     color: "#fff",
@@ -1309,18 +1594,21 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 999,
   },
-  discoverMosaic: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
+  discoverListContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 32,
+    paddingTop: 8,
   },
-  discoverGrid: {
+  discoverGridRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
+    justifyContent: "space-between",
   },
   discoverGridItem: {
     width: "48.2%",
+    marginBottom: 12,
+  },
+  discoverGridSpacer: {
+    opacity: 0,
   },
   discoverCard: {
     overflow: "hidden",
@@ -1332,7 +1620,7 @@ const styles = StyleSheet.create({
   },
   discoverOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(17,24,39,0.26)",
+    backgroundColor: "rgba(17,24,39,0.34)",
   },
   discoverFooter: {
     position: "absolute",
@@ -1340,15 +1628,8 @@ const styles = StyleSheet.create({
     right: 14,
     bottom: 14,
   },
-  discoverSubtitle: {
-    marginBottom: 6,
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: "#f3f4f6",
-  },
   discoverTitle: {
     fontSize: 16,
-    fontFamily: "Inter_700Bold",
     lineHeight: 21,
     fontWeight: "700",
     color: "#fff",
@@ -1366,20 +1647,17 @@ const styles = StyleSheet.create({
   },
   panelTitle: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   panelHandle: {
     marginTop: 2,
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   panelSubtext: {
     marginTop: 4,
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   livePill: {
@@ -1391,7 +1669,6 @@ const styles = StyleSheet.create({
   },
   livePillText: {
     fontSize: 12,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.subtext,
   },
@@ -1401,7 +1678,6 @@ const styles = StyleSheet.create({
   inputLabel: {
     marginBottom: 8,
     fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: "#374151",
   },
@@ -1416,7 +1692,6 @@ const styles = StyleSheet.create({
   },
   filePickerText: {
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   textInput: {
@@ -1426,7 +1701,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    fontFamily: "Inter_400Regular",
     color: colors.text,
   },
   textArea: {
@@ -1441,7 +1715,6 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#fff",
   },
@@ -1470,20 +1743,17 @@ const styles = StyleSheet.create({
   },
   suggestedAvatarText: {
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   suggestedName: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   suggestedHandle: {
     marginTop: 2,
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   suggestedButton: {
@@ -1494,7 +1764,6 @@ const styles = StyleSheet.create({
   },
   suggestedButtonText: {
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#fff",
   },
@@ -1517,7 +1786,6 @@ const styles = StyleSheet.create({
   noteText: {
     flex: 1,
     fontSize: 14,
-    fontFamily: "Inter_400Regular",
     lineHeight: 20,
     color: colors.subtext,
   },

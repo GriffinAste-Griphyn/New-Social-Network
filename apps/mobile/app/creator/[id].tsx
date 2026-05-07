@@ -346,7 +346,6 @@ const styles = StyleSheet.create({
   },
   unavailableTitle: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -388,8 +387,7 @@ const styles = StyleSheet.create({
   },
   avatarFallbackText: {
     fontSize: 22,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   activeDot: {
@@ -415,8 +413,7 @@ const styles = StyleSheet.create({
   name: {
     flexShrink: 1,
     fontSize: 34,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   verifiedBadge: {
@@ -430,7 +427,6 @@ const styles = StyleSheet.create({
   metaLine: {
     marginTop: 3,
     fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.mutedText,
   },
@@ -450,7 +446,6 @@ const styles = StyleSheet.create({
   },
   addedText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -478,7 +473,6 @@ const styles = StyleSheet.create({
   },
   followMenuTitle: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#17191f",
   },
@@ -493,7 +487,6 @@ const styles = StyleSheet.create({
   },
   removeFollowText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#ef4444",
   },
@@ -506,7 +499,6 @@ const styles = StyleSheet.create({
   },
   cancelFollowText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#17191f",
   },

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { revalidatePath } from "next/cache"
 
 import { requireSession } from "@/lib/auth"
+import { settleCreatorPayouts } from "@/lib/creator-earnings"
 import {
   buildAppUrl,
   createCreatorStripeOnboardingUrl,
@@ -42,6 +43,7 @@ export async function syncCreatorStripeAccountAction() {
 
   try {
     await syncCreatorStripeAccount(session.id)
+    await settleCreatorPayouts(session.id)
   } catch (error) {
     redirect(
       buildPayoutErrorUrl(

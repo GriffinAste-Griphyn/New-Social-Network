@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react"
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { Redirect, Tabs } from "expo-router"
-import { Text, View } from "react-native"
+import { StyleSheet, Text, View } from "react-native"
 
 import { useAuthFlow } from "@/lib/auth-flow"
 
@@ -17,43 +17,25 @@ function TabIcon({
   size?: number
 }) {
   return (
-    <View
-      style={{
-        width: 28,
-        height: 28,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
+    <View style={styles.tabIcon}>
       <Ionicons size={size} name={name} color={color} />
       {badgeCount > 0 ? (
-        <View
-          style={{
-            position: "absolute",
-            right: 0,
-            top: 0,
-            minWidth: 16,
-            height: 16,
-            borderRadius: 8,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "#e01616",
-            paddingHorizontal: 4,
-          }}
-        >
-          <Text
-            style={{
-              color: "#ffffff",
-              fontSize: 10,
-              fontFamily: "Inter_700Bold",
-              fontWeight: "700",
-              lineHeight: 12,
-            }}
-          >
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>
             {badgeCount}
           </Text>
         </View>
       ) : null}
+    </View>
+  )
+}
+
+function PostTabIcon() {
+  return (
+    <View style={styles.tabIcon}>
+      <View style={styles.postTabIconFill}>
+        <Ionicons size={18} name="add" color="#ffffff" />
+      </View>
     </View>
   )
 }
@@ -80,7 +62,6 @@ export default function TabLayout() {
         },
         tabBarLabelStyle: {
           fontSize: 11,
-          fontFamily: "Inter_600SemiBold",
           fontWeight: "600",
           letterSpacing: 0,
         },
@@ -108,9 +89,7 @@ export default function TabLayout() {
         name="post"
         options={{
           title: "Post",
-          tabBarIcon: ({ color }) => (
-            <TabIcon name="add-circle-outline" color={color} size={24} />
-          ),
+          tabBarIcon: () => <PostTabIcon />,
         }}
       />
       <Tabs.Screen
@@ -144,3 +123,38 @@ export default function TabLayout() {
     </Tabs>
   )
 }
+
+const styles = StyleSheet.create({
+  tabIcon: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  postTabIconFill: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#e01616",
+  },
+  badge: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#e01616",
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "700",
+    lineHeight: 12,
+  },
+})

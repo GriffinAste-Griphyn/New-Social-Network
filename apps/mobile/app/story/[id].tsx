@@ -9,7 +9,10 @@ import {
   Alert,
   Easing,
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -61,6 +64,15 @@ export default function StoryScreen() {
   const [isItemMenuOpen, setIsItemMenuOpen] = useState(false)
   const [isDeletingStoryItem, setIsDeletingStoryItem] = useState(false)
   const [isSendingReply, setIsSendingReply] = useState(false)
+  const [isReplyMode, setIsReplyMode] = useState(false)
+  const replyInputRef = useRef<TextInput>(null)
+  const activeImpressionRef = useRef<{
+    storyItemId: string
+    segmentStartedAt: number
+    segmentStartMs: number
+    maxViewedMs: number
+  } | null>(null)
+  const reportedImpressionIdsRef = useRef(new Set<string>())
   const activeProgress = useRef(new Animated.Value(0)).current
   const { isFollowing, toggleFollow } = useFollowState()
   const isOwnStoryRoute = id === "my-story"
@@ -79,6 +91,7 @@ export default function StoryScreen() {
   const activeItem = playbackItems[activeIndex]
   const captionTop = getCaptionTopPercent(activeItem)
   const avatarUrl = getStoryAvatarUrl(story)
+  const creatorFirstName = getFirstName(story?.creator)
   const swipeDownResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponderCapture: (_, gestureState) => {
@@ -118,6 +131,7 @@ export default function StoryScreen() {
     setRemoteStory(null)
     setStoryRequestState(id ? "loading" : "settled")
     setIsItemMenuOpen(false)
+    setIsReplyMode(false)
   }, [id])
 
   useEffect(() => {
@@ -162,6 +176,20 @@ export default function StoryScreen() {
   }, [activeIndex])
 
   useEffect(() => {
+    if (!isReplyMode) {
+      return
+    }
+
+    const focusTimer = setTimeout(() => {
+      replyInputRef.current?.focus()
+    }, 90)
+
+    return () => {
+      clearTimeout(focusTimer)
+    }
+  }, [isReplyMode])
+
+  useEffect(() => {
     if (activeItem?.assetKind === "video") {
       videoPlayer.currentTime = activeItem.segmentStartSeconds
       videoPlayer.play()
@@ -170,6 +198,17 @@ export default function StoryScreen() {
 
     videoPlayer.pause()
   }, [activeItem?.assetKind, activeItem?.id, videoPlayer])
+
+  useEffect(() => {
+    if (isReplyMode) {
+      videoPlayer.pause()
+      return
+    }
+
+    if (activeItem?.assetKind === "video") {
+      videoPlayer.play()
+    }
+  }, [activeItem?.assetKind, activeItem?.id, isReplyMode, videoPlayer])
 
   const goPrevious = () => {
     if (activeIndex > 0) {
@@ -284,6 +323,8 @@ export default function StoryScreen() {
         },
       )
       setReply("")
+      setIsReplyMode(false)
+      Keyboard.dismiss()
     } catch (error) {
       Alert.alert(
         "Could not send reply",
@@ -308,8 +349,108 @@ export default function StoryScreen() {
     })
   }
 
+  const openReplyMode = () => {
+    if (isViewingOwnStory || isSendingReply) {
+      return
+    }
+
+    setIsReplyMode(true)
+  }
+
+  const closeReplyMode = () => {
+    Keyboard.dismiss()
+    setIsReplyMode(false)
+  }
+
+  const flushActiveImpression = (completed: boolean) => {
+    const impression = activeImpressionRef.current
+
+    if (!impression || reportedImpressionIdsRef.current.has(impression.storyItemId)) {
+      return
+    }
+
+    const viewedMs = Math.max(
+      impression.maxViewedMs,
+      impression.segmentStartMs + Date.now() - impression.segmentStartedAt,
+    )
+
+    activeImpressionRef.current = null
+    reportedImpressionIdsRef.current.add(impression.storyItemId)
+
+    void postMobileApi<{ ok: true }>(
+      `/api/mobile/stories/${encodeURIComponent(impression.storyItemId)}/impressions`,
+      {
+        viewedMs,
+        completed,
+      },
+    ).catch(() => undefined)
+  }
+
+  useEffect(() => {
+    if (!activeItem || isViewingOwnStory) {
+      flushActiveImpression(false)
+      return
+    }
+
+    const current = activeImpressionRef.current
+    const now = Date.now()
+
+    if (current && current.storyItemId !== activeItem.id) {
+      flushActiveImpression(false)
+    } else if (current) {
+      current.maxViewedMs = Math.max(
+        current.maxViewedMs,
+        current.segmentStartMs + now - current.segmentStartedAt,
+      )
+      current.segmentStartedAt = now
+      current.segmentStartMs = activeItem.segmentStartSeconds * 1_000
+    }
+
+    if (
+      !activeImpressionRef.current &&
+      !reportedImpressionIdsRef.current.has(activeItem.id)
+    ) {
+      activeImpressionRef.current = {
+        storyItemId: activeItem.id,
+        segmentStartedAt: now,
+        segmentStartMs: activeItem.segmentStartSeconds * 1_000,
+        maxViewedMs: activeItem.segmentStartSeconds * 1_000,
+      }
+    }
+
+    if (activeItem.segmentIndex !== activeItem.segmentCount - 1) {
+      return
+    }
+
+    const completionTimer = setTimeout(() => {
+      flushActiveImpression(true)
+    }, Math.max(750, activeItem.durationMs - 250))
+
+    return () => {
+      clearTimeout(completionTimer)
+    }
+  }, [
+    activeItem?.id,
+    activeItem?.playbackId,
+    activeItem?.durationMs,
+    activeItem?.segmentIndex,
+    activeItem?.segmentCount,
+    activeItem?.segmentStartSeconds,
+    isViewingOwnStory,
+  ])
+
+  useEffect(() => {
+    return () => {
+      flushActiveImpression(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (!activeItem) return
+    if (isReplyMode) {
+      activeProgress.stopAnimation()
+      return
+    }
 
     activeProgress.stopAnimation()
     activeProgress.setValue(0)
@@ -333,6 +474,7 @@ export default function StoryScreen() {
     activeItem?.playbackId,
     activeItem?.durationMs,
     activeIndex,
+    isReplyMode,
     playbackItems.length,
   ])
 
@@ -351,6 +493,8 @@ export default function StoryScreen() {
           ) : activeItem?.mediaUrl ? (
             <Image source={{ uri: activeItem.mediaUrl }} style={styles.media} />
           ) : null}
+
+          {story ? <View pointerEvents="none" style={styles.mediaOverlay} /> : null}
 
           {isWaitingForStory ? (
             <View style={styles.loadingState}>
@@ -385,7 +529,7 @@ export default function StoryScreen() {
             </View>
           ) : null}
 
-          {story ? (
+          {story && !isReplyMode ? (
             <View style={styles.storyHeader}>
               <Pressable
                 accessibilityLabel={`Open ${story.creator} profile`}
@@ -412,9 +556,6 @@ export default function StoryScreen() {
                     <Text style={styles.creatorName} numberOfLines={1}>
                       {story.creator}
                     </Text>
-                    <View style={styles.verifiedBadge}>
-                      <Ionicons name="star" size={11} color="#ffffff" />
-                    </View>
                   </View>
                   <Text style={styles.postedAt} numberOfLines={1}>
                     {activeItem?.postedAt ?? "Today"}
@@ -468,7 +609,7 @@ export default function StoryScreen() {
                     pressed ? styles.pressed : null,
                   ]}
                 >
-                  <Ionicons name="add" size={24} color={colors.addText} />
+                  <Ionicons name="add" size={20} color={colors.addText} />
                   <Text style={styles.addButtonText}>Add</Text>
                 </Pressable>
               ) : (
@@ -480,13 +621,13 @@ export default function StoryScreen() {
                     pressed ? styles.pressed : null,
                   ]}
                 >
-                  <Ionicons name="notifications-outline" size={28} color={colors.text} />
+                  <Ionicons name="notifications-outline" size={23} color={colors.text} />
                 </Pressable>
               )}
             </View>
           ) : null}
 
-          {story ? (
+          {story && !isReplyMode ? (
             <View style={styles.tapZones} pointerEvents="box-none">
               <Pressable
                 accessibilityLabel="Previous story item"
@@ -516,7 +657,7 @@ export default function StoryScreen() {
             </View>
           ) : null}
 
-          {story ? (
+          {story && !isReplyMode ? (
             <View style={styles.sideActions}>
               <Pressable
                 accessibilityLabel="Share story"
@@ -532,7 +673,93 @@ export default function StoryScreen() {
           ) : null}
         </View>
 
-        {story ? (
+        {story && isReplyMode ? (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={0}
+            pointerEvents="box-none"
+            style={styles.replyModeLayer}
+          >
+            <View pointerEvents="none" style={styles.replyModeShade} />
+            <View style={styles.replyModeHeader}>
+              <Pressable
+                accessibilityLabel="Close reply"
+                accessibilityRole="button"
+                onPress={closeReplyMode}
+                style={({ pressed }) => [
+                  styles.replyModeClose,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={48} color={colors.text} />
+              </Pressable>
+              <View style={styles.replyModeTitleWrap} pointerEvents="none">
+                <Text style={styles.replyModeTitle}>Reply to</Text>
+                <Text style={styles.replyModeName}>{story.creator}</Text>
+              </View>
+            </View>
+
+            <View style={styles.replyModeFooter}>
+              <Text style={styles.replyModeNotice}>
+                {creatorFirstName} can share your reply to their Public Story.
+              </Text>
+              <View style={styles.replyModeComposerBar}>
+                <Pressable
+                  accessibilityLabel="Camera reply"
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.replyModeCameraButton,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Ionicons name="camera" size={31} color={colors.background} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`Reply to ${story.creator}`}
+                  accessibilityRole="button"
+                  onPress={() => replyInputRef.current?.focus()}
+                  style={styles.replyModeInputShell}
+                >
+                  <TextInput
+                    ref={replyInputRef}
+                    value={reply}
+                    onChangeText={setReply}
+                    placeholder={`Reply to ${story.creator}...`}
+                    placeholderTextColor="rgba(255,255,255,0.92)"
+                    editable={!isViewingOwnStory && !isSendingReply}
+                    keyboardAppearance="dark"
+                    returnKeyType="send"
+                    onSubmitEditing={sendReply}
+                    style={styles.replyModeInput}
+                  />
+                  <Ionicons name="mic-outline" size={31} color={colors.text} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Emoji"
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.replyModeIconButton,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Ionicons name="happy-outline" size={35} color={colors.text} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Photo reply"
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.replyModeIconButton,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Ionicons name="images-outline" size={35} color={colors.text} />
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        ) : null}
+
+        {story && !isReplyMode ? (
           <View style={styles.replyDock}>
             <View style={styles.replyComposer}>
               <TextInput
@@ -543,6 +770,7 @@ export default function StoryScreen() {
                 editable={!isViewingOwnStory && !isSendingReply}
                 style={styles.replyInput}
                 returnKeyType="send"
+                onFocus={openReplyMode}
                 onSubmitEditing={sendReply}
               />
               {reply.trim().length > 0 ? (
@@ -698,6 +926,10 @@ function getStoryAvatarUrl(
   return story.items[0]?.thumbnailUrl ?? story.items[0]?.mediaUrl
 }
 
+function getFirstName(value: string | undefined) {
+  return value?.trim().split(/\s+/)[0] || "They"
+}
+
 function initials(value: string) {
   return value
     .split(" ")
@@ -729,6 +961,11 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  mediaOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    backgroundColor: "rgba(0,0,0,0.12)",
+  },
   loadingState: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -742,7 +979,6 @@ const styles = StyleSheet.create({
   },
   unavailableTitle: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
     textAlign: "center",
@@ -803,7 +1039,6 @@ const styles = StyleSheet.create({
   },
   avatarFallbackText: {
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -819,34 +1054,22 @@ const styles = StyleSheet.create({
   creatorName: {
     flexShrink: 1,
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.text,
-    textShadowColor: "rgba(0,0,0,0.45)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-  verifiedBadge: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.brand,
   },
   postedAt: {
     marginTop: 3,
-    fontSize: 16,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
-    color: colors.mutedText,
-    textShadowColor: "rgba(0,0,0,0.45)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    fontSize: 15,
+    fontWeight: "500",
+    color: "rgba(255,255,255,0.64)",
   },
   bellButton: {
-    width: 46,
-    height: 46,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+    backgroundColor: "rgba(11,13,17,0.26)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -881,25 +1104,23 @@ const styles = StyleSheet.create({
   },
   ownerMenuItemText: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   addButton: {
-    minWidth: 98,
-    height: 42,
-    borderRadius: 21,
-    paddingHorizontal: 16,
+    minWidth: 74,
+    height: 34,
+    borderRadius: 17,
+    paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 5,
-    backgroundColor: colors.brand,
+    gap: 4,
+    backgroundColor: "rgba(224,22,22,0.92)",
   },
   addButtonText: {
-    fontSize: 16,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
+    fontSize: 15,
+    fontWeight: "600",
     color: colors.addText,
   },
   tapZones: {
@@ -929,7 +1150,6 @@ const styles = StyleSheet.create({
   captionText: {
     maxWidth: "100%",
     fontSize: 18,
-    fontFamily: "Inter_400Regular",
     lineHeight: 23,
     color: colors.text,
     textAlign: "center",
@@ -974,7 +1194,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     padding: 0,
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -1012,6 +1231,111 @@ const styles = StyleSheet.create({
     borderRadius: 29,
     borderWidth: 1.5,
     borderColor: colors.outline,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  replyModeLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    justifyContent: "space-between",
+  },
+  replyModeShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.42)",
+  },
+  replyModeHeader: {
+    paddingTop: 10,
+    minHeight: 132,
+    justifyContent: "flex-start",
+  },
+  replyModeClose: {
+    position: "absolute",
+    top: 14,
+    left: 26,
+    zIndex: 2,
+    width: 58,
+    height: 58,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  replyModeTitleWrap: {
+    alignItems: "center",
+    paddingHorizontal: 96,
+  },
+  replyModeTitle: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: "800",
+    color: colors.text,
+    textAlign: "center",
+  },
+  replyModeName: {
+    marginTop: 20,
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: "800",
+    color: colors.text,
+    textAlign: "center",
+  },
+  replyModeFooter: {
+    justifyContent: "flex-end",
+  },
+  replyModeNotice: {
+    marginBottom: 14,
+    paddingHorizontal: 26,
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: "700",
+    color: colors.text,
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  replyModeComposerBar: {
+    minHeight: 72,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: colors.background,
+  },
+  replyModeCameraButton: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.text,
+  },
+  replyModeInputShell: {
+    flex: 1,
+    minWidth: 0,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.82)",
+    paddingLeft: 15,
+    paddingRight: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: colors.background,
+  },
+  replyModeInput: {
+    flex: 1,
+    minWidth: 0,
+    padding: 0,
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: "500",
+    color: colors.text,
+  },
+  replyModeIconButton: {
+    width: 44,
+    height: 54,
     alignItems: "center",
     justifyContent: "center",
   },

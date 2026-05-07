@@ -1,4 +1,7 @@
+"use client"
+
 import Image from "next/image"
+import { useEffect, useRef } from "react"
 import { Play, Sparkles, TrendingUp } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +13,34 @@ type StoryViewportProps = {
 }
 
 export function StoryViewport({ story }: StoryViewportProps) {
+  const recordedStoryIdsRef = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (!story || recordedStoryIdsRef.current.has(story.id)) {
+      return
+    }
+
+    const startedAt = Date.now()
+    const timer = window.setTimeout(() => {
+      recordedStoryIdsRef.current.add(story.id)
+
+      void fetch(`/api/stories/${encodeURIComponent(story.id)}/impressions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          viewedMs: Date.now() - startedAt,
+          completed: true,
+        }),
+      }).catch(() => undefined)
+    }, 4_000)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [story])
+
   if (!story) {
     return (
       <section className="flex min-h-[720px] flex-col justify-between overflow-hidden rounded-[28px] bg-neutral-950 p-6 text-white shadow-[0_32px_72px_rgba(10,10,10,0.24)]">

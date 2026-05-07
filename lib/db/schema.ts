@@ -609,6 +609,10 @@ export const brandMatchEvents = pgTable(
     ),
     index("brand_match_events_story_idx").on(table.storyId),
     index("brand_match_events_creator_idx").on(table.creatorId, table.createdAt),
+    uniqueIndex("brand_match_events_story_profile_idx").on(
+      table.storyId,
+      table.fundingProfileId,
+    ),
   ],
 )
 
@@ -647,12 +651,28 @@ export const earningsLedger = pgTable("earnings_ledger", {
   userId: text("user_id")
     .notNull()
     .references(() => users.id),
+  storyId: text("story_id").references(() => stories.id),
   source: payoutSource("source").notNull(),
   sourceId: text("source_id").notNull(),
   status: payoutStatus("status").notNull().default("pending"),
   amountCents: integer("amount_cents").notNull(),
   availableAt: timestamp("available_at", { withTimezone: true }),
+  stripeTransferId: text("stripe_transfer_id"),
+  stripeTransferStatus: text("stripe_transfer_status"),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (table) => [
+  index("earnings_ledger_user_status_idx").on(table.userId, table.status),
+  index("earnings_ledger_story_idx").on(table.storyId),
+  uniqueIndex("earnings_ledger_source_user_idx").on(
+    table.source,
+    table.sourceId,
+    table.userId,
+  ),
+  uniqueIndex("earnings_ledger_stripe_transfer_idx").on(table.stripeTransferId),
+])

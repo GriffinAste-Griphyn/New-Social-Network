@@ -1,13 +1,14 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { useRouter } from "expo-router"
 import type { ComponentProps } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ActivityIndicator,
   Image,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native"
 
@@ -30,6 +31,19 @@ type CreatorStoryStats = {
   averageViewedSeconds: number
   comments: number
   replies: number
+  earningsCents: number
+  pendingEarningsCents: number
+  paidEarningsCents: number
+}
+
+type CreatorEarningsStats = {
+  totalCents: number
+  pendingCents: number
+  approvedCents: number
+  paidCents: number
+  reversedCents: number
+  availableCents: number
+  nextAvailableAt: string | null
 }
 
 type CreatorStats = {
@@ -44,6 +58,7 @@ type CreatorStats = {
   averageViewedSeconds: number
   comments: number
   replies: number
+  earnings: CreatorEarningsStats
   stories: CreatorStoryStats[]
 }
 
@@ -51,6 +66,16 @@ type CreatorStatsResponse = {
   ok: true
   stats: CreatorStats
 }
+
+type StatsRangePreset = "day" | "week" | "month" | "all" | "custom"
+
+const rangeOptions: Array<{ label: string; value: StatsRangePreset }> = [
+  { label: "Day", value: "day" },
+  { label: "Week", value: "week" },
+  { label: "Month", value: "month" },
+  { label: "All", value: "all" },
+  { label: "Custom", value: "custom" },
+]
 
 const colors = {
   background: "#f3f4f6",
@@ -76,12 +101,101 @@ function formatDate(value: string) {
   }).format(new Date(value))
 }
 
+function formatMoney(cents: number) {
+  return Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(cents / 100)
+}
+
+function formatAvailability(value: string | null) {
+  if (!value) {
+    return "No scheduled payout"
+  }
+
+  return `Available ${Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value))}`
+}
+
+function formatDateInput(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function parseDateInput(value: string, endOfDay = false) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return null
+  }
+
+  const date = new Date(`${value.trim()}T00:00:00`)
+
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 999)
+  }
+
+  return date
+}
+
+function buildCreatorStatsPath(
+  preset: StatsRangePreset,
+  customStart: string,
+  customEnd: string,
+) {
+  const now = new Date()
+  let from: Date | null = null
+  let to: Date | null = now
+
+  if (preset === "day") {
+    from = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+  } else if (preset === "week") {
+    from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+  } else if (preset === "month") {
+    from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+  } else if (preset === "custom") {
+    from = parseDateInput(customStart)
+    to = parseDateInput(customEnd, true)
+  } else {
+    to = null
+  }
+
+  const params = new URLSearchParams()
+
+  if (from) {
+    params.set("from", from.toISOString())
+  }
+
+  if (to) {
+    params.set("to", to.toISOString())
+  }
+
+  const query = params.toString()
+
+  return `/api/mobile/creator/stats${query ? `?${query}` : ""}`
+}
+
 export default function CreatorStatsScreen() {
   const router = useRouter()
   const { account } = useAuthFlow()
   const [stats, setStats] = useState<CreatorStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [rangePreset, setRangePreset] = useState<StatsRangePreset>("week")
+  const [customStart, setCustomStart] = useState(() => {
+    const start = new Date()
+    start.setDate(start.getDate() - 7)
+    return formatDateInput(start)
+  })
+  const [customEnd, setCustomEnd] = useState(() => formatDateInput(new Date()))
+  const statsPath = useMemo(
+    () => buildCreatorStatsPath(rangePreset, customStart, customEnd),
+    [customEnd, customStart, rangePreset],
+  )
 
   useEffect(() => {
     let isMounted = true
@@ -94,10 +208,9 @@ export default function CreatorStatsScreen() {
 
     setIsLoading(true)
 
-    getMobileApi<CreatorStatsResponse>(
-      "/api/mobile/creator/stats",
-      { authToken: account.mobileToken },
-    )
+    getMobileApi<CreatorStatsResponse>(statsPath, {
+      authToken: account.mobileToken,
+    })
       .then((payload) => {
         if (!isMounted) return
         setStats(payload.stats)
@@ -121,7 +234,7 @@ export default function CreatorStatsScreen() {
     return () => {
       isMounted = false
     }
-  }, [account?.mobileToken])
+  }, [account?.mobileToken, statsPath])
 
   return (
     <ScreenFrame>
@@ -144,6 +257,15 @@ export default function CreatorStatsScreen() {
             <Text style={styles.subtitle}>@{account?.handle ?? "account"}</Text>
           </View>
         </View>
+
+        <TimeRangeControl
+          customEnd={customEnd}
+          customStart={customStart}
+          onChangeCustomEnd={setCustomEnd}
+          onChangeCustomStart={setCustomStart}
+          onChangePreset={setRangePreset}
+          selected={rangePreset}
+        />
 
         {isLoading ? (
           <View style={styles.loadingPanel}>
@@ -191,6 +313,49 @@ export default function CreatorStatsScreen() {
             <View style={styles.panel}>
               <View style={styles.panelHeader}>
                 <View>
+                  <Text style={styles.panelTitle}>Earnings and payouts</Text>
+                  <Text style={styles.panelSubtext}>
+                    Story earnings by ledger status.
+                  </Text>
+                </View>
+                <View style={styles.averagePill}>
+                  <Text style={styles.averagePillText}>
+                    {formatAvailability(stats.earnings.nextAvailableAt)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.earningsGrid}>
+                <MetricCard
+                  icon="wallet-outline"
+                  label="Total earned"
+                  value={formatMoney(stats.earnings.totalCents)}
+                  detail="All approved ledger entries"
+                />
+                <MetricCard
+                  icon="hourglass-outline"
+                  label="Pending"
+                  value={formatMoney(stats.earnings.pendingCents)}
+                  detail="Under review or clearing"
+                />
+                <MetricCard
+                  icon="checkmark-done-outline"
+                  label="Available"
+                  value={formatMoney(stats.earnings.availableCents)}
+                  detail="Ready for payout"
+                />
+                <MetricCard
+                  icon="card-outline"
+                  label="Paid out"
+                  value={formatMoney(stats.earnings.paidCents)}
+                  detail="Sent through payouts"
+                />
+              </View>
+            </View>
+
+            <View style={styles.panel}>
+              <View style={styles.panelHeader}>
+                <View>
                   <Text style={styles.panelTitle}>Story activity</Text>
                   <Text style={styles.panelSubtext}>
                     {stats.totalStories} stories · {stats.liveStories} live
@@ -222,6 +387,86 @@ export default function CreatorStatsScreen() {
         ) : null}
       </ScreenScroll>
     </ScreenFrame>
+  )
+}
+
+function TimeRangeControl({
+  customEnd,
+  customStart,
+  onChangeCustomEnd,
+  onChangeCustomStart,
+  onChangePreset,
+  selected,
+}: {
+  customEnd: string
+  customStart: string
+  onChangeCustomEnd: (value: string) => void
+  onChangeCustomStart: (value: string) => void
+  onChangePreset: (value: StatsRangePreset) => void
+  selected: StatsRangePreset
+}) {
+  return (
+    <View style={styles.rangePanel}>
+      <View style={styles.rangeOptions}>
+        {rangeOptions.map((option) => {
+          const isSelected = selected === option.value
+
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Show ${option.label} stats`}
+              key={option.value}
+              onPress={() => onChangePreset(option.value)}
+              style={({ pressed }) => [
+                styles.rangeOption,
+                isSelected ? styles.rangeOptionSelected : null,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.rangeOptionText,
+                  isSelected ? styles.rangeOptionTextSelected : null,
+                ]}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          )
+        })}
+      </View>
+
+      {selected === "custom" ? (
+        <View style={styles.customRangeRow}>
+          <View style={styles.customRangeField}>
+            <Text style={styles.customRangeLabel}>From</Text>
+            <TextInput
+              accessibilityLabel="Custom stats start date"
+              autoCapitalize="none"
+              keyboardType="numbers-and-punctuation"
+              onChangeText={onChangeCustomStart}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.faint}
+              style={styles.customRangeInput}
+              value={customStart}
+            />
+          </View>
+          <View style={styles.customRangeField}>
+            <Text style={styles.customRangeLabel}>To</Text>
+            <TextInput
+              accessibilityLabel="Custom stats end date"
+              autoCapitalize="none"
+              keyboardType="numbers-and-punctuation"
+              onChangeText={onChangeCustomEnd}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.faint}
+              style={styles.customRangeInput}
+              value={customEnd}
+            />
+          </View>
+        </View>
+      ) : null}
+    </View>
   )
 }
 
@@ -272,8 +517,8 @@ function StoryStatsRow({ story }: { story: CreatorStoryStats }) {
         <Text style={styles.storyMeta}>{formatDate(story.createdAt)}</Text>
       </View>
       <View style={styles.storyNumbers}>
-        <Text style={styles.storyViews}>{formatNumber(story.views)}</Text>
-        <Text style={styles.storyMeta}>{story.completionRate}%</Text>
+        <Text style={styles.storyViews}>{formatMoney(story.earningsCents)}</Text>
+        <Text style={styles.storyMeta}>{formatNumber(story.views)} views</Text>
       </View>
     </View>
   )
@@ -299,7 +544,6 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     fontSize: 12,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.faint,
     textTransform: "uppercase",
@@ -307,17 +551,68 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 30,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
     letterSpacing: 0,
   },
   subtitle: {
     marginTop: 2,
     fontSize: 14,
-    fontFamily: "Inter_500Medium",
     fontWeight: "500",
     color: colors.subtext,
+  },
+  rangePanel: {
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    padding: 10,
+  },
+  rangeOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  rangeOption: {
+    minHeight: 34,
+    borderRadius: 8,
+    justifyContent: "center",
+    backgroundColor: colors.mutedSurface,
+    paddingHorizontal: 11,
+  },
+  rangeOptionSelected: {
+    backgroundColor: colors.text,
+  },
+  rangeOptionText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.subtext,
+  },
+  rangeOptionTextSelected: {
+    color: colors.surface,
+  },
+  customRangeRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    gap: 10,
+  },
+  customRangeField: {
+    flex: 1,
+    minWidth: 0,
+  },
+  customRangeLabel: {
+    marginBottom: 5,
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.subtext,
+  },
+  customRangeInput: {
+    minHeight: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 10,
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
   },
   loadingPanel: {
     minHeight: 160,
@@ -335,18 +630,22 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   emptyText: {
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     lineHeight: 18,
     textAlign: "center",
     color: colors.subtext,
   },
   statGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  earningsGrid: {
+    marginTop: 12,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
@@ -366,7 +665,6 @@ const styles = StyleSheet.create({
   },
   metricLabel: {
     fontSize: 12,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.subtext,
   },
@@ -381,15 +679,13 @@ const styles = StyleSheet.create({
   metricValue: {
     marginTop: 18,
     fontSize: 28,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
     letterSpacing: 0,
   },
   metricDetail: {
     marginTop: 2,
     fontSize: 12,
-    fontFamily: "Inter_500Medium",
     fontWeight: "500",
     color: colors.subtext,
   },
@@ -406,14 +702,12 @@ const styles = StyleSheet.create({
   },
   panelTitle: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   panelSubtext: {
     marginTop: 3,
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     color: colors.subtext,
   },
   averagePill: {
@@ -425,7 +719,6 @@ const styles = StyleSheet.create({
   },
   averagePillText: {
     fontSize: 12,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -468,7 +761,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     fontSize: 14,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -479,14 +771,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
     fontSize: 10,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.subtext,
   },
   storyMeta: {
     marginTop: 3,
     fontSize: 12,
-    fontFamily: "Inter_500Medium",
     fontWeight: "500",
     color: colors.subtext,
   },
@@ -496,8 +786,7 @@ const styles = StyleSheet.create({
   },
   storyViews: {
     fontSize: 14,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   emptyStoryState: {

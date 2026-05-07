@@ -1,38 +1,39 @@
 import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
   Inter_700Bold,
-  Inter_800ExtraBold,
-  Inter_900Black,
   useFonts,
 } from "@expo-google-fonts/inter"
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native"
 import { Stack } from "expo-router"
 import { StatusBar } from "expo-status-bar"
+import { Platform } from "react-native"
 
 import { AuthFlowProvider } from "@/lib/auth-flow"
 import { FollowStateProvider } from "@/lib/follow-state"
-import { mobileFontFamily } from "@/lib/typography"
+
+const systemFontFamily = Platform.select({
+  ios: "System",
+  android: "sans-serif",
+  default: "System",
+})
 
 const theme = {
   ...DefaultTheme,
   fonts: {
     regular: {
-      fontFamily: mobileFontFamily.regular,
+      fontFamily: systemFontFamily,
       fontWeight: "400" as const,
     },
     medium: {
-      fontFamily: mobileFontFamily.medium,
+      fontFamily: systemFontFamily,
       fontWeight: "500" as const,
     },
     bold: {
-      fontFamily: mobileFontFamily.bold,
+      fontFamily: systemFontFamily,
       fontWeight: "700" as const,
     },
     heavy: {
-      fontFamily: mobileFontFamily.black,
-      fontWeight: "900" as const,
+      fontFamily: systemFontFamily,
+      fontWeight: "700" as const,
     },
   },
   colors: {
@@ -47,12 +48,7 @@ const theme = {
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
     Inter_700Bold,
-    Inter_800ExtraBold,
-    Inter_900Black,
   })
 
   if (!fontsLoaded) {
@@ -74,6 +70,9 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="creator/[id]" />
             <Stack.Screen name="creator-stats" />
+            <Stack.Screen name="earnings" />
+            <Stack.Screen name="followers" />
+            <Stack.Screen name="payouts" />
             <Stack.Screen name="replies/[creatorId]" />
           </Stack>
         </ThemeProvider>

@@ -6,6 +6,7 @@ import {
   postWalletFundingFromStripe,
   upsertAdvertiserPaymentMethod,
 } from "@/lib/advertiser-store"
+import { syncCreatorLedgerTransferFromWebhook } from "@/lib/creator-earnings"
 import { getStripeClient } from "@/lib/stripe"
 import { syncCreatorStripeAccountFromWebhook } from "@/lib/stripe-connect"
 
@@ -137,6 +138,12 @@ export async function POST(request: Request) {
   if (stripeObject.object === "v2.core.account") {
     await syncCreatorStripeAccountFromWebhook(
       stripeObject as Parameters<typeof syncCreatorStripeAccountFromWebhook>[0],
+    )
+  }
+
+  if (stripeObject.object === "transfer") {
+    await syncCreatorLedgerTransferFromWebhook(
+      event.data.object as Stripe.Transfer,
     )
   }
 

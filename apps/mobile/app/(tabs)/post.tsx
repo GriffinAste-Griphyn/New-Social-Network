@@ -724,14 +724,12 @@ const styles = StyleSheet.create({
   cameraPermissionTitle: {
     color: colors.text,
     fontSize: 18,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     textAlign: "center",
   },
   cameraPermissionCopy: {
     color: colors.mutedText,
     fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     lineHeight: 20,
     textAlign: "center",
@@ -752,7 +750,6 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     color: colors.mutedText,
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     letterSpacing: 0,
   },
@@ -784,7 +781,6 @@ const styles = StyleSheet.create({
   cameraModeText: {
     color: colors.text,
     fontSize: 14,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
   },
   cameraHint: {
@@ -795,7 +791,6 @@ const styles = StyleSheet.create({
   cameraHintText: {
     color: colors.mutedText,
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
   },
   cameraControls: {
@@ -875,7 +870,6 @@ const styles = StyleSheet.create({
   videoPreviewText: {
     color: colors.text,
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
   },
   previewShade: {
@@ -923,8 +917,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     color: colors.text,
     fontSize: 15,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
   },
   rightToolRail: {
     position: "absolute",
@@ -960,7 +953,6 @@ const styles = StyleSheet.create({
   snapText: {
     color: colors.text,
     fontSize: 22,
-    fontFamily: "Inter_700Bold",
     lineHeight: 27,
     fontWeight: "700",
     textAlign: "center",
@@ -971,7 +963,6 @@ const styles = StyleSheet.create({
     padding: 0,
     color: colors.text,
     fontSize: 22,
-    fontFamily: "Inter_700Bold",
     lineHeight: 27,
     fontWeight: "700",
     textAlign: "center",
@@ -1002,8 +993,7 @@ const styles = StyleSheet.create({
   textDoneLabel: {
     color: colors.white,
     fontSize: 13,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
   },
   linkPreview: {
     position: "absolute",
@@ -1023,7 +1013,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     color: colors.white,
     fontSize: 14,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
   },
   linkEditorPanel: {
@@ -1056,7 +1045,6 @@ const styles = StyleSheet.create({
     padding: 0,
     color: colors.text,
     fontSize: 15,
-    fontFamily: "Inter_400Regular",
   },
   linkDoneButton: {
     height: 48,
@@ -1069,8 +1057,7 @@ const styles = StyleSheet.create({
   linkDoneText: {
     color: colors.white,
     fontSize: 14,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontWeight: "700",
   },
   storyFooter: {
     position: "absolute",
@@ -1088,7 +1075,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(224,22,22,0.82)",
     color: colors.text,
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     textAlign: "center",
   },
@@ -1108,8 +1094,7 @@ const styles = StyleSheet.create({
   storyPostLabel: {
     color: colors.text,
     fontSize: 15,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontWeight: "700",
   },
   gallerySheetLayer: {
     flex: 1,
@@ -1135,14 +1120,12 @@ const styles = StyleSheet.create({
   galleryTitle: {
     color: "#111827",
     fontSize: 22,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
   },
   gallerySubtitle: {
     marginTop: 2,
     color: "#6b7280",
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
   },
   galleryCloseButton: {
     width: 38,

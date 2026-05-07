@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 import {
   ArrowLeft,
   BarChart3,
+  BadgeDollarSign,
   Clock3,
   Eye,
   MessageCircle,
@@ -18,6 +19,13 @@ import { getCreatorStats } from "@/lib/creator-stats"
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en", { notation: "compact" }).format(value)
+}
+
+function formatMoney(cents: number) {
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+  }).format(cents / 100)
 }
 
 function formatDate(value: string) {
@@ -145,6 +153,33 @@ export default async function CreatorStatsPage() {
             label="Comments"
             value={formatNumber(stats.comments)}
             subtext={`${formatNumber(stats.replies)} story replies`}
+          />
+        </section>
+
+        <section className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            icon={<BadgeDollarSign className="size-4" />}
+            label="Total earnings"
+            value={formatMoney(stats.earnings.totalCents)}
+            subtext="Ledger total"
+          />
+          <StatCard
+            icon={<BadgeDollarSign className="size-4" />}
+            label="Pending"
+            value={formatMoney(stats.earnings.pendingCents)}
+            subtext="Under review"
+          />
+          <StatCard
+            icon={<BadgeDollarSign className="size-4" />}
+            label="Available"
+            value={formatMoney(stats.earnings.availableCents)}
+            subtext="Ready for payout"
+          />
+          <StatCard
+            icon={<BadgeDollarSign className="size-4" />}
+            label="Paid"
+            value={formatMoney(stats.earnings.paidCents)}
+            subtext="Sent through Stripe"
           />
         </section>
 

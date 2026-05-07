@@ -1,269 +1,374 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
-import * as WebBrowser from "expo-web-browser"
 import type { Href } from "expo-router"
 import { useRouter } from "expo-router"
-import { useState } from "react"
+import type { ComponentProps } from "react"
+import { useEffect, useState } from "react"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import { useAuthFlow } from "@/lib/auth-flow"
-import { useFollowState } from "@/lib/follow-state"
-import { postMobileApi } from "@/lib/mobile-api"
-import { useMobileFeed } from "@/lib/mobile-stories-api"
+import { getMobileApi } from "@/lib/mobile-api"
 import {
   ScreenFrame,
   ScreenHeader,
   ScreenScroll,
-  SuggestedAccountsList,
 } from "@/components/social/ui"
+
+type ProfileStats = {
+  followerCount: number
+  followingCount: number
+  totalViews: number
+  replies: number
+  earnings: {
+    availableCents: number
+    paidCents: number
+  }
+}
+
+type ProfileStatsResponse = {
+  ok: true
+  stats: ProfileStats
+}
+
+const colors = {
+  surface: "#ffffff",
+  mutedSurface: "#f5f6f8",
+  text: "#17191f",
+  subtext: "#6b7280",
+  faint: "#9ca3af",
+  border: "#e5e7eb",
+  accent: "#e01616",
+  dark: "#111827",
+}
+
+function formatMoney(cents: number) {
+  return Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(cents / 100)
+}
+
+function formatNumber(value: number) {
+  return Intl.NumberFormat("en", { notation: "compact" }).format(value)
+}
+
+function initials(value: string) {
+  return value
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase()
+}
 
 export default function ProfileScreen() {
   const router = useRouter()
   const { account } = useAuthFlow()
-  const { revision } = useFollowState()
-  const [stripeError, setStripeError] = useState<string | null>(null)
-  const [isOpeningStripe, setIsOpeningStripe] = useState(false)
-  const liveFeed = useMobileFeed(account?.mobileToken, revision)
-  const suggestions =
-    liveFeed.data?.suggestedAccounts.map((person) => ({
-      id: person.id,
-      name: person.name,
-      handle: person.handle.replace(/^@/, ""),
-      imageUrl: person.imageUrl ?? "",
-    })) ?? []
+  const [stats, setStats] = useState<ProfileStats | null>(null)
+
+  useEffect(() => {
+    let isMounted = true
+
+    if (!account?.mobileToken) {
+      setStats(null)
+      return
+    }
+
+    getMobileApi<ProfileStatsResponse>("/api/mobile/creator/stats", {
+      authToken: account.mobileToken,
+    })
+      .then((payload) => {
+        if (isMounted) {
+          setStats(payload.stats)
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      isMounted = false
+    }
+  }, [account?.mobileToken])
+
+  const displayName = account?.displayName ?? "Account"
+  const handle = account?.handle ?? "account"
+  const followerCount = stats?.followerCount ?? 0
+  const followingCount = stats?.followingCount ?? 0
+  const availableCents = stats?.earnings.availableCents ?? 0
+  const paidCents = stats?.earnings.paidCents ?? 0
 
   return (
     <ScreenFrame>
       <ScreenScroll>
         <ScreenHeader
-          eyebrow="Account"
-          title={account?.displayName ?? "Account"}
-          subtitle={`@${account?.handle ?? "account"}`}
+          eyebrow="Profile"
+          title={displayName}
+          subtitle={`@${handle}`}
         />
-        <AccountToolsPanel
-          isOpeningStripe={isOpeningStripe}
-          onOpenReplies={() => router.push("/replies")}
-          onOpenStats={() => router.push("/creator-stats" as Href)}
-          onOpenStripe={async () => {
-            setStripeError(null)
-            setIsOpeningStripe(true)
 
-            try {
-              const payload = await postMobileApi<{ ok: true; url: string }>(
-                "/api/mobile/stripe/connect/onboarding",
-                {},
-              )
+        <View style={styles.identityPanel}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials(displayName)}</Text>
+          </View>
+          <View style={styles.identityCopy}>
+            <Text style={styles.identityName} numberOfLines={1}>
+              {displayName}
+            </Text>
+            <Text style={styles.identityHandle} numberOfLines={1}>
+              @{handle}
+            </Text>
+          </View>
+          <View style={styles.creatorPill}>
+            <Text style={styles.creatorPillText}>Creator</Text>
+          </View>
+        </View>
 
-              await WebBrowser.openBrowserAsync(payload.url)
-            } catch (error) {
-              setStripeError(
-                error instanceof Error
-                  ? error.message
-                  : "Could not open Stripe onboarding.",
-              )
-            } finally {
-              setIsOpeningStripe(false)
-            }
-          }}
-          stripeError={stripeError}
-        />
-        {suggestions.length > 0 ? (
-          <SuggestedAccountsList people={suggestions} />
-        ) : null}
+        <View style={styles.summaryGrid}>
+          <SummaryMetric
+            label="Followers"
+            value={formatNumber(followerCount)}
+            onPress={() => router.push("/followers" as Href)}
+          />
+          <SummaryMetric
+            label="Following"
+            value={formatNumber(followingCount)}
+            onPress={() => router.push("/followers?view=following" as Href)}
+          />
+          <SummaryMetric
+            label="Available"
+            value={formatMoney(availableCents)}
+            onPress={() => router.push("/earnings" as Href)}
+          />
+          <SummaryMetric
+            label="Paid"
+            value={formatMoney(paidCents)}
+            onPress={() => router.push("/earnings" as Href)}
+          />
+        </View>
+
+        <View style={styles.panel}>
+          <Text style={styles.panelTitle}>Account</Text>
+          <ActionRow
+            icon="file-tray-full-outline"
+            label="Story replies"
+            detail={`${formatNumber(stats?.replies ?? 0)} received`}
+            onPress={() => router.push("/replies")}
+          />
+          <ActionRow
+            icon="people-outline"
+            label="Followers"
+            detail="Followers and following"
+            onPress={() => router.push("/followers" as Href)}
+          />
+        </View>
+
+        <View style={styles.panel}>
+          <Text style={styles.panelTitle}>Creator business</Text>
+          <ActionRow
+            icon="analytics-outline"
+            label="Stats"
+            detail={`${formatNumber(stats?.totalViews ?? 0)} story views`}
+            onPress={() => router.push("/creator-stats" as Href)}
+          />
+          <ActionRow
+            icon="wallet-outline"
+            label="Earnings"
+            detail="Story ledger and balances"
+            onPress={() => router.push("/earnings" as Href)}
+          />
+          <ActionRow
+            icon="card-outline"
+            label="Payouts"
+            detail="Stripe setup and settlement"
+            onPress={() => router.push("/payouts" as Href)}
+          />
+        </View>
       </ScreenScroll>
     </ScreenFrame>
   )
 }
 
-function AccountToolsPanel({
-  isOpeningStripe,
-  onOpenReplies,
-  onOpenStats,
-  onOpenStripe,
-  stripeError,
+function SummaryMetric({
+  label,
+  onPress,
+  value,
 }: {
-  isOpeningStripe: boolean
-  onOpenReplies: () => void
-  onOpenStats: () => void
-  onOpenStripe: () => void
-  stripeError: string | null
+  label: string
+  onPress: () => void
+  value: string
 }) {
   return (
-    <View style={styles.panel}>
-      <View style={styles.panelHeader}>
-        <View>
-          <Text style={styles.panelTitle}>Account tools</Text>
-          <Text style={styles.panelSubtext}>
-            Post, reply, receive replies, and earn from one account.
-          </Text>
-        </View>
-        <View style={styles.creatorBadge}>
-          <Ionicons name="checkmark" size={13} color="#ffffff" />
-        </View>
+    <Pressable
+      accessibilityLabel={`Open ${label}`}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.summaryMetric,
+        pressed ? styles.pressed : null,
+      ]}
+    >
+      <Text style={styles.summaryValue} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={styles.summaryLabel}>{label}</Text>
+    </Pressable>
+  )
+}
+
+function ActionRow({
+  detail,
+  icon,
+  label,
+  onPress,
+}: {
+  detail: string
+  icon: ComponentProps<typeof Ionicons>["name"]
+  label: string
+  onPress: () => void
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={`Open ${label}`}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionRow,
+        pressed ? styles.pressed : null,
+      ]}
+    >
+      <View style={styles.actionIcon}>
+        <Ionicons name={icon} size={19} color={colors.text} />
       </View>
-
-      <Pressable
-        accessibilityLabel="Open story replies"
-        accessibilityRole="button"
-        onPress={onOpenReplies}
-        style={({ pressed }) => [
-          styles.creatorAction,
-          pressed ? styles.creatorActionPressed : null,
-        ]}
-      >
-        <View style={styles.creatorActionIcon}>
-          <Ionicons name="file-tray-full-outline" size={18} color="#17191f" />
-        </View>
-        <View style={styles.creatorActionCopy}>
-          <Text style={styles.creatorActionTitle}>Story replies</Text>
-          <Text style={styles.creatorActionText}>
-            See replies to your stories and replies you have made.
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-      </Pressable>
-
-      <Pressable
-        accessibilityLabel="Open creator stats"
-        accessibilityRole="button"
-        onPress={onOpenStats}
-        style={({ pressed }) => [
-          styles.creatorAction,
-          pressed ? styles.creatorActionPressed : null,
-        ]}
-      >
-        <View style={styles.creatorActionIcon}>
-          <Ionicons name="analytics-outline" size={18} color="#17191f" />
-        </View>
-        <View style={styles.creatorActionCopy}>
-          <Text style={styles.creatorActionTitle}>Creator stats</Text>
-          <Text style={styles.creatorActionText}>
-            Review followers, views, comments, and story performance.
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
-      </Pressable>
-
-      <Pressable
-        accessibilityLabel="Open Stripe creator payouts"
-        accessibilityRole="button"
-        onPress={onOpenStripe}
-        style={({ pressed }) => [
-          styles.creatorAction,
-          pressed ? styles.creatorActionPressed : null,
-        ]}
-      >
-        <View style={styles.creatorActionIcon}>
-          <Ionicons name="card-outline" size={18} color="#17191f" />
-        </View>
-        <View style={styles.creatorActionCopy}>
-          <Text style={styles.creatorActionTitle}>Creator payouts</Text>
-          <Text style={styles.creatorActionText}>
-            Connect Stripe to receive approved story earnings.
-          </Text>
-        </View>
-        <View style={styles.stripeStatusPill}>
-          <Text style={styles.stripeStatusText}>
-            {isOpeningStripe ? "Opening" : "Stripe"}
-          </Text>
-        </View>
-      </Pressable>
-
-      {stripeError ? <Text style={styles.stripeError}>{stripeError}</Text> : null}
-    </View>
+      <View style={styles.actionCopy}>
+        <Text style={styles.actionLabel}>{label}</Text>
+        <Text style={styles.actionDetail}>{detail}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+    </Pressable>
   )
 }
 
 const styles = StyleSheet.create({
-  panel: {
+  identityPanel: {
+    minHeight: 96,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
-    backgroundColor: "#ffffff",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     padding: 14,
-  },
-  panelHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     gap: 12,
   },
-  panelTitle: {
+  avatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent,
+  },
+  avatarText: {
     fontSize: 18,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
-    color: "#17191f",
+    fontWeight: "800",
+    color: colors.surface,
   },
-  panelSubtext: {
-    marginTop: 3,
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-    lineHeight: 18,
-    color: "#6b7280",
-  },
-  creatorBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#e01616",
-  },
-  creatorAction: {
-    minHeight: 64,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 8,
-    backgroundColor: "#f5f6f8",
-    marginTop: 14,
-    paddingHorizontal: 12,
-  },
-  creatorActionPressed: {
-    opacity: 0.72,
-  },
-  creatorActionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#ffffff",
-  },
-  creatorActionCopy: {
+  identityCopy: {
     flex: 1,
     minWidth: 0,
   },
-  creatorActionTitle: {
-    fontSize: 14,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
-    color: "#17191f",
+  identityName: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.text,
   },
-  creatorActionText: {
+  identityHandle: {
     marginTop: 2,
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: "#6b7280",
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.subtext,
   },
-  stripeStatusPill: {
-    minWidth: 52,
-    height: 28,
-    borderRadius: 14,
+  creatorPill: {
+    height: 30,
+    borderRadius: 15,
+    justifyContent: "center",
+    backgroundColor: colors.dark,
+    paddingHorizontal: 11,
+  },
+  creatorPillText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.surface,
+  },
+  summaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  summaryMetric: {
+    width: "48.5%",
+    minHeight: 78,
+    borderRadius: 8,
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    padding: 13,
+  },
+  summaryValue: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  summaryLabel: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.subtext,
+  },
+  panel: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 12,
+  },
+  panelTitle: {
+    marginBottom: 2,
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  actionRow: {
+    minHeight: 64,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+  },
+  actionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#635bff",
-    paddingHorizontal: 10,
+    backgroundColor: colors.mutedSurface,
   },
-  stripeStatusText: {
-    fontSize: 11,
-    fontFamily: "Inter_700Bold",
-    fontWeight: "700",
-    color: "#ffffff",
+  actionCopy: {
+    flex: 1,
+    minWidth: 0,
   },
-  stripeError: {
-    marginTop: 8,
+  actionLabel: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  actionDetail: {
+    marginTop: 2,
     fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: "#b91c1c",
+    fontWeight: "500",
+    color: colors.subtext,
+  },
+  pressed: {
+    opacity: 0.72,
   },
 })

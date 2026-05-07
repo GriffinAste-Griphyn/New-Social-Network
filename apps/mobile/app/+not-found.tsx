@@ -25,7 +25,6 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 20,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: "#111827",
     textAlign: "center",
@@ -36,7 +35,6 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: "#2563eb",
   },

@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context"
 
 import { useAuthFlow } from "@/lib/auth-flow"
+import { mobileBrandFontFamily } from "@/lib/typography"
 
 const colors = {
   surface: "#ffffff",
@@ -92,8 +93,17 @@ export default function AuthScreen() {
           </View>
 
           <View style={styles.heroCopy}>
-            <Text style={styles.kicker}>{stageKicker[stage]}</Text>
-            <Text style={styles.title}>{stageTitle[stage]}</Text>
+            {stage === "landing" ? null : (
+              <Text style={styles.kicker}>{stageKicker[stage]}</Text>
+            )}
+            <Text
+              style={[
+                styles.title,
+                stage === "landing" ? styles.landingTitle : null,
+              ]}
+            >
+              {stageTitle[stage]}
+            </Text>
             <Text style={styles.subtitle}>{stageSubtitle[stage]}</Text>
           </View>
 
@@ -114,30 +124,8 @@ export default function AuthScreen() {
 
             {stage === "landing" ? (
               <View style={styles.form}>
-                <View style={styles.landingPanel}>
-                  <FeatureRow
-                    icon="at-outline"
-                    text="Claim the handle people already know."
-                  />
-                  <FeatureRow
-                    icon="camera-outline"
-                    text="Share story updates with your circle."
-                  />
-                  <FeatureRow
-                    icon="chatbubble-ellipses-outline"
-                    text="Keep replies and creator conversations close."
-                  />
-                </View>
-                <PrimaryButton
-                  icon="person-add-outline"
-                  label="Sign up"
-                  onPress={startSignup}
-                />
-                <SecondaryButton
-                  icon="log-in-outline"
-                  label="Log in"
-                  onPress={startLogin}
-                />
+                <PrimaryButton label="Sign up" onPress={startSignup} />
+                <SecondaryButton label="Log in" onPress={startLogin} />
               </View>
             ) : null}
 
@@ -285,46 +273,56 @@ function StepRail({ stage }: { stage: (typeof stageOrder)[number] }) {
   )
 }
 
-function FeatureRow({
-  icon,
-  text,
-}: {
-  icon: ComponentProps<typeof Ionicons>["name"]
-  text: string
-}) {
-  return (
-    <View style={styles.featureRow}>
-      <View style={styles.featureIcon}>
-        <Ionicons name={icon} size={18} color={colors.dark} />
-      </View>
-      <Text style={styles.featureText}>{text}</Text>
-    </View>
-  )
-}
-
 function Field({
   label,
   prefix,
+  secureTextEntry,
   ...props
 }: {
   label: string
   prefix?: string
 } & ComponentProps<typeof TextInput>) {
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false)
+  const canTogglePassword = Boolean(secureTextEntry)
+  const resolvedSecureTextEntry = canTogglePassword && !isPasswordVisible
+
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      {prefix ? (
+      {prefix || canTogglePassword ? (
         <View style={styles.inputShell}>
-          <Text style={styles.inputPrefix}>{prefix}</Text>
+          {prefix ? <Text style={styles.inputPrefix}>{prefix}</Text> : null}
           <TextInput
             placeholderTextColor="#9ca3af"
-            style={styles.prefixedInput}
+            secureTextEntry={resolvedSecureTextEntry}
+            style={styles.shellInput}
             {...props}
           />
+          {canTogglePassword ? (
+            <Pressable
+              accessibilityLabel={
+                isPasswordVisible ? "Hide password" : "Show password"
+              }
+              accessibilityRole="button"
+              onPress={() => setIsPasswordVisible((current) => !current)}
+              hitSlop={8}
+              style={({ pressed }) => [
+                styles.passwordToggle,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons
+                name={isPasswordVisible ? "eye-off-outline" : "eye-outline"}
+                size={22}
+                color={colors.subtext}
+              />
+            </Pressable>
+          ) : null}
         </View>
       ) : (
         <TextInput
           placeholderTextColor="#9ca3af"
+          secureTextEntry={secureTextEntry}
           style={styles.input}
           {...props}
         />
@@ -396,7 +394,7 @@ function SecondaryButton({
 const stageOrder = ["signup", "verify", "profile"] as const
 
 const stageKicker = {
-  landing: "New social network",
+  landing: "",
   signup: "Create account",
   login: "Welcome back",
   verify: "Verify email",
@@ -405,7 +403,7 @@ const stageKicker = {
 }
 
 const stageTitle = {
-  landing: "Make your name easy to find.",
+  landing: "Welcome to NSN",
   signup: "Start with email and password.",
   login: "Log in to your account.",
   verify: "Verify your account.",
@@ -414,7 +412,7 @@ const stageTitle = {
 }
 
 const stageSubtitle = {
-  landing: "Claim a handle, share stories, and keep replies close.",
+  landing: "Sign up or log in to continue.",
   signup: "Handles are claimed after email verification.",
   login: "Use the email and password you signed up with.",
   verify: "Tap the email link, then return here to continue.",
@@ -433,7 +431,7 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     justifyContent: "center",
-    padding: 20,
+    padding: 24,
   },
   brandRow: {
     flexDirection: "row",
@@ -450,41 +448,41 @@ const styles = StyleSheet.create({
   },
   brandText: {
     fontSize: 18,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontFamily: mobileBrandFontFamily,
+    fontWeight: "700",
     color: colors.text,
   },
   heroCopy: {
-    marginTop: 48,
+    marginTop: 40,
   },
   kicker: {
     fontSize: 12,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 0,
     textTransform: "uppercase",
     color: colors.subtext,
   },
   title: {
     marginTop: 12,
-    fontSize: 42,
-    fontFamily: "Inter_900Black",
-    lineHeight: 44,
-    fontWeight: "900",
+    fontSize: 34,
+    lineHeight: 39,
+    fontWeight: "700",
     letterSpacing: 0,
     color: colors.text,
   },
+  landingTitle: {
+    marginTop: 0,
+  },
   subtitle: {
-    marginTop: 14,
+    marginTop: 10,
     maxWidth: 310,
     fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-    lineHeight: 23,
-    fontWeight: "600",
+    lineHeight: 22,
+    fontWeight: "500",
     color: colors.subtext,
   },
   card: {
-    marginTop: 34,
+    marginTop: 28,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
@@ -506,44 +504,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dark,
   },
   form: {
-    gap: 14,
-  },
-  landingPanel: {
-    gap: 10,
-  },
-  featureRow: {
-    minHeight: 50,
-    flexDirection: "row",
-    alignItems: "center",
     gap: 12,
-    borderRadius: 8,
-    backgroundColor: colors.mutedSurface,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  featureIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  featureText: {
-    flex: 1,
-    fontSize: 13,
-    fontFamily: "Inter_700Bold",
-    lineHeight: 18,
-    fontWeight: "700",
-    color: colors.text,
   },
   field: {
     gap: 7,
   },
   label: {
     fontSize: 13,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   input: {
@@ -553,7 +521,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     paddingHorizontal: 13,
     fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.text,
     backgroundColor: colors.surface,
@@ -571,18 +538,23 @@ const styles = StyleSheet.create({
   inputPrefix: {
     marginRight: 1,
     fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.text,
   },
-  prefixedInput: {
+  shellInput: {
     flex: 1,
     minHeight: 48,
     padding: 0,
     fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
     fontWeight: "600",
     color: colors.text,
+  },
+  passwordToggle: {
+    width: 34,
+    height: 34,
+    marginLeft: 8,
+    alignItems: "center",
+    justifyContent: "center",
   },
   errorBox: {
     marginBottom: 14,
@@ -592,7 +564,6 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     lineHeight: 18,
     fontWeight: "700",
     color: colors.text,
@@ -604,14 +575,12 @@ const styles = StyleSheet.create({
   },
   noticeTitle: {
     fontSize: 14,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontWeight: "700",
     color: colors.text,
   },
   noticeText: {
     marginTop: 5,
     fontSize: 13,
-    fontFamily: "Inter_600SemiBold",
     lineHeight: 18,
     fontWeight: "600",
     color: colors.subtext,
@@ -625,8 +594,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     fontSize: 15,
-    fontFamily: "Inter_900Black",
-    fontWeight: "900",
+    fontWeight: "700",
     color: colors.surface,
   },
   buttonContent: {
@@ -646,8 +614,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     fontSize: 15,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   pressed: {

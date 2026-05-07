@@ -293,7 +293,6 @@ const styles = StyleSheet.create({
   },
   switchButtonText: {
     fontSize: 13,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.subtext,
   },
@@ -333,8 +332,7 @@ const styles = StyleSheet.create({
   },
   avatarText: {
     fontSize: 14,
-    fontFamily: "Inter_800ExtraBold",
-    fontWeight: "800",
+    fontWeight: "700",
     color: colors.text,
   },
   threadBody: {
@@ -343,20 +341,17 @@ const styles = StyleSheet.create({
   },
   threadName: {
     fontSize: 15,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
   statusText: {
     marginTop: 2,
     fontSize: 12,
-    fontFamily: "Inter_500Medium",
     color: colors.subtext,
   },
   replyText: {
     marginTop: 5,
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     color: colors.text,
   },
   emptyPanel: {
@@ -372,7 +367,6 @@ const styles = StyleSheet.create({
   emptyTitle: {
     marginTop: 8,
     fontSize: 16,
-    fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: colors.text,
   },
@@ -380,7 +374,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: "center",
     fontSize: 13,
-    fontFamily: "Inter_400Regular",
     lineHeight: 18,
     color: colors.subtext,
   },

@@ -8,6 +8,8 @@ import {
   syncCreatorStripeAccountAction,
 } from "@/lib/creator-payout-actions"
 import { requireSession } from "@/lib/auth"
+import { settleCreatorPayouts } from "@/lib/creator-earnings"
+import { getCreatorStats } from "@/lib/creator-stats"
 import {
   getCreatorStripeStatus,
   syncCreatorStripeAccount,
@@ -29,6 +31,13 @@ function formatDate(value: Date | null) {
     hour: "numeric",
     minute: "2-digit",
   }).format(value)
+}
+
+function formatMoney(cents: number) {
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+  }).format(cents / 100)
 }
 
 function Flash({ error, stripe }: { error?: string; stripe?: string }) {
@@ -62,10 +71,14 @@ export default async function PayoutsPage({ searchParams }: PayoutsPageProps) {
   const params = await searchParams
   const status =
     params.stripe === "returned"
-      ? await syncCreatorStripeAccount(session.id).catch(() =>
-          getCreatorStripeStatus(session.id),
-        )
+      ? await syncCreatorStripeAccount(session.id)
+          .then(async (syncedStatus) => {
+            await settleCreatorPayouts(session.id)
+            return syncedStatus
+          })
+          .catch(() => getCreatorStripeStatus(session.id))
       : await getCreatorStripeStatus(session.id)
+  const stats = await getCreatorStats(session.id)
   const isConnected = Boolean(status.stripeConnectedAccountId)
   const isReady = status.stripePayoutsEnabled && status.stripeOnboardingComplete
   const statusLabel = isReady
@@ -133,6 +146,29 @@ export default async function PayoutsPage({ searchParams }: PayoutsPageProps) {
             />
           </div>
 
+          <div className="mt-6 grid gap-3 sm:grid-cols-4">
+            <StatusCard
+              icon={<WalletCards className="size-5" />}
+              label="Available"
+              value={formatMoney(stats.earnings.availableCents)}
+            />
+            <StatusCard
+              icon={<WalletCards className="size-5" />}
+              label="Pending"
+              value={formatMoney(stats.earnings.pendingCents)}
+            />
+            <StatusCard
+              icon={<WalletCards className="size-5" />}
+              label="Paid"
+              value={formatMoney(stats.earnings.paidCents)}
+            />
+            <StatusCard
+              icon={<WalletCards className="size-5" />}
+              label="Reversed"
+              value={formatMoney(stats.earnings.reversedCents)}
+            />
+          </div>
+
           {status.stripeRequirementsDue ? (
             <div className="mt-5 rounded-[8px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
               Stripe still needs account details before payouts are enabled.
@@ -154,7 +190,7 @@ export default async function PayoutsPage({ searchParams }: PayoutsPageProps) {
                   className="h-11 rounded-[8px] border-[#d4d4d8] bg-white px-5"
                 >
                   <RefreshCw className="size-4" />
-                  Sync status
+                  Sync and settle
                 </Button>
               </form>
             ) : null}

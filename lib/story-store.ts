@@ -12,6 +12,10 @@ import {
 import type { SocialStoryCard } from "@new-social-network/shared"
 
 import type { CompleteAuthSession } from "@/lib/auth"
+import {
+  processStoryCreatorEarnings,
+  reverseUnpaidStoryEarnings,
+} from "@/lib/creator-earnings"
 import { getDb } from "@/lib/db"
 import {
   creatorProfiles,
@@ -971,6 +975,8 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
+  await processStoryCreatorEarnings(storyId)
+
   return storyId
 }
 
@@ -1017,6 +1023,8 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     ),
   )
 
+  await reverseUnpaidStoryEarnings(story.id)
+
   await db
     .update(stories)
     .set({
@@ -1051,6 +1059,8 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
       })),
     )
   }
+
+  await processStoryCreatorEarnings(input.storyId)
 }
 
 export async function removeStoryForOwner(storyId: string, ownerId: string) {
@@ -1067,6 +1077,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
   if (!story) {
     throw new Error("Story not found.")
   }
+
+  await reverseUnpaidStoryEarnings(story.id)
 
   await db
     .update(stories)

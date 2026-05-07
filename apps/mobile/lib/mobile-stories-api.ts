@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { SocialAppHomeContract, SocialStoryCard } from "@new-social-network/shared"
 
-import { postMobileApi } from "@/lib/mobile-api"
+import { MobileApiError, postMobileApi } from "@/lib/mobile-api"
 
 export type MobileFeedResponse = SocialAppHomeContract & {
   ok: true
@@ -61,10 +61,18 @@ export type MobileStoryUploadResponse = {
 export function useMobileFeed(
   mobileToken: string | null | undefined,
   refreshKey = 0,
+  options?: {
+    onUnauthorized?: () => void
+  },
 ) {
   const [data, setData] = useState<MobileFeedResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const onUnauthorizedRef = useRef(options?.onUnauthorized)
+
+  useEffect(() => {
+    onUnauthorizedRef.current = options?.onUnauthorized
+  }, [options?.onUnauthorized])
 
   useEffect(() => {
     let isMounted = true
@@ -89,6 +97,9 @@ export function useMobileFeed(
       .catch((errorValue) => {
         if (!isMounted) return
         setData(null)
+        if (errorValue instanceof MobileApiError && errorValue.status === 401) {
+          onUnauthorizedRef.current?.()
+        }
         setError(
           errorValue instanceof Error
             ? errorValue.message

@@ -89,6 +89,13 @@
     {
       "idx": 12,
       "version": "7",
+      "when": 1778167003498,
+      "tag": "0012_concerned_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
       "when": 1778180149925,
       "tag": "0013_add_advertiser_payment_methods",
       "breakpoints": true
