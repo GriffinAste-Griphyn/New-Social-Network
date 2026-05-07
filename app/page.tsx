@@ -160,7 +160,7 @@ export default function HomePage() {
 
                   <div className="max-w-[22rem] sm:max-w-[31rem] lg:max-w-[62rem]">
                     <h1 className="text-[3.25rem] font-semibold leading-[0.93] tracking-[-0.06em] text-white sm:text-6xl md:text-7xl lg:text-[6.4rem] lg:leading-[0.94]">
-                      The post-work income social network
+                      Earn from the attention you create
                     </h1>
                   </div>
                 </div>
