@@ -1,4 +1,5 @@
 import Constants from "expo-constants"
+import AsyncStorage from "@react-native-async-storage/async-storage"
 
 const fallbackApiBaseUrl = "http://127.0.0.1:3000"
 
@@ -13,6 +14,8 @@ export class MobileApiError extends Error {
 }
 
 let mobileAuthToken: string | null = null
+const mobileDeviceIdKey = "nsn.mobile.device.id"
+let mobileDeviceIdPromise: Promise<string> | null = null
 
 export function setMobileApiAuthToken(token: string | null) {
   mobileAuthToken = token
@@ -22,14 +25,45 @@ type MobileApiOptions = {
   authToken?: string | null
 }
 
-function getMobileApiHeaders(
+function createMobileDeviceId() {
+  const randomParts = Array.from({ length: 4 }, () =>
+    Math.floor(Math.random() * 0xffffffff)
+      .toString(16)
+      .padStart(8, "0"),
+  )
+
+  return `mobile-${Date.now().toString(36)}-${randomParts.join("")}`
+}
+
+async function getMobileDeviceId() {
+  if (!mobileDeviceIdPromise) {
+    mobileDeviceIdPromise = AsyncStorage.getItem(mobileDeviceIdKey).then(
+      async (storedValue) => {
+        if (storedValue) {
+          return storedValue
+        }
+
+        const nextValue = createMobileDeviceId()
+        await AsyncStorage.setItem(mobileDeviceIdKey, nextValue)
+
+        return nextValue
+      },
+    )
+  }
+
+  return mobileDeviceIdPromise
+}
+
+async function getMobileApiHeaders(
   headers?: Record<string, string>,
   options?: MobileApiOptions,
 ) {
   const authToken = options?.authToken ?? mobileAuthToken
+  const deviceId = await getMobileDeviceId()
 
   return {
     Accept: "application/json",
+    "X-Device-Id": deviceId,
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...headers,
   }
@@ -75,7 +109,7 @@ export async function postMobileApi<TResponse>(
 ) {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
-    headers: getMobileApiHeaders({
+    headers: await getMobileApiHeaders({
       "Content-Type": "application/json",
     }, options),
     body: JSON.stringify(body),
@@ -101,7 +135,7 @@ export async function getMobileApi<TResponse>(
 ) {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "GET",
-    headers: getMobileApiHeaders(undefined, options),
+    headers: await getMobileApiHeaders(undefined, options),
   })
 
   const payload = (await response.json().catch(() => null)) as
@@ -121,7 +155,7 @@ export async function getMobileApi<TResponse>(
 export async function postMobileFormApi<TResponse>(path: string, body: FormData) {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
-    headers: getMobileApiHeaders(),
+    headers: await getMobileApiHeaders(),
     body,
   })
 
@@ -146,7 +180,7 @@ export async function deleteMobileApi<TResponse>(
 ) {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "DELETE",
-    headers: getMobileApiHeaders({
+    headers: await getMobileApiHeaders({
       "Content-Type": "application/json",
     }, options),
     body: JSON.stringify(body),

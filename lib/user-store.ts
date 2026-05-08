@@ -18,13 +18,18 @@ import type {
 } from "@/lib/auth-validators"
 import { getDb } from "@/lib/db"
 import {
-  authRateLimits,
   creatorProfiles,
   passwordResetTokens,
   users,
 } from "@/lib/db/schema"
 import { sendPasswordResetEmail } from "@/lib/email"
 import { env } from "@/lib/env"
+import {
+  clearRateLimit,
+  consumeRateLimit,
+  rateLimitKey,
+  type RateLimitOptions,
+} from "@/lib/rate-limit"
 
 export type AuthUser = {
   id: string
@@ -48,15 +53,18 @@ type GenericAuthResult = { ok: true; message: string } | { ok: false; message: s
 const loginRateLimit = {
   limit: 10,
   windowMs: 15 * 60 * 1000,
-}
+  message: "Too many attempts. Wait a bit before trying again.",
+} satisfies RateLimitOptions
 const signupRateLimit = {
   limit: 5,
   windowMs: 60 * 60 * 1000,
-}
+  message: "Too many attempts. Wait a bit before trying again.",
+} satisfies RateLimitOptions
 const resetRateLimit = {
   limit: 3,
   windowMs: 60 * 60 * 1000,
-}
+  message: "Too many attempts. Wait a bit before trying again.",
+} satisfies RateLimitOptions
 const maxFailedLoginAttempts = 5
 const accountLockoutMs = 15 * 60 * 1000
 const passwordResetTokenTtlMs = 60 * 60 * 1000
@@ -103,59 +111,11 @@ function formatLockoutMessage(lockedUntil: Date) {
   return `Too many failed sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`
 }
 
-async function consumeRateLimit(
-  key: string,
-  options: { limit: number; windowMs: number },
+function authEmailRateLimitKey(
+  bucket: "login" | "signup" | "password-reset",
+  email: string,
 ) {
-  const db = getDb()
-  const now = new Date()
-  const [record] = await db
-    .select()
-    .from(authRateLimits)
-    .where(eq(authRateLimits.key, key))
-    .limit(1)
-
-  if (!record || record.resetAt.getTime() <= now.getTime()) {
-    await db
-      .insert(authRateLimits)
-      .values({
-        key,
-        count: 1,
-        resetAt: new Date(now.getTime() + options.windowMs),
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: authRateLimits.key,
-        set: {
-          count: 1,
-          resetAt: new Date(now.getTime() + options.windowMs),
-          updatedAt: now,
-        },
-      })
-
-    return { ok: true as const }
-  }
-
-  if (record.count >= options.limit) {
-    return {
-      ok: false as const,
-      message: "Too many attempts. Wait a bit before trying again.",
-    }
-  }
-
-  await db
-    .update(authRateLimits)
-    .set({
-      count: record.count + 1,
-      updatedAt: now,
-    })
-    .where(eq(authRateLimits.key, key))
-
-  return { ok: true as const }
-}
-
-async function clearRateLimit(key: string) {
-  await getDb().delete(authRateLimits).where(eq(authRateLimits.key, key))
+  return rateLimitKey(`auth:${bucket}:email`, email.trim().toLowerCase())
 }
 
 function verifyPassword(password: string, storedHash: string) {
@@ -177,7 +137,7 @@ function verifyPassword(password: string, storedHash: string) {
 export async function registerUser(input: SignupInput): Promise<AuthResult> {
   const db = getDb()
   const rateLimit = await consumeRateLimit(
-    `signup:${input.email}`,
+    authEmailRateLimitKey("signup", input.email),
     signupRateLimit,
   )
 
@@ -222,7 +182,10 @@ export async function registerUser(input: SignupInput): Promise<AuthResult> {
 
 export async function authenticateUser(input: LoginInput): Promise<AuthResult> {
   const db = getDb()
-  const rateLimit = await consumeRateLimit(`login:${input.email}`, loginRateLimit)
+  const rateLimit = await consumeRateLimit(
+    authEmailRateLimitKey("login", input.email),
+    loginRateLimit,
+  )
 
   if (!rateLimit.ok) {
     return {
@@ -296,7 +259,7 @@ export async function authenticateUser(input: LoginInput): Promise<AuthResult> {
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id)),
-    clearRateLimit(`login:${input.email}`),
+    clearRateLimit(authEmailRateLimitKey("login", input.email)),
   ])
 
   return {
@@ -310,7 +273,7 @@ export async function requestPasswordReset(
 ): Promise<GenericAuthResult> {
   const db = getDb()
   const rateLimit = await consumeRateLimit(
-    `password-reset:${input.email}`,
+    authEmailRateLimitKey("password-reset", input.email),
     resetRateLimit,
   )
 

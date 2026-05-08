@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 
-import { eq } from "drizzle-orm"
+import { eq, lt } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { authRateLimits } from "@/lib/db/schema"
@@ -8,6 +8,7 @@ import { authRateLimits } from "@/lib/db/schema"
 export type RateLimitOptions = {
   limit: number
   windowMs: number
+  message?: string
 }
 
 export type RateLimitResult =
@@ -21,6 +22,8 @@ export const rateLimitWindows = {
   day: 24 * 60 * 60 * 1000,
 } as const
 
+let lastPrunedAt = 0
+
 export function rateLimitKey(bucket: string, subject: string | null | undefined) {
   const normalizedSubject = subject?.trim() || "anonymous"
   const digest = createHash("sha256")
@@ -31,6 +34,18 @@ export function rateLimitKey(bucket: string, subject: string | null | undefined)
   return `${bucket}:${digest}`
 }
 
+async function pruneExpiredRateLimits(now: Date) {
+  if (now.getTime() - lastPrunedAt < 5 * rateLimitWindows.minute) {
+    return
+  }
+
+  lastPrunedAt = now.getTime()
+  await getDb()
+    .delete(authRateLimits)
+    .where(lt(authRateLimits.resetAt, now))
+    .catch(() => undefined)
+}
+
 export async function consumeRateLimit(
   key: string,
   options: RateLimitOptions,
@@ -38,6 +53,9 @@ export async function consumeRateLimit(
   const db = getDb()
   const now = new Date()
   const resetAt = new Date(now.getTime() + options.windowMs)
+
+  await pruneExpiredRateLimits(now)
+
   const [record] = await db
     .select()
     .from(authRateLimits)
@@ -68,7 +86,7 @@ export async function consumeRateLimit(
   if (record.count >= options.limit) {
     return {
       ok: false,
-      message: "Too many requests. Wait a bit before trying again.",
+      message: options.message ?? "Too many requests. Wait a bit before trying again.",
       retryAfterSeconds: Math.max(
         1,
         Math.ceil((record.resetAt.getTime() - now.getTime()) / 1000),
@@ -85,6 +103,10 @@ export async function consumeRateLimit(
     .where(eq(authRateLimits.key, key))
 
   return { ok: true }
+}
+
+export async function clearRateLimit(key: string) {
+  await getDb().delete(authRateLimits).where(eq(authRateLimits.key, key))
 }
 
 export async function consumeRateLimits(

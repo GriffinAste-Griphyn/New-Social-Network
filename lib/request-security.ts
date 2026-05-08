@@ -10,6 +10,7 @@ import {
 } from "@/lib/rate-limit"
 
 const forbiddenOriginMessage = "Invalid request origin."
+const globalSubject = "global"
 
 export const mutationRateLimits = {
   authLoginIp: { limit: 30, windowMs: 15 * rateLimitWindows.minute },
@@ -27,6 +28,12 @@ export const mutationRateLimits = {
   stripeWriteUser: { limit: 10, windowMs: 15 * rateLimitWindows.minute },
   pushTokenUser: { limit: 20, windowMs: rateLimitWindows.hour },
 } as const satisfies Record<string, RateLimitOptions>
+
+type RateLimitCheck = {
+  bucket: string
+  subject: string | null | undefined
+  options: RateLimitOptions
+}
 
 function parseOrigin(value: string | null) {
   if (!value) {
@@ -82,6 +89,87 @@ export function getRequestIpFromHeaders(headerList: Headers) {
   )
 }
 
+function getExplicitDeviceId(headerList: Headers) {
+  const value =
+    headerList.get("x-device-id") ||
+    headerList.get("x-installation-id") ||
+    headerList.get("x-client-id")
+
+  if (!value) {
+    return null
+  }
+
+  const normalized = value.trim()
+
+  return normalized.length >= 8 && normalized.length <= 200 ? normalized : null
+}
+
+function getDeviceSubjectFromHeaders(headerList: Headers) {
+  const explicitDeviceId = getExplicitDeviceId(headerList)
+
+  if (explicitDeviceId) {
+    return `device:${explicitDeviceId}`
+  }
+
+  return [
+    "fingerprint",
+    getRequestIpFromHeaders(headerList) ?? "unknown-ip",
+    headerList.get("user-agent") ?? "unknown-agent",
+  ].join(":")
+}
+
+function baseRateLimitBucket(bucket: string) {
+  return bucket.replace(/(?::|-)(user|ip)$/, "")
+}
+
+function globalRateLimitOptions(options: RateLimitOptions): RateLimitOptions {
+  return {
+    ...options,
+    limit: Math.max(options.limit * 100, 1_000),
+  }
+}
+
+function addRateLimitCheck(
+  checks: Array<{ key: string; options: RateLimitOptions }>,
+  seenKeys: Set<string>,
+  check: RateLimitCheck,
+) {
+  const key = rateLimitKey(check.bucket, check.subject)
+
+  if (seenKeys.has(key)) {
+    return
+  }
+
+  seenKeys.add(key)
+  checks.push({ key, options: check.options })
+}
+
+function buildLayeredRateLimitChecks(
+  checks: RateLimitCheck[],
+  deviceSubject: string,
+) {
+  const seenKeys = new Set<string>()
+  const layeredChecks: Array<{ key: string; options: RateLimitOptions }> = []
+
+  for (const check of checks) {
+    const baseBucket = baseRateLimitBucket(check.bucket)
+
+    addRateLimitCheck(layeredChecks, seenKeys, check)
+    addRateLimitCheck(layeredChecks, seenKeys, {
+      bucket: `${baseBucket}:device`,
+      subject: deviceSubject,
+      options: check.options,
+    })
+    addRateLimitCheck(layeredChecks, seenKeys, {
+      bucket: `${baseBucket}:global`,
+      subject: globalSubject,
+      options: globalRateLimitOptions(check.options),
+    })
+  }
+
+  return layeredChecks
+}
+
 export function enforceSameOriginRequest(request: Request) {
   const sourceOrigin = getSourceOrigin(request.headers)
   const allowedOrigins = getAllowedOrigins(request, request.headers)
@@ -114,18 +202,11 @@ function rateLimitHeaders(result: Extract<RateLimitResult, { ok: false }>) {
 
 export async function enforceRequestRateLimits(
   request: Request,
-  checks: Array<{
-    bucket: string
-    subject: string | null | undefined
-    options: RateLimitOptions
-  }>,
+  checks: RateLimitCheck[],
   responseOptions?: { redirectTo?: string | URL },
 ) {
   const result = await consumeRateLimits(
-    checks.map((check) => ({
-      key: rateLimitKey(check.bucket, check.subject),
-      options: check.options,
-    })),
+    buildLayeredRateLimitChecks(checks, requestDeviceSubject(request)),
   )
 
   if (result.ok) {
@@ -151,18 +232,16 @@ export function requestIpSubject(request: Request) {
   return getRequestIpFromHeaders(request.headers) || "unknown"
 }
 
+export function requestDeviceSubject(request: Request) {
+  return getDeviceSubjectFromHeaders(request.headers)
+}
+
 export async function enforceActionRateLimits(
-  checks: Array<{
-    bucket: string
-    subject: string | null | undefined
-    options: RateLimitOptions
-  }>,
+  checks: RateLimitCheck[],
 ) {
+  const deviceSubject = await getActionDeviceSubject()
   const result = await consumeRateLimits(
-    checks.map((check) => ({
-      key: rateLimitKey(check.bucket, check.subject),
-      options: check.options,
-    })),
+    buildLayeredRateLimitChecks(checks, deviceSubject),
   )
 
   if (!result.ok) {
@@ -174,4 +253,10 @@ export async function getActionIpSubject() {
   const headerList = await headers()
 
   return getRequestIpFromHeaders(headerList) || "unknown"
+}
+
+export async function getActionDeviceSubject() {
+  const headerList = await headers()
+
+  return getDeviceSubjectFromHeaders(headerList)
 }
