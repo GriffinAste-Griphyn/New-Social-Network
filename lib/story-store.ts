@@ -28,7 +28,10 @@ import {
   users,
 } from "@/lib/db/schema"
 import { listFollowingProfiles } from "@/lib/follow-store"
-import type { StoredStoryAsset } from "@/lib/story-storage"
+import {
+  publicStoryMediaUrl,
+  type StoredStoryAsset,
+} from "@/lib/story-storage"
 import {
   extractCaptionMentions,
   type StoryElementInput,
@@ -264,8 +267,8 @@ function buildFeedStory(row: FeedStoryRow, mentions: StoryMentionRecord[]): Feed
     creator: row.creatorName,
     handle: `@${row.creatorHandle}`,
     assetKind: row.assetKind,
-    mediaUrl: row.mediaUrl,
-    thumbnailUrl: row.thumbnailUrl,
+    mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
+    thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
     caption:
       row.caption?.trim() ||
       "Fresh story in the feed. Uploads land here the second they go live.",
@@ -321,8 +324,8 @@ function buildFeedStoryCard(
     creator: row.creatorName,
     handle: `@${row.creatorHandle}`,
     assetKind: row.assetKind,
-    mediaUrl: row.mediaUrl,
-    thumbnailUrl: row.thumbnailUrl,
+    mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
+    thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
     title:
       row.caption?.trim() ||
       (mentions.length > 0
@@ -383,8 +386,8 @@ function buildStoryStack(rows: FeedStoryRow[]): StoryStack | null {
     items: chronologicalRows.map((row) => ({
       id: row.id,
       assetKind: row.assetKind,
-      mediaUrl: row.mediaUrl,
-      thumbnailUrl: row.thumbnailUrl,
+      mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
       title: row.caption?.trim() ?? "",
       postedAt: formatPostedAt(row.createdAt),
       durationSeconds:
@@ -877,8 +880,9 @@ export async function getMobileCreatorProfile(profileOrStoryId: string) {
     avatarUrl: profile.avatarUrl,
     coverUrl:
       latestStory?.assetKind === "image"
-        ? latestStory.mediaUrl
-        : latestStory?.thumbnailUrl ?? profile.avatarUrl,
+        ? (publicStoryMediaUrl(latestStory.mediaUrl) ?? latestStory.mediaUrl)
+        : (publicStoryMediaUrl(latestStory?.thumbnailUrl ?? null) ??
+          profile.avatarUrl),
     hasActiveStory: Boolean(latestStory),
   } satisfies MobileCreatorProfile
 }

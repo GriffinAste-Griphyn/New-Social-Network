@@ -12,6 +12,7 @@ import {
   stories,
   users,
 } from "@/lib/db/schema"
+import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 type DbNumber = bigint | number | string | null
 
@@ -126,7 +127,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
 }
 
 export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
-  return getDb()
+  const flaggedStories = await getDb()
     .select({
       id: stories.id,
       assetKind: stories.assetKind,
@@ -145,6 +146,12 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
     .where(eq(stories.moderationStatus, "flagged"))
     .orderBy(desc(stories.createdAt))
     .limit(50)
+
+  return flaggedStories.map((story) => ({
+    ...story,
+    mediaUrl: publicStoryMediaUrl(story.mediaUrl) ?? story.mediaUrl,
+    thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl),
+  }))
 }
 
 export async function approveModeratedStory(input: {

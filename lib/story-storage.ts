@@ -14,6 +14,7 @@ const maxStoryUploadBytes = 25 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
 const localStoryUrlPrefix = "/uploads/stories"
 const storyMediaRoutePrefix = "/api/story-media"
+const cloudflareStreamMediaPrefix = "cloudflare-stream"
 const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
 
 type ResolvedUploadType = {
@@ -79,11 +80,13 @@ function encodeStoryMediaPathname(pathname: string) {
 
 function getPrivateVercelBlobPathname(mediaUrl: string) {
   if (mediaUrl.startsWith(`${storyMediaRoutePrefix}/`)) {
-    return mediaUrl
+    const pathname = mediaUrl
       .slice(storyMediaRoutePrefix.length + 1)
       .split("/")
       .map((segment) => decodeURIComponent(segment))
       .join("/")
+
+    return pathname.startsWith("stories/") ? pathname : null
   }
 
   if (!/^https?:\/\//i.test(mediaUrl)) {
@@ -117,6 +120,10 @@ function isVercelBlobUrl(mediaUrl: string) {
 
 function buildStoryMediaRoute(pathname: string) {
   return `${storyMediaRoutePrefix}/${encodeStoryMediaPathname(pathname)}`
+}
+
+function buildCloudflareStreamPathname(uid: string) {
+  return `${cloudflareStreamMediaPrefix}/${uid}/manifest/video.m3u8`
 }
 
 function signStoryMediaPathname(pathname: string, expiresAtMs: number) {
@@ -164,7 +171,9 @@ export function publicStoryMediaUrl(
   }
 
   const blobPathname = getPrivateVercelBlobPathname(value)
-  const mediaUrl = blobPathname ? buildStoryMediaRoute(blobPathname) : value
+  const cloudflareStreamPathname = getCloudflareStreamPathname(value)
+  const mediaPathname = blobPathname ?? cloudflareStreamPathname
+  const mediaUrl = mediaPathname ? buildStoryMediaRoute(mediaPathname) : value
 
   if (/^https?:\/\//i.test(mediaUrl) || !request) {
     return mediaUrl
@@ -172,8 +181,8 @@ export function publicStoryMediaUrl(
 
   const url = new URL(mediaUrl, request.url)
 
-  if (options.signed && blobPathname) {
-    url.searchParams.set("token", createStoryMediaAccessToken(blobPathname))
+  if (options.signed && mediaPathname) {
+    url.searchParams.set("token", createStoryMediaAccessToken(mediaPathname))
   }
 
   return url.toString()
@@ -256,6 +265,14 @@ type CloudflareDirectUploadResponse = {
   }
 }
 
+type CloudflareStreamTokenResponse = {
+  success: boolean
+  errors?: Array<{ message?: string }>
+  result?: {
+    token?: string
+  }
+}
+
 function getCloudflareStreamConfig() {
   const accountId = process.env.CLOUDFLARE_STREAM_ACCOUNT_ID
   const apiToken = process.env.CLOUDFLARE_STREAM_API_TOKEN
@@ -271,18 +288,77 @@ function getCloudflareStreamConfig() {
   return { accountId, apiToken, customerSubdomain }
 }
 
-function buildCloudflarePlaybackUrl(customerSubdomain: string, uid: string) {
+function buildCloudflarePlaybackUrl(customerSubdomain: string, playbackId: string) {
   const origin = /^https?:\/\//i.test(customerSubdomain)
     ? customerSubdomain
     : `https://${customerSubdomain}`
 
-  return `${origin}/${uid}/manifest/video.m3u8`
+  return `${origin}/${playbackId}/manifest/video.m3u8`
 }
 
 function parseCloudflareStreamUid(mediaUrl: string) {
   const match = mediaUrl.match(/\/([a-f0-9]{32})\/manifest\/video\.m3u8/i)
 
   return match?.[1] ?? null
+}
+
+function getCloudflareStreamPathname(mediaUrl: string) {
+  if (mediaUrl.startsWith(`${storyMediaRoutePrefix}/${cloudflareStreamMediaPrefix}/`)) {
+    return mediaUrl.slice(storyMediaRoutePrefix.length + 1)
+  }
+
+  const uid = parseCloudflareStreamUid(mediaUrl)
+
+  return uid ? buildCloudflareStreamPathname(uid) : null
+}
+
+export function parseCloudflareStreamMediaPathname(pathname: string) {
+  const segments = pathname.split("/")
+
+  if (
+    segments.length !== 4 ||
+    segments[0] !== cloudflareStreamMediaPrefix ||
+    segments[2] !== "manifest" ||
+    segments[3] !== "video.m3u8" ||
+    !/^[a-f0-9]{32}$/i.test(segments[1] ?? "")
+  ) {
+    return null
+  }
+
+  return {
+    uid: segments[1],
+  }
+}
+
+export async function createCloudflareStreamPlaybackUrl(uid: string) {
+  const { accountId, apiToken, customerSubdomain } = getCloudflareStreamConfig()
+  const tokenResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}/token`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        downloadable: false,
+        exp: Math.floor((Date.now() + storyMediaAccessTokenTtlMs) / 1000),
+      }),
+    },
+  )
+  const tokenPayload = (await tokenResponse.json().catch(() => null)) as
+    | CloudflareStreamTokenResponse
+    | null
+  const token = tokenPayload?.result?.token
+
+  if (!tokenResponse.ok || !tokenPayload?.success || !token) {
+    throw new StoryUploadError(
+      tokenPayload?.errors?.[0]?.message ??
+        "Could not create a Cloudflare Stream playback token.",
+    )
+  }
+
+  return buildCloudflarePlaybackUrl(customerSubdomain, token)
 }
 
 async function saveCloudflareStreamVideo(
@@ -292,7 +368,7 @@ async function saveCloudflareStreamVideo(
   checksum: string,
   metadata: StoryAssetMetadata,
 ): Promise<StoredStoryAsset> {
-  const { accountId, apiToken, customerSubdomain } = getCloudflareStreamConfig()
+  const { accountId, apiToken } = getCloudflareStreamConfig()
   const createUploadResponse = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`,
     {
@@ -304,7 +380,7 @@ async function saveCloudflareStreamVideo(
       body: JSON.stringify({
         maxDurationSeconds: 120,
         meta: { name: fileName },
-        requireSignedURLs: false,
+        requireSignedURLs: true,
       }),
     },
   )
@@ -338,7 +414,7 @@ async function saveCloudflareStreamVideo(
 
   return {
     assetKind: "video",
-    mediaUrl: buildCloudflarePlaybackUrl(customerSubdomain, uid),
+    mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(uid)),
     thumbnailUrl: null,
     storageProvider: "cloudflare-stream",
     storageKey: uid,

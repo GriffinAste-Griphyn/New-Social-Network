@@ -8,6 +8,7 @@ import {
   stories,
   storyInteractions,
 } from "@/lib/db/schema"
+import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 type DbNumber = bigint | number | string | null
 
@@ -285,8 +286,8 @@ export async function getCreatorStats(
     return {
       id: story.id,
       assetKind: story.assetKind,
-      mediaUrl: story.mediaUrl,
-      thumbnailUrl: story.thumbnailUrl,
+      mediaUrl: publicStoryMediaUrl(story.mediaUrl) ?? story.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl),
       caption: story.caption,
       status: story.status,
       createdAt: story.createdAt.toISOString(),

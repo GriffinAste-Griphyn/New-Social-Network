@@ -1,12 +1,16 @@
 import { get, head } from "@vercel/blob"
-import { or, eq } from "drizzle-orm"
+import { and, or, eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
 
 import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
-import { verifyStoryMediaAccessToken } from "@/lib/story-storage"
+import {
+  createCloudflareStreamPlaybackUrl,
+  parseCloudflareStreamMediaPathname,
+  verifyStoryMediaAccessToken,
+} from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -23,6 +27,13 @@ function isSafeStoryBlobPathname(pathname: string) {
     pathname
       .split("/")
       .every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+  )
+}
+
+function isSafeStoryMediaPathname(pathname: string) {
+  return (
+    isSafeStoryBlobPathname(pathname) ||
+    Boolean(parseCloudflareStreamMediaPathname(pathname))
   )
 }
 
@@ -113,9 +124,10 @@ async function getBlobMetadata(blobPathname: string) {
   }
 }
 
-async function getStoryForBlobPathname(blobPathname: string) {
-  const encodedRoute = `/api/story-media/${encodeStoryMediaPathname(blobPathname)}`
-  const decodedRoute = `/api/story-media/${blobPathname}`
+async function getStoryForMediaPathname(mediaPathname: string) {
+  const encodedRoute = `/api/story-media/${encodeStoryMediaPathname(mediaPathname)}`
+  const decodedRoute = `/api/story-media/${mediaPathname}`
+  const cloudflareStreamMedia = parseCloudflareStreamMediaPathname(mediaPathname)
 
   const [story] = await getDb()
     .select({
@@ -127,7 +139,13 @@ async function getStoryForBlobPathname(blobPathname: string) {
     .from(stories)
     .where(
       or(
-        eq(stories.storageKey, blobPathname),
+        eq(stories.storageKey, mediaPathname),
+        cloudflareStreamMedia
+          ? and(
+              eq(stories.storageProvider, "cloudflare-stream"),
+              eq(stories.storageKey, cloudflareStreamMedia.uid),
+            )
+          : undefined,
         eq(stories.mediaUrl, encodedRoute),
         eq(stories.thumbnailUrl, encodedRoute),
         eq(stories.mediaUrl, decodedRoute),
@@ -162,15 +180,15 @@ async function getStoryForBlobPathname(blobPathname: string) {
   return interactionStory ?? null
 }
 
-async function canServeStoryMedia(request: Request, blobPathname: string) {
-  const story = await getStoryForBlobPathname(blobPathname)
+async function canServeStoryMedia(request: Request, mediaPathname: string) {
+  const story = await getStoryForMediaPathname(mediaPathname)
 
   if (!story) {
     return false
   }
 
   const token = new URL(request.url).searchParams.get("token")
-  const hasValidToken = verifyStoryMediaAccessToken(blobPathname, token)
+  const hasValidToken = verifyStoryMediaAccessToken(mediaPathname, token)
   const session = hasValidToken
     ? null
     : (await getMobileSession(request)) ?? (await getSession())
@@ -192,15 +210,29 @@ export async function GET(
   context: { params: Promise<{ pathname: string[] }> },
 ) {
   const { pathname } = await context.params
-  const blobPathname = pathname.join("/")
+  const mediaPathname = pathname.join("/")
+  const cloudflareStreamMedia = parseCloudflareStreamMediaPathname(mediaPathname)
 
-  if (!isSafeStoryBlobPathname(blobPathname)) {
+  if (!isSafeStoryMediaPathname(mediaPathname)) {
     return notFound()
   }
 
-  if (!(await canServeStoryMedia(request, blobPathname))) {
+  if (!(await canServeStoryMedia(request, mediaPathname))) {
     return notFound()
   }
+
+  if (cloudflareStreamMedia) {
+    const playbackUrl = await createCloudflareStreamPlaybackUrl(
+      cloudflareStreamMedia.uid,
+    )
+    const response = NextResponse.redirect(playbackUrl, { status: 302 })
+
+    response.headers.set("Cache-Control", "private, no-store")
+
+    return response
+  }
+
+  const blobPathname = mediaPathname
 
   const blobMetadata = await getBlobMetadata(blobPathname)
 
