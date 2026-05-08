@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { MarketingFooter } from "@/components/marketing-footer"
 
 const signupHref = "/signup?next=%2Fadvertiser"
 const portalHref = "/login?next=%2Fadvertiser"
@@ -123,10 +124,11 @@ function MobileHeroNav() {
 
 export default function AdvertisePage() {
   return (
-    <main className="min-h-screen overflow-hidden bg-[#f4f2ec] text-black">
+    <div className="min-h-screen bg-[#f4f2ec] text-black">
       <SiteHeader />
 
-      <section className="border-b border-black/10">
+      <main className="overflow-hidden">
+        <section className="border-b border-black/10">
         <div className="mx-auto md:max-w-[1180px] md:px-4 md:py-10">
           <div className="overflow-hidden bg-[#faf9f5] md:rounded-[2.5rem] md:border md:border-black/10 md:shadow-[0_20px_70px_-60px_rgba(15,23,42,0.28)]">
             <div className="relative min-h-[34rem] overflow-hidden sm:min-h-[32rem] lg:min-h-[40rem]">
@@ -190,9 +192,9 @@ export default function AdvertisePage() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
 
-      <section id="premise" className="border-b border-black/10 bg-[#faf9f5]">
+        <section id="premise" className="border-b border-black/10 bg-[#faf9f5]">
         <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
           <div className="grid gap-10 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-16">
             <div className="pt-2">
@@ -214,9 +216,9 @@ export default function AdvertisePage() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
 
-      <section id="setup" className="border-b border-black/10">
+        <section id="setup" className="border-b border-black/10">
         <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
           <div className="grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-20">
             <div className="max-w-[25rem]">
@@ -258,9 +260,9 @@ export default function AdvertisePage() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
 
-      <section id="controls" className="border-b border-black/10 bg-[#111311] text-white">
+        <section id="controls" className="border-b border-black/10 bg-[#111311] text-white">
         <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_28rem] lg:items-end">
           <div>
             <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-white/42">
@@ -287,9 +289,9 @@ export default function AdvertisePage() {
             ))}
           </div>
         </div>
-      </section>
+        </section>
 
-      <section id="funding" className="bg-[#f4f2ec]">
+        <section id="funding" className="bg-[#f4f2ec]">
         <div className="mx-auto max-w-[1180px] px-4 py-16 md:py-24">
           <div className="grid overflow-hidden rounded-[2rem] border border-black/10 bg-[#faf9f5] md:grid-cols-[1.05fr_0.95fr]">
             <div className="p-6 sm:p-8 lg:p-10">
@@ -334,7 +336,9 @@ export default function AdvertisePage() {
             </div>
           </div>
         </div>
-      </section>
-    </main>
+        </section>
+      </main>
+      <MarketingFooter />
+    </div>
   )
 }

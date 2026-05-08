@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { MarketingFooter } from "@/components/marketing-footer"
 
 const mobileAppHref = "/app"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
@@ -332,6 +333,7 @@ export default function HomePage() {
           </div>
         </section>
       </main>
+      <MarketingFooter />
     </div>
   )
 }
