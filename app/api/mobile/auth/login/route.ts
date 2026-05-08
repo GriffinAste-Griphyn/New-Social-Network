@@ -3,11 +3,27 @@ import { NextResponse } from "next/server"
 import { createMobileSessionToken, isProfileComplete } from "@/lib/auth"
 import { loginSchema } from "@/lib/auth-validators"
 import { sendUserVerificationEmail } from "@/lib/email-verification"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { authenticateUser } from "@/lib/user-store"
 
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:auth:login-ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.authLoginIp,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
   const parsed = loginSchema.safeParse(await request.json().catch(() => null))
 
   if (!parsed.success) {

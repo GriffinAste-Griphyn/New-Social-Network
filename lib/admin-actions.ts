@@ -8,6 +8,11 @@ import {
   rejectModeratedStory,
   requireAdminSession,
 } from "@/lib/admin-store"
+import {
+  assertSameOriginAction,
+  enforceActionRateLimits,
+  mutationRateLimits,
+} from "@/lib/request-security"
 
 function getStoryId(formData: FormData) {
   const storyId = formData.get("storyId")
@@ -15,8 +20,36 @@ function getStoryId(formData: FormData) {
   return typeof storyId === "string" ? storyId : ""
 }
 
+async function enforceAdminMutation(userId: string) {
+  try {
+    await enforceActionRateLimits([
+      {
+        bucket: "web:admin:moderation",
+        subject: userId,
+        options: mutationRateLimits.storyWriteUser,
+      },
+    ])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request."
+
+    redirect(`/admin?error=${encodeURIComponent(message)}`)
+  }
+}
+
+async function enforceAdminOrigin() {
+  try {
+    await assertSameOriginAction()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request."
+
+    redirect(`/admin?error=${encodeURIComponent(message)}`)
+  }
+}
+
 export async function approveModeratedStoryAction(formData: FormData) {
+  await enforceAdminOrigin()
   const session = await requireAdminSession()
+  await enforceAdminMutation(session.id)
   const storyId = getStoryId(formData)
 
   if (!storyId) {
@@ -33,7 +66,9 @@ export async function approveModeratedStoryAction(formData: FormData) {
 }
 
 export async function rejectModeratedStoryAction(formData: FormData) {
+  await enforceAdminOrigin()
   const session = await requireAdminSession()
+  await enforceAdminMutation(session.id)
   const storyId = getStoryId(formData)
 
   if (!storyId) {

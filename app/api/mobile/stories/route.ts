@@ -9,6 +9,11 @@ import {
   StoryUploadError,
 } from "@/lib/story-storage"
 import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
+import {
   parseBrandTags,
   parseStoryCaption,
   parseStoryElements,
@@ -21,8 +26,6 @@ export async function POST(request: Request) {
 
   try {
     const session = await getCompleteMobileSession(request)
-    const formData = await request.formData()
-    const mediaEntry = formData.get("media")
 
     if (!session) {
       return NextResponse.json(
@@ -30,6 +33,25 @@ export async function POST(request: Request) {
         { status: 401 },
       )
     }
+
+    const rateLimitResponse = await enforceRequestRateLimits(request, [
+      {
+        bucket: "mobile:story-upload:user",
+        subject: session.id,
+        options: mutationRateLimits.storyUploadUser,
+      },
+      {
+        bucket: "mobile:story-upload:ip",
+        subject: requestIpSubject(request),
+        options: mutationRateLimits.storyUploadIp,
+      },
+    ])
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
+    const formData = await request.formData()
+    const mediaEntry = formData.get("media")
 
     if (!(mediaEntry instanceof File)) {
       return NextResponse.json(

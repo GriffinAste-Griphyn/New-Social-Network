@@ -4,6 +4,11 @@ import { z } from "zod"
 import { createMobileSessionToken, isProfileComplete } from "@/lib/auth"
 import { loginSchema, profileSetupSchema } from "@/lib/auth-validators"
 import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
+import {
   authenticateUser,
   completeUserProfileForUser,
 } from "@/lib/user-store"
@@ -13,6 +18,17 @@ export const runtime = "nodejs"
 const mobileProfileSetupSchema = loginSchema.and(profileSetupSchema)
 
 export async function POST(request: Request) {
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:auth:complete-profile-ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.authLoginIp,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
   const parsed = mobileProfileSetupSchema.safeParse(
     await request.json().catch(() => null),
   )

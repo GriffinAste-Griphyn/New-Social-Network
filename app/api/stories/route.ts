@@ -9,6 +9,12 @@ import {
   parseStoryCaption,
   parseStoryElements,
 } from "@/lib/story-validators"
+import {
+  enforceRequestRateLimits,
+  enforceSameOriginRequest,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -23,6 +29,11 @@ function redirectToFeed(request: Request, searchParams?: Record<string, string>)
 }
 
 export async function POST(request: Request) {
+  const originResponse = enforceSameOriginRequest(request)
+  if (originResponse) {
+    return originResponse
+  }
+
   const session = await getSession()
 
   if (!session) {
@@ -41,6 +52,26 @@ export async function POST(request: Request) {
         status: 303,
       },
     )
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(
+    request,
+    [
+      {
+        bucket: "web:story-upload:user",
+        subject: session.id,
+        options: mutationRateLimits.storyUploadUser,
+      },
+      {
+        bucket: "web:story-upload:ip",
+        subject: requestIpSubject(request),
+        options: mutationRateLimits.storyUploadIp,
+      },
+    ],
+    { redirectTo: "/feed" },
+  )
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   let storedAsset: Awaited<ReturnType<typeof saveStoryAsset>> | undefined

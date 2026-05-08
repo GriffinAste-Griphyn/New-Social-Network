@@ -2,6 +2,11 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { recordStoryImpression } from "@/lib/story-impressions"
 
 export const runtime = "nodejs"
@@ -19,6 +24,22 @@ export async function POST(
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:story-impressions:user",
+      subject: session.id,
+      options: mutationRateLimits.storyImpressionUser,
+    },
+    {
+      bucket: "mobile:story-impressions:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.storyImpressionUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const { id } = await context.params

@@ -7,6 +7,11 @@ import {
   getStoryStackForStory,
   removeStoryForOwner,
 } from "@/lib/story-store"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { publicStoryMediaUrl, removeStoryAsset } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
@@ -69,6 +74,22 @@ export async function DELETE(
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:story-delete:user",
+      subject: session.id,
+      options: mutationRateLimits.storyWriteUser,
+    },
+    {
+      bucket: "mobile:story-delete:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.storyWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const { id } = await context.params

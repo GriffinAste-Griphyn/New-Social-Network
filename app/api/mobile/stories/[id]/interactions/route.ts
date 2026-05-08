@@ -3,9 +3,15 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  listStoryInteractionsForActor,
   createStoryInteraction,
   listStoryInteractionsForCreator,
 } from "@/lib/story-interactions"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import {
   publicStoryMediaUrl,
   removeStoryAsset,
@@ -34,25 +40,42 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const interactions = await listStoryInteractionsForCreator({
-    creatorId: session.id,
-    kinds: ["reply", "comment"],
-    limit: 100,
+  const [interactions, sentInteractions] = await Promise.all([
+    listStoryInteractionsForCreator({
+      creatorId: session.id,
+      kinds: ["reply", "comment"],
+      limit: 100,
+    }),
+    listStoryInteractionsForActor({
+      actorId: session.id,
+      kinds: ["reply", "comment"],
+      limit: 100,
+    }),
+  ])
+
+  const withPublicMediaUrls = <
+    TInteraction extends {
+      mediaUrl: string | null
+      mediaThumbnailUrl: string | null
+    },
+  >(
+    interaction: TInteraction,
+  ) => ({
+    ...interaction,
+    mediaUrl:
+      publicStoryMediaUrl(interaction.mediaUrl, request, { signed: true }) ??
+      interaction.mediaUrl,
+    mediaThumbnailUrl: publicStoryMediaUrl(
+      interaction.mediaThumbnailUrl,
+      request,
+      { signed: true },
+    ),
   })
 
   return NextResponse.json({
     ok: true,
-    interactions: interactions.map((interaction) => ({
-      ...interaction,
-      mediaUrl:
-        publicStoryMediaUrl(interaction.mediaUrl, request, { signed: true }) ??
-        interaction.mediaUrl,
-      mediaThumbnailUrl: publicStoryMediaUrl(
-        interaction.mediaThumbnailUrl,
-        request,
-        { signed: true },
-      ),
-    })),
+    interactions: interactions.map(withPublicMediaUrls),
+    sentInteractions: sentInteractions.map(withPublicMediaUrls),
   })
 }
 
@@ -66,6 +89,22 @@ export async function POST(
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:story-interactions:user",
+      subject: session.id,
+      options: mutationRateLimits.storyInteractionUser,
+    },
+    {
+      bucket: "mobile:story-interactions:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.storyInteractionUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const { id } = await context.params

@@ -6,6 +6,11 @@ import {
   getCreatorNotificationPreference,
   setCreatorNotificationPreference,
 } from "@/lib/creator-notifications"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -43,6 +48,22 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:creator-notifications:user",
+      subject: session.id,
+      options: mutationRateLimits.socialWriteUser,
+    },
+    {
+      bucket: "mobile:creator-notifications:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.socialWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const parsed = notificationPreferenceSchema.safeParse(

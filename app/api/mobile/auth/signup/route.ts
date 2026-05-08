@@ -2,11 +2,27 @@ import { NextResponse } from "next/server"
 
 import { signupSchema } from "@/lib/auth-validators"
 import { sendUserVerificationEmail } from "@/lib/email-verification"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { registerUser } from "@/lib/user-store"
 
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:auth:signup-ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.authSignupIp,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
   const parsed = signupSchema.safeParse(await request.json().catch(() => null))
 
   if (!parsed.success) {

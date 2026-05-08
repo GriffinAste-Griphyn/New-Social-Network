@@ -9,6 +9,11 @@ import {
   removeProfileAvatar,
   saveProfileAvatar,
 } from "@/lib/profile-avatar-storage"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { updateUserAvatar } from "@/lib/user-store"
 
 export const runtime = "nodejs"
@@ -34,6 +39,22 @@ export async function POST(request: Request) {
       { error: "Sign in before updating your profile photo." },
       { status: 401 },
     )
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:avatar-upload:user",
+      subject: session.id,
+      options: mutationRateLimits.profileWriteUser,
+    },
+    {
+      bucket: "mobile:avatar-upload:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.profileWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   try {

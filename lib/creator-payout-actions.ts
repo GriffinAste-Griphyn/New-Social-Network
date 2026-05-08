@@ -10,13 +10,50 @@ import {
   createCreatorStripeOnboardingUrl,
   syncCreatorStripeAccount,
 } from "@/lib/stripe-connect"
+import {
+  assertSameOriginAction,
+  enforceActionRateLimits,
+  mutationRateLimits,
+} from "@/lib/request-security"
 
 function buildPayoutErrorUrl(message: string) {
   return `/payouts?error=${encodeURIComponent(message)}`
 }
 
+async function enforcePayoutOrigin() {
+  try {
+    await assertSameOriginAction()
+  } catch (error) {
+    redirect(
+      buildPayoutErrorUrl(
+        error instanceof Error ? error.message : "Invalid request.",
+      ),
+    )
+  }
+}
+
+async function enforcePayoutRateLimit(userId: string) {
+  try {
+    await enforceActionRateLimits([
+      {
+        bucket: "web:payouts:stripe",
+        subject: userId,
+        options: mutationRateLimits.stripeWriteUser,
+      },
+    ])
+  } catch (error) {
+    redirect(
+      buildPayoutErrorUrl(
+        error instanceof Error ? error.message : "Invalid request.",
+      ),
+    )
+  }
+}
+
 export async function startCreatorStripeOnboardingAction() {
+  await enforcePayoutOrigin()
   const session = await requireSession("/payouts")
+  await enforcePayoutRateLimit(session.id)
   let url: string
 
   try {
@@ -39,7 +76,9 @@ export async function startCreatorStripeOnboardingAction() {
 }
 
 export async function syncCreatorStripeAccountAction() {
+  await enforcePayoutOrigin()
   const session = await requireSession("/payouts")
+  await enforcePayoutRateLimit(session.id)
 
   try {
     await syncCreatorStripeAccount(session.id)

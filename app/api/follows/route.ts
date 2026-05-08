@@ -9,6 +9,12 @@ import {
   listFollowingProfiles,
   unfollowUser,
 } from "@/lib/follow-store"
+import {
+  enforceRequestRateLimits,
+  enforceSameOriginRequest,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -93,8 +99,17 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const originResponse = enforceSameOriginRequest(request)
+  if (originResponse) {
+    return originResponse
+  }
+
   const session = await getSession()
-  const { kind, parsed } = await parseFollowActionRequest(request)
+  const kind = request.headers
+    .get("content-type")
+    ?.includes("application/json")
+    ? "json"
+    : "form"
 
   if (!session) {
     if (kind === "json") {
@@ -121,6 +136,24 @@ export async function POST(request: Request) {
       },
     )
   }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "web:follows:user",
+      subject: session.id,
+      options: mutationRateLimits.socialWriteUser,
+    },
+    {
+      bucket: "web:follows:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.socialWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
+  const { parsed } = await parseFollowActionRequest(request)
 
   if (!parsed.success) {
     const message = parsed.error.issues[0]?.message ?? "Invalid follow request."

@@ -26,9 +26,42 @@ import {
   registerUser,
   resetPassword,
 } from "@/lib/user-store"
+import {
+  assertSameOriginAction,
+  enforceActionRateLimits,
+  getActionIpSubject,
+  mutationRateLimits,
+} from "@/lib/request-security"
+
+async function enforceAuthActionRequest(
+  bucket: string,
+) {
+  await assertSameOriginAction()
+  await enforceActionRateLimits([
+    {
+      bucket,
+      subject: await getActionIpSubject(),
+      options:
+        bucket === "web:auth:signup-ip"
+          ? mutationRateLimits.authSignupIp
+          : bucket === "web:auth:reset-ip"
+            ? mutationRateLimits.authResetIp
+            : mutationRateLimits.authLoginIp,
+    },
+  ])
+}
+
+function actionSecurityMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Invalid request."
+}
 
 export async function loginAction(formData: FormData) {
   const nextPath = resolveNextPath(formData.get("next"), "/advertiser")
+  try {
+    await enforceAuthActionRequest("web:auth:login-ip")
+  } catch (error) {
+    redirect(buildAuthErrorUrl("/login", actionSecurityMessage(error), nextPath))
+  }
   const parsed = loginSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
@@ -69,6 +102,11 @@ export async function loginAction(formData: FormData) {
 
 export async function signupAction(formData: FormData) {
   const nextPath = "/advertiser"
+  try {
+    await enforceAuthActionRequest("web:auth:signup-ip")
+  } catch (error) {
+    redirect(buildAuthErrorUrl("/signup", actionSecurityMessage(error), nextPath))
+  }
   const parsed = signupFlowSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
@@ -107,6 +145,11 @@ export async function signupAction(formData: FormData) {
 }
 
 export async function requestPasswordResetAction(formData: FormData) {
+  try {
+    await enforceAuthActionRequest("web:auth:reset-ip")
+  } catch (error) {
+    redirect(`/forgot-password?error=${encodeURIComponent(actionSecurityMessage(error))}`)
+  }
   const parsed = passwordResetRequestSchema.safeParse({
     email: formData.get("email"),
   })
@@ -137,6 +180,19 @@ export async function requestPasswordResetAction(formData: FormData) {
 
 export async function resetPasswordAction(formData: FormData) {
   const token = formData.get("token")
+  try {
+    await enforceAuthActionRequest("web:auth:reset-ip")
+  } catch (error) {
+    const query = new URLSearchParams({
+      error: actionSecurityMessage(error),
+    })
+
+    if (typeof token === "string" && token) {
+      query.set("token", token)
+    }
+
+    redirect(`/reset-password?${query.toString()}`)
+  }
   const parsed = passwordResetSchema.safeParse({
     token,
     password: formData.get("password"),
@@ -171,6 +227,17 @@ export async function resetPasswordAction(formData: FormData) {
 
 export async function completeProfileAction(formData: FormData) {
   const nextPath = resolveNextPath(formData.get("next"), "/feed")
+  try {
+    await enforceAuthActionRequest("web:auth:profile-ip")
+  } catch (error) {
+    redirect(
+      buildAuthErrorUrl(
+        "/onboarding/profile",
+        actionSecurityMessage(error),
+        nextPath,
+      ),
+    )
+  }
   const parsed = profileSetupSchema.safeParse({
     displayName: formData.get("displayName"),
     handle: formData.get("handle"),
@@ -195,6 +262,11 @@ export async function completeProfileAction(formData: FormData) {
 
 export async function enableCreatorToolsAction(formData: FormData) {
   const nextPath = resolveNextPath(formData.get("next"), "/feed")
+  try {
+    await enforceAuthActionRequest("web:auth:profile-ip")
+  } catch (error) {
+    redirect(`${nextPath}?error=${encodeURIComponent(actionSecurityMessage(error))}`)
+  }
   const result = await activateCreatorTools()
 
   if (!result.ok) {
@@ -206,6 +278,7 @@ export async function enableCreatorToolsAction(formData: FormData) {
 }
 
 export async function logoutAction() {
+  await assertSameOriginAction()
   await clearSession()
   redirect("/")
 }

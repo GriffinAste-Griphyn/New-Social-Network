@@ -2,6 +2,12 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { requireSession } from "@/lib/auth"
+import {
+  enforceRequestRateLimits,
+  enforceSameOriginRequest,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 import { createStoryInteraction } from "@/lib/story-interactions"
 
 export const runtime = "nodejs"
@@ -16,8 +22,29 @@ export async function POST(
   request: Request,
   context: RouteContext<"/api/stories/[id]/interactions">,
 ) {
+  const originResponse = enforceSameOriginRequest(request)
+  if (originResponse) {
+    return originResponse
+  }
+
   const session = await requireSession()
   const { id } = await context.params
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "web:story-interactions:user",
+      subject: session.id,
+      options: mutationRateLimits.storyInteractionUser,
+    },
+    {
+      bucket: "web:story-interactions:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.storyInteractionUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
   const parsed = interactionSchema.safeParse(
     await request.json().catch(() => null),
   )

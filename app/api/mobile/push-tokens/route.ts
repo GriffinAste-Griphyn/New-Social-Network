@@ -3,6 +3,11 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { registerMobilePushToken } from "@/lib/creator-notifications"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -16,6 +21,22 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:push-token:user",
+      subject: session.id,
+      options: mutationRateLimits.pushTokenUser,
+    },
+    {
+      bucket: "mobile:push-token:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.pushTokenUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const parsed = pushTokenSchema.safeParse(await request.json().catch(() => null))

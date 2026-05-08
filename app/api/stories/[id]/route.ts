@@ -12,6 +12,12 @@ import {
   parseStoryCaption,
   parseStoryElements,
 } from "@/lib/story-validators"
+import {
+  enforceRequestRateLimits,
+  enforceSameOriginRequest,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -29,6 +35,11 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const originResponse = enforceSameOriginRequest(request)
+  if (originResponse) {
+    return originResponse
+  }
+
   const session = await getSession()
 
   if (!session) {
@@ -47,6 +58,25 @@ export async function POST(
   }
 
   const { id } = await context.params
+  const rateLimitResponse = await enforceRequestRateLimits(
+    request,
+    [
+      {
+        bucket: "web:story-write:user",
+        subject: session.id,
+        options: mutationRateLimits.storyWriteUser,
+      },
+      {
+        bucket: "web:story-write:ip",
+        subject: requestIpSubject(request),
+        options: mutationRateLimits.storyWriteUser,
+      },
+    ],
+    { redirectTo: "/stories/me" },
+  )
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
 
   try {
     const formData = await request.formData()
@@ -98,6 +128,11 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const originResponse = enforceSameOriginRequest(request)
+  if (originResponse) {
+    return originResponse
+  }
+
   const session = await getSession()
 
   if (!session) {
@@ -109,6 +144,21 @@ export async function DELETE(
   }
 
   const { id } = await context.params
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "web:story-delete:user",
+      subject: session.id,
+      options: mutationRateLimits.storyWriteUser,
+    },
+    {
+      bucket: "web:story-delete:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.storyWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
 
   try {
     const mediaUrl = await removeStoryForOwner(id, session.id)

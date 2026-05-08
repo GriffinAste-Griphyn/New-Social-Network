@@ -14,6 +14,12 @@ import {
   updateBrandFundingProfile,
 } from "@/lib/advertiser-store"
 import { env } from "@/lib/env"
+import {
+  assertSameOriginAction,
+  enforceActionRateLimits,
+  mutationRateLimits,
+} from "@/lib/request-security"
+import type { RateLimitOptions } from "@/lib/rate-limit"
 import { getStripeClient } from "@/lib/stripe"
 
 const accountSchema = z.object({
@@ -53,6 +59,36 @@ const fundingSchema = z.object({
 
 function buildErrorUrl(message: string) {
   return `/advertiser?error=${encodeURIComponent(message)}`
+}
+
+async function enforceAdvertiserOrigin() {
+  try {
+    await assertSameOriginAction()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request."
+
+    redirect(buildErrorUrl(message))
+  }
+}
+
+async function enforceAdvertiserRateLimit(
+  bucket: string,
+  userId: string,
+  options: RateLimitOptions = mutationRateLimits.advertiserWriteUser,
+) {
+  try {
+    await enforceActionRateLimits([
+      {
+        bucket,
+        subject: userId,
+        options,
+      },
+    ])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request."
+
+    redirect(buildErrorUrl(message))
+  }
 }
 
 function dollarsToCents(value: number | undefined) {
@@ -121,7 +157,9 @@ function buildTargets(parsed: z.infer<typeof profileSchema>) {
 }
 
 export async function createAdvertiserAccountAction(formData: FormData) {
+  await enforceAdvertiserOrigin()
   const session = await requireSession()
+  await enforceAdvertiserRateLimit("web:advertiser:create-account", session.id)
   const parsed = accountSchema.safeParse({
     name: formData.get("name"),
     websiteUrl: formData.get("websiteUrl"),
@@ -153,7 +191,9 @@ export async function createAdvertiserAccountAction(formData: FormData) {
 }
 
 export async function saveAdvertiserAccountAction(formData: FormData) {
+  await enforceAdvertiserOrigin()
   const session = await requireSession()
+  await enforceAdvertiserRateLimit("web:advertiser:save-account", session.id)
   const workspace = await getAdvertiserWorkspaceForUser(session.id)
 
   if (!workspace) {
@@ -185,7 +225,9 @@ export async function saveAdvertiserAccountAction(formData: FormData) {
 }
 
 export async function saveBrandFundingProfileAction(formData: FormData) {
+  await enforceAdvertiserOrigin()
   const session = await requireSession()
+  await enforceAdvertiserRateLimit("web:advertiser:save-funding-profile", session.id)
   const workspace = await getAdvertiserWorkspaceForUser(session.id)
 
   if (!workspace?.profile) {
@@ -284,6 +326,7 @@ async function ensureStripeCustomer() {
 }
 
 export async function startAdvertiserFundingAction(formData: FormData) {
+  await enforceAdvertiserOrigin()
   const parsed = fundingSchema.safeParse({
     amountDollars: formData.get("amountDollars"),
   })
@@ -296,6 +339,11 @@ export async function startAdvertiserFundingAction(formData: FormData) {
 
   const amountCents = Math.round(parsed.data.amountDollars * 100)
   const { customerId, stripe, workspace } = await ensureStripeCustomer()
+  await enforceAdvertiserRateLimit(
+    "web:advertiser:start-funding",
+    workspace.account.ownerUserId,
+    mutationRateLimits.stripeWriteUser,
+  )
   const checkoutSession = await stripe.checkout.sessions.create({
     mode: "payment",
     customer: customerId,
@@ -337,7 +385,13 @@ export async function startAdvertiserFundingAction(formData: FormData) {
 }
 
 export async function startAdvertiserPaymentMethodAction() {
+  await enforceAdvertiserOrigin()
   const { customerId, stripe, workspace } = await ensureStripeCustomer()
+  await enforceAdvertiserRateLimit(
+    "web:advertiser:payment-method",
+    workspace.account.ownerUserId,
+    mutationRateLimits.stripeWriteUser,
+  )
   const checkoutSession = await stripe.checkout.sessions.create({
     mode: "setup",
     customer: customerId,

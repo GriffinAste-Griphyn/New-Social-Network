@@ -10,6 +10,11 @@ import {
   listFollowingProfiles,
   unfollowUser,
 } from "@/lib/follow-store"
+import {
+  enforceRequestRateLimits,
+  mutationRateLimits,
+  requestIpSubject,
+} from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -78,6 +83,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:follows:user",
+      subject: session.id,
+      options: mutationRateLimits.socialWriteUser,
+    },
+    {
+      bucket: "mobile:follows:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.socialWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
+  }
+
   const parsed = followMutationSchema.safeParse(
     await request.json().catch(() => null),
   )
@@ -114,6 +135,22 @@ export async function DELETE(request: Request) {
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const rateLimitResponse = await enforceRequestRateLimits(request, [
+    {
+      bucket: "mobile:unfollows:user",
+      subject: session.id,
+      options: mutationRateLimits.socialWriteUser,
+    },
+    {
+      bucket: "mobile:unfollows:ip",
+      subject: requestIpSubject(request),
+      options: mutationRateLimits.socialWriteUser,
+    },
+  ])
+  if (rateLimitResponse) {
+    return rateLimitResponse
   }
 
   const parsed = followMutationSchema.safeParse(
