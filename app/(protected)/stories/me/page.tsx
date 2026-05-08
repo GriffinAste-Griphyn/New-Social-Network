@@ -1,20 +1,19 @@
-import Image from "next/image"
 import {
   ArrowLeft,
   BarChart3,
   Clock3,
   ImagePlus,
-  Link2,
-  MoreHorizontal,
   Pencil,
   Trash2,
 } from "lucide-react"
 
+import { MyStoryInsightsViewer } from "@/components/app/my-story-insights-viewer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { requireSession } from "@/lib/auth"
+import { getCreatorStats } from "@/lib/creator-stats"
 import { getMyStoryStack, type MyStoryItem } from "@/lib/story-store"
 
 type MyStoryPageProps = {
@@ -37,34 +36,6 @@ function formatRemaining(minutes: number) {
   }
 
   return `${Math.ceil(minutes / 60)}h remaining`
-}
-
-function StoryVisual({ story }: { story: MyStoryItem }) {
-  if (story.assetKind === "video") {
-    return (
-      <video
-        src={story.mediaUrl}
-        poster={story.thumbnailUrl ?? undefined}
-        className="absolute inset-0 h-full w-full object-cover"
-        autoPlay
-        muted
-        loop
-        playsInline
-        controls
-      />
-    )
-  }
-
-  return (
-    <Image
-      src={story.mediaUrl}
-      alt="Your story"
-      fill
-      sizes="(min-width: 1024px) 680px, 100vw"
-      className="object-cover"
-      priority
-    />
-  )
 }
 
 function Flash({
@@ -96,100 +67,6 @@ function Flash({
     >
       {message}
     </div>
-  )
-}
-
-function Playback({ story, count }: { story: MyStoryItem; count: number }) {
-  const stickers = story.elements.filter((element) => element.kind === "sticker")
-  const textElements = story.elements.filter((element) => element.kind === "text")
-  const links = story.elements.filter((element) => element.kind === "link")
-
-  return (
-    <section className="overflow-hidden rounded-[8px] bg-neutral-950 shadow-[0_24px_70px_rgba(15,23,42,0.2)]">
-      <div className="relative min-h-[720px]">
-        <StoryVisual story={story} />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/8 to-black/78" />
-
-        <div className="relative flex min-h-[720px] flex-col justify-between p-5 text-white">
-          <div className="space-y-4">
-            <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.max(count, 1)}, minmax(0, 1fr))` }}>
-              {Array.from({ length: Math.max(count, 1) }).map((_, index) => (
-                <div
-                  key={index}
-                  className={`h-1 rounded-full ${index === 0 ? "bg-white" : "bg-white/40"}`}
-                />
-              ))}
-            </div>
-
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium">My Story</p>
-                <p className="text-sm text-white/70">
-                  {formatPostedAt(story.createdAt)} · {formatRemaining(story.minutesRemaining)}
-                </p>
-              </div>
-              <a
-                href="#manage"
-                aria-label="Manage story"
-                className="flex size-10 items-center justify-center rounded-full bg-white/14 backdrop-blur"
-              >
-                <MoreHorizontal className="size-5" />
-              </a>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {stickers.map((element) => (
-                <Badge
-                  key={element.id}
-                  className="border-none bg-[#fde047] text-[#17191f]"
-                >
-                  {element.label}
-                </Badge>
-              ))}
-              {story.brandTags.map((tag) => (
-                <Badge key={tag} className="border-none bg-white/14 text-white">
-                  #{tag}
-                </Badge>
-              ))}
-            </div>
-
-            <div className="max-w-md space-y-3">
-              {textElements.map((element) => (
-                <p
-                  key={element.id}
-                  className="w-fit rounded-[8px] bg-white/14 px-3 py-2 text-xl font-semibold backdrop-blur"
-                >
-                  {element.label}
-                </p>
-              ))}
-
-              {story.caption ? (
-                <p className="text-3xl font-semibold leading-tight">
-                  {story.caption}
-                </p>
-              ) : null}
-            </div>
-
-            {links.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {links.map((element) => (
-                  <a
-                    key={element.id}
-                    href={element.href ?? "#"}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#17191f]"
-                  >
-                    <Link2 className="size-4" />
-                    {element.label}
-                  </a>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </section>
   )
 }
 
@@ -305,7 +182,10 @@ function StoryEditor({ story }: { story: MyStoryItem }) {
 export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
   const session = await requireSession()
   const params = await searchParams
-  const myStory = await getMyStoryStack(session.id)
+  const [myStory, stats] = await Promise.all([
+    getMyStoryStack(session.id),
+    getCreatorStats(session.id),
+  ])
   const currentStory = myStory.items[0] ?? null
 
   return (
@@ -351,10 +231,16 @@ export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
         </div>
 
         {currentStory ? (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,0.92fr)_minmax(360px,0.58fr)]">
-            <Playback story={currentStory} count={myStory.liveCount} />
+          <div className="space-y-5">
+            <MyStoryInsightsViewer
+              stories={myStory.items}
+              storyStats={stats.stories}
+            />
 
-            <aside id="manage" className="space-y-4">
+            <aside
+              id="manage"
+              className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]"
+            >
               <section className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
                 <p className="text-lg font-semibold">Manage story</p>
                 <p className="mt-1 text-sm text-[#6b7280]">
@@ -363,9 +249,11 @@ export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
                 </p>
               </section>
 
-              {myStory.items.map((story) => (
-                <StoryEditor key={story.id} story={story} />
-              ))}
+              <div className="grid gap-4 md:grid-cols-2">
+                {myStory.items.map((story) => (
+                  <StoryEditor key={story.id} story={story} />
+                ))}
+              </div>
             </aside>
           </div>
         ) : (

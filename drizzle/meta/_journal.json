@@ -99,6 +99,48 @@
       "when": 1778180149925,
       "tag": "0013_add_advertiser_payment_methods",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1778182746261,
+      "tag": "0014_daffy_roughhouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1778198682896,
+      "tag": "0015_lethal_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1778198779680,
+      "tag": "0016_large_talos",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1778199292499,
+      "tag": "0017_tiresome_longshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1778200000000,
+      "tag": "0018_add_story_interaction_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778201566291,
+      "tag": "0019_supreme_iceman",
+      "breakpoints": true
     }
   ]
 }

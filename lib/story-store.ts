@@ -16,7 +16,9 @@ import {
   processStoryCreatorEarnings,
   reverseUnpaidStoryEarnings,
 } from "@/lib/creator-earnings"
+import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
+import { evaluateStoryModeration } from "@/lib/moderation"
 import {
   creatorProfiles,
   creatorScores,
@@ -926,6 +928,12 @@ export async function createStory(input: CreateStoryInput) {
   )
   const storyId = randomUUID()
   const now = new Date()
+  const moderation = evaluateStoryModeration({
+    caption: input.caption,
+    explicitBrandTags: input.explicitBrandTags,
+    elements: input.elements,
+  })
+  const isApproved = moderation.status === "approved"
 
   await db
     .insert(creatorScores)
@@ -944,10 +952,23 @@ export async function createStory(input: CreateStoryInput) {
     assetKind: input.storedAsset.assetKind,
     mediaUrl: input.storedAsset.mediaUrl,
     thumbnailUrl: input.storedAsset.thumbnailUrl,
+    storageProvider: input.storedAsset.storageProvider,
+    storageKey: input.storedAsset.storageKey,
+    contentType: input.storedAsset.contentType,
+    byteSize: input.storedAsset.byteSize,
+    checksum: input.storedAsset.checksum,
+    width: input.storedAsset.width,
+    height: input.storedAsset.height,
+    processingStatus: input.storedAsset.processingStatus,
     caption: input.caption || null,
-    durationMs: input.storedAsset.assetKind === "video" ? 10_000 : null,
+    durationMs:
+      input.storedAsset.assetKind === "video"
+        ? (input.storedAsset.durationMs ?? 10_000)
+        : null,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-    status: "live",
+    status: isApproved ? "live" : "processing",
+    moderationStatus: moderation.status,
+    moderationReason: moderation.reason,
     brandSignalScore: brandSignalScore.toFixed(2),
   })
 
@@ -975,7 +996,15 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
-  await processStoryCreatorEarnings(storyId)
+  if (isApproved) {
+    await processStoryCreatorEarnings(storyId)
+    await notifyCreatorStoryPosted({
+      creatorId: input.session.id,
+      creatorName: input.session.displayName,
+      storyId,
+      caption: input.caption || null,
+    }).catch(() => undefined)
+  }
 
   return storyId
 }
@@ -1022,6 +1051,12 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
       0,
     ),
   )
+  const moderation = evaluateStoryModeration({
+    caption: input.caption,
+    explicitBrandTags: input.explicitBrandTags,
+    elements: input.elements,
+  })
+  const isApproved = moderation.status === "approved"
 
   await reverseUnpaidStoryEarnings(story.id)
 
@@ -1029,6 +1064,11 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     .update(stories)
     .set({
       caption: input.caption || null,
+      status: isApproved ? "live" : "processing",
+      moderationStatus: moderation.status,
+      moderationReason: moderation.reason,
+      reviewedAt: null,
+      reviewedByUserId: null,
       brandSignalScore: brandSignalScore.toFixed(2),
     })
     .where(eq(stories.id, input.storyId))
@@ -1060,7 +1100,9 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     )
   }
 
-  await processStoryCreatorEarnings(input.storyId)
+  if (isApproved) {
+    await processStoryCreatorEarnings(input.storyId)
+  }
 }
 
 export async function removeStoryForOwner(storyId: string, ownerId: string) {

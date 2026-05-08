@@ -22,8 +22,42 @@ Story-first social network prototype with:
 Recommended production integrations for the first serious build:
 
 - Neon for Postgres
+- Vercel Blob for private story image storage
 - Cloudflare Stream for story video
 - Stripe Connect for payouts
+
+## Story media setup
+
+Local development can use `STORY_STORAGE_PROVIDER=local`, which writes uploads
+under `public/uploads/stories`.
+
+Production uploads fail closed unless story media is configured for private
+storage:
+
+```bash
+STORY_STORAGE_PROVIDER=vercel-blob
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+STORY_VIDEO_PROCESSOR=cloudflare-stream
+CLOUDFLARE_STREAM_ACCOUNT_ID=...
+CLOUDFLARE_STREAM_API_TOKEN=...
+CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN=...
+```
+
+Private Blob media is served through `/api/story-media/...`, which requires an
+authenticated session or a short-lived signed media URL issued by the mobile API.
+
+## Admin setup
+
+The admin portal is available at `/admin`. `griffin.aste@gmail.com` is included
+as a built-in admin. In production, set `ADMIN_EMAILS` to add more
+comma-separated account emails:
+
+```bash
+ADMIN_EMAILS=founder@example.com,ops@example.com
+```
+
+If `ADMIN_EMAILS` is omitted in local development, any signed-in account can open
+the admin portal.
 
 ## Stripe setup
 

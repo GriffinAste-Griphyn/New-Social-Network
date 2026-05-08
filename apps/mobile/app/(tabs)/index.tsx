@@ -1,6 +1,6 @@
-import type { ReactNode } from "react"
+import { useCallback, useRef, useState, type ReactNode } from "react"
 import Ionicons from "@expo/vector-icons/Ionicons"
-import { useRouter } from "expo-router"
+import { useFocusEffect, useRouter } from "expo-router"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 import { useAuthFlow } from "@/lib/auth-flow"
 import { useFollowState } from "@/lib/follow-state"
@@ -17,7 +17,9 @@ export default function HomeScreen() {
   const router = useRouter()
   const { account, expireSession } = useAuthFlow()
   const { revision } = useFollowState()
-  const liveFeed = useMobileFeed(account?.mobileToken, revision, {
+  const [focusRefreshRevision, setFocusRefreshRevision] = useState(0)
+  const hasHandledInitialFocusRef = useRef(false)
+  const liveFeed = useMobileFeed(account?.mobileToken, revision + focusRefreshRevision, {
     onUnauthorized: expireSession,
   })
   const followedStories = liveFeed.data?.followingStories ?? []
@@ -26,6 +28,17 @@ export default function HomeScreen() {
   const session = liveFeed.data?.session ?? account
   const activeStoryCount = myStory?.liveCount ?? followedStories.length
   const shouldShowFollowing = Boolean(myStory?.hasActiveStory || followedStories.length > 0)
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasHandledInitialFocusRef.current) {
+        hasHandledInitialFocusRef.current = true
+        return
+      }
+
+      setFocusRefreshRevision((current) => current + 1)
+    }, []),
+  )
 
   return (
     <ScreenFrame>

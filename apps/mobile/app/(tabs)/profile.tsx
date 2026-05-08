@@ -8,6 +8,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native"
 import { useAuthFlow } from "@/lib/auth-flow"
 import { getMobileApi } from "@/lib/mobile-api"
 import {
+  AccountAvatarButton,
   ScreenFrame,
   ScreenHeader,
   ScreenScroll,
@@ -103,6 +104,13 @@ export default function ProfileScreen() {
           eyebrow="Profile"
           title={displayName}
           subtitle={`@${handle}`}
+          right={
+            <AccountAvatarButton
+              displayName={displayName}
+              email={account?.email}
+              handle={handle}
+            />
+          }
         />
 
         <View style={styles.identityPanel}>
@@ -163,6 +171,12 @@ export default function ProfileScreen() {
 
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>Creator business</Text>
+          <ActionRow
+            icon="images-outline"
+            label="My Story Stats"
+            detail="Story-by-story views and replies"
+            onPress={() => router.push("/my-story-stats" as Href)}
+          />
           <ActionRow
             icon="analytics-outline"
             label="Stats"

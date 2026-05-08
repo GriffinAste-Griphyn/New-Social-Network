@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getMobileCreatorProfile } from "@/lib/story-store"
+import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -39,7 +40,9 @@ export async function GET(
     profile: {
       ...profile,
       avatarUrl: absoluteMediaUrl(profile.avatarUrl, request),
-      coverUrl: absoluteMediaUrl(profile.coverUrl, request),
+      coverUrl:
+        publicStoryMediaUrl(profile.coverUrl, request, { signed: true }) ??
+        absoluteMediaUrl(profile.coverUrl, request),
     },
   })
 }

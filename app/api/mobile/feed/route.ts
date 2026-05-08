@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getFeedData } from "@/lib/story-store"
+import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -23,8 +24,12 @@ function absoluteStoryCardMedia<T extends {
 }>(story: T, request: Request) {
   return {
     ...story,
-    mediaUrl: absoluteMediaUrl(story.mediaUrl, request) ?? story.mediaUrl,
-    thumbnailUrl: absoluteMediaUrl(story.thumbnailUrl, request),
+    mediaUrl:
+      publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
+      story.mediaUrl,
+    thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl, request, {
+      signed: true,
+    }),
   }
 }
 
@@ -94,9 +99,10 @@ export async function POST(request: Request) {
         ...feed.myStory.owner,
         imageUrl: absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
       },
-      latestThumbnailUrl: absoluteMediaUrl(
+      latestThumbnailUrl: publicStoryMediaUrl(
         feed.myStory.latestThumbnailUrl,
         request,
+        { signed: true },
       ),
       items: feed.myStory.items.map((story) =>
         absoluteStoryCardMedia(story, request),

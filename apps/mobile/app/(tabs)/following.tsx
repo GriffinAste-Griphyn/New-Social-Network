@@ -7,6 +7,7 @@ import { useAuthFlow } from "@/lib/auth-flow"
 import { useFollowState } from "@/lib/follow-state"
 import { useMobileFeed } from "@/lib/mobile-stories-api"
 import {
+  AccountAvatarButton,
   ScreenFrame,
   ScreenHeader,
   ScreenScroll,
@@ -36,6 +37,7 @@ export default function FollowingScreen() {
           <ScreenHeader
             title="Following"
             subtitle="Live stories from accounts you already follow."
+            right={<AccountAvatarButton />}
           />
           <FollowingEmptyState
             hasFollowedCreators={hasFollowedCreators}
@@ -51,6 +53,7 @@ export default function FollowingScreen() {
             <ScreenHeader
               title="Following"
               subtitle="Live stories from accounts you already follow."
+              right={<AccountAvatarButton />}
             />
           }
         />

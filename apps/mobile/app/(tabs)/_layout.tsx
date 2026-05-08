@@ -90,6 +90,7 @@ export default function TabLayout() {
         options={{
           title: "Post",
           tabBarIcon: () => <PostTabIcon />,
+          tabBarLabelStyle: styles.postTabLabel,
         }}
       />
       <Tabs.Screen
@@ -138,6 +139,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#e01616",
+  },
+  postTabLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0,
+    lineHeight: 16,
+    transform: [{ translateY: 1 }],
   },
   badge: {
     position: "absolute",

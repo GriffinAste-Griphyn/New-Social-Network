@@ -6,6 +6,12 @@ import {
   createStoryInteraction,
   listStoryInteractionsForCreator,
 } from "@/lib/story-interactions"
+import {
+  publicStoryMediaUrl,
+  removeStoryAsset,
+  saveStoryAsset,
+  StoryUploadError,
+} from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -14,6 +20,12 @@ const interactionSchema = z.object({
   body: z.string().trim().max(1_000).optional(),
   reaction: z.string().trim().max(24).optional(),
 })
+
+function getStringFormValue(formData: FormData, key: string) {
+  const value = formData.get(key)
+
+  return typeof value === "string" ? value : undefined
+}
 
 export async function GET(request: Request) {
   const session = await getCompleteMobileSession(request)
@@ -30,7 +42,17 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    interactions,
+    interactions: interactions.map((interaction) => ({
+      ...interaction,
+      mediaUrl:
+        publicStoryMediaUrl(interaction.mediaUrl, request, { signed: true }) ??
+        interaction.mediaUrl,
+      mediaThumbnailUrl: publicStoryMediaUrl(
+        interaction.mediaThumbnailUrl,
+        request,
+        { signed: true },
+      ),
+    })),
   })
 }
 
@@ -38,6 +60,8 @@ export async function POST(
   request: Request,
   context: RouteContext<"/api/mobile/stories/[id]/interactions">,
 ) {
+  let storedAsset: Awaited<ReturnType<typeof saveStoryAsset>> | undefined
+
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
@@ -45,9 +69,27 @@ export async function POST(
   }
 
   const { id } = await context.params
-  const parsed = interactionSchema.safeParse(
-    await request.json().catch(() => null),
-  )
+  const contentType = request.headers.get("content-type") ?? ""
+  const formData = contentType.includes("multipart/form-data")
+    ? await request.formData().catch(() => null)
+    : null
+  const mediaEntry = formData?.get("media")
+  const payload = formData
+    ? {
+        kind: getStringFormValue(formData, "kind"),
+        body: getStringFormValue(formData, "body"),
+        reaction: getStringFormValue(formData, "reaction"),
+      }
+    : await request.json().catch(() => null)
+
+  if (!payload) {
+    return NextResponse.json(
+      { error: "Could not read the reply upload. Try again." },
+      { status: 400 },
+    )
+  }
+
+  const parsed = interactionSchema.safeParse(payload)
 
   if (!parsed.success) {
     const message =
@@ -57,20 +99,45 @@ export async function POST(
   }
 
   try {
+    if (mediaEntry instanceof File) {
+      storedAsset = await saveStoryAsset(mediaEntry)
+    }
+
     await createStoryInteraction({
       storyId: id,
       actorId: session.id,
       kind: parsed.data.kind,
       body: parsed.data.body,
       reaction: parsed.data.reaction,
+      storedAsset,
     })
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({
+      ok: true,
+      asset: storedAsset
+        ? {
+            assetKind: storedAsset.assetKind,
+            mediaUrl:
+              publicStoryMediaUrl(storedAsset.mediaUrl, request, {
+                signed: true,
+              }) ?? storedAsset.mediaUrl,
+            thumbnailUrl: publicStoryMediaUrl(storedAsset.thumbnailUrl, request, {
+              signed: true,
+            }),
+          }
+        : null,
+    })
   } catch (error) {
+    if (storedAsset) {
+      await removeStoryAsset(storedAsset.mediaUrl)
+    }
+
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Could not send your reply.",
+          error instanceof StoryUploadError || error instanceof Error
+            ? error.message
+            : "Could not send your reply.",
       },
       { status: 400 },
     )

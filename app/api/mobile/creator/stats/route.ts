@@ -2,20 +2,9 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
+import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
-
-function absoluteMediaUrl(value: string | null, request: Request) {
-  if (!value) {
-    return null
-  }
-
-  if (/^https?:\/\//i.test(value)) {
-    return value
-  }
-
-  return new URL(value, request.url).toString()
-}
 
 function parseStatsRange(request: Request) {
   const url = new URL(request.url)
@@ -52,8 +41,12 @@ export async function GET(request: Request) {
       ...stats,
       stories: stats.stories.map((story) => ({
         ...story,
-        mediaUrl: absoluteMediaUrl(story.mediaUrl, request) ?? story.mediaUrl,
-        thumbnailUrl: absoluteMediaUrl(story.thumbnailUrl, request),
+        mediaUrl:
+          publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
+          story.mediaUrl,
+        thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl, request, {
+          signed: true,
+        }),
       })),
     },
   })

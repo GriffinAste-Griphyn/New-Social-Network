@@ -16,6 +16,7 @@ import { useFollowState } from "@/lib/follow-state"
 import { useAuthFlow } from "@/lib/auth-flow"
 import { useMobileFeed } from "@/lib/mobile-stories-api"
 import {
+  AccountAvatarButton,
   DiscoverGrid,
   ScreenFrame,
 } from "@/components/social/ui"
@@ -151,7 +152,10 @@ function DiscoverSearchHeader({
 }) {
   return (
     <View style={styles.header}>
-      <Text style={styles.title}>Discover</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>Discover</Text>
+        <AccountAvatarButton />
+      </View>
       <View style={styles.searchShell}>
         <Ionicons name="search-outline" size={20} color={colors.subtext} />
         <TextInput
@@ -272,7 +276,16 @@ const styles = StyleSheet.create({
     gap: 14,
     marginBottom: 24,
   },
+  titleRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+  },
   title: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 38,
     fontWeight: "700",
     color: colors.text,

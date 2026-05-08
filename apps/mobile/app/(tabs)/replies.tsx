@@ -6,6 +6,7 @@ import { Image, Pressable, StyleSheet, Text, View } from "react-native"
 import { useAuthFlow } from "@/lib/auth-flow"
 import { getMobileApi } from "@/lib/mobile-api"
 import {
+  AccountAvatarButton,
   ScreenFrame,
   ScreenHeader,
   ScreenScroll,
@@ -23,6 +24,9 @@ type StoryInteractionEvent = {
     imageUrl: string | null
   }
   body: string | null
+  mediaUrl: string | null
+  mediaThumbnailUrl: string | null
+  mediaAssetKind: "image" | "video" | null
   createdAt: string
 }
 
@@ -85,7 +89,7 @@ export default function RepliesScreen() {
   return (
     <ScreenFrame>
       <ScreenScroll>
-        <ScreenHeader title="Replies" />
+        <ScreenHeader title="Replies" right={<AccountAvatarButton />} />
 
         <ReplyViewSwitch activeView={activeView} onChange={setActiveView} />
 
@@ -227,13 +231,29 @@ function ReceivedReplyRow({
           @{interaction.actor.handle} · {formatReplyTime(interaction.createdAt)}
         </Text>
         <Text style={styles.replyText} numberOfLines={2}>
-          {interaction.body ?? "Sent a reaction."}
+          {getReplyPreview(interaction)}
         </Text>
       </View>
 
       <Ionicons name="chevron-forward" size={17} color={colors.faint} />
     </Pressable>
   )
+}
+
+function getReplyPreview(interaction: StoryInteractionEvent) {
+  if (interaction.body) {
+    return interaction.body
+  }
+
+  if (interaction.mediaAssetKind === "video") {
+    return "Sent a video reply."
+  }
+
+  if (interaction.mediaAssetKind === "image") {
+    return "Sent a photo reply."
+  }
+
+  return "Sent a reaction."
 }
 
 function EmptyReplies({

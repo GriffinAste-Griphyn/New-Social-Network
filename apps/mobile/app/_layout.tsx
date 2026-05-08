@@ -3,8 +3,10 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter"
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native"
-import { Stack } from "expo-router"
+import * as Notifications from "expo-notifications"
+import { Stack, useRouter } from "expo-router"
 import { StatusBar } from "expo-status-bar"
+import { useEffect } from "react"
 import { Platform } from "react-native"
 
 import { AuthFlowProvider } from "@/lib/auth-flow"
@@ -46,10 +48,37 @@ const theme = {
   },
 }
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+})
+
 export default function RootLayout() {
+  const router = useRouter()
   const [fontsLoaded] = useFonts({
     Inter_700Bold,
   })
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const storyId = response.notification.request.content.data.storyId
+
+        if (typeof storyId === "string" && storyId.length > 0) {
+          router.push(`/story/${storyId}`)
+        }
+      },
+    )
+
+    return () => {
+      subscription.remove()
+    }
+  }, [router])
 
   if (!fontsLoaded) {
     return null
@@ -72,6 +101,7 @@ export default function RootLayout() {
             <Stack.Screen name="creator-stats" />
             <Stack.Screen name="earnings" />
             <Stack.Screen name="followers" />
+            <Stack.Screen name="my-story-stats" />
             <Stack.Screen name="payouts" />
             <Stack.Screen name="replies/[creatorId]" />
           </Stack>

@@ -2,9 +2,21 @@ import Ionicons from "@expo/vector-icons/Ionicons"
 import { StatusBar } from "expo-status-bar"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useState } from "react"
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native"
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 
+import {
+  getCreatorNotificationsEnabled,
+  setCreatorNotificationsEnabled,
+} from "@/lib/creator-notifications"
 import { useFollowState } from "@/lib/follow-state"
 import { getMobileApi } from "@/lib/mobile-api"
 
@@ -40,6 +52,8 @@ export default function CreatorProfileScreen() {
   const [profile, setProfile] = useState<CreatorProfileView | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isFollowMenuOpen, setIsFollowMenuOpen] = useState(false)
+  const [areNotificationsEnabled, setAreNotificationsEnabled] = useState(false)
+  const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
   const isAdded = profile ? isFollowing(profile.id) : false
 
   useEffect(() => {
@@ -77,6 +91,31 @@ export default function CreatorProfileScreen() {
     }
   }, [id])
 
+  useEffect(() => {
+    let isMounted = true
+
+    if (!profile) {
+      setAreNotificationsEnabled(false)
+      return
+    }
+
+    getCreatorNotificationsEnabled(profile.id)
+      .then((enabled) => {
+        if (isMounted) {
+          setAreNotificationsEnabled(enabled)
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setAreNotificationsEnabled(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [profile?.id])
+
   const handleFollowPress = () => {
     if (!profile) return
 
@@ -94,6 +133,38 @@ export default function CreatorProfileScreen() {
     }
 
     setIsFollowMenuOpen(false)
+  }
+
+  const toggleNotifications = async () => {
+    if (!profile || isUpdatingNotifications) {
+      return
+    }
+
+    const nextEnabled = !areNotificationsEnabled
+
+    setIsUpdatingNotifications(true)
+
+    try {
+      const enabled = await setCreatorNotificationsEnabled({
+        creatorId: profile.id,
+        enabled: nextEnabled,
+      })
+
+      setAreNotificationsEnabled(enabled)
+      Alert.alert(
+        enabled ? "Notifications on" : "Notifications off",
+        enabled
+          ? `You will be notified when ${profile.name} posts a story.`
+          : `You will no longer be notified when ${profile.name} posts.`,
+      )
+    } catch (error) {
+      Alert.alert(
+        "Could not update notifications",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsUpdatingNotifications(false)
+    }
   }
 
   return (
@@ -118,8 +189,15 @@ export default function CreatorProfileScreen() {
 
         <View style={styles.topActionCluster}>
           <ProfileIconButton
-            accessibilityLabel="Profile notifications"
-            icon="notifications-outline"
+            accessibilityLabel={
+              profile && areNotificationsEnabled
+                ? `Turn off notifications for ${profile.name}`
+                : "Turn on profile notifications"
+            }
+            active={areNotificationsEnabled}
+            disabled={!profile || isUpdatingNotifications}
+            icon={areNotificationsEnabled ? "notifications" : "notifications-outline"}
+            onPress={toggleNotifications}
             size={25}
           />
           <ProfileIconButton
@@ -250,11 +328,15 @@ export default function CreatorProfileScreen() {
 
 function ProfileIconButton({
   accessibilityLabel,
+  active = false,
+  disabled = false,
   icon,
   onPress,
   size,
 }: {
   accessibilityLabel: string
+  active?: boolean
+  disabled?: boolean
   icon: keyof typeof Ionicons.glyphMap
   onPress?: () => void
   size: number
@@ -263,9 +345,11 @@ function ProfileIconButton({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconButton,
+        active ? styles.iconButtonActive : null,
         pressed ? styles.pressed : null,
       ]}
     >
@@ -337,6 +421,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.glass,
+  },
+  iconButtonActive: {
+    backgroundColor: "rgba(224,22,22,0.78)",
   },
   centerState: {
     ...StyleSheet.absoluteFillObject,

@@ -1,40 +1,35 @@
-import { randomUUID } from "node:crypto"
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { del, put } from "@vercel/blob"
 
+import { env } from "@/lib/env"
+
 const maxStoryUploadBytes = 25 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
 const localStoryUrlPrefix = "/uploads/stories"
+const storyMediaRoutePrefix = "/api/story-media"
+const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
 
-const supportedUploadTypes = new Map<
-  string,
-  {
-    assetKind: "image" | "video"
-    extension: string
-  }
->([
-  ["image/jpeg", { assetKind: "image", extension: "jpg" }],
-  ["image/png", { assetKind: "image", extension: "png" }],
-  ["image/webp", { assetKind: "image", extension: "webp" }],
-  ["video/mp4", { assetKind: "video", extension: "mp4" }],
-  ["video/webm", { assetKind: "video", extension: "webm" }],
-])
+type ResolvedUploadType = {
+  assetKind: "image" | "video"
+  extension: string
+  contentType: string
+}
 
-const extensionFallback = new Map<
-  string,
-  {
-    assetKind: "image" | "video"
-    extension: string
-  }
->([
-  [".jpg", { assetKind: "image", extension: "jpg" }],
-  [".jpeg", { assetKind: "image", extension: "jpg" }],
-  [".png", { assetKind: "image", extension: "png" }],
-  [".webp", { assetKind: "image", extension: "webp" }],
-  [".mp4", { assetKind: "video", extension: "mp4" }],
-  [".webm", { assetKind: "video", extension: "webm" }],
-])
+type StoryAssetProcessingStatus = "processing" | "ready"
+
+type StoryAssetMetadata = {
+  width: number | null
+  height: number | null
+  durationMs: number | null
+  processingStatus: StoryAssetProcessingStatus
+}
 
 export class StoryUploadError extends Error {}
 
@@ -42,6 +37,15 @@ export type StoredStoryAsset = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  storageProvider: "local" | "vercel-blob" | "cloudflare-stream"
+  storageKey: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width: number | null
+  height: number | null
+  durationMs: number | null
+  processingStatus: StoryAssetProcessingStatus
 }
 
 type StoryStorageProvider = {
@@ -51,6 +55,8 @@ type StoryStorageProvider = {
     buffer: Buffer,
     assetKind: "image" | "video",
     contentType: string,
+    checksum: string,
+    metadata: StoryAssetMetadata,
   ) => Promise<StoredStoryAsset>
 }
 
@@ -64,8 +70,117 @@ function withConfiguredPublicBaseUrl(mediaUrl: string) {
   return `${baseUrl}${mediaUrl}`
 }
 
+function encodeStoryMediaPathname(pathname: string) {
+  return pathname
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+}
+
+function getPrivateVercelBlobPathname(mediaUrl: string) {
+  if (mediaUrl.startsWith(`${storyMediaRoutePrefix}/`)) {
+    return mediaUrl
+      .slice(storyMediaRoutePrefix.length + 1)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/")
+  }
+
+  if (!/^https?:\/\//i.test(mediaUrl)) {
+    return null
+  }
+
+  try {
+    const url = new URL(mediaUrl)
+
+    if (!url.hostname.endsWith(".private.blob.vercel-storage.com")) {
+      return null
+    }
+
+    return decodeURIComponent(url.pathname.replace(/^\/+/, ""))
+  } catch {
+    return null
+  }
+}
+
+function isVercelBlobUrl(mediaUrl: string) {
+  if (!/^https?:\/\//i.test(mediaUrl)) {
+    return false
+  }
+
+  try {
+    return new URL(mediaUrl).hostname.endsWith(".blob.vercel-storage.com")
+  } catch {
+    return false
+  }
+}
+
+function buildStoryMediaRoute(pathname: string) {
+  return `${storyMediaRoutePrefix}/${encodeStoryMediaPathname(pathname)}`
+}
+
+function signStoryMediaPathname(pathname: string, expiresAtMs: number) {
+  return createHmac("sha256", env.AUTH_SECRET)
+    .update(`${pathname}:${expiresAtMs}`)
+    .digest("base64url")
+}
+
+export function createStoryMediaAccessToken(pathname: string) {
+  const expiresAtMs = Date.now() + storyMediaAccessTokenTtlMs
+  const signature = signStoryMediaPathname(pathname, expiresAtMs)
+
+  return `${expiresAtMs}.${signature}`
+}
+
+export function verifyStoryMediaAccessToken(pathname: string, token: string | null) {
+  if (!token) {
+    return false
+  }
+
+  const [expiresAtValue, signature] = token.split(".")
+  const expiresAtMs = Number(expiresAtValue)
+
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now() || !signature) {
+    return false
+  }
+
+  const expected = signStoryMediaPathname(pathname, expiresAtMs)
+  const signatureBuffer = Buffer.from(signature)
+  const expectedBuffer = Buffer.from(expected)
+
+  return (
+    signatureBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(signatureBuffer, expectedBuffer)
+  )
+}
+
+export function publicStoryMediaUrl(
+  value: string | null,
+  request?: Request,
+  options: { signed?: boolean } = {},
+) {
+  if (!value) {
+    return null
+  }
+
+  const blobPathname = getPrivateVercelBlobPathname(value)
+  const mediaUrl = blobPathname ? buildStoryMediaRoute(blobPathname) : value
+
+  if (/^https?:\/\//i.test(mediaUrl) || !request) {
+    return mediaUrl
+  }
+
+  const url = new URL(mediaUrl, request.url)
+
+  if (options.signed && blobPathname) {
+    url.searchParams.set("token", createStoryMediaAccessToken(blobPathname))
+  }
+
+  return url.toString()
+}
+
 const localStoryStorageProvider: StoryStorageProvider = {
-  async save(fileName, buffer, assetKind) {
+  async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
     await mkdir(storyUploadDirectory, { recursive: true })
     await writeFile(path.join(storyUploadDirectory, fileName), buffer)
 
@@ -75,6 +190,12 @@ const localStoryStorageProvider: StoryStorageProvider = {
       assetKind,
       mediaUrl,
       thumbnailUrl: assetKind === "image" ? mediaUrl : null,
+      storageProvider: "local",
+      storageKey: fileName,
+      contentType,
+      byteSize: buffer.byteLength,
+      checksum,
+      ...metadata,
     }
   },
   async remove(mediaUrl) {
@@ -95,31 +216,32 @@ const localStoryStorageProvider: StoryStorageProvider = {
   },
 }
 
-function getBlobContentType(fileName: string, assetKind: "image" | "video") {
-  const extension = path.extname(fileName).slice(1).toLowerCase()
-
-  if (assetKind === "video") {
-    return `video/${extension}`
-  }
-
-  return extension === "jpg" ? "image/jpeg" : `image/${extension}`
-}
-
 const vercelBlobStoryStorageProvider: StoryStorageProvider = {
-  async save(fileName, buffer, assetKind) {
+  async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
     const blob = await put(`stories/${fileName}`, buffer, {
-      access: "public",
-      contentType: getBlobContentType(fileName, assetKind),
+      access: "private",
+      contentType,
     })
+    const mediaUrl = buildStoryMediaRoute(blob.pathname)
 
     return {
       assetKind,
-      mediaUrl: blob.url,
-      thumbnailUrl: assetKind === "image" ? blob.url : null,
+      mediaUrl,
+      thumbnailUrl: assetKind === "image" ? mediaUrl : null,
+      storageProvider: "vercel-blob",
+      storageKey: blob.pathname,
+      contentType,
+      byteSize: buffer.byteLength,
+      checksum,
+      ...metadata,
     }
   },
   async remove(mediaUrl) {
-    if (/^https?:\/\//i.test(mediaUrl)) {
+    const blobPathname = getPrivateVercelBlobPathname(mediaUrl)
+
+    if (blobPathname) {
+      await del(blobPathname)
+    } else if (isVercelBlobUrl(mediaUrl)) {
       await del(mediaUrl)
     }
   },
@@ -167,6 +289,8 @@ async function saveCloudflareStreamVideo(
   fileName: string,
   buffer: Buffer,
   contentType: string,
+  checksum: string,
+  metadata: StoryAssetMetadata,
 ): Promise<StoredStoryAsset> {
   const { accountId, apiToken, customerSubdomain } = getCloudflareStreamConfig()
   const createUploadResponse = await fetch(
@@ -216,6 +340,15 @@ async function saveCloudflareStreamVideo(
     assetKind: "video",
     mediaUrl: buildCloudflarePlaybackUrl(customerSubdomain, uid),
     thumbnailUrl: null,
+    storageProvider: "cloudflare-stream",
+    storageKey: uid,
+    contentType,
+    byteSize: buffer.byteLength,
+    checksum,
+    width: metadata.width,
+    height: metadata.height,
+    durationMs: metadata.durationMs,
+    processingStatus: "processing",
   }
 }
 
@@ -241,25 +374,389 @@ function getStoryStorageProvider() {
     return vercelBlobStoryStorageProvider
   }
 
+  if (process.env.NODE_ENV === "production") {
+    throw new StoryUploadError(
+      "Production story uploads require STORY_STORAGE_PROVIDER=vercel-blob.",
+    )
+  }
+
   return localStoryStorageProvider
 }
 
-function resolveStoryUploadType(file: File) {
-  const byMimeType = supportedUploadTypes.get(file.type)
+function hasPrefix(buffer: Buffer, bytes: number[]) {
+  return bytes.every((byte, index) => buffer[index] === byte)
+}
 
-  if (byMimeType) {
-    return byMimeType
+function getPositiveInteger(value: number) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function getDimensionPair(width: number, height: number) {
+  const resolvedWidth = getPositiveInteger(width)
+  const resolvedHeight = getPositiveInteger(height)
+
+  return resolvedWidth && resolvedHeight
+    ? { width: resolvedWidth, height: resolvedHeight }
+    : null
+}
+
+function readUInt24LE(buffer: Buffer, offset: number) {
+  return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16)
+}
+
+function getPngDimensions(buffer: Buffer) {
+  if (buffer.byteLength < 24) {
+    return null
   }
 
-  const extension = path.extname(file.name).toLowerCase()
-  const byExtension = extensionFallback.get(extension)
+  return getDimensionPair(buffer.readUInt32BE(16), buffer.readUInt32BE(20))
+}
 
-  if (byExtension) {
-    return byExtension
+function getJpegDimensions(buffer: Buffer) {
+  let offset = 2
+
+  while (offset + 9 < buffer.byteLength) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1
+      continue
+    }
+
+    const marker = buffer[offset + 1]
+
+    if (marker === 0xda || marker === 0xd9) {
+      break
+    }
+
+    const segmentLength = buffer.readUInt16BE(offset + 2)
+
+    if (segmentLength < 2 || offset + 2 + segmentLength > buffer.byteLength) {
+      break
+    }
+
+    const isStartOfFrame =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      ![0xc4, 0xc8, 0xcc].includes(marker)
+
+    if (isStartOfFrame) {
+      return getDimensionPair(
+        buffer.readUInt16BE(offset + 7),
+        buffer.readUInt16BE(offset + 5),
+      )
+    }
+
+    offset += 2 + segmentLength
+  }
+
+  return null
+}
+
+function getWebpDimensions(buffer: Buffer) {
+  let offset = 12
+
+  while (offset + 8 <= buffer.byteLength) {
+    const chunkType = buffer.subarray(offset, offset + 4).toString("ascii")
+    const chunkSize = buffer.readUInt32LE(offset + 4)
+    const dataStart = offset + 8
+
+    if (dataStart + chunkSize > buffer.byteLength) {
+      return null
+    }
+
+    if (chunkType === "VP8X" && chunkSize >= 10) {
+      return getDimensionPair(
+        readUInt24LE(buffer, dataStart + 4) + 1,
+        readUInt24LE(buffer, dataStart + 7) + 1,
+      )
+    }
+
+    if (chunkType === "VP8L" && chunkSize >= 5 && buffer[dataStart] === 0x2f) {
+      const width =
+        1 + buffer[dataStart + 1] + ((buffer[dataStart + 2] & 0x3f) << 8)
+      const height =
+        1 +
+        ((buffer[dataStart + 2] & 0xc0) >> 6) +
+        (buffer[dataStart + 3] << 2) +
+        ((buffer[dataStart + 4] & 0x0f) << 10)
+
+      return getDimensionPair(width, height)
+    }
+
+    if (chunkType === "VP8 " && chunkSize >= 10) {
+      return getDimensionPair(
+        buffer.readUInt16LE(dataStart + 6) & 0x3fff,
+        buffer.readUInt16LE(dataStart + 8) & 0x3fff,
+      )
+    }
+
+    offset = dataStart + chunkSize + (chunkSize % 2)
+  }
+
+  return null
+}
+
+type IsoBox = {
+  type: string
+  dataStart: number
+  end: number
+}
+
+function walkIsoBoxes(
+  buffer: Buffer,
+  start: number,
+  end: number,
+  visitor: (box: IsoBox) => void,
+  depth = 0,
+) {
+  if (depth > 8) {
+    return
+  }
+
+  let offset = start
+
+  while (offset + 8 <= end) {
+    let boxSize = buffer.readUInt32BE(offset)
+    const type = buffer.subarray(offset + 4, offset + 8).toString("ascii")
+    let dataStart = offset + 8
+
+    if (boxSize === 1) {
+      if (offset + 16 > end) {
+        return
+      }
+
+      const largeSize = buffer.readBigUInt64BE(offset + 8)
+
+      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) {
+        return
+      }
+
+      boxSize = Number(largeSize)
+      dataStart = offset + 16
+    } else if (boxSize === 0) {
+      boxSize = end - offset
+    }
+
+    const boxEnd = offset + boxSize
+
+    if (boxSize < dataStart - offset || boxEnd > end) {
+      return
+    }
+
+    const box = { type, dataStart, end: boxEnd }
+    visitor(box)
+
+    if (
+      [
+        "moov",
+        "trak",
+        "mdia",
+        "minf",
+        "stbl",
+        "edts",
+        "udta",
+        "iprp",
+        "ipco",
+      ].includes(type)
+    ) {
+      walkIsoBoxes(buffer, dataStart, boxEnd, visitor, depth + 1)
+    } else if (type === "meta" && dataStart + 4 <= boxEnd) {
+      walkIsoBoxes(buffer, dataStart + 4, boxEnd, visitor, depth + 1)
+    }
+
+    offset = boxEnd
+  }
+}
+
+function getIsoMediaMetadata(buffer: Buffer, assetKind: "image" | "video") {
+  let dimensions: { width: number; height: number } | null = null
+  let durationMs: number | null = null
+
+  walkIsoBoxes(buffer, 0, buffer.byteLength, (box) => {
+    if (!dimensions && box.type === "ispe" && box.dataStart + 12 <= box.end) {
+      dimensions = getDimensionPair(
+        buffer.readUInt32BE(box.dataStart + 4),
+        buffer.readUInt32BE(box.dataStart + 8),
+      )
+    }
+
+    if (
+      !dimensions &&
+      assetKind === "video" &&
+      box.type === "tkhd" &&
+      box.dataStart + 4 <= box.end
+    ) {
+      const version = buffer[box.dataStart]
+      const widthOffset = version === 1 ? box.dataStart + 88 : box.dataStart + 76
+      const heightOffset = widthOffset + 4
+
+      if (heightOffset + 4 <= box.end) {
+        dimensions = getDimensionPair(
+          Math.round(buffer.readUInt32BE(widthOffset) / 65536),
+          Math.round(buffer.readUInt32BE(heightOffset) / 65536),
+        )
+      }
+    }
+
+    if (!durationMs && assetKind === "video" && box.type === "mvhd") {
+      const version = buffer[box.dataStart]
+      const timescaleOffset = version === 1 ? box.dataStart + 20 : box.dataStart + 12
+      const durationOffset = version === 1 ? box.dataStart + 24 : box.dataStart + 16
+
+      if (version === 0 && durationOffset + 4 <= box.end) {
+        const timescale = buffer.readUInt32BE(timescaleOffset)
+        const duration = buffer.readUInt32BE(durationOffset)
+        durationMs = timescale > 0 ? Math.round((duration / timescale) * 1000) : null
+      } else if (version === 1 && durationOffset + 8 <= box.end) {
+        const timescale = buffer.readUInt32BE(timescaleOffset)
+        const duration = buffer.readBigUInt64BE(durationOffset)
+        durationMs =
+          timescale > 0 && duration <= BigInt(Number.MAX_SAFE_INTEGER)
+            ? Math.round((Number(duration) / timescale) * 1000)
+            : null
+      }
+    }
+  })
+
+  const resolvedDimensions = dimensions as { width: number; height: number } | null
+
+  return {
+    width: resolvedDimensions?.width ?? null,
+    height: resolvedDimensions?.height ?? null,
+    durationMs,
+  }
+}
+
+function getStoryAssetMetadata(
+  buffer: Buffer,
+  uploadType: ResolvedUploadType,
+): StoryAssetMetadata {
+  if (uploadType.contentType === "image/png") {
+    const dimensions = getPngDimensions(buffer)
+
+    return {
+      width: dimensions?.width ?? null,
+      height: dimensions?.height ?? null,
+      durationMs: null,
+      processingStatus: "ready",
+    }
+  }
+
+  if (uploadType.contentType === "image/jpeg") {
+    const dimensions = getJpegDimensions(buffer)
+
+    return {
+      width: dimensions?.width ?? null,
+      height: dimensions?.height ?? null,
+      durationMs: null,
+      processingStatus: "ready",
+    }
+  }
+
+  if (uploadType.contentType === "image/webp") {
+    const dimensions = getWebpDimensions(buffer)
+
+    return {
+      width: dimensions?.width ?? null,
+      height: dimensions?.height ?? null,
+      durationMs: null,
+      processingStatus: "ready",
+    }
+  }
+
+  if (
+    uploadType.contentType === "image/heic" ||
+    uploadType.contentType === "image/avif" ||
+    uploadType.contentType === "video/mp4"
+  ) {
+    const metadata = getIsoMediaMetadata(buffer, uploadType.assetKind)
+
+    return {
+      ...metadata,
+      durationMs: uploadType.assetKind === "video" ? metadata.durationMs : null,
+      processingStatus: "ready",
+    }
+  }
+
+  return {
+    width: null,
+    height: null,
+    durationMs: null,
+    processingStatus: "ready",
+  }
+}
+
+function getIsoBaseMediaBrand(buffer: Buffer) {
+  if (buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
+    return null
+  }
+
+  return buffer.subarray(8, 12).toString("ascii").trim()
+}
+
+function resolveStoryUploadType(buffer: Buffer): ResolvedUploadType {
+  if (hasPrefix(buffer, [0xff, 0xd8, 0xff])) {
+    return {
+      assetKind: "image",
+      extension: "jpg",
+      contentType: "image/jpeg",
+    }
+  }
+
+  if (hasPrefix(buffer, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return {
+      assetKind: "image",
+      extension: "png",
+      contentType: "image/png",
+    }
+  }
+
+  if (
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return {
+      assetKind: "image",
+      extension: "webp",
+      contentType: "image/webp",
+    }
+  }
+
+  const isoBrand = getIsoBaseMediaBrand(buffer)
+
+  if (isoBrand && ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(isoBrand)) {
+    return {
+      assetKind: "image",
+      extension: "heic",
+      contentType: "image/heic",
+    }
+  }
+
+  if (isoBrand === "avif" || isoBrand === "avis") {
+    return {
+      assetKind: "image",
+      extension: "avif",
+      contentType: "image/avif",
+    }
+  }
+
+  if (isoBrand) {
+    return {
+      assetKind: "video",
+      extension: "mp4",
+      contentType: "video/mp4",
+    }
+  }
+
+  if (hasPrefix(buffer, [0x1a, 0x45, 0xdf, 0xa3])) {
+    return {
+      assetKind: "video",
+      extension: "webm",
+      contentType: "video/webm",
+    }
   }
 
   throw new StoryUploadError(
-    "Upload a JPG, PNG, WEBP, MP4, or WEBM story asset.",
+    "Upload a valid JPG, PNG, WEBP, MP4, or WEBM story asset.",
   )
 }
 
@@ -272,22 +769,37 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
     throw new StoryUploadError("Story uploads are capped at 25 MB for now.")
   }
 
-  const { assetKind, extension } = resolveStoryUploadType(file)
   const buffer = Buffer.from(await file.arrayBuffer())
+  const uploadType = resolveStoryUploadType(buffer)
+  const { assetKind, extension, contentType } = uploadType
+  const checksum = createHash("sha256").update(buffer).digest("hex")
+  const metadata = getStoryAssetMetadata(buffer, uploadType)
   const fileName = `${randomUUID()}.${extension}`
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    assetKind === "video" &&
+    process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream"
+  ) {
+    throw new StoryUploadError(
+      "Production video uploads require STORY_VIDEO_PROCESSOR=cloudflare-stream.",
+    )
+  }
 
   if (
     assetKind === "video" &&
     process.env.STORY_VIDEO_PROCESSOR === "cloudflare-stream"
   ) {
-    return saveCloudflareStreamVideo(fileName, buffer, file.type || getBlobContentType(fileName, assetKind))
+    return saveCloudflareStreamVideo(fileName, buffer, contentType, checksum, metadata)
   }
 
   return getStoryStorageProvider().save(
     fileName,
     buffer,
     assetKind,
-    file.type || getBlobContentType(fileName, assetKind),
+    contentType,
+    checksum,
+    metadata,
   )
 }
 

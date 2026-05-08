@@ -20,6 +20,7 @@ import { SafeAreaView } from "react-native-safe-area-context"
 import { useAuthFlow } from "@/lib/auth-flow"
 import { postMobileFormApi } from "@/lib/mobile-api"
 import type { MobileStoryUploadResponse } from "@/lib/mobile-stories-api"
+import { AccountAvatarButton } from "@/components/social/ui"
 
 type StoryMedia = {
   id: string
@@ -332,6 +333,10 @@ export default function PostScreen() {
             <StoryHeaderPill thumbnailUri={galleryItems[5].uri} />
           </View>
 
+          <View style={styles.snapAccountButton}>
+            <AccountAvatarButton />
+          </View>
+
           <View style={styles.rightToolRail}>
             <ToolRailButton icon="text" active={isTextEditing} onPress={openTextEditor} />
             <ToolRailButton
@@ -531,17 +536,20 @@ export default function PostScreen() {
             <Text style={styles.cameraModeText}>Story</Text>
           </View>
 
-          <Pressable
-            accessibilityLabel="Flip camera"
-            accessibilityRole="button"
-            onPress={flipCamera}
-            style={({ pressed }) => [
-              styles.iconButton,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Ionicons name="camera-reverse-outline" size={23} color={colors.text} />
-          </Pressable>
+          <View style={styles.cameraTopActions}>
+            <Pressable
+              accessibilityLabel="Flip camera"
+              accessibilityRole="button"
+              onPress={flipCamera}
+              style={({ pressed }) => [
+                styles.iconButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="camera-reverse-outline" size={23} color={colors.text} />
+            </Pressable>
+            <AccountAvatarButton />
+          </View>
         </View>
 
         <View style={styles.cameraHint}>
@@ -760,6 +768,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 12,
+  },
+  cameraTopActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   iconButton: {
     width: 44,
@@ -884,6 +898,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  snapAccountButton: {
+    position: "absolute",
+    top: 22,
+    right: 24,
   },
   snapCloseButton: {
     width: 48,

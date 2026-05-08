@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto"
 import { and, desc, eq, inArray } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
-import { stories, storyInteractions, users } from "@/lib/db/schema"
+import { follows, stories, storyInteractions, users } from "@/lib/db/schema"
+import type { StoredStoryAsset } from "@/lib/story-storage"
 
 export type StoryInteractionKind = "reply" | "comment" | "reaction"
 
@@ -20,6 +21,9 @@ export type StoryInteractionEvent = {
   kind: StoryInteractionKind
   body: string | null
   reaction: string | null
+  mediaUrl: string | null
+  mediaThumbnailUrl: string | null
+  mediaAssetKind: "image" | "video" | null
   createdAt: string
 }
 
@@ -34,6 +38,9 @@ function mapEvent(row: {
   kind: StoryInteractionKind
   body: string | null
   reaction: string | null
+  mediaUrl: string | null
+  mediaThumbnailUrl: string | null
+  mediaAssetKind: "image" | "video" | null
   createdAt: Date
 }): StoryInteractionEvent | null {
   if (!row.displayName || !row.handle) {
@@ -53,6 +60,9 @@ function mapEvent(row: {
     kind: row.kind,
     body: row.body,
     reaction: row.reaction,
+    mediaUrl: row.mediaUrl,
+    mediaThumbnailUrl: row.mediaThumbnailUrl,
+    mediaAssetKind: row.mediaAssetKind,
     createdAt: row.createdAt.toISOString(),
   }
 }
@@ -63,6 +73,7 @@ export async function createStoryInteraction(input: {
   kind: StoryInteractionKind
   body?: string | null
   reaction?: string | null
+  storedAsset?: StoredStoryAsset | null
 }) {
   const db = getDb()
   const [story] = await db
@@ -87,10 +98,26 @@ export async function createStoryInteraction(input: {
     throw new Error("You cannot reply to your own story.")
   }
 
+  const [follow] = await db
+    .select({ followerId: follows.followerId })
+    .from(follows)
+    .where(
+      and(
+        eq(follows.followerId, input.actorId),
+        eq(follows.followeeId, story.creatorId),
+      ),
+    )
+    .limit(1)
+
+  if (!follow) {
+    throw new Error("Follow this creator before responding.")
+  }
+
   const body = input.body?.trim() || null
   const reaction = input.reaction?.trim() || null
+  const storedAsset = input.storedAsset ?? null
 
-  if ((input.kind === "reply" || input.kind === "comment") && !body) {
+  if ((input.kind === "reply" || input.kind === "comment") && !body && !storedAsset) {
     throw new Error("Enter a message before sending.")
   }
 
@@ -108,6 +135,9 @@ export async function createStoryInteraction(input: {
       kind: input.kind,
       body,
       reaction,
+      mediaUrl: storedAsset?.mediaUrl ?? null,
+      mediaThumbnailUrl: storedAsset?.thumbnailUrl ?? null,
+      mediaAssetKind: storedAsset?.assetKind ?? null,
     })
     .returning()
 
@@ -138,6 +168,9 @@ export async function listStoryInteractionsForCreator(input: {
       kind: storyInteractions.kind,
       body: storyInteractions.body,
       reaction: storyInteractions.reaction,
+      mediaUrl: storyInteractions.mediaUrl,
+      mediaThumbnailUrl: storyInteractions.mediaThumbnailUrl,
+      mediaAssetKind: storyInteractions.mediaAssetKind,
       createdAt: storyInteractions.createdAt,
     })
     .from(storyInteractions)

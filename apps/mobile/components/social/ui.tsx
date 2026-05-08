@@ -22,6 +22,7 @@ import {
 import type { StyleProp, ViewStyle } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 
+import { useAuthFlow } from "@/lib/auth-flow"
 import { getMobileApi } from "@/lib/mobile-api"
 
 const colors = {
@@ -55,6 +56,14 @@ type AccountMenuCreatorStats = {
     paidCents: number
     nextAvailableAt: string | null
   }
+}
+
+type AccountAvatarButtonProps = {
+  activeStoryCount?: number
+  displayName?: string | null
+  email?: string | null
+  handle?: string | null
+  unreadReplyCount?: number
 }
 
 export function ScreenFrame({
@@ -99,6 +108,42 @@ export function MobileHomeHeader({
   unreadReplyCount: number
 }) {
   const router = useRouter()
+
+  return (
+    <View style={styles.topBar}>
+      <View style={[styles.headerCluster, styles.headerClusterLeft]}>
+        <HeaderCircle
+          accessibilityLabel="Search stories"
+          onPress={() => router.push({ pathname: "/discover", params: { focus: "1" } })}
+        >
+          <Ionicons name="search-outline" size={24} color={colors.subtext} />
+        </HeaderCircle>
+      </View>
+
+      <Text style={styles.appTitle}>Stories</Text>
+
+      <View style={[styles.headerCluster, styles.headerClusterRight]}>
+        <AccountAvatarButton
+          activeStoryCount={activeStoryCount}
+          displayName={displayName}
+          email={email}
+          handle={handle}
+          unreadReplyCount={unreadReplyCount}
+        />
+      </View>
+    </View>
+  )
+}
+
+export function AccountAvatarButton({
+  activeStoryCount = 0,
+  displayName,
+  email,
+  handle,
+  unreadReplyCount = 0,
+}: AccountAvatarButtonProps) {
+  const router = useRouter()
+  const { account } = useAuthFlow()
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
   const [creatorStats, setCreatorStats] =
     useState<AccountMenuCreatorStats | null>(null)
@@ -143,29 +188,21 @@ export function MobileHomeHeader({
   }, [creatorStatsState, isAccountMenuOpen])
 
   const closeAccountMenu = () => setIsAccountMenuOpen(false)
+  const resolvedDisplayName = displayName ?? account?.displayName ?? "Account"
+  const resolvedEmail = email ?? account?.email
+  const resolvedHandle = handle ?? account?.handle ?? "account"
 
   return (
-    <View style={styles.topBar}>
-      <View style={[styles.headerCluster, styles.headerClusterLeft]}>
-        <HeaderCircle
-          accessibilityLabel="Search stories"
-          onPress={() => router.push({ pathname: "/discover", params: { focus: "1" } })}
-        >
-          <Ionicons name="search-outline" size={24} color={colors.subtext} />
-        </HeaderCircle>
-      </View>
-
-      <Text style={styles.appTitle}>Stories</Text>
-
-      <View style={[styles.headerCluster, styles.headerClusterRight]}>
-        <HeaderCircle
-          accessibilityLabel="Open account menu"
-          background={colors.accent}
-          onPress={() => setIsAccountMenuOpen(true)}
-        >
-          <Text style={styles.headerInitials}>{initials(displayName)}</Text>
-        </HeaderCircle>
-      </View>
+    <>
+      <HeaderCircle
+        accessibilityLabel="Open account menu"
+        background={colors.accent}
+        onPress={() => setIsAccountMenuOpen(true)}
+      >
+        <Text style={styles.headerInitials}>
+          {initials(resolvedDisplayName)}
+        </Text>
+      </HeaderCircle>
 
       <Modal
         animationType="fade"
@@ -188,29 +225,40 @@ export function MobileHomeHeader({
               <View style={styles.accountMenuHeader}>
                 <View style={styles.accountMenuAvatar}>
                   <Text style={styles.accountMenuInitials}>
-                    {initials(displayName)}
+                    {initials(resolvedDisplayName)}
                   </Text>
                 </View>
                 <View style={styles.accountMenuIdentity}>
                   <Text style={styles.accountMenuName} numberOfLines={1}>
-                    {displayName}
+                    {resolvedDisplayName}
                   </Text>
                   <Text style={styles.accountMenuHandle} numberOfLines={1}>
-                    @{handle}
+                    @{resolvedHandle}
                   </Text>
                 </View>
+                <Pressable
+                  accessibilityLabel="Close account menu"
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={closeAccountMenu}
+                  style={({ pressed }) => [
+                    styles.accountMenuCloseButton,
+                    pressed ? styles.accountMenuCloseButtonPressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={22} color={colors.text} />
+                </Pressable>
               </View>
 
               <View style={styles.accountSection}>
                 <View style={styles.accountSectionHeader}>
                   <Text style={styles.accountSectionTitle}>Account</Text>
-                  <View style={styles.accountTypePill}>
-                    <Text style={styles.accountTypeText}>Creator</Text>
-                  </View>
                 </View>
                 <View style={styles.accountMenuDetails}>
-                  <AccountDetail label="Handle" value={`@${handle}`} />
-                  {email ? <AccountDetail label="Email" value={email} /> : null}
+                  <AccountDetail label="Handle" value={`@${resolvedHandle}`} />
+                  {resolvedEmail ? (
+                    <AccountDetail label="Email" value={resolvedEmail} />
+                  ) : null}
                   <AccountDetail
                     label="Followers"
                     value={formatCompactNumber(creatorStats?.followerCount ?? 0)}
@@ -278,6 +326,25 @@ export function MobileHomeHeader({
               </View>
 
               <Pressable
+                accessibilityLabel="Open my story stats"
+                accessibilityRole="button"
+                onPress={() => {
+                  closeAccountMenu()
+                  router.push("/my-story-stats")
+                }}
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  pressed ? styles.accountMenuActionPressed : null,
+                ]}
+              >
+                <Ionicons name="analytics-outline" size={19} color={colors.text} />
+                <Text style={styles.accountMenuActionText}>
+                  My Story Stats
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+              </Pressable>
+
+              <Pressable
                 accessibilityLabel="Open creator analytics"
                 accessibilityRole="button"
                 onPress={() => {
@@ -289,9 +356,9 @@ export function MobileHomeHeader({
                   pressed ? styles.accountMenuActionPressed : null,
                 ]}
               >
-                <Ionicons name="analytics-outline" size={19} color={colors.text} />
+                <Ionicons name="wallet-outline" size={19} color={colors.text} />
                 <Text style={styles.accountMenuActionText}>
-                  View post earnings and payouts
+                  Earnings and payouts
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.faint} />
               </Pressable>
@@ -299,7 +366,7 @@ export function MobileHomeHeader({
           </View>
         </View>
       </Modal>
-    </View>
+    </>
   )
 }
 
@@ -1175,6 +1242,17 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  accountMenuCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.mutedSurface,
+  },
+  accountMenuCloseButtonPressed: {
+    opacity: 0.7,
+  },
   accountMenuName: {
     fontSize: 22,
     fontWeight: "700",
@@ -1199,19 +1277,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
     color: colors.text,
-  },
-  accountTypePill: {
-    minHeight: 26,
-    borderRadius: 13,
-    paddingHorizontal: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.dark,
-  },
-  accountTypeText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: colors.surface,
   },
   accountSectionError: {
     marginTop: 8,

@@ -1,0 +1,1 @@
+CREATE INDEX "stories_storage_key_idx" ON "stories" USING btree ("storage_key");

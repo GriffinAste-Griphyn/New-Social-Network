@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { getCreatorStats } from "@/lib/creator-stats"
 import {
   getMyStoryStack,
   getStoryStackForStory,
   removeStoryForOwner,
 } from "@/lib/story-store"
-import { removeStoryAsset } from "@/lib/story-storage"
+import { publicStoryMediaUrl, removeStoryAsset } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -49,8 +50,12 @@ export async function GET(
       avatarUrl: absoluteMediaUrl(story.avatarUrl, request),
       items: story.items.map((item) => ({
         ...item,
-        mediaUrl: absoluteMediaUrl(item.mediaUrl, request) ?? item.mediaUrl,
-        thumbnailUrl: absoluteMediaUrl(item.thumbnailUrl, request),
+        mediaUrl:
+          publicStoryMediaUrl(item.mediaUrl, request, { signed: true }) ??
+          item.mediaUrl,
+        thumbnailUrl: publicStoryMediaUrl(item.thumbnailUrl, request, {
+          signed: true,
+        }),
       })),
     },
   })
@@ -82,7 +87,13 @@ export async function DELETE(
 }
 
 async function getMobileMyStoryStack(userId: string) {
-  const myStory = await getMyStoryStack(userId)
+  const [myStory, creatorStats] = await Promise.all([
+    getMyStoryStack(userId),
+    getCreatorStats(userId),
+  ])
+  const statsByStoryId = new Map(
+    creatorStats.stories.map((story) => [story.id, story]),
+  )
 
   if (myStory.items.length === 0) {
     return null
@@ -103,6 +114,20 @@ async function getMobileMyStoryStack(userId: string) {
       postedAt: "Today",
       durationSeconds: item.assetKind === "video" ? 10 : undefined,
       captionVerticalPercent: 74,
+      stats: (() => {
+        const stats = statsByStoryId.get(item.id)
+
+        return {
+          views: stats?.views ?? 0,
+          uniqueViewers: stats?.uniqueViewers ?? 0,
+          completedViews: stats?.completedViews ?? 0,
+          completionRate: stats?.completionRate ?? 0,
+          averageViewedSeconds: stats?.averageViewedSeconds ?? 0,
+          comments: stats?.comments ?? 0,
+          replies: stats?.replies ?? 0,
+          earningsCents: stats?.earningsCents ?? 0,
+        }
+      })(),
     })),
   }
 }

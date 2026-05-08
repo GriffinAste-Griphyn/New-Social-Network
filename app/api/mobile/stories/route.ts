@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { createStory } from "@/lib/story-store"
 import {
+  publicStoryMediaUrl,
   removeStoryAsset,
   saveStoryAsset,
   StoryUploadError,
@@ -50,7 +51,15 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       storyId,
-      asset: storedAsset,
+      asset: {
+        assetKind: storedAsset.assetKind,
+        mediaUrl:
+          publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+          storedAsset.mediaUrl,
+        thumbnailUrl: publicStoryMediaUrl(storedAsset.thumbnailUrl, request, {
+          signed: true,
+        }),
+      },
     })
   } catch (error) {
     if (storedAsset) {

@@ -1,4 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
+import * as Clipboard from "expo-clipboard"
+import * as ImagePicker from "expo-image-picker"
+import * as Linking from "expo-linking"
 import { StatusBar } from "expo-status-bar"
 import { VideoView, useVideoPlayer } from "expo-video"
 import { useLocalSearchParams, useRouter } from "expo-router"
@@ -10,7 +13,6 @@ import {
   Easing,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   PanResponder,
   Platform,
   Pressable,
@@ -20,10 +22,19 @@ import {
   View,
 } from "react-native"
 import type { DimensionValue } from "react-native"
-import { SafeAreaView } from "react-native-safe-area-context"
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
+import {
+  getCreatorNotificationsEnabled,
+  setCreatorNotificationsEnabled,
+} from "@/lib/creator-notifications"
 import { useFollowState } from "@/lib/follow-state"
-import { deleteMobileApi, getMobileApi, postMobileApi } from "@/lib/mobile-api"
+import {
+  deleteMobileApi,
+  getMobileApi,
+  postMobileApi,
+  postMobileFormApi,
+} from "@/lib/mobile-api"
 import type { MobileStoryApiStack } from "@/lib/mobile-stories-api"
 
 type MobileStoryStackItem = MobileStoryApiStack["items"][number]
@@ -36,11 +47,19 @@ type StoryPlaybackItem = MobileStoryStackItem & {
   segmentCount: number
 }
 
+type ReplyMediaAsset = {
+  uri: string
+  assetKind: "image" | "video"
+  mimeType: string
+  fileName: string
+}
+
 const PHOTO_DURATION_MS = 5_000
 const VIDEO_SEGMENT_SECONDS = 10
 const MIN_FINAL_VIDEO_SEGMENT_SECONDS = 2
 const SWIPE_DOWN_DISMISS_DISTANCE = 86
 const SWIPE_DOWN_DISMISS_VELOCITY = 1.05
+const replyEmojiOptions = ["😂", "😍", "🔥", "👏", "😭", "😮", "💗", "🙏"]
 
 const colors = {
   background: "#000000",
@@ -54,6 +73,7 @@ const colors = {
 
 export default function StoryScreen() {
   const router = useRouter()
+  const safeAreaInsets = useSafeAreaInsets()
   const { id } = useLocalSearchParams<{ id: string }>()
   const [reply, setReply] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
@@ -65,6 +85,11 @@ export default function StoryScreen() {
   const [isDeletingStoryItem, setIsDeletingStoryItem] = useState(false)
   const [isSendingReply, setIsSendingReply] = useState(false)
   const [isReplyMode, setIsReplyMode] = useState(false)
+  const [areCreatorNotificationsEnabled, setAreCreatorNotificationsEnabled] =
+    useState(false)
+  const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
+  const [isEmojiTrayOpen, setIsEmojiTrayOpen] = useState(false)
   const replyInputRef = useRef<TextInput>(null)
   const activeImpressionRef = useRef<{
     storyItemId: string
@@ -77,10 +102,14 @@ export default function StoryScreen() {
   const { isFollowing, toggleFollow } = useFollowState()
   const isOwnStoryRoute = id === "my-story"
   const story = id ? remoteStory ?? undefined : undefined
-  const shouldShowAddButton = story
-    ? story.id !== "my-story" && !isFollowing(story.creatorId)
-    : false
   const isViewingOwnStory = story?.id === "my-story" || isOwnStoryRoute
+  const isFollowingCreator = story ? isFollowing(story.creatorId) : false
+  const shouldShowAddButton = story
+    ? !isViewingOwnStory && !isFollowingCreator
+    : false
+  const canRespondToStory = Boolean(
+    story && !isViewingOwnStory && isFollowingCreator,
+  )
   const playbackItems = useMemo(
     () => (story ? expandStoryItems(story.items) : []),
     [story],
@@ -92,6 +121,7 @@ export default function StoryScreen() {
   const captionTop = getCaptionTopPercent(activeItem)
   const avatarUrl = getStoryAvatarUrl(story)
   const creatorFirstName = getFirstName(story?.creator)
+  const replyComposerBottom = Math.max(0, keyboardHeight - safeAreaInsets.bottom)
   const swipeDownResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponderCapture: (_, gestureState) => {
@@ -132,6 +162,8 @@ export default function StoryScreen() {
     setStoryRequestState(id ? "loading" : "settled")
     setIsItemMenuOpen(false)
     setIsReplyMode(false)
+    setKeyboardHeight(0)
+    setIsEmojiTrayOpen(false)
   }, [id])
 
   useEffect(() => {
@@ -188,6 +220,25 @@ export default function StoryScreen() {
       clearTimeout(focusTimer)
     }
   }, [isReplyMode])
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow"
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide"
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates.height)
+    })
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0)
+    })
+
+    return () => {
+      showSubscription.remove()
+      hideSubscription.remove()
+    }
+  }, [])
 
   useEffect(() => {
     if (activeItem?.assetKind === "video") {
@@ -295,35 +346,59 @@ export default function StoryScreen() {
   const sendStoryInteraction = async ({
     body,
     kind,
+    media,
     reaction,
   }: {
     body?: string
     kind: "reply" | "reaction"
+    media?: ReplyMediaAsset
     reaction?: string
   }) => {
-    if (!activeItem || isViewingOwnStory || isSendingReply) {
+    if (!activeItem || !canRespondToStory || isSendingReply) {
       return
     }
 
     const trimmedBody = body?.trim()
 
-    if (kind === "reply" && !trimmedBody) {
+    if (kind === "reply" && !trimmedBody && !media) {
       return
     }
 
     setIsSendingReply(true)
 
     try {
-      await postMobileApi<{ ok: true }>(
-        `/api/mobile/stories/${encodeURIComponent(activeItem.id)}/interactions`,
-        {
-          kind,
-          body: trimmedBody,
-          reaction,
-        },
-      )
+      if (media) {
+        const formData = new FormData()
+
+        formData.append("kind", kind)
+        formData.append("body", trimmedBody ?? "")
+        if (reaction) {
+          formData.append("reaction", reaction)
+        }
+        formData.append("media", {
+          uri: media.uri,
+          name: media.fileName,
+          type: media.mimeType,
+        } as unknown as Blob)
+
+        await postMobileFormApi<{ ok: true }>(
+          `/api/mobile/stories/${encodeURIComponent(activeItem.id)}/interactions`,
+          formData,
+        )
+      } else {
+        await postMobileApi<{ ok: true }>(
+          `/api/mobile/stories/${encodeURIComponent(activeItem.id)}/interactions`,
+          {
+            kind,
+            body: trimmedBody,
+            reaction,
+          },
+        )
+      }
       setReply("")
       setIsReplyMode(false)
+      setKeyboardHeight(0)
+      setIsEmojiTrayOpen(false)
       Keyboard.dismiss()
     } catch (error) {
       Alert.alert(
@@ -349,8 +424,34 @@ export default function StoryScreen() {
     })
   }
 
+  const sendMediaReply = (media: ReplyMediaAsset) => {
+    void sendStoryInteraction({
+      kind: "reply",
+      body: reply,
+      media,
+    })
+  }
+
+  const copyStoryLink = async () => {
+    if (!story) {
+      return
+    }
+
+    const storyLink = Linking.createURL(`/story/${story.id}`)
+
+    try {
+      await Clipboard.setStringAsync(storyLink)
+      Alert.alert("Link copied", "The story link was copied to your clipboard.")
+    } catch (error) {
+      Alert.alert(
+        "Could not copy link",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    }
+  }
+
   const openReplyMode = () => {
-    if (isViewingOwnStory || isSendingReply) {
+    if (!canRespondToStory || isSendingReply) {
       return
     }
 
@@ -360,6 +461,114 @@ export default function StoryScreen() {
   const closeReplyMode = () => {
     Keyboard.dismiss()
     setIsReplyMode(false)
+    setKeyboardHeight(0)
+    setIsEmojiTrayOpen(false)
+  }
+
+  useEffect(() => {
+    if (!isReplyMode || canRespondToStory) {
+      return
+    }
+
+    setReply("")
+    setIsReplyMode(false)
+    setKeyboardHeight(0)
+    setIsEmojiTrayOpen(false)
+    Keyboard.dismiss()
+  }, [canRespondToStory, isReplyMode])
+
+  const appendEmoji = (emoji: string) => {
+    setReply((current) => `${current}${emoji}`)
+    requestAnimationFrame(() => {
+      replyInputRef.current?.focus()
+    })
+  }
+
+  const openPhotoLibraryReply = async () => {
+    if (!canRespondToStory || isSendingReply) {
+      return
+    }
+
+    setIsEmojiTrayOpen(false)
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo library access needed",
+        "Allow photo library access to send a photo or video reply.",
+      )
+      return
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: false,
+      mediaTypes: ["images", "videos"],
+      preferredAssetRepresentationMode:
+        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      quality: 0.82,
+    })
+
+    if (!result.canceled) {
+      sendMediaReply(toReplyMediaAsset(result.assets[0]))
+    }
+  }
+
+  useEffect(() => {
+    let isMounted = true
+
+    if (!story || isViewingOwnStory || shouldShowAddButton) {
+      setAreCreatorNotificationsEnabled(false)
+      return
+    }
+
+    getCreatorNotificationsEnabled(story.creatorId)
+      .then((enabled) => {
+        if (isMounted) {
+          setAreCreatorNotificationsEnabled(enabled)
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setAreCreatorNotificationsEnabled(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [isViewingOwnStory, shouldShowAddButton, story?.creatorId])
+
+  const toggleCreatorNotifications = async () => {
+    if (!story || isUpdatingNotifications) {
+      return
+    }
+
+    const nextEnabled = !areCreatorNotificationsEnabled
+
+    setIsUpdatingNotifications(true)
+
+    try {
+      const enabled = await setCreatorNotificationsEnabled({
+        creatorId: story.creatorId,
+        enabled: nextEnabled,
+      })
+
+      setAreCreatorNotificationsEnabled(enabled)
+      Alert.alert(
+        enabled ? "Notifications on" : "Notifications off",
+        enabled
+          ? `You will be notified when ${story.creator} posts a story.`
+          : `You will no longer be notified when ${story.creator} posts.`,
+      )
+    } catch (error) {
+      Alert.alert(
+        "Could not update notifications",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsUpdatingNotifications(false)
+    }
   }
 
   const flushActiveImpression = (completed: boolean) => {
@@ -482,19 +691,26 @@ export default function StoryScreen() {
     <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
       <StatusBar style="light" backgroundColor={colors.background} />
       <View style={styles.screen} {...swipeDownResponder.panHandlers}>
-        <View style={styles.mediaFrame}>
-          {activeItem?.assetKind === "video" ? (
+        <View
+          style={[
+            styles.mediaFrame,
+            isReplyMode ? styles.mediaFrameReplyMode : null,
+          ]}
+        >
+          {!isReplyMode && activeItem?.assetKind === "video" ? (
             <VideoView
               player={videoPlayer}
               nativeControls={false}
               contentFit="cover"
               style={styles.media}
             />
-          ) : activeItem?.mediaUrl ? (
+          ) : !isReplyMode && activeItem?.mediaUrl ? (
             <Image source={{ uri: activeItem.mediaUrl }} style={styles.media} />
           ) : null}
 
-          {story ? <View pointerEvents="none" style={styles.mediaOverlay} /> : null}
+          {story && !isReplyMode ? (
+            <View pointerEvents="none" style={styles.mediaOverlay} />
+          ) : null}
 
           {isWaitingForStory ? (
             <View style={styles.loadingState}>
@@ -508,7 +724,7 @@ export default function StoryScreen() {
             </View>
           ) : null}
 
-          {story ? (
+          {story && !isReplyMode ? (
             <View style={styles.progressRow}>
               {playbackItems.map((item, index) => (
                 <View key={item.playbackId} style={styles.progressTrack}>
@@ -530,7 +746,10 @@ export default function StoryScreen() {
           ) : null}
 
           {story && !isReplyMode ? (
-            <View style={styles.storyHeader}>
+            <View
+              pointerEvents="auto"
+              style={styles.storyHeader}
+            >
               <Pressable
                 accessibilityLabel={`Open ${story.creator} profile`}
                 accessibilityRole="button"
@@ -614,14 +833,31 @@ export default function StoryScreen() {
                 </Pressable>
               ) : (
                 <Pressable
-                  accessibilityLabel="Story notifications"
+                  accessibilityLabel={
+                    areCreatorNotificationsEnabled
+                      ? `Turn off notifications for ${story.creator}`
+                      : `Turn on notifications for ${story.creator}`
+                  }
                   accessibilityRole="button"
+                  disabled={isUpdatingNotifications}
+                  onPress={toggleCreatorNotifications}
                   style={({ pressed }) => [
                     styles.bellButton,
+                    areCreatorNotificationsEnabled
+                      ? styles.bellButtonActive
+                      : null,
                     pressed ? styles.pressed : null,
                   ]}
                 >
-                  <Ionicons name="notifications-outline" size={23} color={colors.text} />
+                  <Ionicons
+                    name={
+                      areCreatorNotificationsEnabled
+                        ? "notifications"
+                        : "notifications-outline"
+                    }
+                    size={23}
+                    color={colors.text}
+                  />
                 </Pressable>
               )}
             </View>
@@ -644,7 +880,7 @@ export default function StoryScreen() {
             </View>
           ) : null}
 
-          {activeItem?.title ? (
+          {!isReplyMode && activeItem?.title ? (
             <View
               style={[
                 styles.captionBar,
@@ -662,104 +898,140 @@ export default function StoryScreen() {
               <Pressable
                 accessibilityLabel="Share story"
                 accessibilityRole="button"
+                onPress={() => {
+                  void copyStoryLink()
+                }}
                 style={({ pressed }) => [
                   styles.sideAction,
                   pressed ? styles.pressed : null,
                 ]}
               >
-                <Ionicons name="arrow-redo" size={52} color={colors.text} />
+                <Ionicons
+                  name="arrow-redo"
+                  size={30}
+                  color="rgba(255,255,255,0.66)"
+                />
               </Pressable>
+            </View>
+          ) : null}
+
+          {story && !isReplyMode && isViewingOwnStory && activeItem?.stats ? (
+            <OwnerStoryStatsPanel stats={activeItem.stats} />
+          ) : null}
+
+          {story && isReplyMode && canRespondToStory ? (
+            <View pointerEvents="box-none" style={styles.replyModeMediaLayer}>
+              <View style={styles.replyModeHeader}>
+                <Pressable
+                  accessibilityLabel="Close reply"
+                  accessibilityRole="button"
+                  onPress={closeReplyMode}
+                  style={({ pressed }) => [
+                    styles.replyModeClose,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={34} color={colors.text} />
+                </Pressable>
+                <View style={styles.replyModeTitleWrap} pointerEvents="none">
+                  <Text style={styles.replyModeTitle}>Reply to</Text>
+                  <Text style={styles.replyModeName}>{story.creator}</Text>
+                </View>
+              </View>
+
+              <View style={styles.replyModeBody} pointerEvents="none">
+                <Ionicons
+                  name="paper-plane"
+                  size={44}
+                  color="rgba(255,255,255,0.34)"
+                  style={styles.replyModePlane}
+                />
+                <View style={styles.replyModeNoticeWrap}>
+                  <Text style={styles.replyModeNotice}>
+                    {creatorFirstName} can share your reply to their Public Story.
+                  </Text>
+                </View>
+              </View>
             </View>
           ) : null}
         </View>
 
-        {story && isReplyMode ? (
-          <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={0}
+        {story && isReplyMode && canRespondToStory ? (
+          <View
             pointerEvents="box-none"
-            style={styles.replyModeLayer}
+            style={[
+              styles.replyKeyboardLayer,
+              { bottom: replyComposerBottom },
+            ]}
           >
-            <View pointerEvents="none" style={styles.replyModeShade} />
-            <View style={styles.replyModeHeader}>
+            {isEmojiTrayOpen ? (
+              <View style={styles.replyEmojiTray}>
+                {replyEmojiOptions.map((emoji) => (
+                  <Pressable
+                    key={emoji}
+                    accessibilityLabel={`Add ${emoji} emoji`}
+                    accessibilityRole="button"
+                    onPress={() => appendEmoji(emoji)}
+                    style={({ pressed }) => [
+                      styles.replyEmojiButton,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    <Text style={styles.replyEmojiText}>{emoji}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.replyModeComposerBar}>
               <Pressable
-                accessibilityLabel="Close reply"
+                accessibilityLabel={`Reply to ${story.creator}`}
                 accessibilityRole="button"
-                onPress={closeReplyMode}
+                onPress={() => replyInputRef.current?.focus()}
+                style={styles.replyModeInputShell}
+              >
+                <TextInput
+                  ref={replyInputRef}
+                  value={reply}
+                  onChangeText={setReply}
+                  placeholder={`Reply to ${story.creator}...`}
+                  placeholderTextColor="rgba(255,255,255,0.92)"
+                  editable={!isViewingOwnStory && !isSendingReply}
+                  keyboardAppearance="dark"
+                  returnKeyType="send"
+                  onSubmitEditing={sendReply}
+                  numberOfLines={1}
+                  style={styles.replyModeInput}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Emoji"
+                accessibilityRole="button"
+                onPress={() => setIsEmojiTrayOpen((current) => !current)}
                 style={({ pressed }) => [
-                  styles.replyModeClose,
+                  styles.replyModeIconButton,
+                  isEmojiTrayOpen ? styles.replyModeIconButtonActive : null,
                   pressed ? styles.pressed : null,
                 ]}
               >
-                <Ionicons name="close" size={48} color={colors.text} />
+                <Ionicons name="happy-outline" size={25} color={colors.text} />
               </Pressable>
-              <View style={styles.replyModeTitleWrap} pointerEvents="none">
-                <Text style={styles.replyModeTitle}>Reply to</Text>
-                <Text style={styles.replyModeName}>{story.creator}</Text>
-              </View>
+              <Pressable
+                accessibilityLabel="Photo reply"
+                accessibilityRole="button"
+                disabled={isSendingReply}
+                onPress={openPhotoLibraryReply}
+                style={({ pressed }) => [
+                  styles.replyModeIconButton,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Ionicons name="images-outline" size={25} color={colors.text} />
+              </Pressable>
             </View>
-
-            <View style={styles.replyModeFooter}>
-              <Text style={styles.replyModeNotice}>
-                {creatorFirstName} can share your reply to their Public Story.
-              </Text>
-              <View style={styles.replyModeComposerBar}>
-                <Pressable
-                  accessibilityLabel="Camera reply"
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.replyModeCameraButton,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons name="camera" size={31} color={colors.background} />
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`Reply to ${story.creator}`}
-                  accessibilityRole="button"
-                  onPress={() => replyInputRef.current?.focus()}
-                  style={styles.replyModeInputShell}
-                >
-                  <TextInput
-                    ref={replyInputRef}
-                    value={reply}
-                    onChangeText={setReply}
-                    placeholder={`Reply to ${story.creator}...`}
-                    placeholderTextColor="rgba(255,255,255,0.92)"
-                    editable={!isViewingOwnStory && !isSendingReply}
-                    keyboardAppearance="dark"
-                    returnKeyType="send"
-                    onSubmitEditing={sendReply}
-                    style={styles.replyModeInput}
-                  />
-                  <Ionicons name="mic-outline" size={31} color={colors.text} />
-                </Pressable>
-                <Pressable
-                  accessibilityLabel="Emoji"
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.replyModeIconButton,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons name="happy-outline" size={35} color={colors.text} />
-                </Pressable>
-                <Pressable
-                  accessibilityLabel="Photo reply"
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.replyModeIconButton,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons name="images-outline" size={35} color={colors.text} />
-                </Pressable>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
+          </View>
         ) : null}
 
-        {story && !isReplyMode ? (
+        {story && !isReplyMode && canRespondToStory ? (
           <View style={styles.replyDock}>
             <View style={styles.replyComposer}>
               <TextInput
@@ -784,7 +1056,7 @@ export default function StoryScreen() {
                     pressed ? styles.pressed : null,
                   ]}
                 >
-                  <Ionicons name="arrow-up" size={24} color={colors.background} />
+                  <Ionicons name="arrow-up" size={20} color={colors.background} />
                 </Pressable>
               ) : (
                 <>
@@ -815,9 +1087,9 @@ export default function StoryScreen() {
                 </>
               )}
               <Pressable accessibilityRole="button" style={styles.reactionButton}>
-                <Ionicons name="happy-outline" size={34} color={colors.text} />
+                <Ionicons name="happy-outline" size={28} color={colors.text} />
                 <View style={styles.plusDot}>
-                  <Ionicons name="add" size={10} color={colors.background} />
+                  <Ionicons name="add" size={8} color={colors.background} />
                 </View>
               </Pressable>
             </View>
@@ -831,7 +1103,7 @@ export default function StoryScreen() {
                   pressed ? styles.pressed : null,
                 ]}
               >
-                <Ionicons name="ellipsis-horizontal" size={34} color={colors.text} />
+                <Ionicons name="ellipsis-horizontal" size={28} color={colors.text} />
               </Pressable>
             ) : null}
           </View>
@@ -930,6 +1202,34 @@ function getFirstName(value: string | undefined) {
   return value?.trim().split(/\s+/)[0] || "They"
 }
 
+function formatCompactNumber(value: number) {
+  return Intl.NumberFormat("en", { notation: "compact" }).format(value)
+}
+
+function formatMoney(cents: number) {
+  return Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(cents / 100)
+}
+
+function toReplyMediaAsset(
+  asset: ImagePicker.ImagePickerAsset,
+  forcedKind?: "image" | "video",
+): ReplyMediaAsset {
+  const assetKind = forcedKind ?? (asset.type === "video" ? "video" : "image")
+  const extension = assetKind === "video" ? "mp4" : "jpg"
+
+  return {
+    uri: asset.uri,
+    assetKind,
+    mimeType:
+      asset.mimeType ?? (assetKind === "video" ? "video/mp4" : "image/jpeg"),
+    fileName: asset.fileName ?? `reply-${Date.now()}.${extension}`,
+  }
+}
+
 function initials(value: string) {
   return value
     .split(" ")
@@ -937,6 +1237,63 @@ function initials(value: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase()
+}
+
+function OwnerStoryStatsPanel({
+  stats,
+}: {
+  stats: NonNullable<MobileStoryStackItem["stats"]>
+}) {
+  return (
+    <View pointerEvents="none" style={styles.ownerStatsPanel}>
+      <View style={styles.ownerStatsHeader}>
+        <Text style={styles.ownerStatsTitle}>Story stats</Text>
+        <Text style={styles.ownerStatsEarnings}>
+          {formatMoney(stats.earningsCents)}
+        </Text>
+      </View>
+      <View style={styles.ownerStatsGrid}>
+        <OwnerStoryStat
+          label="Views"
+          value={formatCompactNumber(stats.views)}
+          detail={`${formatCompactNumber(stats.uniqueViewers)} unique`}
+        />
+        <OwnerStoryStat
+          label="Completion"
+          value={`${stats.completionRate}%`}
+          detail={`${formatCompactNumber(stats.completedViews)} complete`}
+        />
+        <OwnerStoryStat
+          label="Replies"
+          value={formatCompactNumber(stats.replies)}
+          detail={`${formatCompactNumber(stats.comments)} comments`}
+        />
+        <OwnerStoryStat
+          label="Avg."
+          value={`${stats.averageViewedSeconds}s`}
+          detail="watch time"
+        />
+      </View>
+    </View>
+  )
+}
+
+function OwnerStoryStat({
+  detail,
+  label,
+  value,
+}: {
+  detail: string
+  label: string
+  value: string
+}) {
+  return (
+    <View style={styles.ownerStatsMetric}>
+      <Text style={styles.ownerStatsLabel}>{label}</Text>
+      <Text style={styles.ownerStatsValue}>{value}</Text>
+      <Text style={styles.ownerStatsDetail}>{detail}</Text>
+    </View>
+  )
 }
 
 const styles = StyleSheet.create({
@@ -955,6 +1312,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     overflow: "hidden",
     backgroundColor: "#111827",
+  },
+  mediaFrameReplyMode: {
+    marginTop: 0,
+    marginBottom: 0,
+    borderRadius: 0,
+    backgroundColor: "#050912",
   },
   media: {
     ...StyleSheet.absoluteFillObject,
@@ -1073,6 +1436,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  bellButtonActive: {
+    borderColor: "rgba(224,22,22,0.78)",
+    backgroundColor: "rgba(224,22,22,0.74)",
+  },
   ownerActions: {
     position: "relative",
     zIndex: 10,
@@ -1156,188 +1523,283 @@ const styles = StyleSheet.create({
   },
   sideActions: {
     position: "absolute",
-    right: 18,
-    bottom: 28,
+    right: 24,
+    bottom: 34,
     zIndex: 6,
     alignItems: "center",
     gap: 16,
   },
   sideAction: {
-    width: 58,
-    height: 58,
+    width: 52,
+    height: 52,
     alignItems: "center",
     justifyContent: "center",
   },
-  replyDock: {
-    minHeight: 86,
+  ownerStatsPanel: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    bottom: 28,
+    zIndex: 9,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
     paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingTop: 11,
+    paddingBottom: 12,
+    backgroundColor: "rgba(8,12,20,0.82)",
+  },
+  ownerStatsHeader: {
+    minHeight: 24,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  ownerStatsTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "rgba(255,255,255,0.72)",
+    textTransform: "uppercase",
+  },
+  ownerStatsEarnings: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  ownerStatsGrid: {
+    marginTop: 10,
+    flexDirection: "row",
+    gap: 8,
+  },
+  ownerStatsMetric: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 68,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  ownerStatsLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "rgba(255,255,255,0.62)",
+  },
+  ownerStatsValue: {
+    marginTop: 4,
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  ownerStatsDetail: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.58)",
+  },
+  replyDock: {
+    minHeight: 84,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
     gap: 10,
     backgroundColor: colors.background,
   },
   replyComposer: {
     flex: 1,
-    minHeight: 58,
-    borderRadius: 29,
-    borderWidth: 1.5,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.4,
     borderColor: colors.outline,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingLeft: 22,
-    paddingRight: 14,
+    gap: 7,
+    paddingLeft: 18,
+    paddingRight: 10,
   },
   replyInput: {
     flex: 1,
     minWidth: 0,
     padding: 0,
-    fontSize: 18,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: "700",
     color: colors.text,
   },
   reactionButton: {
-    width: 36,
-    height: 40,
+    width: 30,
+    height: 34,
     alignItems: "center",
     justifyContent: "center",
   },
   sendReplyButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.text,
   },
   reactionText: {
-    fontSize: 29,
+    fontSize: 24,
   },
   plusDot: {
     position: "absolute",
     top: 2,
     right: 0,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.text,
   },
   moreButton: {
-    width: 64,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 1.5,
+    width: 52,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.4,
     borderColor: colors.outline,
     alignItems: "center",
     justifyContent: "center",
   },
-  replyModeLayer: {
+  replyKeyboardLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    justifyContent: "flex-end",
+  },
+  replyModeMediaLayer: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 20,
-    justifyContent: "space-between",
-  },
-  replyModeShade: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.42)",
+    backgroundColor: "#050912",
   },
   replyModeHeader: {
-    paddingTop: 10,
-    minHeight: 132,
+    paddingTop: 26,
+    minHeight: 118,
     justifyContent: "flex-start",
   },
   replyModeClose: {
     position: "absolute",
-    top: 14,
-    left: 26,
+    top: 26,
+    left: 20,
     zIndex: 2,
-    width: 58,
-    height: 58,
+    width: 48,
+    height: 48,
     alignItems: "center",
     justifyContent: "center",
   },
   replyModeTitleWrap: {
     alignItems: "center",
-    paddingHorizontal: 96,
+    paddingHorizontal: 92,
   },
   replyModeTitle: {
-    fontSize: 34,
-    lineHeight: 40,
+    fontSize: 25,
+    lineHeight: 31,
     fontWeight: "800",
     color: colors.text,
     textAlign: "center",
   },
   replyModeName: {
-    marginTop: 20,
-    fontSize: 22,
-    lineHeight: 27,
+    marginTop: 6,
+    fontSize: 18,
+    lineHeight: 23,
     fontWeight: "800",
     color: colors.text,
     textAlign: "center",
   },
-  replyModeFooter: {
+  replyModeBody: {
+    flex: 1,
     justifyContent: "flex-end",
+    alignItems: "center",
+    paddingHorizontal: 22,
+    paddingBottom: 26,
+  },
+  replyModePlane: {
+    marginBottom: 32,
+    opacity: 0.72,
+    transform: [{ rotate: "-12deg" }],
+  },
+  replyModeNoticeWrap: {
+    width: "100%",
   },
   replyModeNotice: {
-    marginBottom: 14,
-    paddingHorizontal: 26,
-    fontSize: 18,
-    lineHeight: 23,
-    fontWeight: "700",
+    paddingHorizontal: 24,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "800",
     color: colors.text,
     textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.45)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
   replyModeComposerBar: {
-    minHeight: 72,
+    height: 60,
     paddingHorizontal: 12,
-    paddingTop: 9,
-    paddingBottom: 10,
+    paddingTop: 8,
+    paddingBottom: 8,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 7,
     backgroundColor: colors.background,
-  },
-  replyModeCameraButton: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.text,
   },
   replyModeInputShell: {
     flex: 1,
     minWidth: 0,
-    height: 54,
-    borderRadius: 27,
-    borderWidth: 1.5,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1.25,
     borderColor: "rgba(255,255,255,0.82)",
-    paddingLeft: 15,
-    paddingRight: 13,
+    paddingLeft: 12,
+    paddingRight: 10,
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
+    gap: 7,
     backgroundColor: colors.background,
   },
   replyModeInput: {
     flex: 1,
     minWidth: 0,
     padding: 0,
-    fontSize: 24,
-    lineHeight: 29,
-    fontWeight: "500",
+    fontSize: 17,
+    lineHeight: 21,
+    fontWeight: "600",
     color: colors.text,
   },
   replyModeIconButton: {
-    width: 44,
-    height: 54,
+    width: 32,
+    height: 42,
     alignItems: "center",
     justifyContent: "center",
+  },
+  replyModeIconButtonActive: {
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  replyEmojiTray: {
+    marginHorizontal: 12,
+    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(8,12,20,0.96)",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 5,
+  },
+  replyEmojiButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  replyEmojiText: {
+    fontSize: 20,
+    lineHeight: 24,
   },
   pressed: {
     opacity: 0.7,

@@ -121,7 +121,9 @@ export async function getMobileApi<TResponse>(
 export async function postMobileFormApi<TResponse>(path: string, body: FormData) {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
-    headers: getMobileApiHeaders(),
+    headers: getMobileApiHeaders({
+      "Content-Type": "multipart/form-data",
+    }),
     body,
   })
 

@@ -45,6 +45,16 @@ export type MobileStoryApiStack = {
     postedAt: string
     durationSeconds?: number
     captionVerticalPercent?: number
+    stats?: {
+      views: number
+      uniqueViewers: number
+      completedViews: number
+      completionRate: number
+      averageViewedSeconds: number
+      comments: number
+      replies: number
+      earningsCents: number
+    }
   }>
 }
 

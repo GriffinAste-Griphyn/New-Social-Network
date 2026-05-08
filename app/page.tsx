@@ -73,12 +73,12 @@ const payoutRows = [
 function SiteHeader() {
   return (
     <header className="hidden border-b border-black/10 bg-[#f4f2ec]/82 backdrop-blur-xl md:block">
-      <div className="mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between px-4">
-        <Link href="/" className="text-xl font-semibold tracking-[-0.04em]" aria-label="UBEYE home">
+      <div className="mx-auto grid h-16 w-full max-w-[1180px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-4">
+        <Link href="/" className="justify-self-start text-xl font-semibold tracking-[-0.04em]" aria-label="UBEYE home">
           UBEYE
         </Link>
 
-        <nav className="flex items-center gap-2 text-sm text-black/58" aria-label="Primary">
+        <nav className="flex items-center justify-self-center text-sm text-black/58" aria-label="Primary">
           {navLinks.map((link) => (
             <Link
               key={link.label}
@@ -90,7 +90,7 @@ function SiteHeader() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 justify-self-end">
           <Button asChild variant="ghost" className="h-9 rounded-full px-4 text-sm text-black/64">
             <Link href={advertiserSignInHref}>Advertiser sign in</Link>
           </Button>

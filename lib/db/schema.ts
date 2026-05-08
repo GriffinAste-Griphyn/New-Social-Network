@@ -270,26 +270,104 @@ export const follows = pgTable(
   ],
 )
 
-export const stories = pgTable("stories", {
-  id: text("id").primaryKey(),
-  creatorId: text("creator_id")
-    .notNull()
-    .references(() => users.id),
-  assetKind: storyAssetKind("asset_kind").notNull(),
-  mediaUrl: text("media_url").notNull(),
-  thumbnailUrl: text("thumbnail_url"),
-  caption: text("caption"),
-  durationMs: integer("duration_ms"),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  status: storyStatus("status").notNull().default("processing"),
-  brandSignalScore: numeric("brand_signal_score", {
-    precision: 5,
-    scale: 2,
-  }).default("0"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-})
+export const mobilePushTokens = pgTable(
+  "mobile_push_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    expoPushToken: text("expo_push_token").notNull(),
+    platform: text("platform"),
+    enabled: boolean("enabled").notNull().default(true),
+    lastRegisteredAt: timestamp("last_registered_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("mobile_push_tokens_user_idx").on(table.userId),
+    uniqueIndex("mobile_push_tokens_token_idx").on(table.expoPushToken),
+  ],
+)
+
+export const creatorNotificationPreferences = pgTable(
+  "creator_notification_preferences",
+  {
+    subscriberId: text("subscriber_id")
+      .notNull()
+      .references(() => users.id),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => users.id),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "creator_notification_preferences_pkey",
+      columns: [table.subscriberId, table.creatorId],
+    }),
+    index("creator_notifications_subscriber_idx").on(
+      table.subscriberId,
+      table.updatedAt,
+    ),
+    index("creator_notifications_creator_idx").on(
+      table.creatorId,
+      table.updatedAt,
+    ),
+  ],
+)
+
+export const stories = pgTable(
+  "stories",
+  {
+    id: text("id").primaryKey(),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => users.id),
+    assetKind: storyAssetKind("asset_kind").notNull(),
+    mediaUrl: text("media_url").notNull(),
+    thumbnailUrl: text("thumbnail_url"),
+    storageProvider: text("storage_provider"),
+    storageKey: text("storage_key"),
+    contentType: text("content_type"),
+    byteSize: integer("byte_size"),
+    checksum: text("checksum"),
+    width: integer("width"),
+    height: integer("height"),
+    processingStatus: text("processing_status").notNull().default("ready"),
+    moderationStatus: text("moderation_status").notNull().default("approved"),
+    moderationReason: text("moderation_reason"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id),
+    caption: text("caption"),
+    durationMs: integer("duration_ms"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    status: storyStatus("status").notNull().default("processing"),
+    brandSignalScore: numeric("brand_signal_score", {
+      precision: 5,
+      scale: 2,
+    }).default("0"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("stories_storage_key_idx").on(table.storageKey),
+    index("stories_moderation_status_idx").on(table.moderationStatus),
+  ],
+)
 
 export const storyMentions = pgTable("story_mentions", {
   id: text("id").primaryKey(),
@@ -359,6 +437,9 @@ export const storyInteractions = pgTable(
     kind: storyInteractionKind("kind").notNull(),
     body: text("body"),
     reaction: text("reaction"),
+    mediaUrl: text("media_url"),
+    mediaThumbnailUrl: text("media_thumbnail_url"),
+    mediaAssetKind: storyAssetKind("media_asset_kind"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
