@@ -6,10 +6,8 @@ import type { ComponentProps } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Image,
-  Modal,
   PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -98,7 +96,6 @@ export default function PostScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [cameraFacing, setCameraFacing] = useState<"front" | "back">("back")
   const [step, setStep] = useState<FlowStep>("camera")
-  const [isGalleryOpen, setIsGalleryOpen] = useState(false)
   const [selectedMedia, setSelectedMedia] = useState<StoryMedia | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [isPublishing, setIsPublishing] = useState(false)
@@ -220,12 +217,6 @@ export default function PostScreen() {
     if (!result.canceled) {
       usePickedAsset(result.assets[0])
     }
-  }
-
-  const chooseGalleryMedia = (media: StoryMedia) => {
-    setSelectedMedia(media)
-    setIsGalleryOpen(false)
-    setStep("edit")
   }
 
   const publishStory = async () => {
@@ -512,10 +503,6 @@ export default function PostScreen() {
             </View>
           )}
           <View style={styles.cameraShade} />
-          <View style={styles.focusFrame} />
-          <Text style={styles.cameraFacingLabel}>
-            {cameraFacing === "back" ? "Back Camera" : "Front Camera"}
-          </Text>
         </View>
 
         <View style={styles.cameraTopBar}>
@@ -585,7 +572,7 @@ export default function PostScreen() {
           <Pressable
             accessibilityLabel="Open photo gallery"
             accessibilityRole="button"
-            onPress={() => setIsGalleryOpen(true)}
+            onPress={openGalleryPicker}
             style={({ pressed }) => [
               styles.secondaryControl,
               pressed ? styles.pressed : null,
@@ -594,12 +581,6 @@ export default function PostScreen() {
             <Ionicons name="albums-outline" size={24} color={colors.text} />
           </Pressable>
         </View>
-
-        <GalleryModal
-          visible={isGalleryOpen}
-          onClose={() => setIsGalleryOpen(false)}
-          onSelect={chooseGalleryMedia}
-        />
       </View>
     </SafeAreaView>
   )
@@ -640,62 +621,6 @@ function ToolRailButton({
     >
       <Ionicons name={icon} size={24} color={colors.text} />
     </Pressable>
-  )
-}
-
-function GalleryModal({
-  onClose,
-  onSelect,
-  visible,
-}: {
-  onClose: () => void
-  onSelect: (media: StoryMedia) => void
-  visible: boolean
-}) {
-  return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
-      <View style={styles.gallerySheetLayer}>
-        <Pressable
-          accessibilityLabel="Close gallery"
-          accessibilityRole="button"
-          onPress={onClose}
-          style={styles.galleryBackdrop}
-        />
-        <View style={styles.gallerySheet}>
-          <View style={styles.galleryHeader}>
-            <View>
-              <Text style={styles.galleryTitle}>Camera Roll</Text>
-              <Text style={styles.gallerySubtitle}>Choose a photo or video</Text>
-            </View>
-            <Pressable
-              accessibilityLabel="Close gallery"
-              accessibilityRole="button"
-              onPress={onClose}
-              style={styles.galleryCloseButton}
-            >
-              <Ionicons name="close" size={20} color="#111827" />
-            </Pressable>
-          </View>
-
-          <View style={styles.galleryGrid}>
-            {galleryItems.map((media) => (
-              <Pressable
-                key={media.id}
-                accessibilityRole="button"
-                accessibilityLabel="Choose gallery item"
-                onPress={() => onSelect(media)}
-                style={({ pressed }) => [
-                  styles.galleryItem,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Image source={{ uri: media.uri }} style={styles.galleryImage} />
-              </Pressable>
-            ))}
-          </View>
-        </View>
-      </View>
-    </Modal>
   )
 }
 
@@ -741,25 +666,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     lineHeight: 20,
     textAlign: "center",
-  },
-  focusFrame: {
-    position: "absolute",
-    top: "36%",
-    left: "24%",
-    width: "52%",
-    height: "22%",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.54)",
-  },
-  cameraFacingLabel: {
-    position: "absolute",
-    top: "48%",
-    alignSelf: "center",
-    color: colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 0,
   },
   cameraTopBar: {
     minHeight: 56,
@@ -1114,61 +1020,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     fontWeight: "700",
-  },
-  gallerySheetLayer: {
-    flex: 1,
-    justifyContent: "flex-end",
-  },
-  galleryBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.42)",
-  },
-  gallerySheet: {
-    minHeight: 420,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    backgroundColor: colors.white,
-    padding: 16,
-  },
-  galleryHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  galleryTitle: {
-    color: "#111827",
-    fontSize: 22,
-    fontWeight: "700",
-  },
-  gallerySubtitle: {
-    marginTop: 2,
-    color: "#6b7280",
-    fontSize: 13,
-  },
-  galleryCloseButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#f3f4f6",
-  },
-  galleryGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  galleryItem: {
-    width: "31.8%",
-    aspectRatio: 0.75,
-    borderRadius: 8,
-    overflow: "hidden",
-    backgroundColor: "#e5e7eb",
-  },
-  galleryImage: {
-    width: "100%",
-    height: "100%",
   },
   pressed: {
     opacity: 0.72,

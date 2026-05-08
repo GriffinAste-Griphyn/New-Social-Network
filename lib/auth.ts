@@ -16,6 +16,7 @@ const sessionSchema = z.object({
   email: z.email(),
   handle: z.string().nullable(),
   displayName: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
   onboardingIntent: z.enum(["explore", "create", "both"]).default("explore"),
   creatorStatus: z
     .enum(["inactive", "active", "suspended"])
@@ -63,6 +64,7 @@ function toAuthSession(user: {
   email: string
   handle: string | null
   displayName: string | null
+  avatarUrl: string | null
   onboardingIntent: "explore" | "create" | "both"
   creatorStatus: "inactive" | "active" | "suspended"
 }) {
@@ -134,6 +136,7 @@ async function getSessionFromToken(token: string, kind: "web" | "mobile") {
       email: users.email,
       handle: users.handle,
       displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
       onboardingIntent: users.onboardingIntent,
       creatorStatus: users.creatorStatus,
     })

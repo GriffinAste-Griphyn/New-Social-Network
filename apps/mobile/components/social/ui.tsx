@@ -60,6 +60,7 @@ type AccountMenuCreatorStats = {
 
 type AccountAvatarButtonProps = {
   activeStoryCount?: number
+  avatarUrl?: string | null
   displayName?: string | null
   email?: string | null
   handle?: string | null
@@ -137,6 +138,7 @@ export function MobileHomeHeader({
 
 export function AccountAvatarButton({
   activeStoryCount = 0,
+  avatarUrl,
   displayName,
   email,
   handle,
@@ -191,6 +193,7 @@ export function AccountAvatarButton({
   const resolvedDisplayName = displayName ?? account?.displayName ?? "Account"
   const resolvedEmail = email ?? account?.email
   const resolvedHandle = handle ?? account?.handle ?? "account"
+  const resolvedAvatarUrl = avatarUrl ?? account?.avatarUrl ?? null
 
   return (
     <>
@@ -199,9 +202,13 @@ export function AccountAvatarButton({
         background={colors.accent}
         onPress={() => setIsAccountMenuOpen(true)}
       >
-        <Text style={styles.headerInitials}>
-          {initials(resolvedDisplayName)}
-        </Text>
+        {resolvedAvatarUrl ? (
+          <Image source={{ uri: resolvedAvatarUrl }} style={styles.headerAvatarImage} />
+        ) : (
+          <Text style={styles.headerInitials}>
+            {initials(resolvedDisplayName)}
+          </Text>
+        )}
       </HeaderCircle>
 
       <Modal
@@ -224,9 +231,16 @@ export function AccountAvatarButton({
             >
               <View style={styles.accountMenuHeader}>
                 <View style={styles.accountMenuAvatar}>
-                  <Text style={styles.accountMenuInitials}>
-                    {initials(resolvedDisplayName)}
-                  </Text>
+                  {resolvedAvatarUrl ? (
+                    <Image
+                      source={{ uri: resolvedAvatarUrl }}
+                      style={styles.accountMenuAvatarImage}
+                    />
+                  ) : (
+                    <Text style={styles.accountMenuInitials}>
+                      {initials(resolvedDisplayName)}
+                    </Text>
+                  )}
                 </View>
                 <View style={styles.accountMenuIdentity}>
                   <Text style={styles.accountMenuName} numberOfLines={1}>
@@ -271,6 +285,25 @@ export function AccountAvatarButton({
                   <AccountDetail label="Unread replies" value={`${unreadReplyCount}`} />
                 </View>
               </View>
+
+              <Pressable
+                accessibilityLabel="Open my story stats"
+                accessibilityRole="button"
+                onPress={() => {
+                  closeAccountMenu()
+                  router.push("/my-story-stats")
+                }}
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  pressed ? styles.accountMenuActionPressed : null,
+                ]}
+              >
+                <Ionicons name="analytics-outline" size={19} color={colors.text} />
+                <Text style={styles.accountMenuActionText}>
+                  My Story Stats
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+              </Pressable>
 
               <View style={styles.accountSection}>
                 <View style={styles.accountSectionHeader}>
@@ -324,25 +357,6 @@ export function AccountAvatarButton({
                   </>
                 )}
               </View>
-
-              <Pressable
-                accessibilityLabel="Open my story stats"
-                accessibilityRole="button"
-                onPress={() => {
-                  closeAccountMenu()
-                  router.push("/my-story-stats")
-                }}
-                style={({ pressed }) => [
-                  styles.accountMenuAction,
-                  pressed ? styles.accountMenuActionPressed : null,
-                ]}
-              >
-                <Ionicons name="analytics-outline" size={19} color={colors.text} />
-                <Text style={styles.accountMenuActionText}>
-                  My Story Stats
-                </Text>
-                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
-              </Pressable>
 
               <Pressable
                 accessibilityLabel="Open creator analytics"
@@ -1179,6 +1193,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.mutedSurface,
+    overflow: "hidden",
   },
   headerCirclePressed: {
     opacity: 0.72,
@@ -1187,6 +1202,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: colors.surface,
+  },
+  headerAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
   appTitle: {
     fontSize: 24,
@@ -1232,6 +1251,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.accent,
+    overflow: "hidden",
+  },
+  accountMenuAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
   accountMenuInitials: {
     fontSize: 20,

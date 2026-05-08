@@ -1,6 +1,7 @@
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useEffect,
   useContext,
   useMemo,
@@ -19,6 +20,7 @@ type MobileAccount = {
   email: string
   displayName: string
   handle: string
+  avatarUrl: string | null
   mobileToken: string
 }
 
@@ -26,6 +28,7 @@ type MobileAuthUser = {
   email: string
   displayName: string | null
   handle: string | null
+  avatarUrl: string | null
 }
 
 type AuthStage = "landing" | "signup" | "login" | "verify" | "profile" | "complete"
@@ -47,6 +50,7 @@ type AuthFlowContextValue = {
   startSignup: () => void
   submitSignup: (input: { email: string; password: string }) => Promise<boolean>
   expireSession: () => void
+  updateAccount: (input: Partial<Omit<MobileAccount, "mobileToken">>) => void
   verifyAccount: () => Promise<boolean>
 }
 
@@ -75,6 +79,7 @@ function parseStoredAccount(value: string | null): MobileAccount | null {
         email: parsed.email,
         displayName: parsed.displayName,
         handle: parsed.handle,
+        avatarUrl: typeof parsed.avatarUrl === "string" ? parsed.avatarUrl : null,
         mobileToken: parsed.mobileToken,
       }
     }
@@ -170,6 +175,24 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
     void setStoredAccount(nextAccount)
   }
 
+  const updatePersistedAccount = useCallback((
+    input: Partial<Omit<MobileAccount, "mobileToken">>,
+  ) => {
+    setAccount((current) => {
+      if (!current) {
+        return current
+      }
+
+      const nextAccount = {
+        ...current,
+        ...input,
+      }
+
+      void setStoredAccount(nextAccount)
+      return nextAccount
+    })
+  }, [])
+
   const value = useMemo<AuthFlowContextValue>(
     () => ({
       account,
@@ -223,6 +246,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
             email: result.user.email,
             displayName: result.user.displayName ?? normalizedDisplayName,
             handle: result.user.handle ?? normalizedHandle,
+            avatarUrl: result.user.avatarUrl ?? null,
             mobileToken: result.mobileToken,
           })
           setError(null)
@@ -268,6 +292,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
               email: result.user.email,
               displayName: result.user.displayName,
               handle: result.user.handle,
+              avatarUrl: result.user.avatarUrl ?? null,
               mobileToken: result.mobileToken,
             })
           } else {
@@ -378,6 +403,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
           setIsSubmitting(false)
         }
       },
+      updateAccount: updatePersistedAccount,
       verifyAccount: async () => {
         if (!pendingEmail || !pendingPassword) {
           setStage("signup")
@@ -403,6 +429,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
               email: result.user.email,
               displayName: result.user.displayName,
               handle: result.user.handle,
+              avatarUrl: result.user.avatarUrl ?? null,
               mobileToken: result.mobileToken,
             })
           } else {
@@ -423,7 +450,15 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [account, error, isSubmitting, pendingEmail, pendingPassword, stage],
+    [
+      account,
+      error,
+      isSubmitting,
+      pendingEmail,
+      pendingPassword,
+      stage,
+      updatePersistedAccount,
+    ],
   )
 
   return (

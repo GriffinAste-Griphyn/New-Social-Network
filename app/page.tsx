@@ -225,8 +225,8 @@ export default function HomePage() {
                   Participate and earn income
                 </p>
                 <p className="mt-8 max-w-md text-base leading-8 text-black/62 md:text-lg">
-                  UBEYE gives people a way to opt in, contribute verified
-                  attention, and participate in the upside of the network.
+                  UBEYE shares 75% of revenue with the creators and users who
+                  help power the network.
                 </p>
               </div>
 
@@ -271,9 +271,9 @@ export default function HomePage() {
                 Stories are the redistribution engine.
               </h2>
               <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
-                Stories create attention. Attention creates signal. Signal
-                creates advertiser demand. UBEYE routes that value back toward
-                the people who made the network worth funding.
+                People create attention by sharing their lives on their stories. Attention
+                creates advertiser demand. UBEYE shares this value back with
+                the people who make the network possible.
               </p>
             </div>
 

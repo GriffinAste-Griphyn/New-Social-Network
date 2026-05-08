@@ -31,6 +31,7 @@ export type AuthUser = {
   email: string
   handle: string | null
   displayName: string | null
+  avatarUrl: string | null
   onboardingIntent: "explore" | "create" | "both"
   creatorStatus: "inactive" | "active" | "suspended"
 }
@@ -66,6 +67,7 @@ export function toAuthUser(user: typeof users.$inferSelect): AuthUser {
     email: user.email,
     handle: user.handle,
     displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
     onboardingIntent: user.onboardingIntent,
     creatorStatus: user.creatorStatus,
   }
@@ -501,6 +503,32 @@ export async function completeUserProfileForUser(
       userId: user.id,
     })
     .onConflictDoNothing()
+
+  return {
+    ok: true,
+    user: toAuthUser(user),
+  }
+}
+
+export async function updateUserAvatar(
+  userId: string,
+  avatarUrl: string,
+): Promise<AuthResult> {
+  const [user] = await getDb()
+    .update(users)
+    .set({
+      avatarUrl,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId))
+    .returning()
+
+  if (!user) {
+    return {
+      ok: false,
+      message: "Your session is out of sync. Sign in again.",
+    }
+  }
 
   return {
     ok: true,

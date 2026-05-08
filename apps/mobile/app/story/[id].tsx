@@ -5,7 +5,7 @@ import * as Linking from "expo-linking"
 import { StatusBar } from "expo-status-bar"
 import { VideoView, useVideoPlayer } from "expo-video"
 import { useLocalSearchParams, useRouter } from "expo-router"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
@@ -90,6 +90,9 @@ export default function StoryScreen() {
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [isEmojiTrayOpen, setIsEmojiTrayOpen] = useState(false)
+  const [loadedImageUrls, setLoadedImageUrls] = useState<Set<string>>(
+    () => new Set(),
+  )
   const replyInputRef = useRef<TextInput>(null)
   const activeImpressionRef = useRef<{
     storyItemId: string
@@ -118,6 +121,12 @@ export default function StoryScreen() {
     id && !story && storyRequestState !== "settled",
   )
   const activeItem = playbackItems[activeIndex]
+  const isActiveImageLoading = Boolean(
+    !isReplyMode &&
+      activeItem?.assetKind === "image" &&
+      activeItem.mediaUrl &&
+      !loadedImageUrls.has(activeItem.mediaUrl),
+  )
   const captionTop = getCaptionTopPercent(activeItem)
   const avatarUrl = getStoryAvatarUrl(story)
   const creatorFirstName = getFirstName(story?.creator)
@@ -154,6 +163,17 @@ export default function StoryScreen() {
       player.play()
     }
   })
+  const markImageLoaded = useCallback((mediaUrl: string) => {
+    setLoadedImageUrls((current) => {
+      if (current.has(mediaUrl)) {
+        return current
+      }
+
+      const next = new Set(current)
+      next.add(mediaUrl)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     setActiveIndex(0)
@@ -164,6 +184,7 @@ export default function StoryScreen() {
     setIsReplyMode(false)
     setKeyboardHeight(0)
     setIsEmojiTrayOpen(false)
+    setLoadedImageUrls(new Set())
   }, [id])
 
   useEffect(() => {
@@ -206,6 +227,31 @@ export default function StoryScreen() {
   useEffect(() => {
     setIsItemMenuOpen(false)
   }, [activeIndex])
+
+  useEffect(() => {
+    let isMounted = true
+    const imageUrls = Array.from(
+      new Set(
+        playbackItems
+          .filter((item) => item.assetKind === "image" && item.mediaUrl)
+          .map((item) => item.mediaUrl),
+      ),
+    )
+
+    imageUrls.forEach((mediaUrl) => {
+      Image.prefetch(mediaUrl)
+        .catch(() => undefined)
+        .finally(() => {
+          if (isMounted) {
+            markImageLoaded(mediaUrl)
+          }
+        })
+    })
+
+    return () => {
+      isMounted = false
+    }
+  }, [markImageLoaded, playbackItems])
 
   useEffect(() => {
     if (!isReplyMode) {
@@ -656,8 +702,9 @@ export default function StoryScreen() {
 
   useEffect(() => {
     if (!activeItem) return
-    if (isReplyMode) {
+    if (isReplyMode || isActiveImageLoading) {
       activeProgress.stopAnimation()
+      activeProgress.setValue(0)
       return
     }
 
@@ -683,6 +730,7 @@ export default function StoryScreen() {
     activeItem?.playbackId,
     activeItem?.durationMs,
     activeIndex,
+    isActiveImageLoading,
     isReplyMode,
     playbackItems.length,
   ])
@@ -705,7 +753,20 @@ export default function StoryScreen() {
               style={styles.media}
             />
           ) : !isReplyMode && activeItem?.mediaUrl ? (
-            <Image source={{ uri: activeItem.mediaUrl }} style={styles.media} />
+            <Image
+              key={activeItem.playbackId}
+              onLoadEnd={() => {
+                markImageLoaded(activeItem.mediaUrl)
+              }}
+              source={{ uri: activeItem.mediaUrl }}
+              style={styles.media}
+            />
+          ) : null}
+
+          {isActiveImageLoading ? (
+            <View style={styles.mediaLoadingState}>
+              <ActivityIndicator size="small" color={colors.text} />
+            </View>
           ) : null}
 
           {story && !isReplyMode ? (
@@ -1328,6 +1389,13 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
     backgroundColor: "rgba(0,0,0,0.12)",
+  },
+  mediaLoadingState: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.background,
   },
   loadingState: {
     ...StyleSheet.absoluteFillObject,

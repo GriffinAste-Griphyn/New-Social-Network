@@ -1,12 +1,21 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
+import * as ImagePicker from "expo-image-picker"
 import type { Href } from "expo-router"
 import { useRouter } from "expo-router"
 import type { ComponentProps } from "react"
 import { useEffect, useState } from "react"
-import { Pressable, StyleSheet, Text, View } from "react-native"
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native"
 
 import { useAuthFlow } from "@/lib/auth-flow"
-import { getMobileApi } from "@/lib/mobile-api"
+import { getMobileApi, MobileApiError, postMobileFormApi } from "@/lib/mobile-api"
 import {
   AccountAvatarButton,
   ScreenFrame,
@@ -28,6 +37,16 @@ type ProfileStats = {
 type ProfileStatsResponse = {
   ok: true
   stats: ProfileStats
+}
+
+type ProfileAvatarResponse = {
+  ok: true
+  user: {
+    email: string
+    displayName: string | null
+    handle: string | null
+    avatarUrl: string | null
+  }
 }
 
 const colors = {
@@ -64,8 +83,10 @@ function initials(value: string) {
 
 export default function ProfileScreen() {
   const router = useRouter()
-  const { account } = useAuthFlow()
+  const { account, expireSession, updateAccount } = useAuthFlow()
   const [stats, setStats] = useState<ProfileStats | null>(null)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [avatarError, setAvatarError] = useState<string | null>(null)
 
   useEffect(() => {
     let isMounted = true
@@ -97,6 +118,86 @@ export default function ProfileScreen() {
   const availableCents = stats?.earnings.availableCents ?? 0
   const paidCents = stats?.earnings.paidCents ?? 0
 
+  const chooseProfilePhoto = async () => {
+    if (isUploadingAvatar) {
+      return
+    }
+
+    if (!account?.mobileToken) {
+      expireSession()
+      return
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo library access needed",
+        "Allow photo library access to choose a profile picture.",
+      )
+      return
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      mediaTypes: ["images"],
+      preferredAssetRepresentationMode:
+        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      quality: 0.86,
+    })
+
+    if (result.canceled) {
+      return
+    }
+
+    const asset = result.assets[0]
+    const formData = new FormData()
+    const fileName =
+      asset.fileName ??
+      `profile-photo.${asset.mimeType?.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg"}`
+
+    formData.append("avatar", {
+      uri: asset.uri,
+      name: fileName,
+      type: asset.mimeType ?? "image/jpeg",
+    } as unknown as Blob)
+
+    setIsUploadingAvatar(true)
+    setAvatarError(null)
+
+    try {
+      const response = await postMobileFormApi<ProfileAvatarResponse>(
+        "/api/mobile/account/avatar",
+        formData,
+      )
+
+      updateAccount({
+        email: response.user.email,
+        displayName: response.user.displayName ?? displayName,
+        handle: response.user.handle ?? handle,
+        avatarUrl: response.user.avatarUrl,
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not update profile photo."
+
+      if (error instanceof MobileApiError && error.status === 401) {
+        expireSession()
+        Alert.alert(
+          "Sign in again",
+          "Your local app session expired. Sign in, then choose Profile picture again.",
+        )
+        return
+      }
+
+      setAvatarError(message)
+      Alert.alert("Could not update photo", message)
+    } finally {
+      setIsUploadingAvatar(false)
+    }
+  }
+
   return (
     <ScreenFrame>
       <ScreenScroll>
@@ -106,6 +207,7 @@ export default function ProfileScreen() {
           subtitle={`@${handle}`}
           right={
             <AccountAvatarButton
+              avatarUrl={account?.avatarUrl}
               displayName={displayName}
               email={account?.email}
               handle={handle}
@@ -114,9 +216,29 @@ export default function ProfileScreen() {
         />
 
         <View style={styles.identityPanel}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials(displayName)}</Text>
-          </View>
+          <Pressable
+            accessibilityLabel="Change profile picture"
+            accessibilityRole="button"
+            disabled={isUploadingAvatar}
+            onPress={chooseProfilePhoto}
+            style={({ pressed }) => [
+              styles.avatar,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            {account?.avatarUrl ? (
+              <Image source={{ uri: account.avatarUrl }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>{initials(displayName)}</Text>
+            )}
+            <View style={styles.avatarEditBadge}>
+              {isUploadingAvatar ? (
+                <ActivityIndicator size="small" color={colors.surface} />
+              ) : (
+                <Ionicons name="camera" size={14} color={colors.surface} />
+              )}
+            </View>
+          </Pressable>
           <View style={styles.identityCopy}>
             <Text style={styles.identityName} numberOfLines={1}>
               {displayName}
@@ -124,11 +246,27 @@ export default function ProfileScreen() {
             <Text style={styles.identityHandle} numberOfLines={1}>
               @{handle}
             </Text>
+            <Pressable
+              accessibilityLabel="Change profile photo"
+              accessibilityRole="button"
+              disabled={isUploadingAvatar}
+              onPress={chooseProfilePhoto}
+              style={({ pressed }) => [
+                styles.changePhotoButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="camera-outline" size={14} color={colors.surface} />
+              <Text style={styles.changePhotoText}>
+                {isUploadingAvatar ? "Uploading..." : "Change photo"}
+              </Text>
+            </Pressable>
           </View>
           <View style={styles.creatorPill}>
             <Text style={styles.creatorPillText}>Creator</Text>
           </View>
         </View>
+        {avatarError ? <Text style={styles.avatarError}>{avatarError}</Text> : null}
 
         <View style={styles.summaryGrid}>
           <SummaryMetric
@@ -155,6 +293,12 @@ export default function ProfileScreen() {
 
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>Account</Text>
+          <ActionRow
+            icon="camera-outline"
+            label="Profile picture"
+            detail={isUploadingAvatar ? "Uploading photo..." : "Change your creator photo"}
+            onPress={chooseProfilePhoto}
+          />
           <ActionRow
             icon="file-tray-full-outline"
             label="Story replies"
@@ -281,10 +425,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.accent,
   },
+  avatarImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 29,
+  },
   avatarText: {
     fontSize: 18,
     fontWeight: "800",
     color: colors.surface,
+  },
+  avatarEditBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dark,
+  },
+  avatarError: {
+    marginTop: -4,
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: "700",
   },
   identityCopy: {
     flex: 1,
@@ -300,6 +468,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: colors.subtext,
+  },
+  changePhotoButton: {
+    alignSelf: "flex-start",
+    minHeight: 32,
+    borderRadius: 16,
+    marginTop: 8,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.dark,
+  },
+  changePhotoText: {
+    color: colors.surface,
+    fontSize: 12,
+    fontWeight: "800",
   },
   creatorPill: {
     height: 30,
