@@ -130,6 +130,20 @@ function StoryPreview({ story }: { story: AdminModerationStory }) {
     )
   }
 
+  if (story.assetKind === "video" && story.mediaUrl) {
+    return (
+      <video
+        src={story.mediaUrl}
+        poster={story.thumbnailUrl ?? undefined}
+        controls
+        muted
+        playsInline
+        preload="metadata"
+        className="h-full w-full object-cover"
+      />
+    )
+  }
+
   return (
     <div className="flex h-full w-full items-center justify-center bg-[#111827] text-white">
       <ShieldAlert className="size-8" />
@@ -138,6 +152,8 @@ function StoryPreview({ story }: { story: AdminModerationStory }) {
 }
 
 function ModerationRow({ story }: { story: AdminModerationStory }) {
+  const isUserReport = story.moderationReason?.startsWith("User report:")
+
   return (
     <article className="grid gap-4 rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm lg:grid-cols-[12rem_1fr_auto]">
       <div className="aspect-[9/16] overflow-hidden rounded-[8px] bg-[#f3f4f6]">
@@ -147,7 +163,7 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-[#fef3c7] px-3 py-1 text-xs font-medium text-[#92400e]">
-            Flagged
+            {isUserReport ? "Reported" : "Flagged"}
           </span>
           <span className="text-sm text-[#6b7280]">
             {formatDate(story.createdAt)}
@@ -165,7 +181,7 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
           Moderation reason
         </p>
         <p className="mt-1 text-sm leading-6 text-[#6b7280]">
-          {story.moderationReason ?? "Flagged by automated review."}
+          {story.moderationReason ?? "Flagged for review."}
         </p>
 
         <p className="mt-5 text-sm font-medium text-[#374151]">Caption</p>
@@ -340,7 +356,8 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <div>
               <h2 className="text-xl font-semibold">Review queue</h2>
               <p className="mt-1 text-sm text-[#6b7280]">
-                Automated flags from story captions, overlays, tags, and links.
+                User reports and automated flags from captions, overlays, tags,
+                and links.
               </p>
             </div>
           </div>

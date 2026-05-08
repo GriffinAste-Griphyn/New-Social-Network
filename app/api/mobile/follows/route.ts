@@ -57,6 +57,7 @@ export async function GET(request: Request) {
             and(
               inArray(stories.creatorId, followedUserIds),
               eq(stories.status, "live"),
+              eq(stories.moderationStatus, "approved"),
             ),
           )
       : []

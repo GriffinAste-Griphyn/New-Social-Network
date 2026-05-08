@@ -522,6 +522,7 @@ async function getLiveStoryRows() {
     .where(
       and(
         eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
         isNotNull(users.displayName),
         isNotNull(users.handle),
@@ -567,6 +568,7 @@ async function getLiveStoryRowsForCreator(creatorId: string) {
       and(
         eq(stories.creatorId, creatorId),
         eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
         isNotNull(users.displayName),
         isNotNull(users.handle),
@@ -797,6 +799,7 @@ export async function getStoryStackForStory(storyId: string) {
       and(
         eq(stories.id, storyId),
         eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
       ),
     )
@@ -855,6 +858,7 @@ export async function getMobileCreatorProfile(profileOrStoryId: string) {
       and(
         eq(stories.creatorId, creatorId),
         eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
       ),
     )
@@ -1022,6 +1026,7 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
         eq(stories.id, input.storyId),
         eq(stories.creatorId, input.ownerId),
         eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
       ),
     )

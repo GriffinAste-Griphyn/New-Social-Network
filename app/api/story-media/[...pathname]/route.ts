@@ -2,6 +2,7 @@ import { get, head } from "@vercel/blob"
 import { or, eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
 
+import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
@@ -120,6 +121,7 @@ async function getStoryForBlobPathname(blobPathname: string) {
     .select({
       creatorId: stories.creatorId,
       expiresAt: stories.expiresAt,
+      moderationStatus: stories.moderationStatus,
       status: stories.status,
     })
     .from(stories)
@@ -142,6 +144,7 @@ async function getStoryForBlobPathname(blobPathname: string) {
     .select({
       creatorId: stories.creatorId,
       expiresAt: stories.expiresAt,
+      moderationStatus: stories.moderationStatus,
       status: stories.status,
     })
     .from(storyInteractions)
@@ -172,9 +175,16 @@ async function canServeStoryMedia(request: Request, blobPathname: string) {
     ? null
     : (await getMobileSession(request)) ?? (await getSession())
   const isOwner = session?.id === story.creatorId
-  const isLive = story.status === "live" && story.expiresAt.getTime() > Date.now()
+  const isAdmin = session ? isAdminSession(session) : false
+  const isLive =
+    story.status === "live" &&
+    story.moderationStatus === "approved" &&
+    story.expiresAt.getTime() > Date.now()
 
-  return (hasValidToken && isLive) || Boolean(session && (isLive || isOwner))
+  return (
+    (hasValidToken && isLive) ||
+    Boolean(session && (isAdmin || isLive || isOwner))
+  )
 }
 
 export async function GET(

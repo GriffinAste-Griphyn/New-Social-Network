@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation"
 import { and, desc, eq, sql } from "drizzle-orm"
 
-import { requireSession, type CompleteAuthSession } from "@/lib/auth"
+import { isAdminSession } from "@/lib/admin-auth"
+import { requireSession } from "@/lib/auth"
 import { processStoryCreatorEarnings, reverseUnpaidStoryEarnings } from "@/lib/creator-earnings"
 import { getDb } from "@/lib/db"
 import {
@@ -11,7 +12,6 @@ import {
   stories,
   users,
 } from "@/lib/db/schema"
-import { env } from "@/lib/env"
 
 type DbNumber = bigint | number | string | null
 
@@ -46,27 +46,6 @@ function toNumber(value: DbNumber) {
   if (typeof value === "string") return Number(value)
 
   return 0
-}
-
-function getAdminEmails() {
-  const configuredEmails = (env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean)
-
-  return Array.from(
-    new Set(["griffin.aste@gmail.com", ...configuredEmails]),
-  )
-}
-
-export function isAdminSession(session: CompleteAuthSession) {
-  const adminEmails = getAdminEmails()
-
-  if (adminEmails.length === 0) {
-    return process.env.NODE_ENV !== "production"
-  }
-
-  return adminEmails.includes(session.email.toLowerCase())
 }
 
 export async function requireAdminSession() {
