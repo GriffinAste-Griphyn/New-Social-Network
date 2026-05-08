@@ -344,41 +344,48 @@ export async function updateBrandFundingProfile(input: {
 }) {
   const db = getDb()
 
-  await db
-    .update(brandFundingProfiles)
-    .set({
-      status: input.status,
-      displayName: input.displayName,
-      approvalMode: input.approvalMode,
-      payoutAmountCents: input.payoutAmountCents,
-      dailyCapCents: input.dailyCapCents,
-      monthlyCapCents: input.monthlyCapCents,
-      allowedCategories: input.allowedCategories,
-      blockedCategories: input.blockedCategories,
-      notes: input.notes,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(brandFundingProfiles.id, input.profileId),
-        eq(brandFundingProfiles.advertiserAccountId, input.advertiserAccountId),
-      ),
-    )
+  await db.transaction(async (tx) => {
+    const [profile] = await tx
+      .update(brandFundingProfiles)
+      .set({
+        status: input.status,
+        displayName: input.displayName,
+        approvalMode: input.approvalMode,
+        payoutAmountCents: input.payoutAmountCents,
+        dailyCapCents: input.dailyCapCents,
+        monthlyCapCents: input.monthlyCapCents,
+        allowedCategories: input.allowedCategories,
+        blockedCategories: input.blockedCategories,
+        notes: input.notes,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(brandFundingProfiles.id, input.profileId),
+          eq(brandFundingProfiles.advertiserAccountId, input.advertiserAccountId),
+        ),
+      )
+      .returning({ id: brandFundingProfiles.id })
 
-  await db
-    .delete(brandFundingTargets)
-    .where(eq(brandFundingTargets.profileId, input.profileId))
+    if (!profile) {
+      throw new Error("Funding profile not found.")
+    }
 
-  if (input.targets.length > 0) {
-    await db.insert(brandFundingTargets).values(
-      input.targets.map((target) => ({
-        id: `brand-funding-target-${randomUUID()}`,
-        profileId: input.profileId,
-        kind: target.kind,
-        value: target.value,
-      })),
-    )
-  }
+    await tx
+      .delete(brandFundingTargets)
+      .where(eq(brandFundingTargets.profileId, profile.id))
+
+    if (input.targets.length > 0) {
+      await tx.insert(brandFundingTargets).values(
+        input.targets.map((target) => ({
+          id: `brand-funding-target-${randomUUID()}`,
+          profileId: profile.id,
+          kind: target.kind,
+          value: target.value,
+        })),
+      )
+    }
+  })
 }
 
 export async function createPendingWalletFunding(input: {
