@@ -7,6 +7,7 @@ import {
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { del, put } from "@vercel/blob"
+import sharp from "sharp"
 
 import { env } from "@/lib/env"
 
@@ -175,11 +176,26 @@ export function publicStoryMediaUrl(
   const mediaPathname = blobPathname ?? cloudflareStreamPathname
   const mediaUrl = mediaPathname ? buildStoryMediaRoute(mediaPathname) : value
 
-  if (/^https?:\/\//i.test(mediaUrl) || !request) {
+  if (!request) {
     return mediaUrl
   }
 
   const url = new URL(mediaUrl, request.url)
+
+  if (
+    /^https?:\/\//i.test(mediaUrl) &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "127.0.0.1"
+  ) {
+    return mediaUrl
+  }
+
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    const requestUrl = new URL(request.url)
+    url.protocol = requestUrl.protocol
+    url.hostname = requestUrl.hostname
+    url.port = requestUrl.port
+  }
 
   if (options.signed && mediaPathname) {
     url.searchParams.set("token", createStoryMediaAccessToken(mediaPathname))
@@ -847,9 +863,34 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
 
   const buffer = Buffer.from(await file.arrayBuffer())
   const uploadType = resolveStoryUploadType(buffer)
-  const { assetKind, extension, contentType } = uploadType
-  const checksum = createHash("sha256").update(buffer).digest("hex")
-  const metadata = getStoryAssetMetadata(buffer, uploadType)
+  const { assetKind } = uploadType
+  let storedBuffer = buffer
+  let storedUploadType = uploadType
+
+  if (assetKind === "image") {
+    try {
+      storedBuffer = Buffer.from(await sharp(buffer)
+        .rotate()
+        .jpeg({
+          quality: 90,
+          mozjpeg: true,
+        })
+        .toBuffer())
+      storedUploadType = {
+        assetKind: "image",
+        extension: "jpg",
+        contentType: "image/jpeg",
+      }
+    } catch {
+      throw new StoryUploadError(
+        "Could not process that image. Choose a JPG, PNG, WEBP, or HEIC story photo.",
+      )
+    }
+  }
+
+  const { extension, contentType } = storedUploadType
+  const checksum = createHash("sha256").update(storedBuffer).digest("hex")
+  const metadata = getStoryAssetMetadata(storedBuffer, storedUploadType)
   const fileName = `${randomUUID()}.${extension}`
 
   if (
@@ -866,12 +907,12 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
     assetKind === "video" &&
     process.env.STORY_VIDEO_PROCESSOR === "cloudflare-stream"
   ) {
-    return saveCloudflareStreamVideo(fileName, buffer, contentType, checksum, metadata)
+    return saveCloudflareStreamVideo(fileName, storedBuffer, contentType, checksum, metadata)
   }
 
   return getStoryStorageProvider().save(
     fileName,
-    buffer,
+    storedBuffer,
     assetKind,
     contentType,
     checksum,
