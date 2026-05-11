@@ -170,6 +170,7 @@ export default function ProfileScreen() {
       const response = await postMobileFormApi<ProfileAvatarResponse>(
         "/api/mobile/account/avatar",
         formData,
+        { authToken: account.mobileToken },
       )
 
       updateAccount({
@@ -211,6 +212,8 @@ export default function ProfileScreen() {
               displayName={displayName}
               email={account?.email}
               handle={handle}
+              isProfilePhotoUploading={isUploadingAvatar}
+              onProfilePhotoPress={chooseProfilePhoto}
             />
           }
         />
