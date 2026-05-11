@@ -41,14 +41,14 @@ const incomeCards = [
   },
   {
     eyebrow: "02",
-    title: "Pay attention",
+    title: "Watch",
     copy: "Watch what moves through the network. Your attention is no longer treated like free inventory.",
     icon: Eye,
   },
   {
     eyebrow: "03",
     title: "Participate",
-    copy: "Reply, follow, save, and help useful signal move. UBEYE treats participation as part of the value creation loop.",
+    copy: "Reply, follow, and save content that you like. UBEYE treats participation as part of the value creation loop.",
     icon: MessageCircle,
   },
 ]
