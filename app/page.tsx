@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button"
 import { MarketingFooter } from "@/components/marketing-footer"
 
 const mobileAppHref = "/app"
-const consumerSignInHref = "/login?next=%2Ffeed"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
@@ -93,16 +92,11 @@ function SiteHeader() {
         </nav>
 
         <div className="flex items-center gap-2 justify-self-end">
-          <div className="flex items-center gap-0">
-            <Button asChild variant="ghost" className="h-9 rounded-full px-3 text-sm text-black/64">
-              <Link href={consumerSignInHref}>Sign in</Link>
-            </Button>
-            <Button asChild variant="ghost" className="h-9 rounded-full px-3 text-sm text-black/64">
-              <Link href={advertiserSignInHref}>Advertiser portal</Link>
-            </Button>
-          </div>
+          <Button asChild variant="ghost" className="h-9 rounded-full px-4 text-sm text-black/64">
+            <Link href={advertiserSignInHref}>Advertiser sign in</Link>
+          </Button>
           <Button asChild className="h-9 rounded-full bg-black px-4 text-sm text-white hover:bg-black/84">
-            <Link href={mobileAppHref}>Open mobile web</Link>
+            <Link href={mobileAppHref}>Get the app</Link>
           </Button>
         </div>
       </div>
@@ -124,7 +118,7 @@ function MobileHeroNav() {
           href={mobileAppHref}
           className="inline-flex min-h-11 items-center rounded-full bg-white px-5 text-sm font-semibold text-black"
         >
-          Mobile web
+          Get app
         </Link>
       </div>
     </div>
@@ -184,16 +178,9 @@ export default function HomePage() {
                     className="h-11 justify-between rounded-full bg-black px-6 text-sm text-white hover:bg-black/84 sm:justify-center"
                   >
                     <Link href={mobileAppHref}>
-                      Open mobile web
+                      Get the mobile app
                       <ArrowRight className="size-4" />
                     </Link>
-                  </Button>
-                  <Button
-                    asChild
-                    variant="outline"
-                    className="h-11 justify-between rounded-full border-black/12 bg-transparent px-6 text-sm text-black hover:bg-black/5 sm:justify-center"
-                  >
-                    <Link href={consumerSignInHref}>Sign in</Link>
                   </Button>
                   <Button
                     asChild
