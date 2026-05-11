@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { del, put } from "@vercel/blob"
+import sharp from "sharp"
 
 const maxAvatarUploadBytes = 8 * 1024 * 1024
 const avatarUploadDirectory = path.join(process.cwd(), "public", "uploads", "avatars")
@@ -16,6 +17,8 @@ export class ProfileAvatarUploadError extends Error {}
 
 export type StoredProfileAvatar = {
   avatarUrl: string
+  storageProvider: "local" | "vercel-blob"
+  storageKey: string
   contentType: string
   byteSize: number
   checksum: string
@@ -90,20 +93,45 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
-  const uploadType = resolveAvatarUploadType(buffer)
-  const checksum = createHash("sha256").update(buffer).digest("hex")
-  const fileName = `${randomUUID()}.${uploadType.extension}`
+  resolveAvatarUploadType(buffer)
+
+  let normalizedBuffer: Buffer
+
+  try {
+    normalizedBuffer = await sharp(buffer)
+      .rotate()
+      .resize(512, 512, {
+        fit: "cover",
+        position: "center",
+      })
+      .jpeg({
+        quality: 90,
+        mozjpeg: true,
+      })
+      .toBuffer()
+  } catch {
+    throw new ProfileAvatarUploadError(
+      "Could not process that profile photo. Choose a JPG, PNG, WEBP, or HEIC image.",
+    )
+  }
+
+  const contentType = "image/jpeg"
+  const checksum = createHash("sha256").update(normalizedBuffer).digest("hex")
+  const fileName = `${randomUUID()}.jpg`
+  const storageKey = `avatars/${fileName}`
 
   if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
-    const blob = await put(`avatars/${fileName}`, buffer, {
+    const blob = await put(storageKey, normalizedBuffer, {
       access: "public",
-      contentType: uploadType.contentType,
+      contentType,
     })
 
     return {
       avatarUrl: blob.url,
-      contentType: uploadType.contentType,
-      byteSize: buffer.byteLength,
+      storageProvider: "vercel-blob",
+      storageKey: blob.pathname,
+      contentType,
+      byteSize: normalizedBuffer.byteLength,
       checksum,
     }
   }
@@ -115,12 +143,14 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
   }
 
   await mkdir(avatarUploadDirectory, { recursive: true })
-  await writeFile(path.join(avatarUploadDirectory, fileName), buffer)
+  await writeFile(path.join(avatarUploadDirectory, fileName), normalizedBuffer)
 
   return {
     avatarUrl: withConfiguredPublicBaseUrl(`${localAvatarUrlPrefix}/${fileName}`),
-    contentType: uploadType.contentType,
-    byteSize: buffer.byteLength,
+    storageProvider: "local",
+    storageKey: fileName,
+    contentType,
+    byteSize: normalizedBuffer.byteLength,
     checksum,
   }
 }

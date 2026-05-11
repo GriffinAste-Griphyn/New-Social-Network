@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   boolean,
   index,
   integer,
@@ -12,6 +13,31 @@ import {
 } from "drizzle-orm/pg-core"
 
 export const storyAssetKind = pgEnum("story_asset_kind", ["image", "video"])
+export const mediaAssetPurpose = pgEnum("media_asset_purpose", [
+  "story",
+  "story_reply",
+  "avatar",
+])
+export const mediaAssetStatus = pgEnum("media_asset_status", [
+  "processing",
+  "ready",
+  "flagged",
+  "rejected",
+  "deleted",
+  "error",
+])
+export const mediaScanStatus = pgEnum("media_scan_status", [
+  "pending",
+  "passed",
+  "flagged",
+  "failed",
+  "skipped",
+])
+export const mediaStorageProvider = pgEnum("media_storage_provider", [
+  "local",
+  "vercel-blob",
+  "cloudflare-stream",
+])
 export const storyStatus = pgEnum("story_status", [
   "processing",
   "live",
@@ -111,6 +137,9 @@ export const users = pgTable(
     displayName: text("display_name"),
     bio: text("bio"),
     avatarUrl: text("avatar_url"),
+    avatarAssetId: text("avatar_asset_id").references(
+      (): AnyPgColumn => mediaAssets.id,
+    ),
     onboardingIntent: userOnboardingIntent("onboarding_intent")
       .notNull()
       .default("explore"),
@@ -160,6 +189,77 @@ export const authSessions = pgTable(
       table.expiresAt,
       table.revokedAt,
     ),
+  ],
+)
+
+export const mediaAssets = pgTable(
+  "media_assets",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id),
+    purpose: mediaAssetPurpose("purpose").notNull(),
+    assetKind: storyAssetKind("asset_kind").notNull(),
+    storageProvider: mediaStorageProvider("storage_provider").notNull(),
+    storageKey: text("storage_key").notNull(),
+    mediaUrl: text("media_url").notNull(),
+    thumbnailUrl: text("thumbnail_url"),
+    contentType: text("content_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    checksum: text("checksum").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    durationMs: integer("duration_ms"),
+    processingStatus: mediaAssetStatus("processing_status")
+      .notNull()
+      .default("processing"),
+    scanStatus: mediaScanStatus("scan_status").notNull().default("pending"),
+    scanReason: text("scan_reason"),
+    providerStatus: text("provider_status"),
+    providerError: text("provider_error"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("media_assets_provider_key_idx").on(
+      table.storageProvider,
+      table.storageKey,
+    ),
+    index("media_assets_owner_idx").on(table.ownerUserId, table.createdAt),
+    index("media_assets_processing_idx").on(
+      table.processingStatus,
+      table.updatedAt,
+    ),
+    index("media_assets_scan_idx").on(table.scanStatus, table.updatedAt),
+  ],
+)
+
+export const mediaAuditEvents = pgTable(
+  "media_audit_events",
+  {
+    id: text("id").primaryKey(),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id),
+    actorUserId: text("actor_user_id").references((): AnyPgColumn => users.id),
+    eventType: text("event_type").notNull(),
+    message: text("message"),
+    metadata: text("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("media_audit_events_asset_idx").on(table.mediaAssetId, table.createdAt),
+    index("media_audit_events_actor_idx").on(table.actorUserId, table.createdAt),
   ],
 )
 
@@ -344,6 +444,9 @@ export const stories = pgTable(
     contentType: text("content_type"),
     byteSize: integer("byte_size"),
     checksum: text("checksum"),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id),
     width: integer("width"),
     height: integer("height"),
     processingStatus: text("processing_status").notNull().default("ready"),
@@ -440,6 +543,7 @@ export const storyInteractions = pgTable(
     mediaUrl: text("media_url"),
     mediaThumbnailUrl: text("media_thumbnail_url"),
     mediaAssetKind: storyAssetKind("media_asset_kind"),
+    mediaAssetId: text("media_asset_id").references(() => mediaAssets.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

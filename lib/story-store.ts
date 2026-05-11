@@ -18,6 +18,7 @@ import {
 } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
+import { createMediaAssetFromStoredStoryAsset } from "@/lib/media-assets"
 import { evaluateStoryModeration } from "@/lib/moderation"
 import {
   creatorProfiles,
@@ -941,7 +942,17 @@ export async function createStory(input: CreateStoryInput) {
     explicitBrandTags: input.explicitBrandTags,
     elements: input.elements,
   })
-  const isApproved = moderation.status === "approved"
+  const mediaAsset = await createMediaAssetFromStoredStoryAsset({
+    ownerUserId: input.session.id,
+    purpose: "story",
+    storedAsset: input.storedAsset,
+  })
+  const mediaModerationReason =
+    mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed"
+      ? mediaAsset.scanReason ?? "Media upload was flagged by safety scanning."
+      : null
+  const isApproved = moderation.status === "approved" && !mediaModerationReason
+  const isMediaReady = mediaAsset.processingStatus === "ready"
 
   await db
     .insert(creatorScores)
@@ -965,18 +976,19 @@ export async function createStory(input: CreateStoryInput) {
     contentType: input.storedAsset.contentType,
     byteSize: input.storedAsset.byteSize,
     checksum: input.storedAsset.checksum,
+    mediaAssetId: mediaAsset.id,
     width: input.storedAsset.width,
     height: input.storedAsset.height,
-    processingStatus: input.storedAsset.processingStatus,
+    processingStatus: mediaAsset.processingStatus,
     caption: input.caption || null,
     durationMs:
       input.storedAsset.assetKind === "video"
         ? (input.storedAsset.durationMs ?? 10_000)
         : null,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-    status: isApproved ? "live" : "processing",
-    moderationStatus: moderation.status,
-    moderationReason: moderation.reason,
+    status: isApproved && isMediaReady ? "live" : "processing",
+    moderationStatus: mediaModerationReason ? "flagged" : moderation.status,
+    moderationReason: mediaModerationReason ?? moderation.reason,
     brandSignalScore: brandSignalScore.toFixed(2),
   })
 

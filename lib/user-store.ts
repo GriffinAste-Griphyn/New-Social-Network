@@ -476,11 +476,13 @@ export async function completeUserProfileForUser(
 export async function updateUserAvatar(
   userId: string,
   avatarUrl: string,
+  avatarAssetId?: string,
 ): Promise<AuthResult> {
   const [user] = await getDb()
     .update(users)
     .set({
       avatarUrl,
+      ...(avatarAssetId ? { avatarAssetId } : {}),
       updatedAt: new Date(),
     })
     .where(eq(users.id, userId))

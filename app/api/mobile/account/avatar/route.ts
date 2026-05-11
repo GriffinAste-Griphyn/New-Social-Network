@@ -5,6 +5,10 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { users } from "@/lib/db/schema"
 import {
+  createMediaAssetFromStoredProfileAvatar,
+  markMediaAssetDeleted,
+} from "@/lib/media-assets"
+import {
   ProfileAvatarUploadError,
   removeProfileAvatar,
   saveProfileAvatar,
@@ -69,21 +73,58 @@ export async function POST(request: Request) {
     }
 
     const [currentUser] = await getDb()
-      .select({ avatarUrl: users.avatarUrl })
+      .select({ avatarUrl: users.avatarUrl, avatarAssetId: users.avatarAssetId })
       .from(users)
       .where(eq(users.id, session.id))
       .limit(1)
 
     storedAvatar = await saveProfileAvatar(avatarEntry)
+    const mediaAsset = await createMediaAssetFromStoredProfileAvatar({
+      ownerUserId: session.id,
+      storedAvatar,
+    })
 
-    const result = await updateUserAvatar(session.id, storedAvatar.avatarUrl)
+    if (
+      mediaAsset.scanStatus === "flagged" ||
+      mediaAsset.scanStatus === "failed"
+    ) {
+      await removeProfileAvatar(storedAvatar.avatarUrl)
+      await markMediaAssetDeleted({
+        mediaAssetId: mediaAsset.id,
+        actorUserId: session.id,
+        reason: mediaAsset.scanReason ?? "Avatar upload failed safety scanning.",
+      })
+
+      return NextResponse.json(
+        { error: mediaAsset.scanReason ?? "Choose a different profile photo." },
+        { status: 400 },
+      )
+    }
+
+    const result = await updateUserAvatar(
+      session.id,
+      storedAvatar.avatarUrl,
+      mediaAsset.id,
+    )
 
     if (!result.ok) {
       await removeProfileAvatar(storedAvatar.avatarUrl)
+      await markMediaAssetDeleted({
+        mediaAssetId: mediaAsset.id,
+        actorUserId: session.id,
+        reason: "Avatar upload was discarded after profile update failed.",
+      })
       return NextResponse.json({ error: result.message }, { status: 400 })
     }
 
     await removeProfileAvatar(currentUser?.avatarUrl ?? null).catch(() => undefined)
+    if (currentUser?.avatarAssetId) {
+      await markMediaAssetDeleted({
+        mediaAssetId: currentUser.avatarAssetId,
+        actorUserId: session.id,
+        reason: "Avatar was replaced by a newer upload.",
+      }).catch(() => undefined)
+    }
 
     return NextResponse.json({
       ok: true,

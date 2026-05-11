@@ -89,9 +89,9 @@ export async function POST(request: Request) {
     }
 
     const message =
-      error instanceof StoryUploadError || error instanceof Error
+      error instanceof StoryUploadError
         ? error.message
-        : "Story upload failed."
+        : "Story upload failed. Try again."
 
     return NextResponse.json({ error: message }, { status: 400 })
   }
