@@ -1,6 +1,6 @@
-# New Social Network
+# UBEYE
 
-Story-first social network prototype with:
+UBEYE is a story-first social network prototype with:
 
 - stories as the only content type
 - no follower counts

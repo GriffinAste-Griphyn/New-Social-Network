@@ -114,7 +114,7 @@ export default async function PayoutsPage({ searchParams }: PayoutsPageProps) {
               <p className="mt-3 text-sm leading-6 text-[#71717a]">
                 Connect a Stripe account so approved brand-match and ad-share
                 earnings can be paid out without storing sensitive financial
-                details in New Social Network.
+                details in UBEYE.
               </p>
             </div>
             <div

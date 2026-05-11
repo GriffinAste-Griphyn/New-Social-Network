@@ -38,7 +38,7 @@ export default async function ProfileOnboardingPage({
           href="/"
           className="w-fit text-sm font-semibold uppercase tracking-[0.24em] text-black/72"
         >
-          NSN
+          UBEYE
         </Link>
 
         <div className="grid gap-8 py-10 lg:py-14">

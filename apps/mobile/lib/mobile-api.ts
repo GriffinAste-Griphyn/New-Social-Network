@@ -14,7 +14,8 @@ export class MobileApiError extends Error {
 }
 
 let mobileAuthToken: string | null = null
-const mobileDeviceIdKey = "nsn.mobile.device.id"
+const mobileDeviceIdKey = "ubeye.mobile.device.id"
+const legacyMobileDeviceIdKey = "nsn.mobile.device.id"
 let mobileDeviceIdPromise: Promise<string> | null = null
 
 export function setMobileApiAuthToken(token: string | null) {
@@ -41,6 +42,14 @@ async function getMobileDeviceId() {
       async (storedValue) => {
         if (storedValue) {
           return storedValue
+        }
+
+        const legacyValue = await AsyncStorage.getItem(legacyMobileDeviceIdKey)
+
+        if (legacyValue) {
+          await AsyncStorage.setItem(mobileDeviceIdKey, legacyValue)
+          await AsyncStorage.removeItem(legacyMobileDeviceIdKey)
+          return legacyValue
         }
 
         const nextValue = createMobileDeviceId()

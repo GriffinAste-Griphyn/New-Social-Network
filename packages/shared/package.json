@@ -1,5 +1,5 @@
 {
-  "name": "@new-social-network/shared",
+  "name": "@ubeye/shared",
   "version": "0.0.1",
   "private": true,
   "types": "index.d.ts"

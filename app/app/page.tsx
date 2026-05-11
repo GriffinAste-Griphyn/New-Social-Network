@@ -10,7 +10,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 
-const mobileDeepLinkHref = "newsocialnetwork://auth"
+const mobileDeepLinkHref = "ubeye://auth"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"

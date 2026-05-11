@@ -55,7 +55,8 @@ type AuthFlowContextValue = {
 }
 
 const AuthFlowContext = createContext<AuthFlowContextValue | null>(null)
-const storedAccountKey = "nsn.mobile.account.v1"
+const storedAccountKey = "ubeye.mobile.account.v1"
+const legacyStoredAccountKey = "nsn.mobile.account.v1"
 const secureStoreOptions: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 }
@@ -113,9 +114,30 @@ async function getStoredAccount() {
     if (secureValue) {
       return secureValue
     }
+
+    const legacySecureValue = await SecureStore.getItemAsync(legacyStoredAccountKey)
+
+    if (legacySecureValue) {
+      await SecureStore.setItemAsync(storedAccountKey, legacySecureValue, secureStoreOptions)
+      await SecureStore.deleteItemAsync(legacyStoredAccountKey).catch(() => undefined)
+      return legacySecureValue
+    }
   }
 
-  return AsyncStorage.getItem(storedAccountKey)
+  const storedValue = await AsyncStorage.getItem(storedAccountKey)
+
+  if (storedValue) {
+    return storedValue
+  }
+
+  const legacyStoredValue = await AsyncStorage.getItem(legacyStoredAccountKey)
+
+  if (legacyStoredValue) {
+    await AsyncStorage.setItem(storedAccountKey, legacyStoredValue)
+    await AsyncStorage.removeItem(legacyStoredAccountKey)
+  }
+
+  return legacyStoredValue
 }
 
 async function setStoredAccount(account: MobileAccount) {
@@ -123,17 +145,22 @@ async function setStoredAccount(account: MobileAccount) {
 
   if (await isSecureStoreAvailable()) {
     await SecureStore.setItemAsync(storedAccountKey, value, secureStoreOptions)
+    await SecureStore.deleteItemAsync(legacyStoredAccountKey).catch(() => undefined)
     await AsyncStorage.removeItem(storedAccountKey)
+    await AsyncStorage.removeItem(legacyStoredAccountKey)
     return
   }
 
   await AsyncStorage.setItem(storedAccountKey, value)
+  await AsyncStorage.removeItem(legacyStoredAccountKey)
 }
 
 async function removeStoredAccount() {
   await Promise.all([
     SecureStore.deleteItemAsync(storedAccountKey).catch(() => undefined),
+    SecureStore.deleteItemAsync(legacyStoredAccountKey).catch(() => undefined),
     AsyncStorage.removeItem(storedAccountKey),
+    AsyncStorage.removeItem(legacyStoredAccountKey),
   ])
 }
 

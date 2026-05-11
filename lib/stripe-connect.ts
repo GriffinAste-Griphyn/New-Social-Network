@@ -200,7 +200,7 @@ async function createConnectedAccount(session: CompleteAuthSession) {
       },
       profile: {
         product_description:
-          "Creator payouts for New Social Network story earnings.",
+          "Creator payouts for UBEYE story earnings.",
       },
     },
     metadata: {

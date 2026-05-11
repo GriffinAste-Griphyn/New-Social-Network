@@ -89,7 +89,7 @@ export default function AuthScreen() {
             <View style={styles.brandMark}>
               <Ionicons name="sparkles" size={22} color={colors.surface} />
             </View>
-            <Text style={styles.brandText}>NSN</Text>
+            <Text style={styles.brandText}>UBEYE</Text>
           </View>
 
           <View style={styles.heroCopy}>
@@ -403,7 +403,7 @@ const stageKicker = {
 }
 
 const stageTitle = {
-  landing: "Welcome to NSN",
+  landing: "Welcome to UBEYE",
   signup: "Start with email and password.",
   login: "Log in to your account.",
   verify: "Verify your account.",

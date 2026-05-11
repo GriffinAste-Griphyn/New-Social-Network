@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "New Social Network",
-    "slug": "new-social-network-mobile",
+    "name": "UBEYE",
+    "slug": "ubeye",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "newsocialnetwork",
+    "scheme": "ubeye",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -15,9 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourcompany.newsocialnetwork"
+      "bundleIdentifier": "com.griffinaste.ubeye"
     },
     "android": {
+      "package": "com.griffinaste.ubeye",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -37,7 +38,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow New Social Network to access your camera so you can capture stories."
+          "cameraPermission": "Allow UBEYE to access your camera so you can capture stories."
         }
       ]
     ],
