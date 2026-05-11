@@ -1,4 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
+import * as ImagePicker from "expo-image-picker"
 import { useRouter } from "expo-router"
 import type {
   SocialDiscoverTile,
@@ -9,6 +10,7 @@ import type { ReactElement, ReactNode } from "react"
 import { useEffect, useState } from "react"
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Modal,
@@ -23,7 +25,11 @@ import type { StyleProp, ViewStyle } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 
 import { useAuthFlow } from "@/lib/auth-flow"
-import { getMobileApi } from "@/lib/mobile-api"
+import {
+  getMobileApi,
+  MobileApiError,
+  postMobileFormApi,
+} from "@/lib/mobile-api"
 
 const colors = {
   background: "#f3f4f6",
@@ -55,6 +61,16 @@ type AccountMenuCreatorStats = {
     availableCents: number
     paidCents: number
     nextAvailableAt: string | null
+  }
+}
+
+type ProfileAvatarResponse = {
+  ok: true
+  user: {
+    email: string
+    displayName: string | null
+    handle: string | null
+    avatarUrl: string | null
   }
 }
 
@@ -149,8 +165,9 @@ export function AccountAvatarButton({
   unreadReplyCount = 0,
 }: AccountAvatarButtonProps) {
   const router = useRouter()
-  const { account } = useAuthFlow()
+  const { account, expireSession, updateAccount } = useAuthFlow()
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
   const [creatorStats, setCreatorStats] =
     useState<AccountMenuCreatorStats | null>(null)
   const [creatorStatsState, setCreatorStatsState] = useState<
@@ -198,13 +215,101 @@ export function AccountAvatarButton({
   const resolvedEmail = email ?? account?.email
   const resolvedHandle = handle ?? account?.handle ?? "account"
   const resolvedAvatarUrl = avatarUrl ?? account?.avatarUrl ?? null
+  const isAvatarUploading = isProfilePhotoUploading || isUploadingAvatar
+
+  const chooseProfilePhoto = async () => {
+    if (onProfilePhotoPress) {
+      onProfilePhotoPress()
+      return
+    }
+
+    if (isUploadingAvatar) {
+      return
+    }
+
+    if (!account?.mobileToken) {
+      expireSession()
+      return
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo library access needed",
+        "Allow photo library access to choose a profile picture.",
+      )
+      return
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      mediaTypes: ["images"],
+      preferredAssetRepresentationMode:
+        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      quality: 0.86,
+    })
+
+    if (result.canceled) {
+      return
+    }
+
+    const asset = result.assets[0]
+    const formData = new FormData()
+    const fileName =
+      asset.fileName ??
+      `profile-photo.${asset.mimeType?.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg"}`
+
+    formData.append("avatar", {
+      uri: asset.uri,
+      name: fileName,
+      type: asset.mimeType ?? "image/jpeg",
+    } as unknown as Blob)
+
+    setIsUploadingAvatar(true)
+
+    try {
+      const response = await postMobileFormApi<ProfileAvatarResponse>(
+        "/api/mobile/account/avatar",
+        formData,
+        { authToken: account.mobileToken },
+      )
+
+      updateAccount({
+        email: response.user.email,
+        displayName: response.user.displayName ?? resolvedDisplayName,
+        handle: response.user.handle ?? resolvedHandle,
+        avatarUrl: response.user.avatarUrl,
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not update profile photo."
+
+      if (error instanceof MobileApiError && error.status === 401) {
+        expireSession()
+        Alert.alert(
+          "Sign in again",
+          "Your local app session expired. Sign in, then choose Profile picture again.",
+        )
+        return
+      }
+
+      Alert.alert("Could not update photo", message)
+    } finally {
+      setIsUploadingAvatar(false)
+    }
+  }
+
   const changeProfilePhoto = () => {
-    if (!onProfilePhotoPress || isProfilePhotoUploading) {
+    if (isAvatarUploading) {
       return
     }
 
     closeAccountMenu()
-    setTimeout(onProfilePhotoPress, 240)
+    setTimeout(() => {
+      void chooseProfilePhoto()
+    }, 240)
   }
 
   return (
@@ -245,7 +350,7 @@ export function AccountAvatarButton({
                 <Pressable
                   accessibilityLabel="Change profile picture"
                   accessibilityRole="button"
-                  disabled={!onProfilePhotoPress || isProfilePhotoUploading}
+                  disabled={isAvatarUploading}
                   onPress={changeProfilePhoto}
                   style={({ pressed }) => [
                     styles.accountMenuAvatar,
@@ -262,15 +367,13 @@ export function AccountAvatarButton({
                       {initials(resolvedDisplayName)}
                     </Text>
                   )}
-                  {onProfilePhotoPress ? (
-                    <View style={styles.accountMenuAvatarEditBadge}>
-                      {isProfilePhotoUploading ? (
-                        <ActivityIndicator size="small" color={colors.surface} />
-                      ) : (
-                        <Ionicons name="camera" size={13} color={colors.surface} />
-                      )}
-                    </View>
-                  ) : null}
+                  <View style={styles.accountMenuAvatarEditBadge}>
+                    {isAvatarUploading ? (
+                      <ActivityIndicator size="small" color={colors.surface} />
+                    ) : (
+                      <Ionicons name="camera" size={13} color={colors.surface} />
+                    )}
+                  </View>
                 </Pressable>
                 <View style={styles.accountMenuIdentity}>
                   <Text style={styles.accountMenuName} numberOfLines={1}>
