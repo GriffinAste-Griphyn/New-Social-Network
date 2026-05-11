@@ -51,6 +51,21 @@ export type StoryElementInput = {
   kind: "text" | "sticker" | "link"
   label: string
   href?: string
+  positionY?: number
+}
+
+export function parseCaptionVerticalPercent(value: FormDataEntryValue | null) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return 74
+  }
+
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed)) {
+    return 74
+  }
+
+  return Math.min(Math.max(parsed, 18), 82)
 }
 
 function parseDelimitedElements(
@@ -73,8 +88,14 @@ function parseDelimitedElements(
 }
 
 export function parseStoryElements(formData: FormData): StoryElementInput[] {
+  const captionVerticalPercent = parseCaptionVerticalPercent(
+    formData.get("captionVerticalPercent"),
+  )
   const elements: StoryElementInput[] = [
-    ...parseDelimitedElements(formData.get("textOverlays"), "text"),
+    ...parseDelimitedElements(formData.get("textOverlays"), "text").map((element) => ({
+      ...element,
+      positionY: captionVerticalPercent,
+    })),
     ...parseDelimitedElements(formData.get("stickers"), "sticker"),
   ]
   const linkLabel = formData.get("linkLabel")

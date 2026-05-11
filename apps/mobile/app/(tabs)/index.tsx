@@ -26,6 +26,7 @@ export default function HomeScreen() {
   const discoverTiles = liveFeed.data?.discoverTiles ?? []
   const myStory = liveFeed.data?.myStory ?? null
   const session = liveFeed.data?.session ?? account
+  const hasFeedData = Boolean(liveFeed.data)
   const activeStoryCount = myStory?.liveCount ?? followedStories.length
   const shouldShowFollowing = Boolean(myStory?.hasActiveStory || followedStories.length > 0)
 
@@ -43,7 +44,7 @@ export default function HomeScreen() {
   return (
     <ScreenFrame>
       <DiscoverMosaic
-        tiles={!liveFeed.error && !liveFeed.isLoading ? discoverTiles : []}
+        tiles={hasFeedData ? discoverTiles : []}
         ListHeaderComponent={
           <View style={styles.homeListHeader}>
             <MobileHomeHeader
@@ -54,7 +55,7 @@ export default function HomeScreen() {
               unreadReplyCount={0}
             />
 
-            {liveFeed.error ? (
+            {liveFeed.error && !hasFeedData ? (
               <HomeStatus
                 title="Could not load stories"
                 text={liveFeed.error}
@@ -63,14 +64,14 @@ export default function HomeScreen() {
               />
             ) : null}
 
-            {liveFeed.isLoading && !liveFeed.data ? (
+            {liveFeed.isLoading && !hasFeedData ? (
               <HomeStatus
                 title="Loading stories"
                 text="Pulling your feed from the local server."
               />
             ) : null}
 
-            {!liveFeed.error && !liveFeed.isLoading ? (
+            {hasFeedData ? (
               <>
                 {shouldShowFollowing ? (
                   <Section
@@ -90,6 +91,11 @@ export default function HomeScreen() {
                   withChevron={false}
                   compact
                 />
+                {liveFeed.isRefreshing ? (
+                  <Text style={styles.refreshText}>
+                    Refreshing latest stories...
+                  </Text>
+                ) : null}
               </>
             ) : null}
           </View>
@@ -207,5 +213,11 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 13,
     fontWeight: "700",
+  },
+  refreshText: {
+    color: "#6b7280",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: -18,
   },
 })

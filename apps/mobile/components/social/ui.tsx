@@ -6,7 +6,7 @@ import type {
   SocialStoryCard,
 } from "@new-social-network/shared"
 import type { ReactElement, ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { memo, useEffect, useMemo, useState } from "react"
 import {
   ActivityIndicator,
   FlatList,
@@ -810,7 +810,7 @@ function StoryCard({
         accessibilityRole="button"
         onPress={(event) => {
           event.stopPropagation()
-          router.push(`/creator/${story.id}`)
+          router.push(`/creator/${story.creatorId}`)
         }}
         style={({ pressed }) => [
           styles.storyAvatar,
@@ -887,22 +887,38 @@ function DiscoverTileList({
   contentContainerStyle?: StyleProp<ViewStyle>
   tiles: SocialDiscoverTile[]
 }) {
-  const rows: SocialDiscoverTile[][] = []
+  const rows = useMemo(() => {
+    const nextRows: SocialDiscoverTile[][] = []
 
-  for (let index = 0; index < tiles.length; index += 2) {
-    rows.push(tiles.slice(index, index + 2))
-  }
+    for (let index = 0; index < tiles.length; index += 2) {
+      nextRows.push(tiles.slice(index, index + 2))
+    }
+
+    return nextRows
+  }, [tiles])
 
   return (
-    <ScrollView
+    <FlatList
+      data={rows}
       style={styles.scroll}
       contentContainerStyle={[styles.discoverListContent, contentContainerStyle]}
+      initialNumToRender={4}
       keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
-      {ListHeaderComponent}
-      {rows.map((row) => (
-        <View key={row.map((tile) => tile.id).join(":")} style={styles.discoverGridRow}>
+      keyExtractor={(row) => row.map((tile) => tile.id).join(":")}
+      ListEmptyComponent={
+        <View style={styles.discoverEmptyState}>
+          <Ionicons name="compass-outline" size={24} color={colors.subtext} />
+          <Text style={styles.discoverEmptyTitle}>No discover stories yet</Text>
+          <Text style={styles.discoverEmptyText}>
+            New stories from other creators will appear here when they are live.
+          </Text>
+        </View>
+      }
+      ListHeaderComponent={ListHeaderComponent}
+      maxToRenderPerBatch={4}
+      removeClippedSubviews
+      renderItem={({ item: row }) => (
+        <View style={styles.discoverGridRow}>
           {row.map((tile) => (
             <View key={tile.id} style={styles.discoverGridItem}>
               <DiscoverCard tile={tile} height={DISCOVER_CARD_HEIGHT} />
@@ -912,12 +928,14 @@ function DiscoverTileList({
             <View style={[styles.discoverGridItem, styles.discoverGridSpacer]} />
           ) : null}
         </View>
-      ))}
-    </ScrollView>
+      )}
+      showsVerticalScrollIndicator={false}
+      windowSize={6}
+    />
   )
 }
 
-function DiscoverCard({
+const DiscoverCard = memo(function DiscoverCard({
   tile,
   height,
 }: {
@@ -951,7 +969,7 @@ function DiscoverCard({
       </View>
     </Pressable>
   )
-}
+})
 
 export function ComposerCard({
   handle,
@@ -1088,21 +1106,31 @@ function StoryVisual({
   title: string
 }) {
   const source = assetKind === "image" ? mediaUrl : thumbnailUrl
+  const [hasImageError, setHasImageError] = useState(false)
 
-  if (source) {
+  useEffect(() => {
+    setHasImageError(false)
+  }, [source])
+
+  if (source && !hasImageError) {
     return (
       <Image
         source={{ uri: source }}
         style={styles.absoluteFill}
         resizeMode="cover"
         accessibilityLabel={title}
+        onError={() => setHasImageError(true)}
       />
     )
   }
 
   return (
-    <View style={[styles.absoluteFill, styles.videoFallback]}>
-      <Ionicons name="play" size={28} color="#fff" />
+    <View style={[styles.absoluteFill, styles.mediaFallback]}>
+      <Ionicons
+        name={assetKind === "video" ? "play" : "image-outline"}
+        size={28}
+        color="#fff"
+      />
     </View>
   )
 }
@@ -1625,7 +1653,7 @@ const styles = StyleSheet.create({
   absoluteFill: {
     ...StyleSheet.absoluteFillObject,
   },
-  videoFallback: {
+  mediaFallback: {
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#1f2937",
@@ -1698,6 +1726,30 @@ const styles = StyleSheet.create({
   },
   discoverGridSpacer: {
     opacity: 0,
+  },
+  discoverEmptyState: {
+    minHeight: 220,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  discoverEmptyTitle: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  discoverEmptyText: {
+    marginTop: 6,
+    maxWidth: 240,
+    textAlign: "center",
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.subtext,
   },
   discoverCard: {
     overflow: "hidden",

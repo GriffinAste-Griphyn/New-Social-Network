@@ -4,27 +4,34 @@ import { redirect } from "next/navigation"
 import { AuthSubmitButton } from "@/components/app/auth-submit-button"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { getSession, isProfileComplete } from "@/lib/auth"
+import { getSession, isProfileComplete, resolveNextPath } from "@/lib/auth"
 import { signupAction } from "@/lib/auth-actions"
 
 type SignupPageProps = {
   searchParams: Promise<{
     error?: string
+    next?: string
   }>
 }
 
-const advertiserNextPath = "/advertiser"
+function isConsumerPath(pathname: string) {
+  return ["/feed", "/stories", "/stats", "/payouts", "/blocked-users"].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  )
+}
 
 export default async function SignupPage({ searchParams }: SignupPageProps) {
   const params = await searchParams
+  const nextPath = resolveNextPath(params.next, "/feed")
+  const isConsumerSignup = isConsumerPath(nextPath)
   const session = await getSession()
 
   if (isProfileComplete(session)) {
-    redirect(advertiserNextPath)
+    redirect(nextPath)
   }
 
   if (session) {
-    redirect(`/onboarding/profile?next=${encodeURIComponent(advertiserNextPath)}`)
+    redirect(`/onboarding/profile?next=${encodeURIComponent(nextPath)}`)
   }
 
   return (
@@ -36,13 +43,15 @@ export default async function SignupPage({ searchParams }: SignupPageProps) {
 
         <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm">
           <p className="text-sm font-medium text-[#71717a]">
-            Advertiser signup
+            {isConsumerSignup ? "Mobile web signup" : "Advertiser signup"}
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
             Create your account
           </h1>
           <p className="mt-2 text-sm leading-6 text-[#71717a]">
-            Desktop signup is for advertisers only.
+            {isConsumerSignup
+              ? "Create an account from your phone to start using UBEYE mobile web."
+              : "Create an account to manage advertiser funding and campaign settings."}
           </p>
 
           {params.error ? (
@@ -52,8 +61,12 @@ export default async function SignupPage({ searchParams }: SignupPageProps) {
           ) : null}
 
           <form action={signupAction} className="mt-6 grid gap-4">
-            <input type="hidden" name="next" value={advertiserNextPath} />
-            <input type="hidden" name="accountType" value="advertiser" />
+            <input type="hidden" name="next" value={nextPath} />
+            <input
+              type="hidden"
+              name="accountType"
+              value={isConsumerSignup ? "user" : "advertiser"}
+            />
 
             <div>
               <label htmlFor="email" className="text-sm font-medium">
@@ -95,7 +108,9 @@ export default async function SignupPage({ searchParams }: SignupPageProps) {
             variant="outline"
             className="mt-4 h-11 w-full rounded-[8px] border-[#d4d4d8] bg-white text-sm"
           >
-            <Link href="/login?next=%2Fadvertiser">Sign in</Link>
+            <Link href={`/login?next=${encodeURIComponent(nextPath)}`}>
+              Sign in
+            </Link>
           </Button>
         </section>
       </div>

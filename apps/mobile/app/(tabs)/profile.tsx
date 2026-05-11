@@ -311,6 +311,12 @@ export default function ProfileScreen() {
             detail="Followers and following"
             onPress={() => router.push("/followers" as Href)}
           />
+          <ActionRow
+            icon="ban-outline"
+            label="Blocked users"
+            detail="Review and unblock accounts"
+            onPress={() => router.push("/blocked-users" as Href)}
+          />
         </View>
 
         <View style={styles.panel}>

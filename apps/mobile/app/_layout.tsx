@@ -97,6 +97,7 @@ export default function RootLayout() {
           >
             <Stack.Screen name="auth" />
             <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="blocked-users" />
             <Stack.Screen name="creator/[id]" />
             <Stack.Screen name="creator-stats" />
             <Stack.Screen name="earnings" />

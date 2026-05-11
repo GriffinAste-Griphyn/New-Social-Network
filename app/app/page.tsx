@@ -1,5 +1,6 @@
 import Link from "next/link"
 import type { Metadata } from "next"
+import { redirect } from "next/navigation"
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,28 +10,30 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { getSession, isProfileComplete } from "@/lib/auth"
 
-const mobileDeepLinkHref = "newsocialnetwork://auth"
+const mobileSignupHref = "/signup?next=%2Ffeed"
+const mobileSignInHref = "/login?next=%2Ffeed"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
 export const metadata: Metadata = {
-  title: "Get the UBEYE mobile app",
+  title: "Open UBEYE mobile web",
   description:
-    "Open UBEYE on mobile. Consumer signup and login happen in the native app, while desktop access is reserved for advertisers.",
+    "Open UBEYE on your phone in the browser. Sign up, post stories, watch, follow, and participate on mobile web.",
 }
 
 const accessRows = [
   {
     icon: Smartphone,
     label: "Mobile users",
-    value: "Sign up, log in, post, watch, and participate in the native app.",
+    value: "Sign up, log in, post, watch, and participate from mobile Safari or Chrome.",
   },
   {
     icon: MonitorSmartphone,
     label: "Desktop visitors",
-    value: "Use this page as the handoff to mobile account access.",
+    value: "Consumer access is phone-only while the product is in mobile web beta.",
   },
   {
     icon: BadgeDollarSign,
@@ -39,7 +42,17 @@ const accessRows = [
   },
 ]
 
-export default function MobileAppPage() {
+export default async function MobileAppPage() {
+  const session = await getSession()
+
+  if (isProfileComplete(session)) {
+    redirect("/feed")
+  }
+
+  if (session) {
+    redirect("/onboarding/profile?next=%2Ffeed")
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f2ec] text-black">
       <section className="relative isolate min-h-[calc(100svh-4rem)] overflow-hidden border-b border-black/10">
@@ -81,21 +94,29 @@ export default function MobileAppPage() {
                 Back to UBEYE
               </Link>
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-white/54">
-                Mobile app
+                Mobile web beta
               </p>
               <h1 className="mt-5 max-w-[10ch] text-6xl font-semibold leading-[0.94] tracking-[-0.07em] sm:text-7xl lg:text-[6.6rem]">
-                UBEYE lives on your phone.
+                UBEYE runs in your browser.
               </h1>
               <p className="mt-7 max-w-xl text-base leading-8 text-white/68 md:text-lg">
-                Consumer accounts are mobile-only. Desktop login is reserved for
-                advertiser tools.
+                Use UBEYE from your phone first. The mobile web beta supports
+                signup, login, posting, stories, follows, stats, and payouts
+                without TestFlight.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Button asChild className="h-12 justify-between rounded-full bg-white px-6 text-sm font-semibold text-black hover:bg-white/88 sm:justify-center">
-                  <a href={mobileDeepLinkHref}>
-                    Open mobile app
+                  <Link href={mobileSignupHref}>
+                    Create mobile account
                     <ArrowRight className="size-4" />
-                  </a>
+                  </Link>
+                </Button>
+                <Button
+                  asChild
+                  variant="outline"
+                  className="h-12 justify-between rounded-full border-white/22 bg-white/8 px-6 text-sm font-semibold text-white hover:bg-white/14 hover:text-white sm:justify-center"
+                >
+                  <Link href={mobileSignInHref}>Sign in</Link>
                 </Button>
                 <Button
                   asChild

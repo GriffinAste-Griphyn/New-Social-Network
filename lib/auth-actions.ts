@@ -56,7 +56,7 @@ function actionSecurityMessage(error: unknown) {
 }
 
 export async function loginAction(formData: FormData) {
-  const nextPath = resolveNextPath(formData.get("next"), "/advertiser")
+  const nextPath = resolveNextPath(formData.get("next"), "/feed")
   try {
     await enforceAuthActionRequest("web:auth:login-ip")
   } catch (error) {
@@ -101,7 +101,7 @@ export async function loginAction(formData: FormData) {
 }
 
 export async function signupAction(formData: FormData) {
-  const nextPath = "/advertiser"
+  const nextPath = resolveNextPath(formData.get("next"), "/feed")
   try {
     await enforceAuthActionRequest("web:auth:signup-ip")
   } catch (error) {
@@ -110,7 +110,7 @@ export async function signupAction(formData: FormData) {
   const parsed = signupFlowSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
-    accountType: "advertiser",
+    accountType: formData.get("accountType") ?? undefined,
   })
 
   if (!parsed.success) {

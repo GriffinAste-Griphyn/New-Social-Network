@@ -8,6 +8,7 @@ import {
   mobilePushTokens,
   users,
 } from "@/lib/db/schema"
+import { hasBlockBetween } from "@/lib/safety-store"
 
 const expoPushEndpoint = "https://exp.host/--/api/v2/push/send"
 const expoPushTokenPattern = /^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/
@@ -77,6 +78,10 @@ export async function getCreatorNotificationPreference(input: {
   subscriberId: string
   creatorId: string
 }) {
+  if (await hasBlockBetween(input.subscriberId, input.creatorId)) {
+    return false
+  }
+
   const [preference] = await getDb()
     .select({ enabled: creatorNotificationPreferences.enabled })
     .from(creatorNotificationPreferences)
@@ -108,6 +113,10 @@ export async function setCreatorNotificationPreference(input: {
 
   if (!creator) {
     throw new Error("That creator does not exist.")
+  }
+
+  if (await hasBlockBetween(input.subscriberId, input.creatorId)) {
+    throw new Error("Unblock this account before turning on notifications.")
   }
 
   const now = new Date()

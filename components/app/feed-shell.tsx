@@ -30,6 +30,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ProfileAvatarUploader } from "@/components/app/profile-avatar-uploader"
+import { StoryActionsMenu } from "@/components/app/story-actions-menu"
 import type { FollowProfile } from "@/lib/follow-store"
 import type {
   FeedStory,
@@ -75,6 +77,7 @@ type ShellTargets = {
 
 type LeadStory = {
   id: string
+  creatorId: string
   creator: string
   handle: string
   assetKind: "image" | "video"
@@ -168,6 +171,7 @@ function buildLeadStory(
   if (featuredStory) {
     return {
       id: featuredStory.id,
+      creatorId: featuredStory.creatorId,
       creator: featuredStory.creator,
       handle: featuredStory.handle,
       assetKind: featuredStory.assetKind,
@@ -186,6 +190,7 @@ function buildLeadStory(
 
   return {
     id: fallback.id,
+    creatorId: fallback.creatorId,
     creator: fallback.creator,
     handle: fallback.handle,
     assetKind: fallback.assetKind,
@@ -852,6 +857,12 @@ function MobileAppFeed({
                 >
                   Discover
                 </a>
+                <a
+                  href="/blocked-users"
+                  className="block rounded-[8px] px-3 py-2 text-sm font-medium hover:bg-[#f5f6f8]"
+                >
+                  Blocked users
+                </a>
                 <form action={logoutAction}>
                   <button
                     type="submit"
@@ -868,17 +879,11 @@ function MobileAppFeed({
             Stories
           </p>
 
-          <a
-            href={`#${targets.share}`}
-            aria-label="Open your profile tools"
-            className="flex size-12 items-center justify-center justify-self-end rounded-full bg-[#f5f6f8]"
-          >
-            <Avatar className="size-11">
-              <AvatarFallback className="bg-[#fde047] text-[#17191f]">
-                {initials(session.displayName)}
-              </AvatarFallback>
-            </Avatar>
-          </a>
+          <ProfileAvatarUploader
+            displayName={session.displayName}
+            avatarUrl={session.avatarUrl}
+            className="size-12 justify-self-end"
+          />
         </header>
 
         <FlashBanner flash={flash} className="mb-5" />
@@ -981,11 +986,12 @@ function MobileWebFeed({
             <div className="flex size-11 items-center justify-center rounded-full bg-white text-[#6b7280] ring-1 ring-black/8">
               <Bell className="size-5" />
             </div>
-            <div className="flex size-11 items-center justify-center rounded-full bg-[#fde047] text-[#17191f]">
-              <span className="text-sm font-semibold">
-                {initials(session.displayName)}
-              </span>
-            </div>
+            <ProfileAvatarUploader
+              displayName={session.displayName}
+              avatarUrl={session.avatarUrl}
+              className="size-11"
+              avatarClassName="size-11"
+            />
           </div>
         </div>
 
@@ -1144,11 +1150,12 @@ function DesktopFeed({
           </div>
 
           <div className="flex flex-col items-center gap-3">
-            <Avatar className="size-12">
-              <AvatarFallback className="bg-[#fde047] text-[#17191f]">
-                {initials(session.displayName)}
-              </AvatarFallback>
-            </Avatar>
+            <ProfileAvatarUploader
+              displayName={session.displayName}
+              avatarUrl={session.avatarUrl}
+              className="size-12"
+              avatarClassName="size-12"
+            />
             <form action={logoutAction}>
               <button
                 type="submit"
@@ -1180,15 +1187,13 @@ function DesktopFeed({
               Stories
             </h1>
 
-            <a
-              href={`#${targets.share}`}
-              aria-label="Open your profile tools"
-              className="flex size-12 items-center justify-center justify-self-end rounded-full bg-[#e01616]"
-            >
-              <span className="text-sm font-semibold text-white">
-                {initials(session.displayName)}
-              </span>
-            </a>
+            <ProfileAvatarUploader
+              displayName={session.displayName}
+              avatarUrl={session.avatarUrl}
+              className="size-12 justify-self-end"
+              avatarClassName="size-12"
+              fallbackClassName="bg-[#e01616] text-white"
+            />
           </header>
 
           <div className="space-y-7">
@@ -1249,9 +1254,15 @@ function DesktopFeed({
                         {leadStory.handle}
                       </p>
                     </div>
-                    <p className="rounded-full bg-white/16 px-3 py-1 text-xs font-semibold text-white backdrop-blur">
-                      {leadStory.meta}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="rounded-full bg-white/16 px-3 py-1 text-xs font-semibold text-white backdrop-blur">
+                        {leadStory.meta}
+                      </p>
+                      <StoryActionsMenu
+                        creatorId={leadStory.creatorId}
+                        storyId={leadStory.id}
+                      />
+                    </div>
                   </div>
                   <p className="absolute bottom-4 left-4 right-4 line-clamp-4 text-2xl font-semibold leading-[1.08] text-white">
                     {leadStory.title}
@@ -1287,11 +1298,12 @@ function DesktopFeed({
         <aside className="sticky top-5 hidden self-start space-y-5 lg:block">
           <section className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
             <div className="flex items-center gap-3">
-              <Avatar className="size-12">
-                <AvatarFallback className="bg-[#fde047] text-[#17191f]">
-                  {initials(session.displayName)}
-                </AvatarFallback>
-              </Avatar>
+              <ProfileAvatarUploader
+                displayName={session.displayName}
+                avatarUrl={session.avatarUrl}
+                className="size-12"
+                avatarClassName="size-12"
+              />
               <div className="min-w-0">
                 <p className="truncate text-base font-semibold text-[#17191f]">
                   {session.displayName}

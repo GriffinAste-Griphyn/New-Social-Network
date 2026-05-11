@@ -141,6 +141,20 @@
       "when": 1778201566291,
       "tag": "0019_supreme_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1778253655055,
+      "tag": "0020_skinny_sauron",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1778516463827,
+      "tag": "0021_pink_big_bertha",
+      "breakpoints": true
     }
   ]
 }

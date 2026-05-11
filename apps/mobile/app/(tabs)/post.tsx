@@ -3,10 +3,12 @@ import { CameraView, useCameraPermissions } from "expo-camera"
 import * as ImagePicker from "expo-image-picker"
 import { useRouter } from "expo-router"
 import type { ComponentProps } from "react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  type GestureResponderEvent,
   Image,
-  PanResponder,
+  Keyboard,
+  type LayoutChangeEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -87,6 +89,11 @@ const galleryItems: StoryMedia[] = [
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max)
+const defaultTextVerticalPercent = 74
+const minTextVerticalPercent = 18
+const maxTextVerticalPercent = 82
+const textOverlayHeight = 42
+const textOverlayKeyboardGap = 8
 
 export default function PostScreen() {
   const router = useRouter()
@@ -103,8 +110,14 @@ export default function PostScreen() {
   const [linkUrl, setLinkUrl] = useState("")
   const [isTextEditing, setIsTextEditing] = useState(false)
   const [isLinkEditing, setIsLinkEditing] = useState(false)
-  const [textVerticalOffset, setTextVerticalOffset] = useState(0)
-  const textDragStartY = useRef(0)
+  const [textVerticalPercent, setTextVerticalPercent] = useState(
+    defaultTextVerticalPercent,
+  )
+  const previewHeight = useRef(0)
+  const [previewHeightValue, setPreviewHeightValue] = useState(0)
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
+  const textDragStartPercent = useRef(defaultTextVerticalPercent)
+  const textDragStartPageY = useRef(0)
   const hasCameraPermission = Boolean(cameraPermission?.granted)
 
   const activeMedia = useMemo(
@@ -113,24 +126,50 @@ export default function PostScreen() {
   )
   const hasOverlayText = overlayText.trim().length > 0
   const hasLink = linkUrl.trim().length > 0
-  const textPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_, gestureState) =>
-          hasOverlayText && Math.abs(gestureState.dy) > 6,
-        onMoveShouldSetPanResponder: (_, gestureState) =>
-          hasOverlayText && Math.abs(gestureState.dy) > 6,
-        onPanResponderGrant: () => {
-          textDragStartY.current = textVerticalOffset
-        },
-        onPanResponderMove: (_, gestureState) => {
-          setTextVerticalOffset(
-            clamp(textDragStartY.current + gestureState.dy, -240, 220),
-          )
-        },
-        onPanResponderTerminationRequest: () => false,
-      }),
-    [hasOverlayText, textVerticalOffset],
+  const maxVisibleTextVerticalPercent =
+    isTextEditing && keyboardHeight > 0 && previewHeightValue > 0
+      ? clamp(
+          ((previewHeightValue -
+            keyboardHeight -
+            textOverlayHeight -
+            textOverlayKeyboardGap) /
+            previewHeightValue) *
+            100,
+          minTextVerticalPercent,
+          maxTextVerticalPercent,
+        )
+      : maxTextVerticalPercent
+  const displayedTextVerticalPercent = Math.min(
+    textVerticalPercent,
+    maxVisibleTextVerticalPercent,
+  )
+
+  const beginTextDrag = useCallback((event: GestureResponderEvent) => {
+    textDragStartPageY.current = event.nativeEvent.pageY
+    textDragStartPercent.current = displayedTextVerticalPercent
+  }, [displayedTextVerticalPercent])
+
+  const moveTextDrag = useCallback((event: GestureResponderEvent) => {
+    const height = previewHeight.current
+
+    if (height <= 0) {
+      return
+    }
+
+    const dy = event.nativeEvent.pageY - textDragStartPageY.current
+    const nextPercent = textDragStartPercent.current + (dy / height) * 100
+
+    setTextVerticalPercent(
+      clamp(nextPercent, minTextVerticalPercent, maxVisibleTextVerticalPercent),
+    )
+  }, [maxVisibleTextVerticalPercent])
+
+  const textDragHandlers = useMemo(
+    () => ({
+      onTouchMove: moveTextDrag,
+      onTouchStart: beginTextDrag,
+    }),
+    [beginTextDrag, moveTextDrag],
   )
 
   const usePickedAsset = (asset: ImagePicker.ImagePickerAsset) => {
@@ -162,6 +201,28 @@ export default function PostScreen() {
       void requestCameraPermission()
     }
   }, [cameraPermission, requestCameraPermission, step])
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener("keyboardWillShow", (event) => {
+      setKeyboardHeight(event.endCoordinates.height)
+    })
+    const didShowSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+      setKeyboardHeight(event.endCoordinates.height)
+    })
+    const hideSubscription = Keyboard.addListener("keyboardWillHide", () => {
+      setKeyboardHeight(0)
+    })
+    const didHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardHeight(0)
+    })
+
+    return () => {
+      showSubscription.remove()
+      didShowSubscription.remove()
+      hideSubscription.remove()
+      didHideSubscription.remove()
+    }
+  }, [])
 
   const captureStory = async () => {
     if (!hasCameraPermission) {
@@ -240,6 +301,7 @@ export default function PostScreen() {
       formData.append("brandTags", "")
       formData.append("stickers", "")
       formData.append("textOverlays", overlayText.trim())
+      formData.append("captionVerticalPercent", textVerticalPercent.toFixed(2))
       formData.append("linkLabel", hasLink ? "Open link" : "")
       formData.append("linkUrl", linkUrl.trim())
       formData.append("media", {
@@ -280,18 +342,21 @@ export default function PostScreen() {
     setIsLinkEditing(false)
   }
 
-  const nudgeText = (amount: number) => {
-    setTextVerticalOffset((current) => clamp(current + amount, -240, 220))
-  }
-
   const flipCamera = () => {
     setCameraFacing((current) => (current === "back" ? "front" : "back"))
+  }
+
+  const handlePreviewLayout = (event: LayoutChangeEvent) => {
+    const nextHeight = event.nativeEvent.layout.height
+
+    previewHeight.current = nextHeight
+    setPreviewHeightValue(nextHeight)
   }
 
   if (step === "edit") {
     return (
       <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-        <View style={styles.previewScreen}>
+        <View style={styles.previewScreen} onLayout={handlePreviewLayout}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add text to story"
@@ -341,13 +406,15 @@ export default function PostScreen() {
             <View
               style={[
                 styles.snapTextOverlay,
-                { transform: [{ translateY: textVerticalOffset }] },
+                { top: `${displayedTextVerticalPercent}%` },
               ]}
-              {...textPanResponder.panHandlers}
+              {...textDragHandlers}
             >
               {isTextEditing ? (
                 <TextInput
+                  {...textDragHandlers}
                   autoFocus
+                  rejectResponderTermination={false}
                   value={overlayText}
                   onChangeText={setOverlayText}
                   placeholder="Add text"
@@ -357,7 +424,12 @@ export default function PostScreen() {
                   onSubmitEditing={finishTextEditing}
                 />
               ) : (
-                <Text style={styles.snapText}>{overlayText.trim()}</Text>
+                <Text
+                  style={styles.snapText}
+                  {...textDragHandlers}
+                >
+                  {overlayText.trim()}
+                </Text>
               )}
             </View>
           ) : null}
@@ -407,44 +479,6 @@ export default function PostScreen() {
                 ]}
               >
                 <Text style={styles.linkDoneText}>Done</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {isTextEditing ? (
-            <View style={styles.textMoveControls}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Move text up"
-                onPress={() => nudgeText(-28)}
-                style={({ pressed }) => [
-                  styles.textMoveButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Ionicons name="chevron-up" size={22} color={colors.text} />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Done editing text"
-                onPress={finishTextEditing}
-                style={({ pressed }) => [
-                  styles.textDoneButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Text style={styles.textDoneLabel}>Done</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Move text down"
-                onPress={() => nudgeText(28)}
-                style={({ pressed }) => [
-                  styles.textMoveButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Ionicons name="chevron-down" size={22} color={colors.text} />
               </Pressable>
             </View>
           ) : null}
@@ -867,7 +901,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    top: "47%",
     minHeight: 42,
     backgroundColor: "rgba(11,13,17,0.36)",
     paddingHorizontal: 24,
@@ -891,34 +924,6 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     fontWeight: "700",
     textAlign: "center",
-  },
-  textMoveControls: {
-    position: "absolute",
-    left: 22,
-    top: "37%",
-    gap: 10,
-    alignItems: "center",
-  },
-  textMoveButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(11,13,17,0.52)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textDoneButton: {
-    height: 38,
-    borderRadius: 19,
-    paddingHorizontal: 14,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textDoneLabel: {
-    color: colors.white,
-    fontSize: 13,
-    fontWeight: "700",
   },
   linkPreview: {
     position: "absolute",

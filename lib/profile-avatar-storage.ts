@@ -16,6 +16,8 @@ export class ProfileAvatarUploadError extends Error {}
 
 export type StoredProfileAvatar = {
   avatarUrl: string
+  storageProvider: "local" | "vercel-blob"
+  storageKey: string
   contentType: string
   byteSize: number
   checksum: string
@@ -102,6 +104,8 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
 
     return {
       avatarUrl: blob.url,
+      storageProvider: "vercel-blob",
+      storageKey: blob.pathname,
       contentType: uploadType.contentType,
       byteSize: buffer.byteLength,
       checksum,
@@ -119,6 +123,8 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
 
   return {
     avatarUrl: withConfiguredPublicBaseUrl(`${localAvatarUrlPrefix}/${fileName}`),
+    storageProvider: "local",
+    storageKey: fileName,
     contentType: uploadType.contentType,
     byteSize: buffer.byteLength,
     checksum,
