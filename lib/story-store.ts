@@ -18,6 +18,7 @@ import {
 } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
+import { createMediaAssetFromStoredStoryAsset } from "@/lib/media-assets"
 import { evaluateStoryModeration } from "@/lib/moderation"
 import {
   creatorProfiles,
@@ -28,6 +29,7 @@ import {
   users,
 } from "@/lib/db/schema"
 import { listFollowingProfiles } from "@/lib/follow-store"
+import { getBlockedAccountIds, hasBlockBetween } from "@/lib/safety-store"
 import {
   publicStoryMediaUrl,
   type StoredStoryAsset,
@@ -71,6 +73,7 @@ type StoryElementRecord = {
   kind: "text" | "sticker" | "link"
   label: string
   href: string | null
+  positionY: string | null
 }
 
 type RankedStoryRow = FeedStoryRow & {
@@ -97,6 +100,7 @@ function toCompleteStoryRow<T extends {
 
 export type FeedStory = {
   id: string
+  creatorId: string
   creator: string
   handle: string
   assetKind: "image" | "video"
@@ -133,6 +137,7 @@ export type MyStoryItem = FeedStoryCard & {
   expiresAt: string
   minutesRemaining: number
   brandTags: string[]
+  captionVerticalPercent: number
   elements: MyStoryElement[]
 }
 
@@ -264,6 +269,7 @@ function buildFeedStory(row: FeedStoryRow, mentions: StoryMentionRecord[]): Feed
 
   return {
     id: row.id,
+    creatorId: row.creatorId,
     creator: row.creatorName,
     handle: `@${row.creatorHandle}`,
     assetKind: row.assetKind,
@@ -321,6 +327,7 @@ function buildFeedStoryCard(
 
   return {
     id: row.id,
+    creatorId: row.creatorId,
     creator: row.creatorName,
     handle: `@${row.creatorHandle}`,
     assetKind: row.assetKind,
@@ -368,7 +375,21 @@ function getLatestStory<T extends { createdAt: Date }>(rows: T[]) {
   }, null)
 }
 
-function buildStoryStack(rows: FeedStoryRow[]): StoryStack | null {
+function getCaptionVerticalPercent(elements: StoryElementRecord[] | undefined) {
+  const textElement = elements?.find((element) => element.kind === "text")
+  const positionY = Number(textElement?.positionY)
+
+  if (!Number.isFinite(positionY)) {
+    return 74
+  }
+
+  return Math.min(Math.max(positionY, 18), 82)
+}
+
+function buildStoryStack(
+  rows: FeedStoryRow[],
+  elementsByStory = new Map<string, StoryElementRecord[]>(),
+): StoryStack | null {
   const first = rows[0]
 
   if (!first) {
@@ -394,7 +415,7 @@ function buildStoryStack(rows: FeedStoryRow[]): StoryStack | null {
         row.assetKind === "video"
           ? Math.max(1, Math.ceil((row.durationMs ?? 10_000) / 1_000))
           : undefined,
-      captionVerticalPercent: 74,
+      captionVerticalPercent: getCaptionVerticalPercent(elementsByStory.get(row.id)),
     })),
   }
 }
@@ -452,6 +473,7 @@ function buildMyStorySummary(
       Math.ceil((expiresAtMs - Date.now()) / (1000 * 60)),
     )
     const mentions = mentionsByStory.get(row.id) ?? []
+    const elements = elementsByStory.get(row.id) ?? []
 
     return {
       ...buildFeedStoryCard(row, mentions),
@@ -460,7 +482,8 @@ function buildMyStorySummary(
       expiresAt: row.expiresAt.toISOString(),
       minutesRemaining,
       brandTags: mentions.map((mention) => mention.brandSlug),
-      elements: (elementsByStory.get(row.id) ?? []).map((element) => ({
+      captionVerticalPercent: getCaptionVerticalPercent(elements),
+      elements: elements.map((element) => ({
         id: element.id,
         kind: element.kind,
         label: element.label,
@@ -496,8 +519,11 @@ function buildMyStorySummary(
   }
 }
 
-async function getLiveStoryRows() {
+async function getLiveStoryRows(viewerId?: string) {
   const db = getDb()
+  const blockedAccountIds = viewerId
+    ? await getBlockedAccountIds(viewerId)
+    : new Set<string>()
 
   const rows = await db
     .select({
@@ -535,14 +561,22 @@ async function getLiveStoryRows() {
     .limit(24)
 
   return rows.flatMap((row) => {
+    if (blockedAccountIds.has(row.creatorId)) {
+      return []
+    }
+
     const story = toCompleteStoryRow(row)
 
     return story ? [story] : []
   })
 }
 
-async function getLiveStoryRowsForCreator(creatorId: string) {
+async function getLiveStoryRowsForCreator(creatorId: string, viewerId?: string) {
   const db = getDb()
+
+  if (viewerId && creatorId !== viewerId && (await hasBlockBetween(viewerId, creatorId))) {
+    return []
+  }
 
   const rows = await db
     .select({
@@ -618,6 +652,7 @@ async function getStoryElements(storyIds: string[]) {
       kind: storyElements.kind,
       label: storyElements.label,
       href: storyElements.href,
+      positionY: storyElements.positionY,
     })
     .from(storyElements)
     .where(inArray(storyElements.storyId, storyIds))
@@ -691,7 +726,7 @@ export async function getMyStoryStack(viewerId: string): Promise<MyStorySummary>
 export async function getFeedData(viewerId: string): Promise<FeedData> {
 
   const [storyRows, followingProfiles, myStory] = await Promise.all([
-    getLiveStoryRows(),
+    getLiveStoryRows(viewerId),
     listFollowingProfiles(viewerId),
     getMyStoryStack(viewerId),
   ])
@@ -790,7 +825,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   }
 }
 
-export async function getStoryStackForStory(storyId: string) {
+export async function getStoryStackForStory(storyId: string, viewerId?: string) {
 
   const db = getDb()
   const [story] = await db
@@ -812,12 +847,16 @@ export async function getStoryStackForStory(storyId: string) {
     return null
   }
 
-  const rows = await getLiveStoryRowsForCreator(story.creatorId)
+  const rows = await getLiveStoryRowsForCreator(story.creatorId, viewerId)
+  const elementRows = await getStoryElements(rows.map((row) => row.id))
 
-  return buildStoryStack(rows)
+  return buildStoryStack(rows, groupElements(elementRows))
 }
 
-export async function getMobileCreatorProfile(profileOrStoryId: string) {
+export async function getMobileCreatorProfile(
+  profileOrStoryId: string,
+  viewerId?: string,
+) {
 
   const db = getDb()
   const [directUser] = await db
@@ -835,6 +874,10 @@ export async function getMobileCreatorProfile(profileOrStoryId: string) {
   const creatorId = directUser?.id ?? sourceStory?.creatorId
 
   if (!creatorId) {
+    return null
+  }
+
+  if (viewerId && creatorId !== viewerId && (await hasBlockBetween(viewerId, creatorId))) {
     return null
   }
 
@@ -941,7 +984,17 @@ export async function createStory(input: CreateStoryInput) {
     explicitBrandTags: input.explicitBrandTags,
     elements: input.elements,
   })
-  const isApproved = moderation.status === "approved"
+  const mediaAsset = await createMediaAssetFromStoredStoryAsset({
+    ownerUserId: input.session.id,
+    purpose: "story",
+    storedAsset: input.storedAsset,
+  })
+  const mediaModerationReason =
+    mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed"
+      ? mediaAsset.scanReason ?? "Media upload was flagged by safety scanning."
+      : null
+  const isApproved = moderation.status === "approved" && !mediaModerationReason
+  const isMediaReady = mediaAsset.processingStatus === "ready"
 
   await db
     .insert(creatorScores)
@@ -957,6 +1010,7 @@ export async function createStory(input: CreateStoryInput) {
   await db.insert(stories).values({
     id: storyId,
     creatorId: input.session.id,
+    mediaAssetId: mediaAsset.id,
     assetKind: input.storedAsset.assetKind,
     mediaUrl: input.storedAsset.mediaUrl,
     thumbnailUrl: input.storedAsset.thumbnailUrl,
@@ -974,9 +1028,9 @@ export async function createStory(input: CreateStoryInput) {
         ? (input.storedAsset.durationMs ?? 10_000)
         : null,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-    status: isApproved ? "live" : "processing",
-    moderationStatus: moderation.status,
-    moderationReason: moderation.reason,
+    status: isApproved && isMediaReady ? "live" : "processing",
+    moderationStatus: mediaModerationReason ? "flagged" : moderation.status,
+    moderationReason: mediaModerationReason ?? moderation.reason,
     brandSignalScore: brandSignalScore.toFixed(2),
   })
 
@@ -1000,11 +1054,12 @@ export async function createStory(input: CreateStoryInput) {
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        positionY: element.positionY?.toFixed(2),
       })),
     )
   }
 
-  if (isApproved) {
+  if (isApproved && isMediaReady) {
     await processStoryCreatorEarnings(storyId)
     await notifyCreatorStoryPosted({
       creatorId: input.session.id,
@@ -1105,6 +1160,7 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        positionY: element.positionY?.toFixed(2),
       })),
     )
   }
@@ -1120,6 +1176,7 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     .select({
       id: stories.id,
       mediaUrl: stories.mediaUrl,
+      mediaAssetId: stories.mediaAssetId,
     })
     .from(stories)
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
@@ -1138,5 +1195,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     })
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
 
-  return story.mediaUrl
+  return {
+    mediaUrl: story.mediaUrl,
+    mediaAssetId: story.mediaAssetId,
+  }
 }

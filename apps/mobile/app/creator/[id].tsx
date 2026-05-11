@@ -18,7 +18,7 @@ import {
   setCreatorNotificationsEnabled,
 } from "@/lib/creator-notifications"
 import { useFollowState } from "@/lib/follow-state"
-import { getMobileApi } from "@/lib/mobile-api"
+import { getMobileApi, postMobileApi } from "@/lib/mobile-api"
 
 type CreatorProfileView = {
   id: string
@@ -52,8 +52,10 @@ export default function CreatorProfileScreen() {
   const [profile, setProfile] = useState<CreatorProfileView | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isFollowMenuOpen, setIsFollowMenuOpen] = useState(false)
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const [areNotificationsEnabled, setAreNotificationsEnabled] = useState(false)
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
+  const [isBlockingProfile, setIsBlockingProfile] = useState(false)
   const isAdded = profile ? isFollowing(profile.id) : false
 
   useEffect(() => {
@@ -67,6 +69,7 @@ export default function CreatorProfileScreen() {
 
     setIsLoading(true)
     setIsFollowMenuOpen(false)
+    setIsProfileMenuOpen(false)
 
     getMobileApi<MobileCreatorProfileResponse>(
       `/api/mobile/creators/${encodeURIComponent(id)}`,
@@ -167,6 +170,49 @@ export default function CreatorProfileScreen() {
     }
   }
 
+  const blockProfile = async () => {
+    if (!profile || isBlockingProfile) {
+      return
+    }
+
+    setIsBlockingProfile(true)
+
+    try {
+      await postMobileApi<{ ok: true }>("/api/mobile/blocks", {
+        blockedUserId: profile.id,
+      })
+      setIsProfileMenuOpen(false)
+      Alert.alert("User blocked", `${profile.name} will no longer appear in your feed.`)
+      router.replace("/")
+    } catch (error) {
+      Alert.alert(
+        "Could not block user",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsBlockingProfile(false)
+    }
+  }
+
+  const confirmBlockProfile = () => {
+    if (!profile || isBlockingProfile) {
+      return
+    }
+
+    Alert.alert(
+      `Block ${profile.name}?`,
+      "You will stop seeing each other's stories, follows, replies, and notifications.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: () => void blockProfile(),
+        },
+      ],
+    )
+  }
+
   return (
     <View style={styles.screen}>
       <StatusBar style="light" translucent />
@@ -208,6 +254,7 @@ export default function CreatorProfileScreen() {
           <ProfileIconButton
             accessibilityLabel="More profile actions"
             icon="ellipsis-horizontal"
+            onPress={() => setIsProfileMenuOpen(true)}
             size={27}
           />
         </View>
@@ -312,6 +359,47 @@ export default function CreatorProfileScreen() {
               accessibilityLabel="Cancel"
               accessibilityRole="button"
               onPress={() => setIsFollowMenuOpen(false)}
+              style={({ pressed }) => [
+                styles.cancelFollowButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={styles.cancelFollowText}>Cancel</Text>
+            </Pressable>
+          </SafeAreaView>
+        </View>
+      ) : null}
+
+      {profile && isProfileMenuOpen ? (
+        <View style={styles.followMenuLayer}>
+          <Pressable
+            accessibilityLabel="Close profile actions"
+            accessibilityRole="button"
+            onPress={() => setIsProfileMenuOpen(false)}
+            style={styles.followMenuBackdrop}
+          />
+          <SafeAreaView style={styles.followMenu} edges={["bottom"]}>
+            <View style={styles.followMenuHandle} />
+            <Text style={styles.followMenuTitle}>{profile.name}</Text>
+            <Pressable
+              accessibilityLabel={`Block ${profile.name}`}
+              accessibilityRole="button"
+              disabled={isBlockingProfile}
+              onPress={confirmBlockProfile}
+              style={({ pressed }) => [
+                styles.removeFollowButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="ban-outline" size={18} color="#ef4444" />
+              <Text style={styles.removeFollowText}>
+                {isBlockingProfile ? "Blocking..." : "Block user"}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+              onPress={() => setIsProfileMenuOpen(false)}
               style={({ pressed }) => [
                 styles.cancelFollowButton,
                 pressed ? styles.pressed : null,

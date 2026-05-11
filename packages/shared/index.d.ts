@@ -14,6 +14,7 @@ export interface SocialFollowingProfile {
 
 export interface SocialStoryCard {
   id: string
+  creatorId: string
   creator: string
   handle: string
   assetKind: SocialAssetKind

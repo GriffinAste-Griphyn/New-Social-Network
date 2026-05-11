@@ -16,6 +16,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -54,12 +55,120 @@ type ReplyMediaAsset = {
   fileName: string
 }
 
+type StoryReportReason =
+  | "nudity"
+  | "profanity"
+  | "harassment"
+  | "bullying"
+  | "hate"
+  | "violence"
+  | "self_harm"
+  | "scam"
+  | "spam"
+  | "false_information"
+  | "illegal_goods"
+  | "child_safety"
+  | "intellectual_property"
+  | "other"
+
 const PHOTO_DURATION_MS = 5_000
 const VIDEO_SEGMENT_SECONDS = 10
 const MIN_FINAL_VIDEO_SEGMENT_SECONDS = 2
 const SWIPE_DOWN_DISMISS_DISTANCE = 86
 const SWIPE_DOWN_DISMISS_VELOCITY = 1.05
 const replyEmojiOptions = ["😂", "😍", "🔥", "👏", "😭", "😮", "💗", "🙏"]
+
+const reportReasonOptions: Array<{
+  id: StoryReportReason
+  icon: keyof typeof Ionicons.glyphMap
+  label: string
+  detail: string
+}> = [
+  {
+    id: "nudity",
+    icon: "body-outline",
+    label: "Nudity or sexual activity",
+    detail: "Nudity, sexual acts, or sexually explicit content.",
+  },
+  {
+    id: "profanity",
+    icon: "chatbubble-ellipses-outline",
+    label: "Profanity or abusive language",
+    detail: "Slurs, graphic insults, or hostile language.",
+  },
+  {
+    id: "harassment",
+    icon: "person-remove-outline",
+    label: "Harassment",
+    detail: "Targeted abuse, threats, or unwanted contact.",
+  },
+  {
+    id: "bullying",
+    icon: "sad-outline",
+    label: "Bullying",
+    detail: "Mocking, humiliation, or repeated intimidation.",
+  },
+  {
+    id: "hate",
+    icon: "alert-circle-outline",
+    label: "Hate speech",
+    detail: "Attacks based on identity or protected traits.",
+  },
+  {
+    id: "violence",
+    icon: "warning-outline",
+    label: "Violence or threats",
+    detail: "Threats, graphic violence, or calls to harm.",
+  },
+  {
+    id: "self_harm",
+    icon: "heart-dislike-outline",
+    label: "Self-harm or suicide",
+    detail: "Content encouraging or showing self-harm.",
+  },
+  {
+    id: "scam",
+    icon: "card-outline",
+    label: "Scam or fraud",
+    detail: "Fake giveaways, phishing, or deceptive money requests.",
+  },
+  {
+    id: "spam",
+    icon: "mail-unread-outline",
+    label: "Spam",
+    detail: "Repetitive, irrelevant, or engagement-bait content.",
+  },
+  {
+    id: "false_information",
+    icon: "newspaper-outline",
+    label: "False information",
+    detail: "Misleading claims that could cause harm.",
+  },
+  {
+    id: "illegal_goods",
+    icon: "ban-outline",
+    label: "Illegal or regulated goods",
+    detail: "Drugs, weapons, counterfeit goods, or restricted sales.",
+  },
+  {
+    id: "child_safety",
+    icon: "shield-checkmark-outline",
+    label: "Child safety",
+    detail: "Content that may exploit or endanger minors.",
+  },
+  {
+    id: "intellectual_property",
+    icon: "document-text-outline",
+    label: "Intellectual property",
+    detail: "Copyright, trademark, or impersonation concerns.",
+  },
+  {
+    id: "other",
+    icon: "ellipsis-horizontal-circle-outline",
+    label: "Something else",
+    detail: "Another issue not listed here.",
+  },
+]
 
 const colors = {
   background: "#000000",
@@ -82,9 +191,15 @@ export default function StoryScreen() {
     "idle" | "loading" | "settled"
   >("idle")
   const [isItemMenuOpen, setIsItemMenuOpen] = useState(false)
+  const [isViewerActionsOpen, setIsViewerActionsOpen] = useState(false)
+  const [isReportReasonMenuOpen, setIsReportReasonMenuOpen] = useState(false)
   const [isDeletingStoryItem, setIsDeletingStoryItem] = useState(false)
+  const [isReportingStory, setIsReportingStory] = useState(false)
+  const [reportingReason, setReportingReason] = useState<StoryReportReason | null>(null)
+  const [isBlockingCreator, setIsBlockingCreator] = useState(false)
   const [isSendingReply, setIsSendingReply] = useState(false)
   const [isReplyMode, setIsReplyMode] = useState(false)
+  const [replySentMessage, setReplySentMessage] = useState<string | null>(null)
   const [areCreatorNotificationsEnabled, setAreCreatorNotificationsEnabled] =
     useState(false)
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
@@ -102,6 +217,8 @@ export default function StoryScreen() {
   } | null>(null)
   const reportedImpressionIdsRef = useRef(new Set<string>())
   const activeProgress = useRef(new Animated.Value(0)).current
+  const activeProgressValueRef = useRef(0)
+  const activeProgressPlaybackIdRef = useRef<string | null>(null)
   const { isFollowing, toggleFollow } = useFollowState()
   const isOwnStoryRoute = id === "my-story"
   const story = id ? remoteStory ?? undefined : undefined
@@ -181,7 +298,11 @@ export default function StoryScreen() {
     setRemoteStory(null)
     setStoryRequestState(id ? "loading" : "settled")
     setIsItemMenuOpen(false)
+    setIsViewerActionsOpen(false)
+    setIsReportReasonMenuOpen(false)
+    setReportingReason(null)
     setIsReplyMode(false)
+    setReplySentMessage(null)
     setKeyboardHeight(0)
     setIsEmojiTrayOpen(false)
     setLoadedImageUrls(new Set())
@@ -226,6 +347,9 @@ export default function StoryScreen() {
 
   useEffect(() => {
     setIsItemMenuOpen(false)
+    setIsViewerActionsOpen(false)
+    setIsReportReasonMenuOpen(false)
+    setReportingReason(null)
   }, [activeIndex])
 
   useEffect(() => {
@@ -295,17 +419,6 @@ export default function StoryScreen() {
 
     videoPlayer.pause()
   }, [activeItem?.assetKind, activeItem?.id, videoPlayer])
-
-  useEffect(() => {
-    if (isReplyMode) {
-      videoPlayer.pause()
-      return
-    }
-
-    if (activeItem?.assetKind === "video") {
-      videoPlayer.play()
-    }
-  }, [activeItem?.assetKind, activeItem?.id, isReplyMode, videoPlayer])
 
   const goPrevious = () => {
     if (activeIndex > 0) {
@@ -443,6 +556,7 @@ export default function StoryScreen() {
       }
       setReply("")
       setIsReplyMode(false)
+      setReplySentMessage(kind === "reaction" ? "Reaction sent" : "Reply sent")
       setKeyboardHeight(0)
       setIsEmojiTrayOpen(false)
       Keyboard.dismiss()
@@ -496,11 +610,92 @@ export default function StoryScreen() {
     }
   }
 
+  const reportActiveStory = async (reason: StoryReportReason) => {
+    if (!activeItem || isReportingStory) {
+      return
+    }
+
+    setIsReportingStory(true)
+    setReportingReason(reason)
+
+    try {
+      await postMobileApi<{ ok: true }>(
+        `/api/mobile/stories/${encodeURIComponent(activeItem.id)}/report`,
+        { reason },
+      )
+      setIsViewerActionsOpen(false)
+      setIsReportReasonMenuOpen(false)
+      Alert.alert("Report sent", "This story was sent to moderation.")
+    } catch (error) {
+      Alert.alert(
+        "Could not report story",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsReportingStory(false)
+      setReportingReason(null)
+    }
+  }
+
+  const chooseReportReason = () => {
+    if (!activeItem || isReportingStory) {
+      return
+    }
+
+    setIsViewerActionsOpen(false)
+    setIsReportReasonMenuOpen(true)
+  }
+
+  const blockStoryCreator = async () => {
+    if (!story || isBlockingCreator) {
+      return
+    }
+
+    setIsBlockingCreator(true)
+
+    try {
+      await postMobileApi<{ ok: true }>("/api/mobile/blocks", {
+        blockedUserId: story.creatorId,
+      })
+      setIsViewerActionsOpen(false)
+      setIsReportReasonMenuOpen(false)
+      Alert.alert("User blocked", `${story.creator} will no longer appear in your feed.`)
+      router.replace("/")
+    } catch (error) {
+      Alert.alert(
+        "Could not block user",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsBlockingCreator(false)
+    }
+  }
+
+  const confirmBlockStoryCreator = () => {
+    if (!story || isBlockingCreator) {
+      return
+    }
+
+    Alert.alert(
+      `Block ${story.creator}?`,
+      "You will stop seeing each other's stories, follows, replies, and notifications.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: () => void blockStoryCreator(),
+        },
+      ],
+    )
+  }
+
   const openReplyMode = () => {
     if (!canRespondToStory || isSendingReply) {
       return
     }
 
+    setReplySentMessage(null)
     setIsReplyMode(true)
   }
 
@@ -701,18 +896,49 @@ export default function StoryScreen() {
   }, [])
 
   useEffect(() => {
+    const listenerId = activeProgress.addListener(({ value }) => {
+      activeProgressValueRef.current = value
+    })
+
+    return () => {
+      activeProgress.removeListener(listenerId)
+    }
+  }, [activeProgress])
+
+  useEffect(() => {
+    if (!replySentMessage) {
+      return
+    }
+
+    const confirmationTimer = setTimeout(() => {
+      setReplySentMessage(null)
+    }, 1800)
+
+    return () => {
+      clearTimeout(confirmationTimer)
+    }
+  }, [replySentMessage])
+
+  useEffect(() => {
     if (!activeItem) return
-    if (isReplyMode || isActiveImageLoading) {
+    if (activeProgressPlaybackIdRef.current !== activeItem.playbackId) {
+      activeProgressPlaybackIdRef.current = activeItem.playbackId
+      activeProgressValueRef.current = 0
       activeProgress.stopAnimation()
       activeProgress.setValue(0)
+    }
+
+    if (isReplyMode || isActiveImageLoading) {
+      activeProgress.stopAnimation()
       return
     }
 
     activeProgress.stopAnimation()
-    activeProgress.setValue(0)
+    const startProgress = Math.min(Math.max(activeProgressValueRef.current, 0), 1)
+    activeProgress.setValue(startProgress)
     const animation = Animated.timing(activeProgress, {
       toValue: 1,
-      duration: activeItem.durationMs,
+      duration: Math.max(1, activeItem.durationMs * (1 - startProgress)),
       easing: Easing.linear,
       useNativeDriver: false,
     })
@@ -745,14 +971,14 @@ export default function StoryScreen() {
             isReplyMode ? styles.mediaFrameReplyMode : null,
           ]}
         >
-          {!isReplyMode && activeItem?.assetKind === "video" ? (
+          {activeItem?.assetKind === "video" ? (
             <VideoView
               player={videoPlayer}
               nativeControls={false}
               contentFit="cover"
               style={styles.media}
             />
-          ) : !isReplyMode && activeItem?.mediaUrl ? (
+          ) : activeItem?.mediaUrl ? (
             <Image
               key={activeItem.playbackId}
               onLoadEnd={() => {
@@ -766,6 +992,13 @@ export default function StoryScreen() {
           {isActiveImageLoading ? (
             <View style={styles.mediaLoadingState}>
               <ActivityIndicator size="small" color={colors.text} />
+            </View>
+          ) : null}
+
+          {replySentMessage ? (
+            <View pointerEvents="none" style={styles.replySentToast}>
+              <Ionicons name="checkmark-circle" size={18} color={colors.text} />
+              <Text style={styles.replySentToastText}>{replySentMessage}</Text>
             </View>
           ) : null}
 
@@ -877,49 +1110,68 @@ export default function StoryScreen() {
                     </View>
                   ) : null}
                 </View>
-              ) : shouldShowAddButton ? (
-                <Pressable
-                  accessibilityLabel={`Add ${story.creator}`}
-                  accessibilityRole="button"
-                  onPress={() => {
-                    toggleFollow(story.creatorId)
-                  }}
-                  style={({ pressed }) => [
-                    styles.addButton,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons name="add" size={20} color={colors.addText} />
-                  <Text style={styles.addButtonText}>Add</Text>
-                </Pressable>
               ) : (
-                <Pressable
-                  accessibilityLabel={
-                    areCreatorNotificationsEnabled
-                      ? `Turn off notifications for ${story.creator}`
-                      : `Turn on notifications for ${story.creator}`
-                  }
-                  accessibilityRole="button"
-                  disabled={isUpdatingNotifications}
-                  onPress={toggleCreatorNotifications}
-                  style={({ pressed }) => [
-                    styles.bellButton,
-                    areCreatorNotificationsEnabled
-                      ? styles.bellButtonActive
-                      : null,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons
-                    name={
-                      areCreatorNotificationsEnabled
-                        ? "notifications"
-                        : "notifications-outline"
-                    }
-                    size={23}
-                    color={colors.text}
-                  />
-                </Pressable>
+                <View style={styles.viewerActionCluster}>
+                  {shouldShowAddButton ? (
+                    <Pressable
+                      accessibilityLabel={`Add ${story.creator}`}
+                      accessibilityRole="button"
+                      onPress={() => {
+                        toggleFollow(story.creatorId)
+                      }}
+                      style={({ pressed }) => [
+                        styles.addButton,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Ionicons name="add" size={20} color={colors.addText} />
+                      <Text style={styles.addButtonText}>Add</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      accessibilityLabel={
+                        areCreatorNotificationsEnabled
+                          ? `Turn off notifications for ${story.creator}`
+                          : `Turn on notifications for ${story.creator}`
+                      }
+                      accessibilityRole="button"
+                      disabled={isUpdatingNotifications}
+                      onPress={toggleCreatorNotifications}
+                      style={({ pressed }) => [
+                        styles.bellButton,
+                        areCreatorNotificationsEnabled
+                          ? styles.bellButtonActive
+                          : null,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Ionicons
+                        name={
+                          areCreatorNotificationsEnabled
+                            ? "notifications"
+                            : "notifications-outline"
+                        }
+                        size={23}
+                        color={colors.text}
+                      />
+                    </Pressable>
+                  )}
+                  <Pressable
+                    accessibilityLabel="More story actions"
+                    accessibilityRole="button"
+                    onPress={() => setIsViewerActionsOpen((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.viewerMenuButton,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    <Ionicons
+                      name="ellipsis-horizontal"
+                      size={28}
+                      color={colors.text}
+                    />
+                  </Pressable>
+                </View>
               )}
             </View>
           ) : null}
@@ -1064,6 +1316,29 @@ export default function StoryScreen() {
                   style={styles.replyModeInput}
                 />
               </Pressable>
+              {reply.trim().length > 0 ? (
+                <Pressable
+                  accessibilityLabel="Send story reply"
+                  accessibilityRole="button"
+                  disabled={isSendingReply}
+                  onPress={sendReply}
+                  style={({ pressed }) => [
+                    styles.replyModeSendButton,
+                    isSendingReply ? styles.replyModeSendButtonDisabled : null,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  {isSendingReply ? (
+                    <ActivityIndicator size="small" color={colors.background} />
+                  ) : (
+                    <Ionicons
+                      name="arrow-up"
+                      size={19}
+                      color={colors.background}
+                    />
+                  )}
+                </Pressable>
+              ) : null}
               <Pressable
                 accessibilityLabel="Emoji"
                 accessibilityRole="button"
@@ -1159,6 +1434,7 @@ export default function StoryScreen() {
               <Pressable
                 accessibilityLabel="More story actions"
                 accessibilityRole="button"
+                onPress={() => setIsViewerActionsOpen((current) => !current)}
                 style={({ pressed }) => [
                   styles.moreButton,
                   pressed ? styles.pressed : null,
@@ -1167,6 +1443,126 @@ export default function StoryScreen() {
                 <Ionicons name="ellipsis-horizontal" size={28} color={colors.text} />
               </Pressable>
             ) : null}
+          </View>
+        ) : null}
+
+        {story && isViewerActionsOpen && !isViewingOwnStory ? (
+          <View pointerEvents="box-none" style={styles.viewerMenuLayer}>
+            <Pressable
+              accessibilityLabel="Close story actions"
+              accessibilityRole="button"
+              onPress={() => setIsViewerActionsOpen(false)}
+              style={styles.viewerMenuBackdrop}
+            />
+            <View style={styles.viewerMenu}>
+              <Text style={styles.viewerMenuTitle}>Story actions</Text>
+              <Pressable
+                accessibilityLabel="Report this story"
+                accessibilityRole="button"
+                disabled={isReportingStory}
+                onPress={chooseReportReason}
+                style={({ pressed }) => [
+                  styles.viewerMenuItem,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Ionicons name="flag-outline" size={18} color="#17191f" />
+                <Text style={styles.viewerMenuItemText}>
+                  {isReportingStory ? "Reporting..." : "Report story"}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel={`Block ${story.creator}`}
+                accessibilityRole="button"
+                disabled={isBlockingCreator}
+                onPress={confirmBlockStoryCreator}
+                style={({ pressed }) => [
+                  styles.viewerMenuItemDanger,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Ionicons name="ban-outline" size={19} color={colors.brand} />
+                <Text style={styles.viewerMenuItemDangerText}>
+                  {isBlockingCreator ? "Blocking..." : `Block ${creatorFirstName}`}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {story && isReportReasonMenuOpen && !isViewingOwnStory ? (
+          <View style={styles.reportReasonLayer}>
+            <Pressable
+              accessibilityLabel="Close report reasons"
+              accessibilityRole="button"
+              onPress={() => setIsReportReasonMenuOpen(false)}
+              style={styles.reportReasonBackdrop}
+            />
+            <View style={styles.reportReasonPanel}>
+              <View style={styles.reportReasonHeader}>
+                <View style={styles.reportReasonHeaderCopy}>
+                  <Text style={styles.reportReasonEyebrow}>Report story</Text>
+                  <Text style={styles.reportReasonTitle}>
+                    What is the issue?
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="Close report reasons"
+                  accessibilityRole="button"
+                  onPress={() => setIsReportReasonMenuOpen(false)}
+                  style={({ pressed }) => [
+                    styles.reportReasonClose,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={20} color="#17191f" />
+                </Pressable>
+              </View>
+
+              <ScrollView
+                contentContainerStyle={styles.reportReasonList}
+                showsVerticalScrollIndicator={false}
+              >
+                {reportReasonOptions.map((option) => (
+                  <Pressable
+                    accessibilityLabel={`Report for ${option.label}`}
+                    accessibilityRole="button"
+                    disabled={isReportingStory}
+                    key={option.id}
+                    onPress={() => void reportActiveStory(option.id)}
+                    style={({ pressed }) => [
+                      styles.reportReasonOption,
+                      pressed ? styles.reportReasonOptionPressed : null,
+                    ]}
+                  >
+                    <View style={styles.reportReasonIcon}>
+                      <Ionicons
+                        name={option.icon}
+                        size={19}
+                        color="#17191f"
+                      />
+                    </View>
+                    <View style={styles.reportReasonOptionCopy}>
+                      <Text style={styles.reportReasonOptionLabel}>
+                        {option.label}
+                      </Text>
+                      <Text style={styles.reportReasonOptionDetail}>
+                        {option.detail}
+                      </Text>
+                    </View>
+                    {reportingReason === option.id ? (
+                      <ActivityIndicator size="small" color={colors.brand} />
+                    ) : (
+                      <Ionicons
+                        name="chevron-forward"
+                        size={16}
+                        color="#9ca3af"
+                      />
+                    )}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
           </View>
         ) : null}
       </View>
@@ -1397,6 +1793,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.background,
   },
+  replySentToast: {
+    position: "absolute",
+    top: 84,
+    alignSelf: "center",
+    zIndex: 34,
+    minHeight: 40,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    backgroundColor: "rgba(17,24,39,0.86)",
+  },
+  replySentToastText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "800",
+  },
   loadingState: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -1507,6 +1921,21 @@ const styles = StyleSheet.create({
   bellButtonActive: {
     borderColor: "rgba(224,22,22,0.78)",
     backgroundColor: "rgba(224,22,22,0.74)",
+  },
+  viewerActionCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  viewerMenuButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+    backgroundColor: "rgba(11,13,17,0.26)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   ownerActions: {
     position: "relative",
@@ -1734,6 +2163,164 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  viewerMenuLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 42,
+  },
+  viewerMenuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  viewerMenu: {
+    position: "absolute",
+    top: 86,
+    right: 14,
+    width: 198,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.10)",
+    backgroundColor: "#ffffff",
+    padding: 8,
+    gap: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.24,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  viewerMenuTitle: {
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 2,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    color: "#6b7280",
+    textTransform: "uppercase",
+  },
+  viewerMenuItem: {
+    minHeight: 42,
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+  },
+  viewerMenuItemText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#17191f",
+  },
+  viewerMenuItemDanger: {
+    minHeight: 42,
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: "#fff1f2",
+    paddingHorizontal: 10,
+  },
+  viewerMenuItemDangerText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.brand,
+  },
+  reportReasonLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 44,
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  reportReasonBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.42)",
+  },
+  reportReasonPanel: {
+    maxHeight: "78%",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.10)",
+    backgroundColor: "#ffffff",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.26,
+    shadowRadius: 28,
+    elevation: 16,
+  },
+  reportReasonHeader: {
+    minHeight: 74,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+  },
+  reportReasonHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reportReasonEyebrow: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    color: "#6b7280",
+    textTransform: "uppercase",
+  },
+  reportReasonTitle: {
+    marginTop: 3,
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#17191f",
+  },
+  reportReasonClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f3f4f6",
+  },
+  reportReasonList: {
+    padding: 8,
+  },
+  reportReasonOption: {
+    minHeight: 68,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  reportReasonOptionPressed: {
+    backgroundColor: "#f3f4f6",
+  },
+  reportReasonIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f3f4f6",
+  },
+  reportReasonOptionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reportReasonOptionLabel: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#17191f",
+  },
+  reportReasonOptionDetail: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "500",
+    color: "#6b7280",
+  },
   replyKeyboardLayer: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 30,
@@ -1742,7 +2329,7 @@ const styles = StyleSheet.create({
   replyModeMediaLayer: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 20,
-    backgroundColor: "#050912",
+    backgroundColor: "rgba(5,9,18,0.54)",
   },
   replyModeHeader: {
     paddingTop: 26,
@@ -1833,6 +2420,17 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: "600",
     color: colors.text,
+  },
+  replyModeSendButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.text,
+  },
+  replyModeSendButtonDisabled: {
+    opacity: 0.62,
   },
   replyModeIconButton: {
     width: 32,

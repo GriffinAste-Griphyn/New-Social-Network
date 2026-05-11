@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import {
@@ -6,6 +6,7 @@ import {
   feedImpressions,
   follows,
   stories,
+  storyElements,
   storyInteractions,
 } from "@/lib/db/schema"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
@@ -21,6 +22,7 @@ export type CreatorStoryStats = {
   status: "processing" | "live" | "expired" | "removed"
   createdAt: string
   expiresAt: string
+  captionVerticalPercent: number
   views: number
   uniqueViewers: number
   completedViews: number
@@ -94,6 +96,20 @@ function calculateAverageSeconds(totalViewedMs: number, views: number) {
   return Math.round((totalViewedMs / views / 1000) * 10) / 10
 }
 
+function getCaptionVerticalPercent(value: DbNumber | undefined) {
+  if (typeof value === "undefined") {
+    return 74
+  }
+
+  const positionY = toNumber(value)
+
+  if (!Number.isFinite(positionY) || positionY <= 0) {
+    return 74
+  }
+
+  return Math.min(Math.max(positionY, 18), 82)
+}
+
 export type CreatorStatsRange = {
   from?: Date
   to?: Date
@@ -154,7 +170,7 @@ export async function getCreatorStats(
       })
       .from(stories)
       .where(and(...storyFilters))
-      .orderBy(desc(stories.createdAt)),
+      .orderBy(asc(stories.createdAt)),
     db
       .select({
         storyId: feedImpressions.storyId,
@@ -203,6 +219,23 @@ export async function getCreatorStats(
       .innerJoin(stories, eq(stories.id, feedImpressions.storyId))
       .where(and(...impressionFilters)),
   ])
+  const storyIds = storyRows.map((story) => story.id)
+  const captionPositionRows =
+    storyIds.length > 0
+      ? await db
+          .select({
+            storyId: storyElements.storyId,
+            positionY: storyElements.positionY,
+          })
+          .from(storyElements)
+          .where(
+            and(
+              inArray(storyElements.storyId, storyIds),
+              eq(storyElements.kind, "text"),
+            ),
+          )
+          .orderBy(asc(storyElements.createdAt))
+      : []
 
   const impressionsByStory = new Map(
     impressionRows.map((row) => [
@@ -234,6 +267,13 @@ export async function getCreatorStats(
       },
     ]),
   )
+  const captionPositionByStory = new Map<string, DbNumber>()
+
+  captionPositionRows.forEach((row) => {
+    if (!captionPositionByStory.has(row.storyId)) {
+      captionPositionByStory.set(row.storyId, row.positionY)
+    }
+  })
 
   const earningsByStatus = new Map(
     earningsRows.map((row) => [
@@ -292,6 +332,9 @@ export async function getCreatorStats(
       status: story.status,
       createdAt: story.createdAt.toISOString(),
       expiresAt: story.expiresAt.toISOString(),
+      captionVerticalPercent: getCaptionVerticalPercent(
+        captionPositionByStory.get(story.id),
+      ),
       views: impressions.views,
       uniqueViewers: impressions.uniqueViewers,
       completedViews: impressions.completedViews,

@@ -25,6 +25,7 @@ type CreatorStoryStats = {
   caption: string | null
   status: "processing" | "live" | "expired" | "removed"
   createdAt: string
+  captionVerticalPercent?: number
   views: number
   uniqueViewers: number
   completedViews: number
@@ -120,6 +121,12 @@ function getReplyPreview(interaction: StoryInteractionEvent) {
   }
 
   return interaction.reaction ? `Reacted ${interaction.reaction}` : "Sent a reaction."
+}
+
+function getCaptionTopPercent(story: CreatorStoryStats) {
+  const requestedTop = story.captionVerticalPercent ?? 74
+
+  return Math.min(Math.max(requestedTop, 18), 82)
 }
 
 export default function MyStoryStatsScreen() {
@@ -412,6 +419,7 @@ function StoryCarouselCard({
   width: number
 }) {
   const imageUrl = story.thumbnailUrl ?? story.mediaUrl
+  const caption = story.caption?.trim()
 
   return (
     <View style={[styles.storyCard, { width }, isActive ? styles.storyCardActive : null]}>
@@ -424,22 +432,18 @@ function StoryCarouselCard({
           <Image source={{ uri: imageUrl }} style={styles.storyImage} />
         )}
         <View style={styles.storyMediaOverlay} />
-        <View style={styles.storyCardHeader}>
-          <View style={styles.storyStatusBadge}>
-            <Text style={styles.storyStatusBadgeText}>{story.status}</Text>
+        {caption ? (
+          <View
+            style={[
+              styles.storyCaptionBar,
+              { top: `${getCaptionTopPercent(story)}%` },
+            ]}
+          >
+            <Text style={styles.storyCaptionText} numberOfLines={2}>
+              {caption}
+            </Text>
           </View>
-          {story.assetKind === "video" ? (
-            <View style={styles.videoBadge}>
-              <Ionicons name="play" size={13} color="#ffffff" />
-            </View>
-          ) : null}
-        </View>
-        <View style={styles.storyCardFooter}>
-          <Text style={styles.storyTitle} numberOfLines={2}>
-            {story.caption || "Untitled story"}
-          </Text>
-          <Text style={styles.storyDate}>{formatDate(story.createdAt)}</Text>
-        </View>
+        ) : null}
       </View>
     </View>
   )
@@ -592,55 +596,25 @@ const styles = StyleSheet.create({
   },
   storyMediaOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.18)",
+    backgroundColor: "rgba(0,0,0,0.12)",
   },
-  storyCardHeader: {
+  storyCaptionBar: {
     position: "absolute",
-    top: 12,
-    left: 12,
-    right: 12,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 8,
-  },
-  storyStatusBadge: {
-    minHeight: 30,
-    borderRadius: 15,
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.18)",
-    paddingHorizontal: 10,
-  },
-  storyStatusBadgeText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: "#ffffff",
-    textTransform: "uppercase",
-  },
-  videoBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    left: 0,
+    right: 0,
+    minHeight: 42,
+    paddingHorizontal: 24,
+    paddingVertical: 8,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.42)",
+    backgroundColor: "rgba(0,0,0,0.48)",
   },
-  storyCardFooter: {
-    position: "absolute",
-    left: 14,
-    right: 14,
-    bottom: 14,
-  },
-  storyTitle: {
-    fontSize: 25,
-    lineHeight: 31,
-    fontWeight: "800",
+  storyCaptionText: {
+    maxWidth: "100%",
+    fontSize: 18,
+    lineHeight: 23,
     color: "#ffffff",
-  },
-  storyDate: {
-    marginTop: 6,
-    fontSize: 13,
-    fontWeight: "700",
-    color: "rgba(255,255,255,0.72)",
+    textAlign: "center",
   },
   carouselControls: {
     flexDirection: "row",

@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache"
 import { NextResponse } from "next/server"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
+import { markMediaAssetDeleted } from "@/lib/media-assets"
 import {
   removeStoryForOwner,
   updateStoryForOwner,
@@ -83,9 +84,14 @@ export async function POST(
     const action = formData.get("action")
 
     if (action === "delete") {
-      const mediaUrl = await removeStoryForOwner(id, session.id)
+      const removedStory = await removeStoryForOwner(id, session.id)
 
-      await removeStoryAsset(mediaUrl)
+      await removeStoryAsset(removedStory.mediaUrl)
+      await markMediaAssetDeleted({
+        mediaAssetId: removedStory.mediaAssetId,
+        actorUserId: session.id,
+        reason: "Story was removed by its owner.",
+      })
       revalidatePath("/feed")
       revalidatePath("/stories/me")
 
@@ -161,9 +167,14 @@ export async function DELETE(
   }
 
   try {
-    const mediaUrl = await removeStoryForOwner(id, session.id)
+    const removedStory = await removeStoryForOwner(id, session.id)
 
-    await removeStoryAsset(mediaUrl)
+    await removeStoryAsset(removedStory.mediaUrl)
+    await markMediaAssetDeleted({
+      mediaAssetId: removedStory.mediaAssetId,
+      actorUserId: session.id,
+      reason: "Story was removed by its owner.",
+    })
     revalidatePath("/feed")
     revalidatePath("/stories/me")
 

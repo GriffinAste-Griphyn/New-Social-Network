@@ -5,6 +5,8 @@ import { alias } from "drizzle-orm/pg-core"
 
 import { getDb } from "@/lib/db"
 import { follows, stories, storyInteractions, users } from "@/lib/db/schema"
+import { createMediaAssetFromStoredStoryAsset } from "@/lib/media-assets"
+import { hasBlockBetween } from "@/lib/safety-store"
 import type { StoredStoryAsset } from "@/lib/story-storage"
 
 export type StoryInteractionKind = "reply" | "comment" | "reaction"
@@ -162,6 +164,10 @@ export async function createStoryInteraction(input: {
     throw new Error("You cannot reply to your own story.")
   }
 
+  if (await hasBlockBetween(input.actorId, story.creatorId)) {
+    throw new Error("You cannot respond to this story.")
+  }
+
   const [follow] = await db
     .select({ followerId: follows.followerId })
     .from(follows)
@@ -189,6 +195,21 @@ export async function createStoryInteraction(input: {
     throw new Error("Choose a reaction before sending.")
   }
 
+  const mediaAsset = storedAsset
+    ? await createMediaAssetFromStoredStoryAsset({
+        ownerUserId: input.actorId,
+        purpose: "story_reply",
+        storedAsset,
+      })
+    : null
+
+  if (
+    mediaAsset &&
+    (mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed")
+  ) {
+    throw new Error(mediaAsset.scanReason ?? "This media reply needs review.")
+  }
+
   const [event] = await db
     .insert(storyInteractions)
     .values({
@@ -199,6 +220,7 @@ export async function createStoryInteraction(input: {
       kind: input.kind,
       body,
       reaction,
+      mediaAssetId: mediaAsset?.id ?? null,
       mediaUrl: storedAsset?.mediaUrl ?? null,
       mediaThumbnailUrl: storedAsset?.thumbnailUrl ?? null,
       mediaAssetKind: storedAsset?.assetKind ?? null,

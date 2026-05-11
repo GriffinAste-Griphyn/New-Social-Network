@@ -122,6 +122,26 @@ function buildStoryMediaRoute(pathname: string) {
   return `${storyMediaRoutePrefix}/${encodeStoryMediaPathname(pathname)}`
 }
 
+function getRequestMediaOrigin(request: Request) {
+  const url = new URL(request.url)
+
+  if (url.hostname !== "0.0.0.0" && url.hostname !== "::") {
+    return url.origin
+  }
+
+  const host =
+    request.headers.get("x-forwarded-host") ??
+    request.headers.get("host")
+
+  if (!host) {
+    return url.origin
+  }
+
+  const protocol = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "")
+
+  return `${protocol}://${host}`
+}
+
 function buildCloudflareStreamPathname(uid: string) {
   return `${cloudflareStreamMediaPrefix}/${uid}/manifest/video.m3u8`
 }
@@ -179,7 +199,7 @@ export function publicStoryMediaUrl(
     return mediaUrl
   }
 
-  const url = new URL(mediaUrl, request.url)
+  const url = new URL(mediaUrl, getRequestMediaOrigin(request))
 
   if (options.signed && mediaPathname) {
     url.searchParams.set("token", createStoryMediaAccessToken(mediaPathname))
@@ -273,6 +293,28 @@ type CloudflareStreamTokenResponse = {
   }
 }
 
+type CloudflareStreamVideoDetailsResponse = {
+  success: boolean
+  errors?: Array<{ message?: string }>
+  result?: {
+    readyToStream?: boolean
+    readyToStreamAt?: string
+    status?: {
+      state?: string
+      errorReasonText?: string
+      errorReasonCode?: string
+    }
+  }
+}
+
+export type CloudflareStreamVideoStatus = {
+  readyToStream: boolean
+  readyToStreamAt: Date | null
+  state: string
+  errorReasonText: string | null
+  errorReasonCode: string | null
+}
+
 function getCloudflareStreamConfig() {
   const accountId = process.env.CLOUDFLARE_STREAM_ACCOUNT_ID
   const apiToken = process.env.CLOUDFLARE_STREAM_API_TOKEN
@@ -359,6 +401,46 @@ export async function createCloudflareStreamPlaybackUrl(uid: string) {
   }
 
   return buildCloudflarePlaybackUrl(customerSubdomain, token)
+}
+
+export async function fetchCloudflareStreamVideoStatus(
+  uid: string,
+): Promise<CloudflareStreamVideoStatus> {
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`,
+    {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    },
+  )
+  const payload = (await response.json().catch(() => null)) as
+    | CloudflareStreamVideoDetailsResponse
+    | null
+  const result = payload?.result
+
+  if (!response.ok || !payload?.success || !result) {
+    throw new StoryUploadError(
+      payload?.errors?.[0]?.message ??
+        "Could not fetch Cloudflare Stream video status.",
+    )
+  }
+
+  const readyToStreamAt = result.readyToStreamAt
+    ? new Date(result.readyToStreamAt)
+    : null
+
+  return {
+    readyToStream: Boolean(result.readyToStream),
+    readyToStreamAt:
+      readyToStreamAt && Number.isFinite(readyToStreamAt.getTime())
+        ? readyToStreamAt
+        : null,
+    state: result.status?.state ?? "unknown",
+    errorReasonText: result.status?.errorReasonText || null,
+    errorReasonCode: result.status?.errorReasonCode || null,
+  }
 }
 
 async function saveCloudflareStreamVideo(

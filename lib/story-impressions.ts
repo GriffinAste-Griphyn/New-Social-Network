@@ -4,6 +4,7 @@ import { and, eq, gt } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { feedImpressions, stories } from "@/lib/db/schema"
+import { hasBlockBetween } from "@/lib/safety-store"
 
 function clampViewedMs(value: number) {
   if (!Number.isFinite(value)) {
@@ -36,6 +37,10 @@ export async function recordStoryImpression(input: {
     .limit(1)
 
   if (!story || story.creatorId === input.viewerId) {
+    return { recorded: false }
+  }
+
+  if (await hasBlockBetween(input.viewerId, story.creatorId)) {
     return { recorded: false }
   }
 

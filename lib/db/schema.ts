@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   boolean,
   index,
   integer,
@@ -12,6 +13,31 @@ import {
 } from "drizzle-orm/pg-core"
 
 export const storyAssetKind = pgEnum("story_asset_kind", ["image", "video"])
+export const mediaAssetPurpose = pgEnum("media_asset_purpose", [
+  "story",
+  "story_reply",
+  "avatar",
+])
+export const mediaAssetStatus = pgEnum("media_asset_status", [
+  "processing",
+  "ready",
+  "flagged",
+  "rejected",
+  "deleted",
+  "error",
+])
+export const mediaScanStatus = pgEnum("media_scan_status", [
+  "pending",
+  "passed",
+  "flagged",
+  "failed",
+  "skipped",
+])
+export const mediaStorageProvider = pgEnum("media_storage_provider", [
+  "local",
+  "vercel-blob",
+  "cloudflare-stream",
+])
 export const storyStatus = pgEnum("story_status", [
   "processing",
   "live",
@@ -111,6 +137,9 @@ export const users = pgTable(
     displayName: text("display_name"),
     bio: text("bio"),
     avatarUrl: text("avatar_url"),
+    avatarAssetId: text("avatar_asset_id").references(
+      (): AnyPgColumn => mediaAssets.id,
+    ),
     onboardingIntent: userOnboardingIntent("onboarding_intent")
       .notNull()
       .default("explore"),
@@ -270,6 +299,28 @@ export const follows = pgTable(
   ],
 )
 
+export const userBlocks = pgTable(
+  "user_blocks",
+  {
+    blockerId: text("blocker_id")
+      .notNull()
+      .references(() => users.id),
+    blockedUserId: text("blocked_user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "user_blocks_pkey",
+      columns: [table.blockerId, table.blockedUserId],
+    }),
+    index("user_blocks_blocked_user_idx").on(table.blockedUserId),
+  ],
+)
+
 export const mobilePushTokens = pgTable(
   "mobile_push_tokens",
   {
@@ -329,6 +380,80 @@ export const creatorNotificationPreferences = pgTable(
   ],
 )
 
+export const mediaAssets = pgTable(
+  "media_assets",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id),
+    purpose: mediaAssetPurpose("purpose").notNull(),
+    assetKind: storyAssetKind("asset_kind").notNull(),
+    storageProvider: mediaStorageProvider("storage_provider").notNull(),
+    storageKey: text("storage_key").notNull(),
+    mediaUrl: text("media_url").notNull(),
+    thumbnailUrl: text("thumbnail_url"),
+    contentType: text("content_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    checksum: text("checksum").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    durationMs: integer("duration_ms"),
+    processingStatus: mediaAssetStatus("processing_status")
+      .notNull()
+      .default("processing"),
+    scanStatus: mediaScanStatus("scan_status").notNull().default("pending"),
+    scanReason: text("scan_reason"),
+    providerStatus: text("provider_status"),
+    providerError: text("provider_error"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("media_assets_provider_key_idx").on(
+      table.storageProvider,
+      table.storageKey,
+    ),
+    index("media_assets_owner_idx").on(table.ownerUserId, table.createdAt),
+    index("media_assets_processing_idx").on(
+      table.processingStatus,
+      table.updatedAt,
+    ),
+    index("media_assets_scan_idx").on(table.scanStatus, table.updatedAt),
+  ],
+)
+
+export const mediaAuditEvents = pgTable(
+  "media_audit_events",
+  {
+    id: text("id").primaryKey(),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id),
+    actorUserId: text("actor_user_id").references(() => users.id),
+    eventType: text("event_type").notNull(),
+    message: text("message"),
+    metadata: text("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("media_audit_events_asset_idx").on(
+      table.mediaAssetId,
+      table.createdAt,
+    ),
+    index("media_audit_events_type_idx").on(table.eventType, table.createdAt),
+  ],
+)
+
 export const stories = pgTable(
   "stories",
   {
@@ -336,6 +461,9 @@ export const stories = pgTable(
     creatorId: text("creator_id")
       .notNull()
       .references(() => users.id),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id),
     assetKind: storyAssetKind("asset_kind").notNull(),
     mediaUrl: text("media_url").notNull(),
     thumbnailUrl: text("thumbnail_url"),
@@ -364,6 +492,7 @@ export const stories = pgTable(
       .defaultNow(),
   },
   (table) => [
+    uniqueIndex("stories_media_asset_idx").on(table.mediaAssetId),
     index("stories_storage_key_idx").on(table.storageKey),
     index("stories_moderation_status_idx").on(table.moderationStatus),
   ],
@@ -381,6 +510,45 @@ export const storyMentions = pgTable("story_mentions", {
     .notNull()
     .defaultNow(),
 })
+
+export const contentReports = pgTable(
+  "content_reports",
+  {
+    id: text("id").primaryKey(),
+    reporterId: text("reporter_id")
+      .notNull()
+      .references(() => users.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    targetUserId: text("target_user_id")
+      .notNull()
+      .references(() => users.id),
+    reason: text("reason").notNull(),
+    note: text("note"),
+    status: text("status").notNull().default("open"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("content_reports_reporter_story_idx").on(
+      table.reporterId,
+      table.storyId,
+    ),
+    index("content_reports_story_idx").on(table.storyId, table.createdAt),
+    index("content_reports_target_user_idx").on(
+      table.targetUserId,
+      table.createdAt,
+    ),
+    index("content_reports_status_idx").on(table.status, table.createdAt),
+  ],
+)
 
 export const storyElements = pgTable(
   "story_elements",
@@ -437,6 +605,7 @@ export const storyInteractions = pgTable(
     kind: storyInteractionKind("kind").notNull(),
     body: text("body"),
     reaction: text("reaction"),
+    mediaAssetId: text("media_asset_id").references(() => mediaAssets.id),
     mediaUrl: text("media_url"),
     mediaThumbnailUrl: text("media_thumbnail_url"),
     mediaAssetKind: storyAssetKind("media_asset_kind"),
@@ -452,6 +621,7 @@ export const storyInteractions = pgTable(
     ),
     index("story_interactions_actor_id_idx").on(table.actorId, table.createdAt),
     index("story_interactions_kind_idx").on(table.kind, table.createdAt),
+    index("story_interactions_media_asset_idx").on(table.mediaAssetId),
   ],
 )
 

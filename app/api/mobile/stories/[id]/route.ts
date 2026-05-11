@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
+import { markMediaAssetDeleted } from "@/lib/media-assets"
 import {
   getMyStoryStack,
   getStoryStackForStory,
@@ -42,7 +43,7 @@ export async function GET(
   const story =
     id === "my-story"
       ? await getMobileMyStoryStack(session.id)
-      : await getStoryStackForStory(id)
+      : await getStoryStackForStory(id, session.id)
 
   if (!story) {
     return NextResponse.json({ error: "Story not found." }, { status: 404 })
@@ -95,9 +96,14 @@ export async function DELETE(
   const { id } = await context.params
 
   try {
-    const mediaUrl = await removeStoryForOwner(id, session.id)
+    const removedStory = await removeStoryForOwner(id, session.id)
 
-    await removeStoryAsset(mediaUrl)
+    await removeStoryAsset(removedStory.mediaUrl)
+    await markMediaAssetDeleted({
+      mediaAssetId: removedStory.mediaAssetId,
+      actorUserId: session.id,
+      reason: "Story was removed by its owner.",
+    })
 
     return NextResponse.json({ ok: true })
   } catch (error) {
@@ -134,7 +140,7 @@ async function getMobileMyStoryStack(userId: string) {
       title: item.caption.trim(),
       postedAt: "Today",
       durationSeconds: item.assetKind === "video" ? 10 : undefined,
-      captionVerticalPercent: 74,
+      captionVerticalPercent: item.captionVerticalPercent,
       stats: (() => {
         const stats = statsByStoryId.get(item.id)
 

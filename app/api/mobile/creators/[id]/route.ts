@@ -29,7 +29,7 @@ export async function GET(
   }
 
   const { id } = await context.params
-  const profile = await getMobileCreatorProfile(id)
+  const profile = await getMobileCreatorProfile(id, session.id)
 
   if (!profile) {
     return NextResponse.json({ error: "Creator not found." }, { status: 404 })

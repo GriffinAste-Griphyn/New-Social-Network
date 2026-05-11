@@ -1,7 +1,7 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm"
+import { and, desc, eq, isNotNull, or } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
-import { follows, users } from "@/lib/db/schema"
+import { follows, userBlocks, users } from "@/lib/db/schema"
 
 export type FollowProfile = {
   id: string
@@ -45,8 +45,46 @@ async function ensureTargetExists(targetUserId: string) {
   return Boolean(target)
 }
 
+async function getBlockedAccountIds(userId: string) {
+  const db = getDb()
+  const [outgoing, incoming] = await Promise.all([
+    db
+      .select({ id: userBlocks.blockedUserId })
+      .from(userBlocks)
+      .where(eq(userBlocks.blockerId, userId)),
+    db
+      .select({ id: userBlocks.blockerId })
+      .from(userBlocks)
+      .where(eq(userBlocks.blockedUserId, userId)),
+  ])
+
+  return new Set([...outgoing, ...incoming].map((row) => row.id))
+}
+
+async function hasBlockBetween(leftUserId: string, rightUserId: string) {
+  const [block] = await getDb()
+    .select({ blockerId: userBlocks.blockerId })
+    .from(userBlocks)
+    .where(
+      or(
+        and(
+          eq(userBlocks.blockerId, leftUserId),
+          eq(userBlocks.blockedUserId, rightUserId),
+        ),
+        and(
+          eq(userBlocks.blockerId, rightUserId),
+          eq(userBlocks.blockedUserId, leftUserId),
+        ),
+      ),
+    )
+    .limit(1)
+
+  return Boolean(block)
+}
+
 export async function listFollowingProfiles(userId: string): Promise<FollowProfile[]> {
   const db = getDb()
+  const blockedAccountIds = await getBlockedAccountIds(userId)
   const rows = await db
     .select({
       id: users.id,
@@ -66,6 +104,10 @@ export async function listFollowingProfiles(userId: string): Promise<FollowProfi
     .orderBy(desc(follows.createdAt))
 
   return rows.flatMap((row) => {
+    if (blockedAccountIds.has(row.id)) {
+      return []
+    }
+
     const profile = mapProfile(row)
 
     return profile ? [profile] : []
@@ -74,6 +116,7 @@ export async function listFollowingProfiles(userId: string): Promise<FollowProfi
 
 export async function listFollowerProfiles(userId: string): Promise<FollowProfile[]> {
   const db = getDb()
+  const blockedAccountIds = await getBlockedAccountIds(userId)
   const rows = await db
     .select({
       id: users.id,
@@ -93,6 +136,10 @@ export async function listFollowerProfiles(userId: string): Promise<FollowProfil
     .orderBy(desc(follows.createdAt))
 
   return rows.flatMap((row) => {
+    if (blockedAccountIds.has(row.id)) {
+      return []
+    }
+
     const profile = mapProfile(row)
 
     return profile ? [profile] : []
@@ -113,6 +160,10 @@ export async function followUser(input: {
 
   if (!targetExists) {
     throw new Error("That account does not exist.")
+  }
+
+  if (await hasBlockBetween(followerId, followeeId)) {
+    throw new Error("Unblock this account before following.")
   }
 
   const db = getDb()

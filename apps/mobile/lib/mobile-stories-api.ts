@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
+import AsyncStorage from "@react-native-async-storage/async-storage"
 import type { SocialAppHomeContract, SocialStoryCard } from "@new-social-network/shared"
+import { Image } from "react-native"
 
 import { MobileApiError, postMobileApi } from "@/lib/mobile-api"
 
@@ -68,6 +70,119 @@ export type MobileStoryUploadResponse = {
   }
 }
 
+type CachedMobileFeed = {
+  data: MobileFeedResponse
+  cachedAt: number
+}
+
+const feedCachePrefix = "nsn.mobile.feed.v3"
+const memoryFeedCache = new Map<string, CachedMobileFeed>()
+const inFlightFeedRequests = new Map<string, Promise<MobileFeedResponse>>()
+
+function hashCacheKey(value: string) {
+  let hash = 5381
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index)
+  }
+
+  return (hash >>> 0).toString(36)
+}
+
+function getFeedCacheKey(mobileToken: string) {
+  return `${feedCachePrefix}.${hashCacheKey(mobileToken)}`
+}
+
+function parseCachedFeed(value: string | null): CachedMobileFeed | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<CachedMobileFeed>
+
+    if (
+      typeof parsed.cachedAt === "number" &&
+      parsed.data &&
+      parsed.data.ok === true
+    ) {
+      return parsed as CachedMobileFeed
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function getCachedFeed(cacheKey: string) {
+  const memoryFeed = memoryFeedCache.get(cacheKey)
+
+  if (memoryFeed) {
+    return Promise.resolve(memoryFeed)
+  }
+
+  return AsyncStorage.getItem(cacheKey).then((value) => {
+    const cachedFeed = parseCachedFeed(value)
+
+    if (cachedFeed) {
+      memoryFeedCache.set(cacheKey, cachedFeed)
+    }
+
+    return cachedFeed
+  })
+}
+
+function setCachedFeed(cacheKey: string, data: MobileFeedResponse) {
+  const cachedFeed = {
+    data,
+    cachedAt: Date.now(),
+  }
+
+  memoryFeedCache.set(cacheKey, cachedFeed)
+  void AsyncStorage.setItem(cacheKey, JSON.stringify(cachedFeed)).catch(() => undefined)
+}
+
+function removeCachedFeed(cacheKey: string) {
+  memoryFeedCache.delete(cacheKey)
+  void AsyncStorage.removeItem(cacheKey).catch(() => undefined)
+}
+
+function requestMobileFeed(mobileToken: string, cacheKey: string) {
+  const existingRequest = inFlightFeedRequests.get(cacheKey)
+
+  if (existingRequest) {
+    return existingRequest
+  }
+
+  const request = postMobileApi<MobileFeedResponse>(
+    "/api/mobile/feed",
+    {},
+    { authToken: mobileToken },
+  ).finally(() => {
+    inFlightFeedRequests.delete(cacheKey)
+  })
+
+  inFlightFeedRequests.set(cacheKey, request)
+  return request
+}
+
+function prefetchFeedImages(feed: MobileFeedResponse) {
+  const urls = [
+    ...feed.discoverTiles.map((tile) => tile.thumbnailUrl ?? tile.imageUrl),
+    ...feed.followingStories.map((story) => story.thumbnailUrl ?? story.mediaUrl),
+    feed.myStory.latestThumbnailUrl,
+    ...feed.followingProfiles.map((profile) => profile.imageUrl),
+    ...feed.suggestedAccounts.map((account) => account.imageUrl),
+  ]
+    .filter((url): url is string => Boolean(url))
+    .slice(0, 18)
+
+  urls.forEach((url) => {
+    void Image.prefetch(url).catch(() => undefined)
+  })
+}
+
 export function useMobileFeed(
   mobileToken: string | null | undefined,
   refreshKey = 0,
@@ -75,9 +190,17 @@ export function useMobileFeed(
     onUnauthorized?: () => void
   },
 ) {
-  const [data, setData] = useState<MobileFeedResponse | null>(null)
+  const [data, setData] = useState<MobileFeedResponse | null>(() => {
+    if (!mobileToken) {
+      return null
+    }
+
+    return memoryFeedCache.get(getFeedCacheKey(mobileToken))?.data ?? null
+  })
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isCached, setIsCached] = useState(() => Boolean(data))
   const onUnauthorizedRef = useRef(options?.onUnauthorized)
 
   useEffect(() => {
@@ -89,25 +212,45 @@ export function useMobileFeed(
 
     if (!mobileToken) {
       setData(null)
+      setError(null)
+      setIsCached(false)
       return
     }
 
-    setIsLoading(true)
+    const cacheKey = getFeedCacheKey(mobileToken)
+    const cachedFeed = memoryFeedCache.get(cacheKey)
 
-    postMobileApi<MobileFeedResponse>(
-      "/api/mobile/feed",
-      {},
-      { authToken: mobileToken },
-    )
+    if (cachedFeed) {
+      setData(cachedFeed.data)
+      setIsCached(true)
+      setError(null)
+    }
+
+    setIsLoading(!cachedFeed)
+    setIsRefreshing(Boolean(cachedFeed))
+
+    getCachedFeed(cacheKey).then((storedFeed) => {
+      if (!isMounted || !storedFeed) return
+
+      setData((currentData) => currentData ?? storedFeed.data)
+      setIsCached(true)
+    })
+
+    requestMobileFeed(mobileToken, cacheKey)
       .then((payload) => {
         if (!isMounted) return
         setData(payload)
         setError(null)
+        setIsCached(false)
+        setCachedFeed(cacheKey, payload)
+        prefetchFeedImages(payload)
       })
       .catch((errorValue) => {
         if (!isMounted) return
-        setData(null)
         if (errorValue instanceof MobileApiError && errorValue.status === 401) {
+          setData(null)
+          setIsCached(false)
+          removeCachedFeed(cacheKey)
           onUnauthorizedRef.current?.()
         }
         setError(
@@ -119,6 +262,7 @@ export function useMobileFeed(
       .finally(() => {
         if (isMounted) {
           setIsLoading(false)
+          setIsRefreshing(false)
         }
       })
 
@@ -127,5 +271,5 @@ export function useMobileFeed(
     }
   }, [mobileToken, refreshKey])
 
-  return { data, error, isLoading }
+  return { data, error, isCached, isLoading, isRefreshing }
 }

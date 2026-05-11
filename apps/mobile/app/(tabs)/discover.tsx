@@ -19,6 +19,7 @@ import {
   AccountAvatarButton,
   DiscoverGrid,
   ScreenFrame,
+  ScreenScroll,
 } from "@/components/social/ui"
 
 type DiscoverSearchResult = {
@@ -53,6 +54,7 @@ export default function DiscoverScreen() {
   const { isFollowing, revision, toggleFollow } = useFollowState()
   const liveFeed = useMobileFeed(account?.mobileToken, revision)
   const discoverTiles = liveFeed.data?.discoverTiles ?? []
+  const hasFeedData = Boolean(liveFeed.data)
   const normalizedQuery = query.trim().toLowerCase()
 
   useEffect(() => {
@@ -86,6 +88,33 @@ export default function DiscoverScreen() {
       .filter((profile) => profile.searchText.includes(normalizedQuery))
       .slice(0, 12)
   }, [liveFeed.data?.suggestedAccounts, normalizedQuery])
+
+  if (!normalizedQuery && !hasFeedData && (liveFeed.error || liveFeed.isLoading)) {
+    return (
+      <ScreenFrame>
+        <ScreenScroll>
+          <DiscoverSearchHeader
+            inputRef={inputRef}
+            query={query}
+            setQuery={setQuery}
+          />
+          <View style={styles.statusPanel}>
+            <Ionicons
+              name={liveFeed.error ? "cloud-offline-outline" : "sync-outline"}
+              size={24}
+              color={colors.subtext}
+            />
+            <Text style={styles.statusTitle}>
+              {liveFeed.error ? "Could not load Discover" : "Loading Discover"}
+            </Text>
+            <Text style={styles.statusText}>
+              {liveFeed.error ?? "Pulling live stories from the local server."}
+            </Text>
+          </View>
+        </ScreenScroll>
+      </ScreenFrame>
+    )
+  }
 
   return (
     <ScreenFrame>
@@ -320,6 +349,29 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     color: colors.text,
+  },
+  statusPanel: {
+    minHeight: 180,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  statusTitle: {
+    marginTop: 10,
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  statusText: {
+    marginTop: 6,
+    textAlign: "center",
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.subtext,
   },
   resultRow: {
     flexDirection: "row",

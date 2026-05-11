@@ -15,9 +15,16 @@ type LoginPageProps = {
   }>
 }
 
+function isConsumerPath(pathname: string) {
+  return ["/feed", "/stories", "/stats", "/payouts", "/blocked-users"].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  )
+}
+
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = await searchParams
-  const nextPath = resolveNextPath(params.next, "/advertiser")
+  const nextPath = resolveNextPath(params.next, "/feed")
+  const isConsumerSignIn = isConsumerPath(nextPath)
   const session = await getSession()
 
   if (isProfileComplete(session)) {
@@ -37,13 +44,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
         <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm">
           <p className="text-sm font-medium text-[#71717a]">
-            Advertiser sign in
+            {isConsumerSignIn ? "Mobile web sign in" : "Advertiser sign in"}
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
             Welcome back
           </h1>
           <p className="mt-2 text-sm leading-6 text-[#71717a]">
-            Sign in to manage your advertiser account.
+            {isConsumerSignIn
+              ? "Sign in on your phone to post, watch, follow, and manage your story."
+              : "Sign in to manage your advertiser account."}
           </p>
 
           {params.error ? (
@@ -109,7 +118,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             variant="outline"
             className="mt-4 h-11 w-full rounded-[8px] border-[#d4d4d8] bg-white text-sm"
           >
-            <Link href="/signup?next=%2Fadvertiser">Create account</Link>
+            <Link href={`/signup?next=${encodeURIComponent(nextPath)}`}>
+              Create account
+            </Link>
           </Button>
         </section>
       </div>
