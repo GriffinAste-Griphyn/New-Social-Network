@@ -242,18 +242,32 @@ export function AccountAvatarButton({
       return
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      mediaTypes: ["images"],
-      preferredAssetRepresentationMode:
-        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      quality: 0.86,
-    })
+    let result: ImagePicker.ImagePickerResult
+
+    try {
+      result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        mediaTypes: ["images"],
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 0.86,
+      })
+    } catch (error) {
+      Alert.alert(
+        "Could not open photos",
+        error instanceof Error
+          ? error.message
+          : "Close Expo Go and try choosing a profile picture again.",
+      )
+      return
+    }
 
     if (result.canceled) {
       return
     }
+
+    closeAccountMenu()
 
     const asset = result.assets[0]
     const formData = new FormData()
@@ -306,10 +320,7 @@ export function AccountAvatarButton({
       return
     }
 
-    closeAccountMenu()
-    setTimeout(() => {
-      void chooseProfilePhoto()
-    }, 240)
+    void chooseProfilePhoto()
   }
 
   return (
