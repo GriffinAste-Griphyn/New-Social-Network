@@ -9,7 +9,7 @@ import {
   inArray,
   isNotNull,
 } from "drizzle-orm"
-import type { SocialStoryCard } from "@new-social-network/shared"
+import type { SocialStoryCard } from "@ubeye/shared"
 
 import type { CompleteAuthSession } from "@/lib/auth"
 import {

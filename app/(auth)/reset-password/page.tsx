@@ -26,7 +26,7 @@ export default async function ResetPasswordPage({
             href="/"
             className="text-xs font-semibold uppercase tracking-[0.22em] text-black/42"
           >
-            NSN
+            UBEYE
           </Link>
           <h1 className="text-3xl font-semibold text-foreground">
             Choose a new password

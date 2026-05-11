@@ -29,7 +29,8 @@ export type CompleteAuthSession = AuthSession & {
   displayName: string
 }
 
-const sessionCookieName = "nsn_session"
+const sessionCookieName = "ubeye_session"
+const legacySessionCookieName = "nsn_session"
 const webSessionMaxAgeSeconds = 60 * 60 * 24 * 30
 const mobileSessionMaxAgeSeconds = 60 * 60 * 24 * 30
 const sessionLastSeenWriteIntervalMs = 5 * 60 * 1000
@@ -267,7 +268,9 @@ export function isProfileComplete(
 
 export async function getSession() {
   const cookieStore = await cookies()
-  const cookieValue = cookieStore.get(sessionCookieName)?.value
+  const cookieValue =
+    cookieStore.get(sessionCookieName)?.value ??
+    cookieStore.get(legacySessionCookieName)?.value
 
   if (!cookieValue) {
     return null
@@ -299,6 +302,13 @@ export async function createSession(user: AuthUser) {
     path: "/",
     maxAge: webSessionMaxAgeSeconds,
   })
+  cookieStore.set(legacySessionCookieName, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  })
 }
 
 export async function createMobileSessionToken(
@@ -315,13 +325,22 @@ export async function createMobileSessionToken(
 
 export async function clearSession() {
   const cookieStore = await cookies()
-  const cookieValue = cookieStore.get(sessionCookieName)?.value
+  const cookieValue =
+    cookieStore.get(sessionCookieName)?.value ??
+    cookieStore.get(legacySessionCookieName)?.value
 
   if (cookieValue) {
     await revokeSessionToken(cookieValue)
   }
 
   cookieStore.set(sessionCookieName, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  })
+  cookieStore.set(legacySessionCookieName, "", {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

@@ -1,5 +1,5 @@
 {
-  "name": "new-social-network",
+  "name": "ubeye",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
-    "@new-social-network/shared": "file:packages/shared",
+    "@ubeye/shared": "file:packages/shared",
     "@vercel/blob": "^2.3.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

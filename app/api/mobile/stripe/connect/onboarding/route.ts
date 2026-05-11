@@ -36,8 +36,8 @@ export async function POST(request: Request) {
   try {
     const url = await createCreatorStripeOnboardingUrl({
       session,
-      refreshUrl: "newsocialnetwork://profile?stripe=refresh",
-      returnUrl: "newsocialnetwork://profile?stripe=returned",
+      refreshUrl: "ubeye://profile?stripe=refresh",
+      returnUrl: "ubeye://profile?stripe=returned",
     })
 
     return NextResponse.json({ ok: true, url })

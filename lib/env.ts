@@ -6,7 +6,7 @@ const envSchema = z.object({
   AUTH_SECRET: z.string().min(32),
   ADMIN_EMAILS: z.string().optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
-  RESEND_FROM_EMAIL: z.string().default("New Social Network <onboarding@resend.dev>"),
+  RESEND_FROM_EMAIL: z.string().default("UBEYE <onboarding@resend.dev>"),
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),

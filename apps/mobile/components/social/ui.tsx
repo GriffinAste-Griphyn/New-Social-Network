@@ -4,7 +4,7 @@ import type {
   SocialDiscoverTile,
   SocialFollowingProfile,
   SocialStoryCard,
-} from "@new-social-network/shared"
+} from "@ubeye/shared"
 import type { ReactElement, ReactNode } from "react"
 import { useEffect, useState } from "react"
 import {

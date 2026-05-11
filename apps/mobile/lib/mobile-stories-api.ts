@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import type { SocialAppHomeContract, SocialStoryCard } from "@new-social-network/shared"
+import type { SocialAppHomeContract, SocialStoryCard } from "@ubeye/shared"
 
 import { MobileApiError, postMobileApi } from "@/lib/mobile-api"
 
