@@ -32,6 +32,7 @@ import { useFollowState } from "@/lib/follow-state"
 import {
   deleteMobileApi,
   getMobileApi,
+  normalizeMobileMediaUrl,
   postMobileApi,
   postMobileFormApi,
 } from "@/lib/mobile-api"
@@ -93,6 +94,9 @@ export default function StoryScreen() {
   const [loadedImageUrls, setLoadedImageUrls] = useState<Set<string>>(
     () => new Set(),
   )
+  const [failedImageUrls, setFailedImageUrls] = useState<Set<string>>(
+    () => new Set(),
+  )
   const replyInputRef = useRef<TextInput>(null)
   const activeImpressionRef = useRef<{
     storyItemId: string
@@ -126,6 +130,11 @@ export default function StoryScreen() {
       activeItem?.assetKind === "image" &&
       activeItem.mediaUrl &&
       !loadedImageUrls.has(activeItem.mediaUrl),
+  )
+  const didActiveImageFail = Boolean(
+    activeItem?.assetKind === "image" &&
+      activeItem.mediaUrl &&
+      failedImageUrls.has(activeItem.mediaUrl),
   )
   const captionTop = getCaptionTopPercent(activeItem)
   const avatarUrl = getStoryAvatarUrl(story)
@@ -175,6 +184,19 @@ export default function StoryScreen() {
     })
   }, [])
 
+  const markImageFailed = useCallback((mediaUrl: string) => {
+    markImageLoaded(mediaUrl)
+    setFailedImageUrls((current) => {
+      if (current.has(mediaUrl)) {
+        return current
+      }
+
+      const next = new Set(current)
+      next.add(mediaUrl)
+      return next
+    })
+  }, [markImageLoaded])
+
   useEffect(() => {
     setActiveIndex(0)
     setReply("")
@@ -185,6 +207,7 @@ export default function StoryScreen() {
     setKeyboardHeight(0)
     setIsEmojiTrayOpen(false)
     setLoadedImageUrls(new Set())
+    setFailedImageUrls(new Set())
   }, [id])
 
   useEffect(() => {
@@ -202,7 +225,7 @@ export default function StoryScreen() {
     )
       .then((payload) => {
         if (isMounted) {
-          setRemoteStory(payload.story)
+          setRemoteStory(normalizeStoryMediaUrls(payload.story))
           setStoryRequestState("settled")
         }
       })
@@ -755,6 +778,9 @@ export default function StoryScreen() {
           ) : !isReplyMode && activeItem?.mediaUrl ? (
             <Image
               key={activeItem.playbackId}
+              onError={() => {
+                markImageFailed(activeItem.mediaUrl)
+              }}
               onLoadEnd={() => {
                 markImageLoaded(activeItem.mediaUrl)
               }}
@@ -766,6 +792,15 @@ export default function StoryScreen() {
           {isActiveImageLoading ? (
             <View style={styles.mediaLoadingState}>
               <ActivityIndicator size="small" color={colors.text} />
+            </View>
+          ) : null}
+
+          {didActiveImageFail ? (
+            <View style={styles.unavailableState}>
+              <Ionicons name="image-outline" size={34} color={colors.text} />
+              <Text style={styles.unavailableTitle}>
+                Could not load this story image.
+              </Text>
             </View>
           ) : null}
 
@@ -1196,6 +1231,18 @@ function getCaptionTopPercent(item: StoryPlaybackItem | undefined) {
   const requestedTop = item?.captionVerticalPercent ?? 74
 
   return Math.min(Math.max(requestedTop, 18), 82)
+}
+
+function normalizeStoryMediaUrls(story: MobileStoryApiStack): MobileStoryApiStack {
+  return {
+    ...story,
+    avatarUrl: normalizeMobileMediaUrl(story.avatarUrl),
+    items: story.items.map((item) => ({
+      ...item,
+      mediaUrl: normalizeMobileMediaUrl(item.mediaUrl) ?? item.mediaUrl,
+      thumbnailUrl: normalizeMobileMediaUrl(item.thumbnailUrl),
+    })),
+  }
 }
 
 function expandStoryItems(items: MobileStoryStackItem[]): StoryPlaybackItem[] {

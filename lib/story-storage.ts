@@ -873,7 +873,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
         .rotate()
         .jpeg({
           quality: 90,
-          mozjpeg: true,
+          progressive: false,
         })
         .toBuffer())
       storedUploadType = {
