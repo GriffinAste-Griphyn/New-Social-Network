@@ -18,6 +18,20 @@ function absoluteMediaUrl(value: string | null, request: Request) {
   return new URL(value, request.url).toString()
 }
 
+function versionMediaUrl(value: string | null, version: string | null | undefined) {
+  if (!value || !version) {
+    return value
+  }
+
+  try {
+    const url = new URL(value)
+    url.searchParams.set("v", version)
+    return url.toString()
+  } catch {
+    return value
+  }
+}
+
 function absoluteStoryCardMedia<T extends {
   mediaUrl: string
   thumbnailUrl: string | null
@@ -69,6 +83,16 @@ export async function POST(request: Request) {
   const discoverStories = collapseStoryCardsByCreator(
     feed.discoverStories.map((story) => absoluteStoryCardMedia(story, request)),
   ).filter((story) => !followedCreatorNames.has(story.creator.toLowerCase()))
+  const latestMyStoryItem =
+    feed.myStory.items.length > 0
+      ? feed.myStory.items[feed.myStory.items.length - 1]
+      : null
+  const latestMyStoryThumbnailUrl = versionMediaUrl(
+    publicStoryMediaUrl(feed.myStory.latestThumbnailUrl, request, {
+      signed: true,
+    }),
+    latestMyStoryItem?.id,
+  )
 
   return NextResponse.json({
     ok: true,
@@ -99,11 +123,7 @@ export async function POST(request: Request) {
         ...feed.myStory.owner,
         imageUrl: absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
       },
-      latestThumbnailUrl: publicStoryMediaUrl(
-        feed.myStory.latestThumbnailUrl,
-        request,
-        { signed: true },
-      ),
+      latestThumbnailUrl: latestMyStoryThumbnailUrl,
       items: feed.myStory.items.map((story) =>
         absoluteStoryCardMedia(story, request),
       ),

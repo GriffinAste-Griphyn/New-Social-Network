@@ -4,8 +4,10 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto"
+import { execFile } from "node:child_process"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { promisify } from "node:util"
 import { del, put } from "@vercel/blob"
 import sharp from "sharp"
 
@@ -17,6 +19,7 @@ const localStoryUrlPrefix = "/uploads/stories"
 const storyMediaRoutePrefix = "/api/story-media"
 const cloudflareStreamMediaPrefix = "cloudflare-stream"
 const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
+const execFileAsync = promisify(execFile)
 
 type ResolvedUploadType = {
   assetKind: "image" | "video"
@@ -204,17 +207,86 @@ export function publicStoryMediaUrl(
   return url.toString()
 }
 
+async function createLocalVideoThumbnail(videoPath: string, thumbnailPath: string) {
+  const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg"
+  const extractLastFrame = [
+    "-y",
+    "-sseof",
+    "-0.1",
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    thumbnailPath,
+  ]
+  const extractFirstFrame = [
+    "-y",
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    thumbnailPath,
+  ]
+
+  try {
+    await execFileAsync(ffmpegPath, extractLastFrame)
+  } catch {
+    try {
+      await execFileAsync(ffmpegPath, extractFirstFrame)
+    } catch {
+      return false
+    }
+  }
+
+  try {
+    const normalizedThumbnail = Buffer.from(await sharp(thumbnailPath)
+      .rotate()
+      .resize({
+        width: 720,
+        height: 1280,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({
+        quality: 86,
+        progressive: false,
+      })
+      .toBuffer())
+
+    await writeFile(thumbnailPath, normalizedThumbnail)
+    return true
+  } catch {
+    await rm(thumbnailPath, { force: true })
+    return false
+  }
+}
+
 const localStoryStorageProvider: StoryStorageProvider = {
   async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
     await mkdir(storyUploadDirectory, { recursive: true })
-    await writeFile(path.join(storyUploadDirectory, fileName), buffer)
+    const absolutePath = path.join(storyUploadDirectory, fileName)
+
+    await writeFile(absolutePath, buffer)
 
     const mediaUrl = withConfiguredPublicBaseUrl(`${localStoryUrlPrefix}/${fileName}`)
+    let thumbnailUrl = assetKind === "image" ? mediaUrl : null
+
+    if (assetKind === "video") {
+      const extension = path.extname(fileName)
+      const thumbnailFileName = `${fileName.slice(0, -extension.length)}-thumb.jpg`
+      const thumbnailPath = path.join(storyUploadDirectory, thumbnailFileName)
+
+      if (await createLocalVideoThumbnail(absolutePath, thumbnailPath)) {
+        thumbnailUrl = withConfiguredPublicBaseUrl(
+          `${localStoryUrlPrefix}/${thumbnailFileName}`,
+        )
+      }
+    }
 
     return {
       assetKind,
       mediaUrl,
-      thumbnailUrl: assetKind === "image" ? mediaUrl : null,
+      thumbnailUrl,
       storageProvider: "local",
       storageKey: fileName,
       contentType,
@@ -236,8 +308,18 @@ const localStoryStorageProvider: StoryStorageProvider = {
 
     const fileName = localMediaUrl.replace(`${localStoryUrlPrefix}/`, "")
     const absolutePath = path.join(storyUploadDirectory, fileName)
+    const extension = path.extname(fileName)
+    const thumbnailPath = extension
+      ? path.join(
+          storyUploadDirectory,
+          `${fileName.slice(0, -extension.length)}-thumb.jpg`,
+        )
+      : null
 
     await rm(absolutePath, { force: true })
+    if (thumbnailPath) {
+      await rm(thumbnailPath, { force: true })
+    }
   },
 }
 

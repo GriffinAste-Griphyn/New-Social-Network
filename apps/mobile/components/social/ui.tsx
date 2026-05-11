@@ -764,6 +764,7 @@ export function StoryRail({
 type MyStoryPreview = {
   hasActiveStory: boolean
   latestThumbnailUrl: string | null
+  latestAssetKind: "image" | "video" | null
   owner: {
     name: string
     handle: string
@@ -780,6 +781,7 @@ export function FollowingPreviewRail({
 }) {
   const router = useRouter()
   const hasActiveMyStory = Boolean(myStory?.hasActiveStory)
+  const myStoryPreviewUrl = normalizeMobileMediaUrl(myStory?.latestThumbnailUrl)
 
   return (
     <FlatList
@@ -802,15 +804,22 @@ export function FollowingPreviewRail({
               pressed ? styles.followingPreviewPressed : null,
             ]}
           >
-            {myStory?.latestThumbnailUrl ? (
-              <Image
-                source={{ uri: myStory.latestThumbnailUrl }}
-                style={styles.followingPreviewImage}
+            {myStoryPreviewUrl ? (
+              <StoryVisual
+                assetKind={myStory?.latestAssetKind ?? "image"}
+                mediaUrl={myStoryPreviewUrl}
+                thumbnailUrl={myStoryPreviewUrl}
+                title="My Story"
               />
             ) : (
               <View style={styles.myStoryEmptyPreview} />
             )}
             <View style={styles.followingPreviewOverlay} />
+            {myStory?.latestAssetKind === "video" && myStoryPreviewUrl ? (
+              <View style={styles.myStoryVideoBadge}>
+                <Ionicons name="play" size={12} color="#fff" />
+              </View>
+            ) : null}
             <View style={styles.myStoryAddBadge}>
               <Ionicons name="add" size={16} color="#fff" />
             </View>
@@ -1241,11 +1250,14 @@ function StoryVisual({
   thumbnailUrl: string | null
   title: string
 }) {
-  const source = assetKind === "image" ? mediaUrl : thumbnailUrl
+  const source = normalizeMobileMediaUrl(
+    assetKind === "image" ? mediaUrl : thumbnailUrl,
+  )
 
   if (source) {
     return (
       <Image
+        key={source}
         source={{ uri: source }}
         style={styles.absoluteFill}
         resizeMode="cover"
@@ -1727,6 +1739,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dark,
     borderWidth: 2,
     borderColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  myStoryVideoBadge: {
+    position: "absolute",
+    top: 42,
+    right: 11,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(17,24,39,0.78)",
     alignItems: "center",
     justifyContent: "center",
   },
