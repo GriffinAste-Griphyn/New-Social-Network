@@ -64,6 +64,8 @@ type AccountAvatarButtonProps = {
   displayName?: string | null
   email?: string | null
   handle?: string | null
+  isProfilePhotoUploading?: boolean
+  onProfilePhotoPress?: () => void
   unreadReplyCount?: number
 }
 
@@ -142,6 +144,8 @@ export function AccountAvatarButton({
   displayName,
   email,
   handle,
+  isProfilePhotoUploading = false,
+  onProfilePhotoPress,
   unreadReplyCount = 0,
 }: AccountAvatarButtonProps) {
   const router = useRouter()
@@ -194,6 +198,14 @@ export function AccountAvatarButton({
   const resolvedEmail = email ?? account?.email
   const resolvedHandle = handle ?? account?.handle ?? "account"
   const resolvedAvatarUrl = avatarUrl ?? account?.avatarUrl ?? null
+  const changeProfilePhoto = () => {
+    if (!onProfilePhotoPress || isProfilePhotoUploading) {
+      return
+    }
+
+    closeAccountMenu()
+    setTimeout(onProfilePhotoPress, 240)
+  }
 
   return (
     <>
@@ -230,7 +242,16 @@ export function AccountAvatarButton({
               contentContainerStyle={styles.accountMenuScrollContent}
             >
               <View style={styles.accountMenuHeader}>
-                <View style={styles.accountMenuAvatar}>
+                <Pressable
+                  accessibilityLabel="Change profile picture"
+                  accessibilityRole="button"
+                  disabled={!onProfilePhotoPress || isProfilePhotoUploading}
+                  onPress={changeProfilePhoto}
+                  style={({ pressed }) => [
+                    styles.accountMenuAvatar,
+                    pressed ? styles.accountMenuAvatarPressed : null,
+                  ]}
+                >
                   {resolvedAvatarUrl ? (
                     <Image
                       source={{ uri: resolvedAvatarUrl }}
@@ -241,7 +262,16 @@ export function AccountAvatarButton({
                       {initials(resolvedDisplayName)}
                     </Text>
                   )}
-                </View>
+                  {onProfilePhotoPress ? (
+                    <View style={styles.accountMenuAvatarEditBadge}>
+                      {isProfilePhotoUploading ? (
+                        <ActivityIndicator size="small" color={colors.surface} />
+                      ) : (
+                        <Ionicons name="camera" size={13} color={colors.surface} />
+                      )}
+                    </View>
+                  ) : null}
+                </Pressable>
                 <View style={styles.accountMenuIdentity}>
                   <Text style={styles.accountMenuName} numberOfLines={1}>
                     {resolvedDisplayName}
@@ -1251,16 +1281,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.accent,
-    overflow: "hidden",
+  },
+  accountMenuAvatarPressed: {
+    opacity: 0.72,
   },
   accountMenuAvatarImage: {
     width: "100%",
     height: "100%",
+    borderRadius: 29,
   },
   accountMenuInitials: {
     fontSize: 20,
     fontWeight: "700",
     color: colors.surface,
+  },
+  accountMenuAvatarEditBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dark,
   },
   accountMenuIdentity: {
     flex: 1,
