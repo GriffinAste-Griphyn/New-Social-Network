@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { and, desc, eq, inArray } from "drizzle-orm"
+import { alias } from "drizzle-orm/pg-core"
 
 import { getDb } from "@/lib/db"
 import { follows, stories, storyInteractions, users } from "@/lib/db/schema"
@@ -25,6 +26,15 @@ export type StoryInteractionEvent = {
   mediaThumbnailUrl: string | null
   mediaAssetKind: "image" | "video" | null
   createdAt: string
+}
+
+export type SentStoryInteractionEvent = StoryInteractionEvent & {
+  target: {
+    id: string
+    name: string
+    handle: string
+    imageUrl: string | null
+  }
 }
 
 function mapEvent(row: {
@@ -56,6 +66,60 @@ function mapEvent(row: {
       name: row.displayName,
       handle: row.handle,
       imageUrl: row.avatarUrl,
+    },
+    kind: row.kind,
+    body: row.body,
+    reaction: row.reaction,
+    mediaUrl: row.mediaUrl,
+    mediaThumbnailUrl: row.mediaThumbnailUrl,
+    mediaAssetKind: row.mediaAssetKind,
+    createdAt: row.createdAt.toISOString(),
+  }
+}
+
+function mapSentEvent(row: {
+  id: string
+  storyId: string
+  creatorId: string
+  actorId: string
+  actorDisplayName: string | null
+  actorHandle: string | null
+  actorAvatarUrl: string | null
+  creatorDisplayName: string | null
+  creatorHandle: string | null
+  creatorAvatarUrl: string | null
+  kind: StoryInteractionKind
+  body: string | null
+  reaction: string | null
+  mediaUrl: string | null
+  mediaThumbnailUrl: string | null
+  mediaAssetKind: "image" | "video" | null
+  createdAt: Date
+}): SentStoryInteractionEvent | null {
+  if (
+    !row.actorDisplayName ||
+    !row.actorHandle ||
+    !row.creatorDisplayName ||
+    !row.creatorHandle
+  ) {
+    return null
+  }
+
+  return {
+    id: row.id,
+    storyId: row.storyId,
+    creatorId: row.creatorId,
+    actor: {
+      id: row.actorId,
+      name: row.actorDisplayName,
+      handle: row.actorHandle,
+      imageUrl: row.actorAvatarUrl,
+    },
+    target: {
+      id: row.creatorId,
+      name: row.creatorDisplayName,
+      handle: row.creatorHandle,
+      imageUrl: row.creatorAvatarUrl,
     },
     kind: row.kind,
     body: row.body,
@@ -181,6 +245,54 @@ export async function listStoryInteractionsForCreator(input: {
 
   return rows.flatMap((row) => {
     const event = mapEvent(row)
+
+    return event ? [event] : []
+  })
+}
+
+export async function listStoryInteractionsForActor(input: {
+  actorId: string
+  kinds?: StoryInteractionKind[]
+  limit?: number
+}): Promise<SentStoryInteractionEvent[]> {
+  const db = getDb()
+  const actorUsers = alias(users, "actor_users")
+  const creatorUsers = alias(users, "creator_users")
+  const kinds = input.kinds?.length ? input.kinds : undefined
+  const filters = [
+    eq(storyInteractions.actorId, input.actorId),
+    kinds ? inArray(storyInteractions.kind, kinds) : undefined,
+  ].filter(Boolean)
+
+  const rows = await db
+    .select({
+      id: storyInteractions.id,
+      storyId: storyInteractions.storyId,
+      creatorId: storyInteractions.creatorId,
+      actorId: storyInteractions.actorId,
+      actorDisplayName: actorUsers.displayName,
+      actorHandle: actorUsers.handle,
+      actorAvatarUrl: actorUsers.avatarUrl,
+      creatorDisplayName: creatorUsers.displayName,
+      creatorHandle: creatorUsers.handle,
+      creatorAvatarUrl: creatorUsers.avatarUrl,
+      kind: storyInteractions.kind,
+      body: storyInteractions.body,
+      reaction: storyInteractions.reaction,
+      mediaUrl: storyInteractions.mediaUrl,
+      mediaThumbnailUrl: storyInteractions.mediaThumbnailUrl,
+      mediaAssetKind: storyInteractions.mediaAssetKind,
+      createdAt: storyInteractions.createdAt,
+    })
+    .from(storyInteractions)
+    .innerJoin(actorUsers, eq(actorUsers.id, storyInteractions.actorId))
+    .innerJoin(creatorUsers, eq(creatorUsers.id, storyInteractions.creatorId))
+    .where(and(...filters))
+    .orderBy(desc(storyInteractions.createdAt))
+    .limit(input.limit ?? 50)
+
+  return rows.flatMap((row) => {
+    const event = mapSentEvent(row)
 
     return event ? [event] : []
   })
