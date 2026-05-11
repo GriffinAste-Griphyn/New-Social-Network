@@ -111,6 +111,33 @@ export function getApiBaseUrl() {
   return `http://${host === "localhost" ? "127.0.0.1" : host}:3000`
 }
 
+export function normalizeMobileMediaUrl(value: string | null | undefined) {
+  if (!value) {
+    return null
+  }
+
+  if (!/^https?:\/\//i.test(value)) {
+    return value
+  }
+
+  try {
+    const mediaUrl = new URL(value)
+
+    if (mediaUrl.hostname !== "localhost" && mediaUrl.hostname !== "127.0.0.1") {
+      return value
+    }
+
+    const apiUrl = new URL(getApiBaseUrl())
+    mediaUrl.protocol = apiUrl.protocol
+    mediaUrl.hostname = apiUrl.hostname
+    mediaUrl.port = apiUrl.port
+
+    return mediaUrl.toString()
+  } catch {
+    return value
+  }
+}
+
 export async function postMobileApi<TResponse>(
   path: string,
   body: Record<string, unknown>,

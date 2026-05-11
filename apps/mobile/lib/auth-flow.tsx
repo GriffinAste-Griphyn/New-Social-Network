@@ -12,6 +12,7 @@ import * as SecureStore from "expo-secure-store"
 
 import {
   MobileApiError,
+  normalizeMobileMediaUrl,
   postMobileApi,
   setMobileApiAuthToken,
 } from "@/lib/mobile-api"
@@ -80,7 +81,10 @@ function parseStoredAccount(value: string | null): MobileAccount | null {
         email: parsed.email,
         displayName: parsed.displayName,
         handle: parsed.handle,
-        avatarUrl: typeof parsed.avatarUrl === "string" ? parsed.avatarUrl : null,
+        avatarUrl:
+          typeof parsed.avatarUrl === "string"
+            ? normalizeMobileMediaUrl(parsed.avatarUrl)
+            : null,
         mobileToken: parsed.mobileToken,
       }
     }
@@ -213,6 +217,10 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
       const nextAccount = {
         ...current,
         ...input,
+        avatarUrl:
+          "avatarUrl" in input
+            ? normalizeMobileMediaUrl(input.avatarUrl)
+            : current.avatarUrl,
       }
 
       void setStoredAccount(nextAccount)
@@ -273,7 +281,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
             email: result.user.email,
             displayName: result.user.displayName ?? normalizedDisplayName,
             handle: result.user.handle ?? normalizedHandle,
-            avatarUrl: result.user.avatarUrl ?? null,
+            avatarUrl: normalizeMobileMediaUrl(result.user.avatarUrl),
             mobileToken: result.mobileToken,
           })
           setError(null)
@@ -319,7 +327,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
               email: result.user.email,
               displayName: result.user.displayName,
               handle: result.user.handle,
-              avatarUrl: result.user.avatarUrl ?? null,
+              avatarUrl: normalizeMobileMediaUrl(result.user.avatarUrl),
               mobileToken: result.mobileToken,
             })
           } else {
@@ -456,7 +464,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
               email: result.user.email,
               displayName: result.user.displayName,
               handle: result.user.handle,
-              avatarUrl: result.user.avatarUrl ?? null,
+              avatarUrl: normalizeMobileMediaUrl(result.user.avatarUrl),
               mobileToken: result.mobileToken,
             })
           } else {

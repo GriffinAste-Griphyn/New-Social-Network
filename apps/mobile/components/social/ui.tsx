@@ -28,6 +28,7 @@ import { useAuthFlow } from "@/lib/auth-flow"
 import {
   getMobileApi,
   MobileApiError,
+  normalizeMobileMediaUrl,
   postMobileFormApi,
 } from "@/lib/mobile-api"
 
@@ -214,7 +215,11 @@ export function AccountAvatarButton({
   const resolvedDisplayName = displayName ?? account?.displayName ?? "Account"
   const resolvedEmail = email ?? account?.email
   const resolvedHandle = handle ?? account?.handle ?? "account"
-  const resolvedAvatarUrl = avatarUrl ?? account?.avatarUrl ?? null
+  const resolvedAvatarUrl = normalizeMobileMediaUrl(avatarUrl ?? account?.avatarUrl)
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null)
+  const shouldShowAvatar = Boolean(
+    resolvedAvatarUrl && failedAvatarUrl !== resolvedAvatarUrl,
+  )
   const isAvatarUploading = isProfilePhotoUploading || isUploadingAvatar
 
   const chooseProfilePhoto = async () => {
@@ -330,8 +335,12 @@ export function AccountAvatarButton({
         background={colors.accent}
         onPress={() => setIsAccountMenuOpen(true)}
       >
-        {resolvedAvatarUrl ? (
-          <Image source={{ uri: resolvedAvatarUrl }} style={styles.headerAvatarImage} />
+        {shouldShowAvatar && resolvedAvatarUrl ? (
+          <Image
+            onError={() => setFailedAvatarUrl(resolvedAvatarUrl)}
+            source={{ uri: resolvedAvatarUrl }}
+            style={styles.headerAvatarImage}
+          />
         ) : (
           <Text style={styles.headerInitials}>
             {initials(resolvedDisplayName)}
@@ -368,8 +377,9 @@ export function AccountAvatarButton({
                     pressed ? styles.accountMenuAvatarPressed : null,
                   ]}
                 >
-                  {resolvedAvatarUrl ? (
+                  {shouldShowAvatar && resolvedAvatarUrl ? (
                     <Image
+                      onError={() => setFailedAvatarUrl(resolvedAvatarUrl)}
                       source={{ uri: resolvedAvatarUrl }}
                       style={styles.accountMenuAvatarImage}
                     />

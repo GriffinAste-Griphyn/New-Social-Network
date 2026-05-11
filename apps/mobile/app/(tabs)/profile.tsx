@@ -15,7 +15,12 @@ import {
 } from "react-native"
 
 import { useAuthFlow } from "@/lib/auth-flow"
-import { getMobileApi, MobileApiError, postMobileFormApi } from "@/lib/mobile-api"
+import {
+  getMobileApi,
+  MobileApiError,
+  normalizeMobileMediaUrl,
+  postMobileFormApi,
+} from "@/lib/mobile-api"
 import {
   AccountAvatarButton,
   ScreenFrame,
@@ -113,6 +118,7 @@ export default function ProfileScreen() {
 
   const displayName = account?.displayName ?? "Account"
   const handle = account?.handle ?? "account"
+  const avatarUrl = normalizeMobileMediaUrl(account?.avatarUrl)
   const followerCount = stats?.followerCount ?? 0
   const followingCount = stats?.followingCount ?? 0
   const availableCents = stats?.earnings.availableCents ?? 0
@@ -208,7 +214,7 @@ export default function ProfileScreen() {
           subtitle={`@${handle}`}
           right={
             <AccountAvatarButton
-              avatarUrl={account?.avatarUrl}
+              avatarUrl={avatarUrl}
               displayName={displayName}
               email={account?.email}
               handle={handle}
@@ -229,8 +235,8 @@ export default function ProfileScreen() {
               pressed ? styles.pressed : null,
             ]}
           >
-            {account?.avatarUrl ? (
-              <Image source={{ uri: account.avatarUrl }} style={styles.avatarImage} />
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
             ) : (
               <Text style={styles.avatarText}>{initials(displayName)}</Text>
             )}

@@ -321,7 +321,7 @@ export default function PostScreen() {
             >
               <Ionicons name="close" size={38} color={colors.text} />
             </Pressable>
-            <StoryHeaderPill thumbnailUri={galleryItems[5].uri} />
+            <StoryHeaderPill />
           </View>
 
           <View style={styles.snapAccountButton}>
@@ -586,12 +586,9 @@ export default function PostScreen() {
   )
 }
 
-function StoryHeaderPill({ thumbnailUri }: { thumbnailUri: string }) {
+function StoryHeaderPill() {
   return (
     <View style={styles.storyHeaderPill}>
-      <View style={styles.storyHeaderThumbWrap}>
-        <Image source={{ uri: thumbnailUri }} style={styles.storyHeaderThumb} />
-      </View>
       <Text numberOfLines={1} style={styles.storyHeaderTitle}>
         New Story
       </Text>
