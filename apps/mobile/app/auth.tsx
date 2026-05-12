@@ -3,6 +3,7 @@ import { useRouter } from "expo-router"
 import type { ComponentProps } from "react"
 import { useEffect, useState } from "react"
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,6 +27,8 @@ const colors = {
   accent: "#e01616",
   dark: "#111827",
 }
+
+const ubeyeEyeIcon = require("../assets/images/ubeye-eye-icon.png") as number
 
 export default function AuthScreen() {
   const router = useRouter()
@@ -94,7 +97,11 @@ export default function AuthScreen() {
         >
           <View style={styles.brandRow}>
             <View style={styles.brandMark}>
-              <Ionicons name="sparkles" size={22} color={colors.surface} />
+              <Image
+                accessibilityIgnoresInvertColors
+                source={ubeyeEyeIcon}
+                style={styles.brandMarkImage}
+              />
             </View>
             <Text style={styles.brandText}>UBEYE</Text>
           </View>
@@ -495,6 +502,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.dark,
+  },
+  brandMarkImage: {
+    width: 32,
+    height: 32,
   },
   brandText: {
     fontSize: 18,

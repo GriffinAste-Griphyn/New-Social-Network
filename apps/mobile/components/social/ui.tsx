@@ -28,6 +28,7 @@ import { SafeAreaView } from "react-native-safe-area-context"
 
 import { useAuthFlow } from "@/lib/auth-flow"
 import {
+  deleteMobileApi,
   getMobileApi,
   MobileApiError,
   normalizeMobileMediaUrl,
@@ -168,9 +169,10 @@ export function AccountAvatarButton({
   unreadReplyCount = 0,
 }: AccountAvatarButtonProps) {
   const router = useRouter()
-  const { account, expireSession, updateAccount } = useAuthFlow()
+  const { account, expireSession, reset, updateAccount } = useAuthFlow()
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false)
   const [creatorStats, setCreatorStats] =
     useState<AccountMenuCreatorStats | null>(null)
   const [creatorStatsState, setCreatorStatsState] = useState<
@@ -328,6 +330,76 @@ export function AccountAvatarButton({
     }
 
     void chooseProfilePhoto()
+  }
+
+  const confirmLogout = () => {
+    Alert.alert(
+      "Log out?",
+      "You will need to sign in again to use this account on this phone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Log out",
+          style: "destructive",
+          onPress: () => {
+            closeAccountMenu()
+            reset()
+          },
+        },
+      ],
+    )
+  }
+
+  const deleteAccount = async () => {
+    if (isDeletingAccount) {
+      return
+    }
+
+    if (!account?.mobileToken) {
+      closeAccountMenu()
+      expireSession()
+      return
+    }
+
+    setIsDeletingAccount(true)
+
+    try {
+      await deleteMobileApi<{ ok: true; message: string }>(
+        "/api/mobile/account",
+        {},
+        { authToken: account.mobileToken },
+      )
+      closeAccountMenu()
+      reset()
+    } catch (error) {
+      if (error instanceof MobileApiError && error.status === 401) {
+        closeAccountMenu()
+        expireSession()
+        return
+      }
+
+      Alert.alert(
+        "Could not delete account",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsDeletingAccount(false)
+    }
+  }
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      "Delete account?",
+      "This removes your profile, signs you out, and hides your stories and replies. Financial records may be retained where required.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete account",
+          style: "destructive",
+          onPress: deleteAccount,
+        },
+      ],
+    )
   }
 
   return (
@@ -531,6 +603,53 @@ export function AccountAvatarButton({
                   Earnings and payouts
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+              </Pressable>
+
+              <Pressable
+                accessibilityLabel="Log out"
+                accessibilityRole="button"
+                onPress={confirmLogout}
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  pressed ? styles.accountMenuActionPressed : null,
+                ]}
+              >
+                <Ionicons name="log-out-outline" size={19} color={colors.danger} />
+                <Text
+                  style={[
+                    styles.accountMenuActionText,
+                    styles.accountMenuActionTextDanger,
+                  ]}
+                >
+                  Log out
+                </Text>
+              </Pressable>
+
+              <Pressable
+                accessibilityLabel="Delete account"
+                accessibilityRole="button"
+                onPress={confirmDeleteAccount}
+                disabled={isDeletingAccount}
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  styles.accountMenuDangerAction,
+                  isDeletingAccount ? styles.accountMenuActionDisabled : null,
+                  pressed ? styles.accountMenuActionPressed : null,
+                ]}
+              >
+                {isDeletingAccount ? (
+                  <ActivityIndicator size="small" color={colors.danger} />
+                ) : (
+                  <Ionicons name="trash-outline" size={19} color={colors.danger} />
+                )}
+                <Text
+                  style={[
+                    styles.accountMenuActionText,
+                    styles.accountMenuActionTextDanger,
+                  ]}
+                >
+                  {isDeletingAccount ? "Deleting account..." : "Delete account"}
+                </Text>
               </Pressable>
             </ScrollView>
           </View>
@@ -1667,12 +1786,22 @@ const styles = StyleSheet.create({
   accountMenuActionPressed: {
     opacity: 0.76,
   },
+  accountMenuActionDisabled: {
+    opacity: 0.58,
+  },
+  accountMenuDangerAction: {
+    borderColor: "rgba(239,68,68,0.22)",
+    backgroundColor: "rgba(239,68,68,0.06)",
+  },
   accountMenuActionText: {
     flex: 1,
     minWidth: 0,
     fontSize: 14,
     fontWeight: "800",
     color: colors.text,
+  },
+  accountMenuActionTextDanger: {
+    color: colors.danger,
   },
   screenHeader: {
     flexDirection: "row",
