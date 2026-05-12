@@ -16,6 +16,7 @@ import {
 
 import { useAuthFlow } from "@/lib/auth-flow"
 import {
+  deleteMobileApi,
   getMobileApi,
   MobileApiError,
   normalizeMobileMediaUrl,
@@ -91,6 +92,7 @@ export default function ProfileScreen() {
   const { account, expireSession, reset, updateAccount } = useAuthFlow()
   const [stats, setStats] = useState<ProfileStats | null>(null)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false)
   const [avatarError, setAvatarError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -223,6 +225,60 @@ export default function ProfileScreen() {
     )
   }
 
+  const deleteAccount = async () => {
+    if (isDeletingAccount) {
+      return
+    }
+
+    if (!account?.mobileToken) {
+      expireSession()
+      return
+    }
+
+    setIsDeletingAccount(true)
+
+    try {
+      await deleteMobileApi<{ ok: true; message: string }>(
+        "/api/mobile/account",
+        {},
+        { authToken: account.mobileToken },
+      )
+      reset()
+    } catch (error) {
+      if (error instanceof MobileApiError && error.status === 401) {
+        expireSession()
+        return
+      }
+
+      Alert.alert(
+        "Could not delete account",
+        error instanceof Error
+          ? error.message
+          : "Try again in a moment.",
+      )
+    } finally {
+      setIsDeletingAccount(false)
+    }
+  }
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      "Delete account?",
+      "This removes your profile, signs you out, and hides your stories and replies. Financial records may be retained where required.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Delete account",
+          style: "destructive",
+          onPress: deleteAccount,
+        },
+      ],
+    )
+  }
+
   return (
     <ScreenFrame>
       <ScreenScroll>
@@ -344,6 +400,17 @@ export default function ProfileScreen() {
             detail="Sign out on this device"
             isDestructive
             onPress={confirmLogout}
+          />
+          <ActionRow
+            icon="trash-outline"
+            label="Delete account"
+            detail={
+              isDeletingAccount
+                ? "Deleting account..."
+                : "Remove profile and personal data"
+            }
+            isDestructive
+            onPress={confirmDeleteAccount}
           />
         </View>
 

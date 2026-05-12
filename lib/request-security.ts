@@ -24,6 +24,7 @@ export const mutationRateLimits = {
   storyInteractionUser: { limit: 120, windowMs: 15 * rateLimitWindows.minute },
   storyImpressionUser: { limit: 600, windowMs: 15 * rateLimitWindows.minute },
   reportUser: { limit: 20, windowMs: rateLimitWindows.hour },
+  accountDeleteUser: { limit: 3, windowMs: rateLimitWindows.day },
   advertiserWriteUser: { limit: 40, windowMs: 15 * rateLimitWindows.minute },
   stripeWriteUser: { limit: 10, windowMs: 15 * rateLimitWindows.minute },
   pushTokenUser: { limit: 20, windowMs: rateLimitWindows.hour },

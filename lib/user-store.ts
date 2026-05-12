@@ -6,7 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto"
 
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq, inArray, isNull, or } from "drizzle-orm"
 
 import { getSession, isProfileComplete, revokeAllUserSessions } from "@/lib/auth"
 import type {
@@ -18,9 +18,27 @@ import type {
 } from "@/lib/auth-validators"
 import { getDb } from "@/lib/db"
 import {
+  advertiserAccounts,
+  advertiserMembers,
+  advertiserPaymentMethods,
+  authSessions,
+  brandFundingProfiles,
+  creatorNotificationPreferences,
   creatorProfiles,
+  emailVerificationTokens,
+  feedImpressions,
+  follows,
+  mediaAssets,
+  mediaAuditEvents,
+  mobilePushTokens,
   passwordResetTokens,
+  safetyReports,
+  stories,
+  storyElements,
+  storyInteractions,
+  storyMentions,
   users,
+  userBlocks,
 } from "@/lib/db/schema"
 import { sendPasswordResetEmail } from "@/lib/email"
 import { env } from "@/lib/env"
@@ -498,6 +516,257 @@ export async function updateUserAvatar(
   return {
     ok: true,
     user: toAuthUser(user),
+  }
+}
+
+export async function deleteUserAccount(
+  userId: string,
+): Promise<GenericAuthResult> {
+  const db = getDb()
+  const now = new Date()
+  const deletedEmail = `deleted-${userId}@deleted.ubeye.local`
+  const deletedPassword = hashPassword(randomBytes(32).toString("base64url"))
+
+  await db.transaction(async (tx) => {
+    const userStories = await tx
+      .select({ id: stories.id })
+      .from(stories)
+      .where(eq(stories.creatorId, userId))
+    const storyIds = userStories.map((story) => story.id)
+
+    await tx
+      .update(authSessions)
+      .set({ revokedAt: now })
+      .where(
+        and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)),
+      )
+
+    await tx
+      .update(passwordResetTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(passwordResetTokens.userId, userId),
+          isNull(passwordResetTokens.usedAt),
+        ),
+      )
+
+    await tx
+      .update(emailVerificationTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(emailVerificationTokens.userId, userId),
+          isNull(emailVerificationTokens.usedAt),
+        ),
+      )
+
+    await tx
+      .delete(mobilePushTokens)
+      .where(eq(mobilePushTokens.userId, userId))
+    await tx
+      .delete(follows)
+      .where(or(eq(follows.followerId, userId), eq(follows.followeeId, userId)))
+    await tx.delete(userBlocks).where(
+      or(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, userId)),
+    )
+    await tx.delete(creatorNotificationPreferences).where(
+      or(
+        eq(creatorNotificationPreferences.subscriberId, userId),
+        eq(creatorNotificationPreferences.creatorId, userId),
+      ),
+    )
+
+    await tx
+      .update(safetyReports)
+      .set({
+        details: null,
+        resolutionNote: null,
+        updatedAt: now,
+      })
+      .where(
+        or(
+          eq(safetyReports.reporterId, userId),
+          eq(safetyReports.targetUserId, userId),
+          eq(safetyReports.reviewedByUserId, userId),
+        ),
+      )
+
+    await tx
+      .update(storyInteractions)
+      .set({
+        body: null,
+        reaction: null,
+        mediaUrl: null,
+        mediaThumbnailUrl: null,
+        mediaAssetKind: null,
+        mediaAssetId: null,
+      })
+      .where(
+        or(
+          eq(storyInteractions.actorId, userId),
+          eq(storyInteractions.creatorId, userId),
+        ),
+      )
+
+    await tx
+      .update(mediaAuditEvents)
+      .set({ actorUserId: null })
+      .where(eq(mediaAuditEvents.actorUserId, userId))
+
+    if (storyIds.length > 0) {
+      await tx
+        .delete(storyElements)
+        .where(inArray(storyElements.storyId, storyIds))
+      await tx
+        .delete(storyMentions)
+        .where(inArray(storyMentions.storyId, storyIds))
+      await tx.delete(feedImpressions).where(
+        or(
+          eq(feedImpressions.viewerId, userId),
+          inArray(feedImpressions.storyId, storyIds),
+        ),
+      )
+    } else {
+      await tx
+        .delete(feedImpressions)
+        .where(eq(feedImpressions.viewerId, userId))
+    }
+
+    await tx
+      .update(stories)
+      .set({
+        status: "removed",
+        caption: null,
+        moderationStatus: "removed",
+        moderationReason: "Creator account deleted.",
+        reviewedAt: now,
+        reviewedByUserId: null,
+      })
+      .where(eq(stories.creatorId, userId))
+
+    await tx
+      .update(mediaAssets)
+      .set({
+        processingStatus: "deleted",
+        scanStatus: "skipped",
+        deletedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(mediaAssets.ownerUserId, userId))
+
+    await tx
+      .update(creatorProfiles)
+      .set({
+        category: null,
+        creatorBio: null,
+        isPublic: false,
+        analyticsEnabled: false,
+        monetizationEnabled: false,
+        stripeConnectedAccountId: null,
+        stripePayoutsEnabled: false,
+        stripeOnboardingComplete: false,
+        stripeRequirementsStatus: null,
+        stripeRequirementsDue: null,
+        stripeConnectedAt: null,
+        stripeUpdatedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(creatorProfiles.userId, userId))
+
+    const ownedAdvertiserAccounts = await tx
+      .select({ id: advertiserAccounts.id })
+      .from(advertiserAccounts)
+      .where(eq(advertiserAccounts.ownerUserId, userId))
+    const advertiserAccountIds = ownedAdvertiserAccounts.map(
+      (account) => account.id,
+    )
+
+    if (advertiserAccountIds.length > 0) {
+      await tx
+        .update(advertiserAccounts)
+        .set({
+          name: "Deleted account",
+          websiteUrl: null,
+          billingEmail: deletedEmail,
+          status: "paused",
+          stripeCustomerId: null,
+          updatedAt: now,
+        })
+        .where(inArray(advertiserAccounts.id, advertiserAccountIds))
+
+      await tx
+        .update(advertiserPaymentMethods)
+        .set({
+          brand: null,
+          last4: null,
+          expMonth: null,
+          expYear: null,
+          billingName: null,
+          billingEmail: null,
+          status: "deleted",
+          isDefault: false,
+          updatedAt: now,
+        })
+        .where(
+          inArray(
+            advertiserPaymentMethods.advertiserAccountId,
+            advertiserAccountIds,
+          ),
+        )
+
+      await tx
+        .update(brandFundingProfiles)
+        .set({
+          status: "paused",
+          allowedCategories: null,
+          blockedCategories: null,
+          notes: null,
+          updatedAt: now,
+        })
+        .where(
+          inArray(
+            brandFundingProfiles.advertiserAccountId,
+            advertiserAccountIds,
+          ),
+        )
+    }
+
+    await tx
+      .delete(advertiserMembers)
+      .where(eq(advertiserMembers.userId, userId))
+
+    const [deletedUser] = await tx
+      .update(users)
+      .set({
+        authProvider: "deleted",
+        authUserId: `deleted-${userId}`,
+        email: deletedEmail,
+        emailVerifiedAt: null,
+        passwordHash: deletedPassword,
+        failedLoginCount: 0,
+        lockedUntil: null,
+        handle: null,
+        displayName: null,
+        bio: null,
+        avatarUrl: null,
+        avatarAssetId: null,
+        onboardingIntent: "explore",
+        creatorStatus: "inactive",
+        isCreatorMode: false,
+        updatedAt: now,
+      })
+      .where(eq(users.id, userId))
+      .returning({ id: users.id })
+
+    if (!deletedUser) {
+      throw new Error("Account not found.")
+    }
+  })
+
+  return {
+    ok: true,
+    message: "Your account has been deleted.",
   }
 }
 
