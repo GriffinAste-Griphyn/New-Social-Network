@@ -8,6 +8,11 @@ import {
   mobilePushTokens,
   users,
 } from "@/lib/db/schema"
+import {
+  assertUsersCanConnect,
+  getBlockedPeerIds,
+  isBlockedBetween,
+} from "@/lib/social-safety"
 
 const expoPushEndpoint = "https://exp.host/--/api/v2/push/send"
 const expoPushTokenPattern = /^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/
@@ -77,6 +82,10 @@ export async function getCreatorNotificationPreference(input: {
   subscriberId: string
   creatorId: string
 }) {
+  if (await isBlockedBetween(input.subscriberId, input.creatorId)) {
+    return false
+  }
+
   const [preference] = await getDb()
     .select({ enabled: creatorNotificationPreferences.enabled })
     .from(creatorNotificationPreferences)
@@ -109,6 +118,11 @@ export async function setCreatorNotificationPreference(input: {
   if (!creator) {
     throw new Error("That creator does not exist.")
   }
+
+  await assertUsersCanConnect({
+    actorId: input.subscriberId,
+    targetUserId: input.creatorId,
+  })
 
   const now = new Date()
 
@@ -152,8 +166,12 @@ export async function notifyCreatorStoryPosted(input: {
   const subscriberIds = preferences
     .map((preference) => preference.subscriberId)
     .filter((subscriberId) => subscriberId !== input.creatorId)
+  const blockedPeerIds = await getBlockedPeerIds(input.creatorId)
+  const eligibleSubscriberIds = subscriberIds.filter(
+    (subscriberId) => !blockedPeerIds.has(subscriberId),
+  )
 
-  if (subscriberIds.length === 0) {
+  if (eligibleSubscriberIds.length === 0) {
     return
   }
 
@@ -162,7 +180,7 @@ export async function notifyCreatorStoryPosted(input: {
     .from(mobilePushTokens)
     .where(
       and(
-        inArray(mobilePushTokens.userId, subscriberIds),
+        inArray(mobilePushTokens.userId, eligibleSubscriberIds),
         eq(mobilePushTokens.enabled, true),
       ),
     )

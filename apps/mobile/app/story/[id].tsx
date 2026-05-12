@@ -37,6 +37,11 @@ import {
   postMobileFormApi,
 } from "@/lib/mobile-api"
 import type { MobileStoryApiStack } from "@/lib/mobile-stories-api"
+import {
+  blockAccount,
+  reportAccount,
+  reportStory,
+} from "@/lib/social-safety"
 
 type MobileStoryStackItem = MobileStoryApiStack["items"][number]
 
@@ -83,7 +88,9 @@ export default function StoryScreen() {
     "idle" | "loading" | "settled"
   >("idle")
   const [isItemMenuOpen, setIsItemMenuOpen] = useState(false)
+  const [isStoryMenuOpen, setIsStoryMenuOpen] = useState(false)
   const [isDeletingStoryItem, setIsDeletingStoryItem] = useState(false)
+  const [isSubmittingSafetyAction, setIsSubmittingSafetyAction] = useState(false)
   const [isSendingReply, setIsSendingReply] = useState(false)
   const [isReplyMode, setIsReplyMode] = useState(false)
   const [isOwnerStatsMinimized, setIsOwnerStatsMinimized] = useState(false)
@@ -107,7 +114,7 @@ export default function StoryScreen() {
   } | null>(null)
   const reportedImpressionIdsRef = useRef(new Set<string>())
   const activeProgress = useRef(new Animated.Value(0)).current
-  const { isFollowing, toggleFollow } = useFollowState()
+  const { isFollowing, removeFollowLocally, toggleFollow } = useFollowState()
   const isOwnStoryRoute = id === "my-story"
   const story = id ? remoteStory ?? undefined : undefined
   const isViewingOwnStory = story?.id === "my-story" || isOwnStoryRoute
@@ -213,6 +220,7 @@ export default function StoryScreen() {
     setRemoteStory(null)
     setStoryRequestState(id ? "loading" : "settled")
     setIsItemMenuOpen(false)
+    setIsStoryMenuOpen(false)
     setIsReplyMode(false)
     setKeyboardHeight(0)
     setIsEmojiTrayOpen(false)
@@ -529,6 +537,104 @@ export default function StoryScreen() {
         error instanceof Error ? error.message : "Try again in a moment.",
       )
     }
+  }
+
+  const submitStoryReport = async () => {
+    if (!activeItem || isSubmittingSafetyAction) {
+      return
+    }
+
+    setIsStoryMenuOpen(false)
+    setIsSubmittingSafetyAction(true)
+
+    try {
+      await reportStory(activeItem.id, "harassment")
+      Alert.alert(
+        "Report sent",
+        "Thanks. This story was sent to the review queue.",
+      )
+    } catch (error) {
+      Alert.alert(
+        "Could not report story",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsSubmittingSafetyAction(false)
+    }
+  }
+
+  const submitCreatorReport = async () => {
+    if (!story || isSubmittingSafetyAction) {
+      return
+    }
+
+    setIsStoryMenuOpen(false)
+    setIsSubmittingSafetyAction(true)
+
+    try {
+      await reportAccount(story.creatorId, "harassment")
+      Alert.alert(
+        "Report sent",
+        "Thanks. This account was sent to the review queue.",
+      )
+    } catch (error) {
+      Alert.alert(
+        "Could not report account",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsSubmittingSafetyAction(false)
+    }
+  }
+
+  const blockStoryCreator = async () => {
+    if (!story || isSubmittingSafetyAction) {
+      return
+    }
+
+    setIsStoryMenuOpen(false)
+    setIsSubmittingSafetyAction(true)
+
+    try {
+      await blockAccount(story.creatorId)
+      removeFollowLocally(story.creatorId)
+      Alert.alert(
+        "Account blocked",
+        `${story.creator} will no longer appear in your feed or profile lists.`,
+      )
+      router.replace("/")
+    } catch (error) {
+      Alert.alert(
+        "Could not block account",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsSubmittingSafetyAction(false)
+    }
+  }
+
+  const confirmBlockStoryCreator = () => {
+    if (!story || isSubmittingSafetyAction) {
+      return
+    }
+
+    Alert.alert(
+      `Block ${story.creator}?`,
+      "This removes follows in both directions and hides their content from you.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: () => {
+            void blockStoryCreator()
+          },
+        },
+      ],
+    )
   }
 
   const openReplyMode = () => {
@@ -924,49 +1030,118 @@ export default function StoryScreen() {
                     </View>
                   ) : null}
                 </View>
-              ) : shouldShowAddButton ? (
-                <Pressable
-                  accessibilityLabel={`Add ${story.creator}`}
-                  accessibilityRole="button"
-                  onPress={() => {
-                    toggleFollow(story.creatorId)
-                  }}
-                  style={({ pressed }) => [
-                    styles.addButton,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons name="add" size={20} color={colors.addText} />
-                  <Text style={styles.addButtonText}>Add</Text>
-                </Pressable>
               ) : (
-                <Pressable
-                  accessibilityLabel={
-                    areCreatorNotificationsEnabled
-                      ? `Turn off notifications for ${story.creator}`
-                      : `Turn on notifications for ${story.creator}`
-                  }
-                  accessibilityRole="button"
-                  disabled={isUpdatingNotifications}
-                  onPress={toggleCreatorNotifications}
-                  style={({ pressed }) => [
-                    styles.bellButton,
-                    areCreatorNotificationsEnabled
-                      ? styles.bellButtonActive
-                      : null,
-                    pressed ? styles.pressed : null,
-                  ]}
-                >
-                  <Ionicons
-                    name={
-                      areCreatorNotificationsEnabled
-                        ? "notifications"
-                        : "notifications-outline"
-                    }
-                    size={23}
-                    color={colors.text}
-                  />
-                </Pressable>
+                <View style={styles.viewerActions}>
+                  {shouldShowAddButton ? (
+                    <Pressable
+                      accessibilityLabel={`Add ${story.creator}`}
+                      accessibilityRole="button"
+                      onPress={() => {
+                        toggleFollow(story.creatorId)
+                      }}
+                      style={({ pressed }) => [
+                        styles.addButton,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Ionicons name="add" size={20} color={colors.addText} />
+                      <Text style={styles.addButtonText}>Add</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      accessibilityLabel={
+                        areCreatorNotificationsEnabled
+                          ? `Turn off notifications for ${story.creator}`
+                          : `Turn on notifications for ${story.creator}`
+                      }
+                      accessibilityRole="button"
+                      disabled={isUpdatingNotifications}
+                      onPress={toggleCreatorNotifications}
+                      style={({ pressed }) => [
+                        styles.bellButton,
+                        areCreatorNotificationsEnabled
+                          ? styles.bellButtonActive
+                          : null,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Ionicons
+                        name={
+                          areCreatorNotificationsEnabled
+                            ? "notifications"
+                            : "notifications-outline"
+                        }
+                        size={23}
+                        color={colors.text}
+                      />
+                    </Pressable>
+                  )}
+                  <Pressable
+                    accessibilityLabel="More story actions"
+                    accessibilityRole="button"
+                    onPress={() => setIsStoryMenuOpen((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.storyMenuButton,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    <Ionicons
+                      name="ellipsis-horizontal"
+                      size={28}
+                      color={colors.text}
+                    />
+                  </Pressable>
+
+                  {isStoryMenuOpen ? (
+                    <View style={styles.ownerMenu}>
+                      <Pressable
+                        accessibilityLabel="Report this story"
+                        accessibilityRole="button"
+                        disabled={isSubmittingSafetyAction}
+                        onPress={() => {
+                          void submitStoryReport()
+                        }}
+                        style={({ pressed }) => [
+                          styles.ownerMenuItem,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <Ionicons name="flag-outline" size={18} color={colors.text} />
+                        <Text style={styles.ownerMenuItemText}>Report story</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Report ${story.creator}`}
+                        accessibilityRole="button"
+                        disabled={isSubmittingSafetyAction}
+                        onPress={() => {
+                          void submitCreatorReport()
+                        }}
+                        style={({ pressed }) => [
+                          styles.ownerMenuItem,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <Ionicons name="person-outline" size={18} color={colors.text} />
+                        <Text style={styles.ownerMenuItemText}>Report account</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Block ${story.creator}`}
+                        accessibilityRole="button"
+                        disabled={isSubmittingSafetyAction}
+                        onPress={confirmBlockStoryCreator}
+                        style={({ pressed }) => [
+                          styles.ownerMenuItem,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <Ionicons name="ban-outline" size={18} color={colors.brand} />
+                        <Text style={styles.ownerMenuDestructiveText}>
+                          Block account
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
               )}
             </View>
           ) : null}
@@ -1206,18 +1381,6 @@ export default function StoryScreen() {
               </Pressable>
             </View>
 
-            {!isViewingOwnStory ? (
-              <Pressable
-                accessibilityLabel="More story actions"
-                accessibilityRole="button"
-                style={({ pressed }) => [
-                  styles.moreButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Ionicons name="ellipsis-horizontal" size={28} color={colors.text} />
-              </Pressable>
-            ) : null}
           </View>
         ) : null}
       </View>
@@ -1612,6 +1775,24 @@ const styles = StyleSheet.create({
     borderColor: "rgba(224,22,22,0.78)",
     backgroundColor: "rgba(224,22,22,0.74)",
   },
+  viewerActions: {
+    position: "relative",
+    zIndex: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  storyMenuButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+    backgroundColor: "rgba(11,13,17,0.26)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   ownerActions: {
     position: "relative",
     zIndex: 10,
@@ -1645,6 +1826,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: colors.text,
+  },
+  ownerMenuDestructiveText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.brand,
   },
   addButton: {
     minWidth: 74,

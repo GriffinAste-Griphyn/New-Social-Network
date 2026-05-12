@@ -19,6 +19,10 @@ import {
 } from "@/lib/creator-notifications"
 import { useFollowState } from "@/lib/follow-state"
 import { getMobileApi } from "@/lib/mobile-api"
+import {
+  blockAccount,
+  reportAccount,
+} from "@/lib/social-safety"
 
 type CreatorProfileView = {
   id: string
@@ -48,12 +52,14 @@ const colors = {
 export default function CreatorProfileScreen() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
-  const { isFollowing, toggleFollow } = useFollowState()
+  const { isFollowing, removeFollowLocally, toggleFollow } = useFollowState()
   const [profile, setProfile] = useState<CreatorProfileView | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isFollowMenuOpen, setIsFollowMenuOpen] = useState(false)
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const [areNotificationsEnabled, setAreNotificationsEnabled] = useState(false)
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
+  const [isSubmittingSafetyAction, setIsSubmittingSafetyAction] = useState(false)
   const isAdded = profile ? isFollowing(profile.id) : false
 
   useEffect(() => {
@@ -67,6 +73,7 @@ export default function CreatorProfileScreen() {
 
     setIsLoading(true)
     setIsFollowMenuOpen(false)
+    setIsProfileMenuOpen(false)
 
     getMobileApi<MobileCreatorProfileResponse>(
       `/api/mobile/creators/${encodeURIComponent(id)}`,
@@ -133,6 +140,80 @@ export default function CreatorProfileScreen() {
     }
 
     setIsFollowMenuOpen(false)
+  }
+
+  const reportProfile = async () => {
+    if (!profile || isSubmittingSafetyAction) {
+      return
+    }
+
+    setIsProfileMenuOpen(false)
+    setIsSubmittingSafetyAction(true)
+
+    try {
+      await reportAccount(profile.id, "harassment")
+      Alert.alert(
+        "Report sent",
+        "Thanks. This account was sent to the review queue.",
+      )
+    } catch (error) {
+      Alert.alert(
+        "Could not report account",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsSubmittingSafetyAction(false)
+    }
+  }
+
+  const blockProfile = async () => {
+    if (!profile || isSubmittingSafetyAction) {
+      return
+    }
+
+    setIsProfileMenuOpen(false)
+    setIsSubmittingSafetyAction(true)
+
+    try {
+      await blockAccount(profile.id)
+      removeFollowLocally(profile.id)
+      Alert.alert(
+        "Account blocked",
+        `${profile.name} will no longer appear in your feed or profile lists.`,
+      )
+      router.back()
+    } catch (error) {
+      Alert.alert(
+        "Could not block account",
+        error instanceof Error ? error.message : "Try again in a moment.",
+      )
+    } finally {
+      setIsSubmittingSafetyAction(false)
+    }
+  }
+
+  const confirmBlockProfile = () => {
+    if (!profile || isSubmittingSafetyAction) {
+      return
+    }
+
+    Alert.alert(
+      `Block ${profile.name}?`,
+      "This removes follows in both directions and hides their content from you.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: () => {
+            void blockProfile()
+          },
+        },
+      ],
+    )
   }
 
   const toggleNotifications = async () => {
@@ -208,6 +289,7 @@ export default function CreatorProfileScreen() {
           <ProfileIconButton
             accessibilityLabel="More profile actions"
             icon="ellipsis-horizontal"
+            onPress={() => setIsProfileMenuOpen(true)}
             size={27}
           />
         </View>
@@ -312,6 +394,60 @@ export default function CreatorProfileScreen() {
               accessibilityLabel="Cancel"
               accessibilityRole="button"
               onPress={() => setIsFollowMenuOpen(false)}
+              style={({ pressed }) => [
+                styles.cancelFollowButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={styles.cancelFollowText}>Cancel</Text>
+            </Pressable>
+          </SafeAreaView>
+        </View>
+      ) : null}
+
+      {profile && isProfileMenuOpen ? (
+        <View style={styles.followMenuLayer}>
+          <Pressable
+            accessibilityLabel="Close profile actions"
+            accessibilityRole="button"
+            onPress={() => setIsProfileMenuOpen(false)}
+            style={styles.followMenuBackdrop}
+          />
+          <SafeAreaView style={styles.followMenu} edges={["bottom"]}>
+            <View style={styles.followMenuHandle} />
+            <Text style={styles.followMenuTitle}>{profile.name}</Text>
+            <Pressable
+              accessibilityLabel={`Report ${profile.name}`}
+              accessibilityRole="button"
+              disabled={isSubmittingSafetyAction}
+              onPress={() => {
+                void reportProfile()
+              }}
+              style={({ pressed }) => [
+                styles.reportProfileButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="flag-outline" size={18} color="#17191f" />
+              <Text style={styles.reportProfileText}>Report account</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Block ${profile.name}`}
+              accessibilityRole="button"
+              disabled={isSubmittingSafetyAction}
+              onPress={confirmBlockProfile}
+              style={({ pressed }) => [
+                styles.removeFollowButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="ban-outline" size={18} color="#ef4444" />
+              <Text style={styles.removeFollowText}>Block account</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+              onPress={() => setIsProfileMenuOpen(false)}
               style={({ pressed }) => [
                 styles.cancelFollowButton,
                 pressed ? styles.pressed : null,
@@ -576,6 +712,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#ef4444",
+  },
+  reportProfileButton: {
+    minHeight: 48,
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 14,
+  },
+  reportProfileText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#17191f",
   },
   cancelFollowButton: {
     minHeight: 48,

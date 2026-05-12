@@ -6,6 +6,7 @@ import {
   Building2,
   Check,
   Clock3,
+  Flag,
   LogOut,
   ShieldAlert,
   Trash2,
@@ -16,13 +17,17 @@ import {
 import {
   approveModeratedStoryAction,
   rejectModeratedStoryAction,
+  reviewSafetyReportAction,
 } from "@/lib/admin-actions"
 import {
   getAdminOverview,
+  listAdminSafetyReports,
   listFlaggedStories,
   requireAdminSession,
+  type AdminSafetyReport,
   type AdminModerationStory,
 } from "@/lib/admin-store"
+import { formatSafetyReportReason } from "@/lib/social-safety"
 import { logoutAction } from "@/lib/auth-actions"
 
 type AdminPageProps = {
@@ -62,6 +67,14 @@ function flashMessage(params: Awaited<AdminPageProps["searchParams"]>) {
 
   if (params.moderation === "removed") {
     return { tone: "success" as const, message: "Story removed." }
+  }
+
+  if (params.moderation === "report-actioned") {
+    return { tone: "success" as const, message: "Report action applied." }
+  }
+
+  if (params.moderation === "report-reviewed") {
+    return { tone: "success" as const, message: "Report reviewed." }
   }
 
   return null
@@ -211,14 +224,87 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
   )
 }
 
+function SafetyReportRow({ report }: { report: AdminSafetyReport }) {
+  const targetLabel =
+    report.targetUser?.handle ??
+    report.targetUser?.email ??
+    report.story?.id ??
+    report.interaction?.id ??
+    "Unknown target"
+  const body =
+    report.targetKind === "interaction"
+      ? report.interaction?.body || report.interaction?.reaction || "Reply"
+      : report.targetKind === "story"
+        ? report.story?.caption || "Story"
+        : report.details || "Account report"
+
+  return (
+    <article className="grid gap-4 rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm lg:grid-cols-[1fr_auto]">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-[#fee2e2] px-3 py-1 text-xs font-medium text-[#991b1b]">
+            {report.targetKind}
+          </span>
+          <span className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-medium text-[#3730a3]">
+            {formatSafetyReportReason(report.reason)}
+          </span>
+          <span className="text-sm text-[#6b7280]">
+            {formatDate(report.createdAt)}
+          </span>
+        </div>
+
+        <h3 className="mt-3 text-lg font-semibold text-[#111827]">
+          {targetLabel}
+        </h3>
+        <p className="mt-1 text-sm text-[#6b7280]">
+          Reported by{" "}
+          {report.reporter.handle
+            ? `@${report.reporter.handle}`
+            : report.reporter.email}
+        </p>
+
+        <p className="mt-4 max-w-3xl text-sm leading-6 text-[#111827]">
+          {body}
+        </p>
+        {report.details ? (
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6b7280]">
+            {report.details}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex gap-2 lg:flex-col">
+        <form action={reviewSafetyReportAction}>
+          <input type="hidden" name="reportId" value={report.id} />
+          <input type="hidden" name="status" value="dismissed" />
+          <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#d1d5db] bg-white px-4 text-sm font-medium text-[#374151]">
+            <Check className="size-4" />
+            Dismiss
+          </button>
+        </form>
+
+        <form action={reviewSafetyReportAction}>
+          <input type="hidden" name="reportId" value={report.id} />
+          <input type="hidden" name="status" value="actioned" />
+          <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#fecdd3] bg-[#fff1f2] px-4 text-sm font-medium text-[#be123c]">
+            <Trash2 className="size-4" />
+            Action
+          </button>
+        </form>
+      </div>
+    </article>
+  )
+}
+
 export default async function AdminPage({ searchParams }: AdminPageProps) {
   const [session, params] = await Promise.all([
     requireAdminSession(),
     searchParams,
   ])
-  const [overview, flaggedStories] = await Promise.all([
+  const [overview, flaggedStories, safetyReports] = await Promise.all([
     getAdminOverview(),
     listFlaggedStories(),
+    listAdminSafetyReports(),
   ])
   const flash = flashMessage(params)
 
@@ -277,8 +363,10 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           <MetricCard
             icon={<AlertTriangle className="size-5" />}
             label="Review queue"
-            value={formatNumber(overview.flaggedStoryCount)}
-            subtext="Stories held before feed distribution"
+            value={formatNumber(
+              overview.flaggedStoryCount + overview.pendingReportCount,
+            )}
+            subtext={`${formatNumber(overview.pendingReportCount)} user reports`}
           />
         </section>
 
@@ -349,6 +437,34 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </div>
             </div>
           </article>
+        </section>
+
+        <section className="mt-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold">User reports</h2>
+              <p className="mt-1 text-sm text-[#6b7280]">
+                Reports against stories, accounts, and replies.
+              </p>
+            </div>
+            <Flag className="size-5 text-[#374151]" />
+          </div>
+
+          {safetyReports.length > 0 ? (
+            <div className="grid gap-4">
+              {safetyReports.map((report) => (
+                <SafetyReportRow key={report.id} report={report} />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[8px] border border-[#e5e7eb] bg-white p-8 text-center shadow-sm">
+              <Flag className="mx-auto size-8 text-[#9ca3af]" />
+              <h3 className="mt-3 text-lg font-semibold">No user reports</h3>
+              <p className="mt-1 text-sm text-[#6b7280]">
+                Reports submitted from web or mobile will appear here.
+              </p>
+            </div>
+          )}
         </section>
 
         <section className="mt-5">

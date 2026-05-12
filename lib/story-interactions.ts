@@ -5,6 +5,10 @@ import { alias } from "drizzle-orm/pg-core"
 
 import { getDb } from "@/lib/db"
 import { follows, stories, storyInteractions, users } from "@/lib/db/schema"
+import {
+  assertUsersCanConnect,
+  getBlockedPeerIds,
+} from "@/lib/social-safety"
 import type { StoredStoryAsset } from "@/lib/story-storage"
 
 export type StoryInteractionKind = "reply" | "comment" | "reaction"
@@ -162,6 +166,11 @@ export async function createStoryInteraction(input: {
     throw new Error("You cannot reply to your own story.")
   }
 
+  await assertUsersCanConnect({
+    actorId: input.actorId,
+    targetUserId: story.creatorId,
+  })
+
   const [follow] = await db
     .select({ followerId: follows.followerId })
     .from(follows)
@@ -214,6 +223,7 @@ export async function listStoryInteractionsForCreator(input: {
   limit?: number
 }): Promise<StoryInteractionEvent[]> {
   const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(input.creatorId)
   const kinds = input.kinds?.length ? input.kinds : undefined
   const filters = [
     eq(storyInteractions.creatorId, input.creatorId),
@@ -244,6 +254,10 @@ export async function listStoryInteractionsForCreator(input: {
     .limit(input.limit ?? 50)
 
   return rows.flatMap((row) => {
+    if (blockedPeerIds.has(row.actorId)) {
+      return []
+    }
+
     const event = mapEvent(row)
 
     return event ? [event] : []
@@ -256,6 +270,7 @@ export async function listStoryInteractionsForActor(input: {
   limit?: number
 }): Promise<SentStoryInteractionEvent[]> {
   const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(input.actorId)
   const actorUsers = alias(users, "actor_users")
   const creatorUsers = alias(users, "creator_users")
   const kinds = input.kinds?.length ? input.kinds : undefined
@@ -292,6 +307,10 @@ export async function listStoryInteractionsForActor(input: {
     .limit(input.limit ?? 50)
 
   return rows.flatMap((row) => {
+    if (blockedPeerIds.has(row.creatorId)) {
+      return []
+    }
+
     const event = mapSentEvent(row)
 
     return event ? [event] : []

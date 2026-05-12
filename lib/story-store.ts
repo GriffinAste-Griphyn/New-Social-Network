@@ -33,6 +33,7 @@ import {
   publicStoryMediaUrl,
   type StoredStoryAsset,
 } from "@/lib/story-storage"
+import { getBlockedPeerIds, isBlockedBetween } from "@/lib/social-safety"
 import {
   extractCaptionMentions,
   type StoryElementInput,
@@ -749,11 +750,16 @@ export async function getMyStoryStack(viewerId: string): Promise<MyStorySummary>
 
 export async function getFeedData(viewerId: string): Promise<FeedData> {
 
-  const [storyRows, followingProfiles, myStory] = await Promise.all([
+  const [rawStoryRows, followingProfiles, myStory, blockedPeerIds] = await Promise.all([
     getLiveStoryRows(),
     listFollowingProfiles(viewerId),
     getMyStoryStack(viewerId),
+    getBlockedPeerIds(viewerId),
   ])
+  const storyRows = rawStoryRows.filter(
+    (story) =>
+      story.creatorId === viewerId || !blockedPeerIds.has(story.creatorId),
+  )
 
   if (storyRows.length === 0) {
     return {
@@ -861,7 +867,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   }
 }
 
-export async function getStoryStackForStory(storyId: string) {
+export async function getStoryStackForStory(storyId: string, viewerId?: string) {
 
   const db = getDb()
   const [story] = await db
@@ -883,13 +889,24 @@ export async function getStoryStackForStory(storyId: string) {
     return null
   }
 
+  if (viewerId && story.creatorId !== viewerId) {
+    const blocked = await isBlockedBetween(viewerId, story.creatorId)
+
+    if (blocked) {
+      return null
+    }
+  }
+
   const rows = await getLiveStoryRowsForCreator(story.creatorId)
   const elementRows = await getStoryElements(rows.map((row) => row.id))
 
   return buildStoryStack(rows, groupElements(elementRows))
 }
 
-export async function getMobileCreatorProfile(profileOrStoryId: string) {
+export async function getMobileCreatorProfile(
+  profileOrStoryId: string,
+  viewerId?: string,
+) {
 
   const db = getDb()
   const [directUser] = await db
@@ -908,6 +925,14 @@ export async function getMobileCreatorProfile(profileOrStoryId: string) {
 
   if (!creatorId) {
     return null
+  }
+
+  if (viewerId && creatorId !== viewerId) {
+    const blocked = await isBlockedBetween(viewerId, creatorId)
+
+    if (blocked) {
+      return null
+    }
   }
 
   const [profile] = await db

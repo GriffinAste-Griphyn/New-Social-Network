@@ -19,6 +19,7 @@ type FollowStateContextValue = {
   followedCreatorIds: Set<string>
   revision: number
   isFollowing: (creatorId: string) => boolean
+  removeFollowLocally: (creatorId: string) => void
   toggleFollow: (creatorId: string) => void
 }
 
@@ -105,14 +106,34 @@ export function FollowStateProvider({ children }: { children: ReactNode }) {
       })
   }, [account?.mobileToken, followedCreatorIds])
 
+  const removeFollowLocally = useCallback((creatorId: string) => {
+    setFollowedCreatorIds((current) => {
+      if (!current.has(creatorId)) {
+        return current
+      }
+
+      const next = new Set(current)
+      next.delete(creatorId)
+      return next
+    })
+    setRevision((current) => current + 1)
+  }, [])
+
   const value = useMemo(
     () => ({
       followedCreatorIds,
       revision,
       isFollowing,
+      removeFollowLocally,
       toggleFollow,
     }),
-    [followedCreatorIds, isFollowing, revision, toggleFollow],
+    [
+      followedCreatorIds,
+      isFollowing,
+      removeFollowLocally,
+      revision,
+      toggleFollow,
+    ],
   )
 
   return (

@@ -13,6 +13,11 @@ import {
   users,
 } from "@/lib/db/schema"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
+import {
+  countPendingSafetyReports,
+  listPendingSafetyReports,
+  type PendingSafetyReport,
+} from "@/lib/social-safety"
 
 type DbNumber = bigint | number | string | null
 
@@ -25,6 +30,7 @@ export type AdminOverview = {
   activeBudgetCents: number
   pendingBudgetCents: number
   flaggedStoryCount: number
+  pendingReportCount: number
 }
 
 export type AdminModerationStory = {
@@ -70,6 +76,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
     activeBudgetRows,
     pendingBudgetRows,
     flaggedStoryRows,
+    pendingReportCount,
   ] = await Promise.all([
     db.select({ count: sql<DbNumber>`count(*)::int` }).from(advertiserAccounts),
     db
@@ -112,6 +119,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       .select({ count: sql<DbNumber>`count(*)::int` })
       .from(stories)
       .where(eq(stories.moderationStatus, "flagged")),
+    countPendingSafetyReports(),
   ])
 
   return {
@@ -123,7 +131,14 @@ export async function getAdminOverview(): Promise<AdminOverview> {
     activeBudgetCents: toNumber(activeBudgetRows[0]?.amountCents),
     pendingBudgetCents: toNumber(pendingBudgetRows[0]?.amountCents),
     flaggedStoryCount: toNumber(flaggedStoryRows[0]?.count),
+    pendingReportCount,
   }
+}
+
+export type AdminSafetyReport = PendingSafetyReport
+
+export async function listAdminSafetyReports() {
+  return listPendingSafetyReports()
 }
 
 export async function listFlaggedStories(): Promise<AdminModerationStory[]> {

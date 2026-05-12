@@ -2,6 +2,10 @@ import { and, desc, eq, isNotNull } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { follows, users } from "@/lib/db/schema"
+import {
+  assertUsersCanConnect,
+  getBlockedPeerIds,
+} from "@/lib/social-safety"
 
 export type FollowProfile = {
   id: string
@@ -47,6 +51,7 @@ async function ensureTargetExists(targetUserId: string) {
 
 export async function listFollowingProfiles(userId: string): Promise<FollowProfile[]> {
   const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(userId)
   const rows = await db
     .select({
       id: users.id,
@@ -66,6 +71,10 @@ export async function listFollowingProfiles(userId: string): Promise<FollowProfi
     .orderBy(desc(follows.createdAt))
 
   return rows.flatMap((row) => {
+    if (blockedPeerIds.has(row.id)) {
+      return []
+    }
+
     const profile = mapProfile(row)
 
     return profile ? [profile] : []
@@ -74,6 +83,7 @@ export async function listFollowingProfiles(userId: string): Promise<FollowProfi
 
 export async function listFollowerProfiles(userId: string): Promise<FollowProfile[]> {
   const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(userId)
   const rows = await db
     .select({
       id: users.id,
@@ -93,6 +103,10 @@ export async function listFollowerProfiles(userId: string): Promise<FollowProfil
     .orderBy(desc(follows.createdAt))
 
   return rows.flatMap((row) => {
+    if (blockedPeerIds.has(row.id)) {
+      return []
+    }
+
     const profile = mapProfile(row)
 
     return profile ? [profile] : []
@@ -114,6 +128,11 @@ export async function followUser(input: {
   if (!targetExists) {
     throw new Error("That account does not exist.")
   }
+
+  await assertUsersCanConnect({
+    actorId: followerId,
+    targetUserId: followeeId,
+  })
 
   const db = getDb()
 

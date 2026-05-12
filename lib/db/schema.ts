@@ -54,6 +54,29 @@ export const storyInteractionKind = pgEnum("story_interaction_kind", [
   "comment",
   "reaction",
 ])
+export const safetyReportTargetKind = pgEnum("safety_report_target_kind", [
+  "story",
+  "user",
+  "interaction",
+])
+export const safetyReportReason = pgEnum("safety_report_reason", [
+  "spam",
+  "harassment",
+  "hate",
+  "sexual_content",
+  "violence",
+  "self_harm",
+  "illegal_goods",
+  "impersonation",
+  "intellectual_property",
+  "other",
+])
+export const safetyReportStatus = pgEnum("safety_report_status", [
+  "pending",
+  "reviewed",
+  "actioned",
+  "dismissed",
+])
 export const mentionType = pgEnum("mention_type", ["tag", "text", "detected"])
 export const campaignStatus = pgEnum("campaign_status", [
   "draft",
@@ -370,6 +393,30 @@ export const follows = pgTable(
   ],
 )
 
+export const userBlocks = pgTable(
+  "user_blocks",
+  {
+    blockerId: text("blocker_id")
+      .notNull()
+      .references(() => users.id),
+    blockedId: text("blocked_id")
+      .notNull()
+      .references(() => users.id),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "user_blocks_pkey",
+      columns: [table.blockerId, table.blockedId],
+    }),
+    index("user_blocks_blocker_idx").on(table.blockerId, table.createdAt),
+    index("user_blocks_blocked_idx").on(table.blockedId, table.createdAt),
+  ],
+)
+
 export const mobilePushTokens = pgTable(
   "mobile_push_tokens",
   {
@@ -556,6 +603,65 @@ export const storyInteractions = pgTable(
     ),
     index("story_interactions_actor_id_idx").on(table.actorId, table.createdAt),
     index("story_interactions_kind_idx").on(table.kind, table.createdAt),
+  ],
+)
+
+export const safetyReports = pgTable(
+  "safety_reports",
+  {
+    id: text("id").primaryKey(),
+    reporterId: text("reporter_id")
+      .notNull()
+      .references(() => users.id),
+    targetKind: safetyReportTargetKind("target_kind").notNull(),
+    targetUserId: text("target_user_id").references(() => users.id),
+    targetStoryId: text("target_story_id").references(() => stories.id),
+    targetInteractionId: text("target_interaction_id").references(
+      () => storyInteractions.id,
+    ),
+    reason: safetyReportReason("reason").notNull(),
+    details: text("details"),
+    status: safetyReportStatus("status").notNull().default("pending"),
+    resolutionNote: text("resolution_note"),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("safety_reports_status_idx").on(table.status, table.createdAt),
+    index("safety_reports_reporter_idx").on(table.reporterId, table.createdAt),
+    index("safety_reports_target_user_idx").on(
+      table.targetUserId,
+      table.createdAt,
+    ),
+    index("safety_reports_target_story_idx").on(
+      table.targetStoryId,
+      table.createdAt,
+    ),
+    index("safety_reports_target_interaction_idx").on(
+      table.targetInteractionId,
+      table.createdAt,
+    ),
+    uniqueIndex("safety_reports_story_once_idx").on(
+      table.targetKind,
+      table.reporterId,
+      table.targetStoryId,
+    ),
+    uniqueIndex("safety_reports_user_once_idx").on(
+      table.targetKind,
+      table.reporterId,
+      table.targetUserId,
+    ),
+    uniqueIndex("safety_reports_interaction_once_idx").on(
+      table.targetKind,
+      table.reporterId,
+      table.targetInteractionId,
+    ),
   ],
 )
 

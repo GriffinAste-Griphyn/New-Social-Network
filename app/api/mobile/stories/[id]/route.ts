@@ -56,7 +56,7 @@ export async function GET(
   const story =
     id === "my-story"
       ? await getMobileMyStoryStack(session.id)
-      : await getStoryStackForStory(id)
+      : await getStoryStackForStory(id, session.id)
 
   if (!story) {
     return NextResponse.json({ error: "Story not found." }, { status: 404 })
