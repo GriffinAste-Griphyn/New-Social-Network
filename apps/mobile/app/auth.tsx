@@ -37,11 +37,14 @@ export default function AuthScreen() {
     isComplete,
     isSubmitting,
     login,
+    message,
     pendingEmail,
+    requestPasswordReset,
     reset,
     resendVerification,
     stage,
     startLogin,
+    startPasswordReset,
     startSignup,
     submitSignup,
     verifyAccount,
@@ -63,6 +66,10 @@ export default function AuthScreen() {
 
   const submitLogin = async () => {
     await login({ email, password })
+  }
+
+  const submitPasswordResetRequest = async () => {
+    await requestPasswordReset({ email })
   }
 
   const submitVerification = async () => {
@@ -119,6 +126,16 @@ export default function AuthScreen() {
                 style={styles.errorBox}
               >
                 <Text style={styles.errorText}>{error}</Text>
+              </Pressable>
+            ) : null}
+
+            {message ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={clearError}
+                style={styles.messageBox}
+              >
+                <Text style={styles.messageText}>{message}</Text>
               </Pressable>
             ) : null}
 
@@ -188,8 +205,38 @@ export default function AuthScreen() {
                 />
                 <SecondaryButton
                   disabled={isSubmitting}
+                  label="Forgot password?"
+                  onPress={startPasswordReset}
+                />
+                <SecondaryButton
+                  disabled={isSubmitting}
                   label="Back"
                   onPress={backToLanding}
+                />
+              </View>
+            ) : null}
+
+            {stage === "forgot" ? (
+              <View style={styles.form}>
+                <Field
+                  autoCapitalize="none"
+                  autoComplete="email"
+                  keyboardType="email-address"
+                  label="Email"
+                  onChangeText={setEmail}
+                  placeholder="you@example.com"
+                  value={email}
+                />
+                <PrimaryButton
+                  disabled={isSubmitting}
+                  icon="mail-outline"
+                  label={isSubmitting ? "Sending reset link" : "Send reset link"}
+                  onPress={submitPasswordResetRequest}
+                />
+                <SecondaryButton
+                  disabled={isSubmitting}
+                  label="Back to log in"
+                  onPress={startLogin}
                 />
               </View>
             ) : null}
@@ -397,6 +444,7 @@ const stageKicker = {
   landing: "",
   signup: "Create account",
   login: "Welcome back",
+  forgot: "Password reset",
   verify: "Verify email",
   profile: "Profile setup",
   complete: "Ready",
@@ -406,6 +454,7 @@ const stageTitle = {
   landing: "Welcome to UBEYE",
   signup: "Start with email and password.",
   login: "Log in to your account.",
+  forgot: "Reset your password.",
   verify: "Verify your account.",
   profile: "Choose your name and handle.",
   complete: "Account ready.",
@@ -415,6 +464,7 @@ const stageSubtitle = {
   landing: "Sign up or log in to continue.",
   signup: "Handles are claimed after email verification.",
   login: "Use the email and password you signed up with.",
+  forgot: "Enter your email and we will send a secure reset link.",
   verify: "Tap the email link, then return here to continue.",
   profile: "This is how people will find and reply to you.",
   complete: "Your account is ready to use.",
@@ -567,6 +617,20 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "700",
     color: colors.text,
+  },
+  messageBox: {
+    marginBottom: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+    backgroundColor: "#f0fdf4",
+    padding: 12,
+  },
+  messageText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: "#166534",
   },
   noticeBox: {
     borderRadius: 8,

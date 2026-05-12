@@ -824,19 +824,7 @@ export default function PostScreen() {
             />
           </Pressable>
 
-          <Pressable
-            accessibilityLabel="Open photo gallery"
-            accessibilityRole="button"
-            onPress={openGalleryPicker}
-            disabled={isRecordingVideo}
-            style={({ pressed }) => [
-              styles.secondaryControl,
-              isRecordingVideo ? styles.controlDisabled : null,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Ionicons name="albums-outline" size={24} color={colors.text} />
-          </Pressable>
+          <View style={styles.cameraControlSpacer} />
         </View>
       </View>
     </SafeAreaView>
@@ -1098,13 +1086,9 @@ const styles = StyleSheet.create({
   controlDisabled: {
     opacity: 0.42,
   },
-  secondaryControl: {
+  cameraControlSpacer: {
     width: 58,
     height: 58,
-    borderRadius: 29,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.darkGlass,
   },
   previewScreen: {
     flex: 1,

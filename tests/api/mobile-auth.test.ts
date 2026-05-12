@@ -10,6 +10,8 @@ import {
   authenticateUser,
   completeUserProfileForUser,
   registerUser,
+  requestPasswordReset,
+  resetPassword,
 } from "@/lib/user-store"
 
 vi.mock("@/lib/request-security", async () => {
@@ -28,6 +30,8 @@ vi.mock("@/lib/user-store", () => ({
   authenticateUser: vi.fn(),
   completeUserProfileForUser: vi.fn(),
   registerUser: vi.fn(),
+  requestPasswordReset: vi.fn(),
+  resetPassword: vi.fn(),
 }))
 
 vi.mock("@/lib/email-verification", () => ({
@@ -180,6 +184,56 @@ describe("mobile auth API", () => {
       displayName: "Creator",
       handle: "creator",
       onboardingIntent: "create",
+    })
+  })
+
+  it("requests a mobile password reset email", async () => {
+    vi.mocked(requestPasswordReset).mockResolvedValue({
+      ok: true,
+      message: "If an account exists for that email, a reset link has been sent.",
+    })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/forgot-password/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/forgot-password", {
+        email: "Creator@Example.com",
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+    })
+    expect(requestPasswordReset).toHaveBeenCalledWith({
+      email: "creator@example.com",
+    })
+  })
+
+  it("resets a mobile password with a valid token", async () => {
+    vi.mocked(resetPassword).mockResolvedValue({
+      ok: true,
+      message: "Password updated. Sign in with your new password.",
+    })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/reset-password/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/reset-password", {
+        token: "reset-token",
+        password: "newpassword123",
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+    })
+    expect(resetPassword).toHaveBeenCalledWith({
+      token: "reset-token",
+      password: "newpassword123",
     })
   })
 })

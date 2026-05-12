@@ -32,11 +32,19 @@ type MobileAuthUser = {
   avatarUrl: string | null
 }
 
-type AuthStage = "landing" | "signup" | "login" | "verify" | "profile" | "complete"
+type AuthStage =
+  | "landing"
+  | "signup"
+  | "login"
+  | "forgot"
+  | "verify"
+  | "profile"
+  | "complete"
 
 type AuthFlowContextValue = {
   account: MobileAccount | null
   error: string | null
+  message: string | null
   isSubmitting: boolean
   isComplete: boolean
   pendingEmail: string | null
@@ -45,9 +53,11 @@ type AuthFlowContextValue = {
   clearError: () => void
   completeProfile: (input: { displayName: string; handle: string }) => Promise<boolean>
   login: (input: { email: string; password: string }) => Promise<boolean>
+  requestPasswordReset: (input: { email: string }) => Promise<boolean>
   reset: () => void
   resendVerification: () => Promise<boolean>
   startLogin: () => void
+  startPasswordReset: () => void
   startSignup: () => void
   submitSignup: (input: { email: string; password: string }) => Promise<boolean>
   expireSession: () => void
@@ -174,6 +184,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
   const [pendingPassword, setPendingPassword] = useState("")
   const [account, setAccount] = useState<MobileAccount | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -232,15 +243,20 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
     () => ({
       account,
       error,
+      message,
       isSubmitting,
       isComplete: stage === "complete" && Boolean(account),
       pendingEmail,
       stage,
       backToLanding: () => {
         setError(null)
+        setMessage(null)
         setStage("landing")
       },
-      clearError: () => setError(null),
+      clearError: () => {
+        setError(null)
+        setMessage(null)
+      },
       completeProfile: async ({ displayName, handle }) => {
         const normalizedDisplayName = displayName.trim()
         const normalizedHandle = normalizeHandle(handle)
@@ -285,6 +301,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
             mobileToken: result.mobileToken,
           })
           setError(null)
+          setMessage(null)
           return true
         } catch (error) {
           setError(error instanceof Error ? error.message : "Could not finish setup.")
@@ -335,6 +352,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
           }
 
           setError(null)
+          setMessage(null)
           return true
         } catch (error) {
           if (error instanceof MobileApiError && error.status === 403) {
@@ -349,9 +367,45 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
           setIsSubmitting(false)
         }
       },
+      requestPasswordReset: async ({ email }) => {
+        const normalizedEmail = normalizeEmail(email)
+
+        if (!normalizedEmail || !normalizedEmail.includes("@")) {
+          setError("Enter a valid email.")
+          setMessage(null)
+          return false
+        }
+
+        setIsSubmitting(true)
+
+        try {
+          const result = await postMobileApi<{
+            ok: true
+            message: string
+          }>("/api/mobile/auth/forgot-password", {
+            email: normalizedEmail,
+          })
+
+          setPendingEmail(normalizedEmail)
+          setError(null)
+          setMessage(result.message)
+          return true
+        } catch (error) {
+          setMessage(null)
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Could not send reset email.",
+          )
+          return false
+        } finally {
+          setIsSubmitting(false)
+        }
+      },
       reset: () => {
         setAccount(null)
         setError(null)
+        setMessage(null)
         setPendingEmail(null)
         setPendingPassword("")
         setStage("landing")
@@ -362,6 +416,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
         setAccount(null)
         setPendingEmail(null)
         setPendingPassword("")
+        setMessage(null)
         setStage("login")
         setError("Your session expired. Sign in again.")
         void removeStoredAccount()
@@ -382,6 +437,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
             password: pendingPassword,
           })
           setError(null)
+          setMessage(null)
           return true
         } catch (error) {
           setError(
@@ -396,10 +452,17 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
       },
       startLogin: () => {
         setError(null)
+        setMessage(null)
         setStage("login")
+      },
+      startPasswordReset: () => {
+        setError(null)
+        setMessage(null)
+        setStage("forgot")
       },
       startSignup: () => {
         setError(null)
+        setMessage(null)
         setStage("signup")
       },
       submitSignup: async ({ email, password }) => {
@@ -430,6 +493,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
           setPendingPassword(password)
           setStage("verify")
           setError(null)
+          setMessage(null)
           return true
         } catch (error) {
           setError(error instanceof Error ? error.message : "Could not sign up.")
@@ -472,6 +536,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
           }
 
           setError(null)
+          setMessage(null)
           return true
         } catch (error) {
           setError(
@@ -489,6 +554,7 @@ export function AuthFlowProvider({ children }: { children: ReactNode }) {
       account,
       error,
       isSubmitting,
+      message,
       pendingEmail,
       pendingPassword,
       stage,
