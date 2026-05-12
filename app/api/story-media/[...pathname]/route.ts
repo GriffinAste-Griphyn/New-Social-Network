@@ -270,17 +270,20 @@ async function getStoryForMediaPathname(mediaPathname: string) {
 }
 
 async function canServeStoryMedia(request: Request, mediaPathname: string) {
+  const token = new URL(request.url).searchParams.get("token")
+  const hasValidToken = verifyStoryMediaAccessToken(mediaPathname, token)
+
+  if (hasValidToken) {
+    return true
+  }
+
   const story = await getStoryForMediaPathname(mediaPathname)
 
   if (!story) {
     return false
   }
 
-  const token = new URL(request.url).searchParams.get("token")
-  const hasValidToken = verifyStoryMediaAccessToken(mediaPathname, token)
-  const session = hasValidToken
-    ? null
-    : (await getMobileSession(request)) ?? (await getSession())
+  const session = (await getMobileSession(request)) ?? (await getSession())
   const isOwner = session?.id === story.creatorId
   const isAdmin = session ? isAdminSession(session) : false
   const isLive =
@@ -289,7 +292,6 @@ async function canServeStoryMedia(request: Request, mediaPathname: string) {
     story.expiresAt.getTime() > Date.now()
 
   return (
-    (hasValidToken && isLive) ||
     Boolean(session && (isAdmin || isLive || isOwner))
   )
 }
