@@ -88,7 +88,7 @@ function initials(value: string) {
 
 export default function ProfileScreen() {
   const router = useRouter()
-  const { account, expireSession, updateAccount } = useAuthFlow()
+  const { account, expireSession, reset, updateAccount } = useAuthFlow()
   const [stats, setStats] = useState<ProfileStats | null>(null)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
   const [avatarError, setAvatarError] = useState<string | null>(null)
@@ -203,6 +203,24 @@ export default function ProfileScreen() {
     } finally {
       setIsUploadingAvatar(false)
     }
+  }
+
+  const confirmLogout = () => {
+    Alert.alert(
+      "Log out?",
+      "You will need to sign in again to use this account on this phone.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Log out",
+          style: "destructive",
+          onPress: reset,
+        },
+      ],
+    )
   }
 
   return (
@@ -320,6 +338,13 @@ export default function ProfileScreen() {
             detail="Followers and following"
             onPress={() => router.push("/followers" as Href)}
           />
+          <ActionRow
+            icon="log-out-outline"
+            label="Log out"
+            detail="Sign out on this device"
+            isDestructive
+            onPress={confirmLogout}
+          />
         </View>
 
         <View style={styles.panel}>
@@ -384,14 +409,18 @@ function SummaryMetric({
 function ActionRow({
   detail,
   icon,
+  isDestructive = false,
   label,
   onPress,
 }: {
   detail: string
   icon: ComponentProps<typeof Ionicons>["name"]
+  isDestructive?: boolean
   label: string
   onPress: () => void
 }) {
+  const iconColor = isDestructive ? colors.accent : colors.text
+
   return (
     <Pressable
       accessibilityLabel={`Open ${label}`}
@@ -403,10 +432,17 @@ function ActionRow({
       ]}
     >
       <View style={styles.actionIcon}>
-        <Ionicons name={icon} size={19} color={colors.text} />
+        <Ionicons name={icon} size={19} color={iconColor} />
       </View>
       <View style={styles.actionCopy}>
-        <Text style={styles.actionLabel}>{label}</Text>
+        <Text
+          style={[
+            styles.actionLabel,
+            isDestructive ? styles.destructiveText : null,
+          ]}
+        >
+          {label}
+        </Text>
         <Text style={styles.actionDetail}>{detail}</Text>
       </View>
       <Ionicons name="chevron-forward" size={18} color={colors.faint} />
@@ -574,6 +610,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     color: colors.subtext,
+  },
+  destructiveText: {
+    color: colors.accent,
   },
   pressed: {
     opacity: 0.72,
