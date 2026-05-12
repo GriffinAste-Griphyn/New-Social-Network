@@ -5,7 +5,8 @@ import {
   timingSafeEqual,
 } from "node:crypto"
 import { execFile } from "node:child_process"
-import { mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 import { del, put } from "@vercel/blob"
@@ -17,6 +18,7 @@ const maxStoryUploadBytes = 25 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
 const localStoryUrlPrefix = "/uploads/stories"
 const storyMediaRoutePrefix = "/api/story-media"
+const localStoryMediaPrefix = "local"
 const cloudflareStreamMediaPrefix = "cloudflare-stream"
 const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
 const execFileAsync = promisify(execFile)
@@ -126,6 +128,34 @@ function buildStoryMediaRoute(pathname: string) {
   return `${storyMediaRoutePrefix}/${encodeStoryMediaPathname(pathname)}`
 }
 
+function buildLocalStoryMediaPathname(fileName: string) {
+  return `${localStoryMediaPrefix}/${fileName}`
+}
+
+function getLocalStoryMediaPathname(mediaUrl: string) {
+  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
+  const normalizedUrl =
+    baseUrl && mediaUrl.startsWith(baseUrl)
+      ? mediaUrl.slice(baseUrl.length)
+      : mediaUrl
+
+  if (normalizedUrl.startsWith(`${storyMediaRoutePrefix}/${localStoryMediaPrefix}/`)) {
+    return normalizedUrl
+      .slice(storyMediaRoutePrefix.length + 1)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/")
+  }
+
+  if (normalizedUrl.startsWith(`${localStoryUrlPrefix}/`)) {
+    const fileName = normalizedUrl.slice(localStoryUrlPrefix.length + 1)
+
+    return buildLocalStoryMediaPathname(fileName)
+  }
+
+  return null
+}
+
 function buildCloudflareStreamPathname(uid: string) {
   return `${cloudflareStreamMediaPrefix}/${uid}/manifest/video.m3u8`
 }
@@ -175,8 +205,10 @@ export function publicStoryMediaUrl(
   }
 
   const blobPathname = getPrivateVercelBlobPathname(value)
+  const localStoryMediaPathname = getLocalStoryMediaPathname(value)
   const cloudflareStreamPathname = getCloudflareStreamPathname(value)
-  const mediaPathname = blobPathname ?? cloudflareStreamPathname
+  const mediaPathname =
+    blobPathname ?? localStoryMediaPathname ?? cloudflareStreamPathname
   const mediaUrl = mediaPathname ? buildStoryMediaRoute(mediaPathname) : value
 
   if (!request) {
@@ -265,10 +297,17 @@ const localStoryStorageProvider: StoryStorageProvider = {
   async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
     await mkdir(storyUploadDirectory, { recursive: true })
     const absolutePath = path.join(storyUploadDirectory, fileName)
+    const temporaryPath = path.join(
+      storyUploadDirectory,
+      `.${fileName}.${randomUUID()}.tmp`,
+    )
 
-    await writeFile(absolutePath, buffer)
+    await writeFile(temporaryPath, buffer)
+    await rename(temporaryPath, absolutePath)
 
-    const mediaUrl = withConfiguredPublicBaseUrl(`${localStoryUrlPrefix}/${fileName}`)
+    const mediaUrl = withConfiguredPublicBaseUrl(
+      buildStoryMediaRoute(buildLocalStoryMediaPathname(fileName)),
+    )
     let thumbnailUrl = assetKind === "image" ? mediaUrl : null
 
     if (assetKind === "video") {
@@ -278,7 +317,7 @@ const localStoryStorageProvider: StoryStorageProvider = {
 
       if (await createLocalVideoThumbnail(absolutePath, thumbnailPath)) {
         thumbnailUrl = withConfiguredPublicBaseUrl(
-          `${localStoryUrlPrefix}/${thumbnailFileName}`,
+          buildStoryMediaRoute(buildLocalStoryMediaPathname(thumbnailFileName)),
         )
       }
     }
@@ -288,7 +327,7 @@ const localStoryStorageProvider: StoryStorageProvider = {
       mediaUrl,
       thumbnailUrl,
       storageProvider: "local",
-      storageKey: fileName,
+      storageKey: buildLocalStoryMediaPathname(fileName),
       contentType,
       byteSize: buffer.byteLength,
       checksum,
@@ -296,17 +335,13 @@ const localStoryStorageProvider: StoryStorageProvider = {
     }
   },
   async remove(mediaUrl) {
-    const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
-    const localMediaUrl =
-      baseUrl && mediaUrl.startsWith(baseUrl)
-        ? mediaUrl.slice(baseUrl.length)
-        : mediaUrl
+    const localStoryMediaPathname = getLocalStoryMediaPathname(mediaUrl)
 
-    if (!localMediaUrl.startsWith(localStoryUrlPrefix)) {
+    if (!localStoryMediaPathname?.startsWith(`${localStoryMediaPrefix}/`)) {
       return
     }
 
-    const fileName = localMediaUrl.replace(`${localStoryUrlPrefix}/`, "")
+    const fileName = localStoryMediaPathname.slice(localStoryMediaPrefix.length + 1)
     const absolutePath = path.join(storyUploadDirectory, fileName)
     const extension = path.extname(fileName)
     const thumbnailPath = extension
@@ -934,6 +969,49 @@ function resolveStoryUploadType(buffer: Buffer): ResolvedUploadType {
   )
 }
 
+async function normalizeVideoForLocalPlayback(buffer: Buffer): Promise<Buffer> {
+  const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg"
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-story-video-"))
+  const inputPath = path.join(tempDirectory, "input")
+  const outputPath = path.join(tempDirectory, "output.mp4")
+
+  try {
+    await writeFile(inputPath, buffer)
+    await execFileAsync(ffmpegPath, [
+      "-y",
+      "-i",
+      inputPath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a?",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "23",
+      "-pix_fmt",
+      "yuv420p",
+      "-vf",
+      "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ])
+
+    return Buffer.from(await readFile(outputPath))
+  } catch {
+    return buffer
+  } finally {
+    await rm(tempDirectory, { force: true, recursive: true })
+  }
+}
+
 export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   if (!(file instanceof File) || file.size === 0) {
     throw new StoryUploadError("Choose an image or video before posting.")
@@ -946,7 +1024,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   const buffer = Buffer.from(await file.arrayBuffer())
   const uploadType = resolveStoryUploadType(buffer)
   const { assetKind } = uploadType
-  let storedBuffer = buffer
+  let storedBuffer: Buffer = buffer
   let storedUploadType = uploadType
 
   if (assetKind === "image") {
@@ -967,6 +1045,13 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
       throw new StoryUploadError(
         "Could not process that image. Choose a JPG, PNG, WEBP, or HEIC story photo.",
       )
+    }
+  } else if (process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
+    storedBuffer = await normalizeVideoForLocalPlayback(buffer)
+    storedUploadType = {
+      assetKind: "video",
+      extension: "mp4",
+      contentType: "video/mp4",
     }
   }
 

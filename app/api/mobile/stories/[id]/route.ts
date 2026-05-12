@@ -28,6 +28,20 @@ function absoluteMediaUrl(value: string | null, request: Request) {
   return new URL(value, request.url).toString()
 }
 
+function versionMediaUrl(value: string | null, version: string | null | undefined) {
+  if (!value || !version) {
+    return value
+  }
+
+  try {
+    const url = new URL(value)
+    url.searchParams.set("v", version)
+    return url.toString()
+  } catch {
+    return value
+  }
+}
+
 export async function GET(
   request: Request,
   context: RouteContext<"/api/mobile/stories/[id]">,
@@ -55,12 +69,17 @@ export async function GET(
       avatarUrl: absoluteMediaUrl(story.avatarUrl, request),
       items: story.items.map((item) => ({
         ...item,
-        mediaUrl:
+        mediaUrl: versionMediaUrl(
           publicStoryMediaUrl(item.mediaUrl, request, { signed: true }) ??
-          item.mediaUrl,
-        thumbnailUrl: publicStoryMediaUrl(item.thumbnailUrl, request, {
-          signed: true,
-        }),
+            item.mediaUrl,
+          item.id,
+        ),
+        thumbnailUrl: versionMediaUrl(
+          publicStoryMediaUrl(item.thumbnailUrl, request, {
+            signed: true,
+          }),
+          item.id,
+        ),
       })),
     },
   })
@@ -131,10 +150,12 @@ async function getMobileMyStoryStack(userId: string) {
       assetKind: item.assetKind,
       mediaUrl: item.mediaUrl,
       thumbnailUrl: item.thumbnailUrl,
-      title: item.caption.trim(),
+      title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
       postedAt: "Today",
-      durationSeconds: item.assetKind === "video" ? 10 : undefined,
-      captionVerticalPercent: 74,
+      durationSeconds:
+        item.assetKind === "video" ? item.durationSeconds ?? 10 : undefined,
+      captionVerticalPercent: item.textOverlays?.[0]?.positionY ?? 74,
+      textOverlays: item.textOverlays ?? [],
       stats: (() => {
         const stats = statsByStoryId.get(item.id)
 

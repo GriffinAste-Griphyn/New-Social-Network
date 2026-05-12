@@ -51,11 +51,17 @@ export type StoryElementInput = {
   kind: "text" | "sticker" | "link"
   label: string
   href?: string
+  positionX?: string
+  positionY?: string
 }
 
 function parseDelimitedElements(
   value: FormDataEntryValue | null,
   kind: "text" | "sticker",
+  position?: {
+    positionX?: string
+    positionY?: string
+  },
 ) {
   if (typeof value !== "string" || value.trim().length === 0) {
     return []
@@ -69,12 +75,31 @@ function parseDelimitedElements(
     .map((entry) => ({
       kind,
       label: storyElementLabelSchema.parse(entry),
+      ...position,
     }))
 }
 
+function parsePositionPercent(value: FormDataEntryValue | null, fallback: number) {
+  if (typeof value !== "string") {
+    return fallback.toFixed(2)
+  }
+
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed)) {
+    return fallback.toFixed(2)
+  }
+
+  return Math.min(Math.max(parsed, 0), 100).toFixed(2)
+}
+
 export function parseStoryElements(formData: FormData): StoryElementInput[] {
+  const textPosition = {
+    positionX: parsePositionPercent(formData.get("textOverlayPositionX"), 50),
+    positionY: parsePositionPercent(formData.get("textOverlayPositionY"), 74),
+  }
   const elements: StoryElementInput[] = [
-    ...parseDelimitedElements(formData.get("textOverlays"), "text"),
+    ...parseDelimitedElements(formData.get("textOverlays"), "text", textPosition),
     ...parseDelimitedElements(formData.get("stickers"), "sticker"),
   ]
   const linkLabel = formData.get("linkLabel")

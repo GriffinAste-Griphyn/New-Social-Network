@@ -13,6 +13,7 @@ import {
   Alert,
   FlatList,
   Image,
+  type LayoutChangeEvent,
   Modal,
   Pressable,
   ScrollView,
@@ -22,6 +23,7 @@ import {
   View,
 } from "react-native"
 import type { StyleProp, ViewStyle } from "react-native"
+import type { DimensionValue } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 
 import { useAuthFlow } from "@/lib/auth-flow"
@@ -765,6 +767,12 @@ type MyStoryPreview = {
   hasActiveStory: boolean
   latestThumbnailUrl: string | null
   latestAssetKind: "image" | "video" | null
+  latestTextOverlays?: Array<{
+    id: string
+    label: string
+    positionX: number
+    positionY: number
+  }>
   owner: {
     name: string
     handle: string
@@ -815,6 +823,10 @@ export function FollowingPreviewRail({
               <View style={styles.myStoryEmptyPreview} />
             )}
             <View style={styles.followingPreviewOverlay} />
+            <StoryVisualTextOverlays
+              textOverlays={myStory?.latestTextOverlays ?? []}
+              compact
+            />
             {myStory?.latestAssetKind === "video" && myStoryPreviewUrl ? (
               <View style={styles.myStoryVideoBadge}>
                 <Ionicons name="play" size={12} color="#fff" />
@@ -871,6 +883,10 @@ export function FollowingPreviewRail({
                 title={story.creator}
               />
               <View style={styles.followingPreviewOverlay} />
+              <StoryVisualTextOverlays
+                textOverlays={story.textOverlays ?? []}
+                compact
+              />
 
               {isMyStory ? (
                 <View style={styles.myStoryAddBadge}>
@@ -967,6 +983,7 @@ function StoryCard({
         title={story.title}
       />
       <View style={styles.storyOverlay} />
+      <StoryVisualTextOverlays textOverlays={story.textOverlays ?? []} />
 
       <Pressable
         accessibilityLabel={`Open ${story.creator} profile`}
@@ -1269,6 +1286,82 @@ function StoryVisual({
   return (
     <View style={[styles.absoluteFill, styles.videoFallback]}>
       <Ionicons name="play" size={28} color="#fff" />
+    </View>
+  )
+}
+
+function StoryVisualTextOverlays({
+  compact = false,
+  textOverlays,
+}: {
+  compact?: boolean
+  textOverlays: Array<{
+    id: string
+    label: string
+    positionX: number
+    positionY: number
+  }>
+}) {
+  const [layout, setLayout] = useState({ width: 0, height: 0 })
+  const shortestSide =
+    layout.width > 0 && layout.height > 0
+      ? Math.min(layout.width, layout.height)
+      : compact
+        ? 126
+        : 280
+  const fontSize = Math.round(
+    compact
+      ? Math.min(Math.max(shortestSide * 0.07, 7), 10)
+      : Math.min(Math.max(shortestSide * 0.052, 12), 17),
+  )
+  const lineHeight = Math.round(fontSize * 1.18)
+  const minHeight = Math.round(fontSize * 1.65)
+  const paddingHorizontal = Math.round(fontSize * 0.52)
+  const paddingVertical = Math.max(1, Math.round(fontSize * 0.16))
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    const { height, width } = event.nativeEvent.layout
+
+    setLayout((current) =>
+      current.width === width && current.height === height
+        ? current
+        : { width, height },
+    )
+  }
+
+  return (
+    <View
+      pointerEvents="none"
+      style={styles.storyVisualTextLayer}
+      onLayout={handleLayout}
+    >
+      {textOverlays.slice(0, 2).map((overlay) => (
+        <View
+          key={overlay.id}
+          style={[
+            styles.storyVisualTextOverlay,
+            {
+              minHeight,
+              paddingHorizontal,
+              paddingVertical,
+              top: `${Math.min(Math.max(overlay.positionY, 12), 86)}%` as DimensionValue,
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.storyVisualText,
+              {
+                fontSize,
+                lineHeight,
+              },
+            ]}
+            numberOfLines={2}
+          >
+            {overlay.label}
+          </Text>
+        </View>
+      ))}
     </View>
   )
 }
@@ -1822,6 +1915,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#1f2937",
+  },
+  storyVisualTextLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+  },
+  storyVisualTextOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(11,13,17,0.42)",
+  },
+  storyVisualText: {
+    color: "#fff",
+    fontWeight: "800",
+    textAlign: "center",
   },
   storyOverlay: {
     ...StyleSheet.absoluteFillObject,

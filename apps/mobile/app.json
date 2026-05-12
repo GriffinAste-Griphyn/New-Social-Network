@@ -38,9 +38,12 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow UBEYE to access your camera so you can capture stories."
+          "cameraPermission": "Allow UBEYE to access your camera so you can capture stories.",
+          "microphonePermission": "Allow UBEYE to access your microphone so you can record story videos."
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

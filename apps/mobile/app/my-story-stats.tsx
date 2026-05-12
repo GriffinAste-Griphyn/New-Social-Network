@@ -122,6 +122,13 @@ function getReplyPreview(interaction: StoryInteractionEvent) {
   return interaction.reaction ? `Reacted ${interaction.reaction}` : "Sent a reaction."
 }
 
+function orderStoriesChronologically(stories: CreatorStoryStats[]) {
+  return [...stories].sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
+  )
+}
+
 export default function MyStoryStatsScreen() {
   const router = useRouter()
   const { account } = useAuthFlow()
@@ -160,9 +167,13 @@ export default function MyStoryStatsScreen() {
     ])
       .then(([statsPayload, repliesPayload]) => {
         if (!isMounted) return
-        setStories(statsPayload.stats.stories)
+        const chronologicalStories = orderStoriesChronologically(
+          statsPayload.stats.stories,
+        )
+
+        setStories(chronologicalStories)
         setInteractions(repliesPayload.interactions)
-        setActiveIndex(0)
+        setActiveIndex(Math.max(chronologicalStories.length - 1, 0))
         setError(null)
       })
       .catch((errorValue) => {
@@ -257,6 +268,7 @@ export default function MyStoryStatsScreen() {
               snapToInterval={cardWidth + 12}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.carouselContent}
+              initialScrollIndex={Math.max(stories.length - 1, 0)}
               getItemLayout={(_, index) => ({
                 length: cardWidth + 12,
                 offset: (cardWidth + 12) * index,

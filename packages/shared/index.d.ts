@@ -20,6 +20,13 @@ export interface SocialStoryCard {
   mediaUrl: string
   thumbnailUrl: string | null
   title: string
+  textOverlays?: Array<{
+    id: string
+    label: string
+    positionX: number
+    positionY: number
+  }>
+  durationSeconds?: number
   lastUploadedAt: string
   progressPercent: number
 }

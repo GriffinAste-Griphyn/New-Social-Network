@@ -72,6 +72,8 @@ type StoryElementRecord = {
   kind: "text" | "sticker" | "link"
   label: string
   href: string | null
+  positionX: string | null
+  positionY: string | null
 }
 
 type RankedStoryRow = FeedStoryRow & {
@@ -126,6 +128,8 @@ export type MyStoryElement = {
   kind: "text" | "sticker" | "link"
   label: string
   href: string | null
+  positionX: number
+  positionY: number
 }
 
 export type MyStoryItem = FeedStoryCard & {
@@ -170,6 +174,12 @@ export type StoryStackItem = {
   postedAt: string
   durationSeconds?: number
   captionVerticalPercent?: number
+  textOverlays: Array<{
+    id: string
+    label: string
+    positionX: number
+    positionY: number
+  }>
 }
 
 export type StoryStack = {
@@ -215,6 +225,28 @@ function numericStringToNumber(value: string | null | undefined) {
   const parsed = Number(value)
 
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function positionStringToNumber(
+  value: string | null | undefined,
+  fallback: number,
+) {
+  if (value == null) {
+    return fallback
+  }
+
+  return Math.min(Math.max(numericStringToNumber(value), 0), 100)
+}
+
+function textOverlaysFromElements(elements: StoryElementRecord[]) {
+  return elements
+    .filter((element) => element.kind === "text")
+    .map((element) => ({
+      id: element.id,
+      label: element.label,
+      positionX: positionStringToNumber(element.positionX, 50),
+      positionY: positionStringToNumber(element.positionY, 74),
+    }))
 }
 
 function formatLiveWindow(createdAt: Date) {
@@ -309,6 +341,7 @@ function buildSuggestedAccount(
 function buildFeedStoryCard(
   row: FeedStoryRow,
   mentions: StoryMentionRecord[],
+  elements: StoryElementRecord[] = [],
 ): FeedStoryCard {
   const ageHours = Math.max(
     0,
@@ -319,6 +352,8 @@ function buildFeedStoryCard(
     12,
     Math.min(96, Math.round((freshnessRemaining / 24) * 100)),
   )
+  const textOverlays = textOverlaysFromElements(elements)
+  const firstTextOverlay = textOverlays[0]
 
   return {
     id: row.id,
@@ -328,10 +363,16 @@ function buildFeedStoryCard(
     mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
     title:
+      firstTextOverlay?.label.trim() ||
       row.caption?.trim() ||
       (mentions.length > 0
         ? "Fresh story with tags moving through the feed."
         : "Fresh story moving through the feed."),
+    textOverlays,
+    durationSeconds:
+      row.assetKind === "video"
+        ? Math.max(1, Math.ceil((row.durationMs ?? 10_000) / 1_000))
+        : undefined,
     lastUploadedAt: row.createdAt.toISOString(),
     progressPercent,
   }
@@ -369,7 +410,10 @@ function getLatestStory<T extends { createdAt: Date }>(rows: T[]) {
   }, null)
 }
 
-function buildStoryStack(rows: FeedStoryRow[]): StoryStack | null {
+function buildStoryStack(
+  rows: FeedStoryRow[],
+  elementsByStory: Map<string, StoryElementRecord[]> = new Map(),
+): StoryStack | null {
   const first = rows[0]
 
   if (!first) {
@@ -385,17 +429,27 @@ function buildStoryStack(rows: FeedStoryRow[]): StoryStack | null {
     handle: `@${first.creatorHandle}`,
     avatarUrl: first.creatorAvatarUrl,
     items: chronologicalRows.map((row) => ({
+      ...(() => {
+        const textOverlays = textOverlaysFromElements(
+          elementsByStory.get(row.id) ?? [],
+        )
+        const firstTextOverlay = textOverlays[0]
+
+        return {
+          title: firstTextOverlay?.label.trim() || row.caption?.trim() || "",
+          captionVerticalPercent: firstTextOverlay?.positionY ?? 74,
+          textOverlays,
+        }
+      })(),
       id: row.id,
       assetKind: row.assetKind,
       mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
-      title: row.caption?.trim() ?? "",
       postedAt: formatPostedAt(row.createdAt),
       durationSeconds:
         row.assetKind === "video"
           ? Math.max(1, Math.ceil((row.durationMs ?? 10_000) / 1_000))
           : undefined,
-      captionVerticalPercent: 74,
     })),
   }
 }
@@ -455,7 +509,7 @@ function buildMyStorySummary(
     const mentions = mentionsByStory.get(row.id) ?? []
 
     return {
-      ...buildFeedStoryCard(row, mentions),
+      ...buildFeedStoryCard(row, mentions, elementsByStory.get(row.id) ?? []),
       caption: row.caption?.trim() ?? "",
       createdAt: row.createdAt.toISOString(),
       expiresAt: row.expiresAt.toISOString(),
@@ -466,6 +520,8 @@ function buildMyStorySummary(
         kind: element.kind,
         label: element.label,
         href: element.href,
+        positionX: positionStringToNumber(element.positionX, 50),
+        positionY: positionStringToNumber(element.positionY, 74),
       })),
     }
   })
@@ -619,6 +675,8 @@ async function getStoryElements(storyIds: string[]) {
       kind: storyElements.kind,
       label: storyElements.label,
       href: storyElements.href,
+      positionX: storyElements.positionX,
+      positionY: storyElements.positionY,
     })
     .from(storyElements)
     .where(inArray(storyElements.storyId, storyIds))
@@ -709,8 +767,12 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   }
 
   const storyIds = storyRows.map((story) => story.id)
-  const mentionRows = await getStoryMentions(storyIds)
+  const [mentionRows, elementRows] = await Promise.all([
+    getStoryMentions(storyIds),
+    getStoryElements(storyIds),
+  ])
   const mentionsByStory = groupMentions(mentionRows)
+  const elementsByStory = groupElements(elementRows)
 
   const rankedStories: RankedStoryRow[] = storyRows
     .map((row) => ({
@@ -771,14 +833,22 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   const followingStories = firstStoryPerCreator(followingRankedStories)
     .slice(0, 8)
     .map((story) =>
-      buildFeedStoryCard(story, mentionsByStory.get(story.id) ?? []),
+      buildFeedStoryCard(
+        story,
+        mentionsByStory.get(story.id) ?? [],
+        elementsByStory.get(story.id) ?? [],
+      ),
     )
 
   const discoverStories = firstStoryPerCreator(discoverRankedStories)
     .slice(0, 8)
     .map((story) => latestDiscoverStoryByCreator.get(story.creatorId) ?? story)
     .map((story) =>
-      buildFeedStoryCard(story, mentionsByStory.get(story.id) ?? []),
+      buildFeedStoryCard(
+        story,
+        mentionsByStory.get(story.id) ?? [],
+        elementsByStory.get(story.id) ?? [],
+      ),
     )
 
   return {
@@ -814,8 +884,9 @@ export async function getStoryStackForStory(storyId: string) {
   }
 
   const rows = await getLiveStoryRowsForCreator(story.creatorId)
+  const elementRows = await getStoryElements(rows.map((row) => row.id))
 
-  return buildStoryStack(rows)
+  return buildStoryStack(rows, groupElements(elementRows))
 }
 
 export async function getMobileCreatorProfile(profileOrStoryId: string) {
@@ -1012,6 +1083,8 @@ export async function createStory(input: CreateStoryInput) {
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        positionX: element.positionX ?? "50.00",
+        positionY: element.positionY ?? "74.00",
       })),
     )
   }
@@ -1117,6 +1190,8 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        positionX: element.positionX ?? "50.00",
+        positionY: element.positionY ?? "74.00",
       })),
     )
   }

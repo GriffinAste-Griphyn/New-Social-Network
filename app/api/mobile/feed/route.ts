@@ -124,6 +124,7 @@ export async function POST(request: Request) {
         imageUrl: absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
       },
       latestThumbnailUrl: latestMyStoryThumbnailUrl,
+      latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
       items: feed.myStory.items.map((story) =>
         absoluteStoryCardMedia(story, request),
       ),

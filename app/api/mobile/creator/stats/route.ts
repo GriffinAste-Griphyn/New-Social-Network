@@ -19,6 +19,20 @@ function parseStatsRange(request: Request) {
   }
 }
 
+function versionMediaUrl(value: string | null, version: string | null | undefined) {
+  if (!value || !version) {
+    return value
+  }
+
+  try {
+    const url = new URL(value)
+    url.searchParams.set("v", version)
+    return url.toString()
+  } catch {
+    return value
+  }
+}
+
 export async function GET(request: Request) {
   const session = await getCompleteMobileSession(request)
 
@@ -41,12 +55,17 @@ export async function GET(request: Request) {
       ...stats,
       stories: stats.stories.map((story) => ({
         ...story,
-        mediaUrl:
+        mediaUrl: versionMediaUrl(
           publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
-          story.mediaUrl,
-        thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl, request, {
-          signed: true,
-        }),
+            story.mediaUrl,
+          story.id,
+        ),
+        thumbnailUrl: versionMediaUrl(
+          publicStoryMediaUrl(story.thumbnailUrl, request, {
+            signed: true,
+          }),
+          story.id,
+        ),
       })),
     },
   })

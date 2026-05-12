@@ -25,6 +25,12 @@ export type MobileFeedResponse = SocialAppHomeContract & {
     liveCount: number
     latestThumbnailUrl: string | null
     latestAssetKind: "image" | "video" | null
+    latestTextOverlays?: Array<{
+      id: string
+      label: string
+      positionX: number
+      positionY: number
+    }>
     expiresSoonLabel: string | null
     items: SocialStoryCard[]
   }
@@ -42,6 +48,12 @@ export type MobileStoryApiStack = {
     mediaUrl: string
     thumbnailUrl: string | null
     title: string
+    textOverlays?: Array<{
+      id: string
+      label: string
+      positionX: number
+      positionY: number
+    }>
     postedAt: string
     durationSeconds?: number
     captionVerticalPercent?: number

@@ -86,6 +86,7 @@ export default function StoryScreen() {
   const [isDeletingStoryItem, setIsDeletingStoryItem] = useState(false)
   const [isSendingReply, setIsSendingReply] = useState(false)
   const [isReplyMode, setIsReplyMode] = useState(false)
+  const [isOwnerStatsMinimized, setIsOwnerStatsMinimized] = useState(false)
   const [areCreatorNotificationsEnabled, setAreCreatorNotificationsEnabled] =
     useState(false)
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false)
@@ -182,6 +183,15 @@ export default function StoryScreen() {
       next.add(mediaUrl)
       return next
     })
+    setFailedImageUrls((current) => {
+      if (!current.has(mediaUrl)) {
+        return current
+      }
+
+      const next = new Set(current)
+      next.delete(mediaUrl)
+      return next
+    })
   }, [])
 
   const markImageFailed = useCallback((mediaUrl: string) => {
@@ -225,6 +235,8 @@ export default function StoryScreen() {
     )
       .then((payload) => {
         if (isMounted) {
+          setLoadedImageUrls(new Set())
+          setFailedImageUrls(new Set())
           setRemoteStory(normalizeStoryMediaUrls(payload.story))
           setStoryRequestState("settled")
         }
@@ -784,7 +796,7 @@ export default function StoryScreen() {
               onLoadEnd={() => {
                 markImageLoaded(activeItem.mediaUrl)
               }}
-              source={{ uri: activeItem.mediaUrl }}
+              source={{ uri: activeItem.mediaUrl, cache: "reload" }}
               style={styles.media}
             />
           ) : null}
@@ -1012,7 +1024,11 @@ export default function StoryScreen() {
           ) : null}
 
           {story && !isReplyMode && isViewingOwnStory && activeItem?.stats ? (
-            <OwnerStoryStatsPanel stats={activeItem.stats} />
+            <OwnerStoryStatsPanel
+              stats={activeItem.stats}
+              isMinimized={isOwnerStatsMinimized}
+              onToggle={() => setIsOwnerStatsMinimized((current) => !current)}
+            />
           ) : null}
 
           {story && isReplyMode && canRespondToStory ? (
@@ -1348,39 +1364,80 @@ function initials(value: string) {
 }
 
 function OwnerStoryStatsPanel({
+  isMinimized,
+  onToggle,
   stats,
 }: {
+  isMinimized: boolean
+  onToggle: () => void
   stats: NonNullable<MobileStoryStackItem["stats"]>
 }) {
-  return (
-    <View pointerEvents="none" style={styles.ownerStatsPanel}>
-      <View style={styles.ownerStatsHeader}>
-        <Text style={styles.ownerStatsTitle}>Story stats</Text>
-        <Text style={styles.ownerStatsEarnings}>
-          {formatMoney(stats.earningsCents)}
-        </Text>
+  if (isMinimized) {
+    return (
+      <View pointerEvents="box-none" style={styles.ownerStatsPanelContainer}>
+        <Pressable
+          accessibilityLabel="Show story stats"
+          accessibilityRole="button"
+          onPress={onToggle}
+          style={({ pressed }) => [
+            styles.ownerStatsCollapsedPill,
+            pressed ? styles.pressed : null,
+          ]}
+        >
+          <Ionicons name="bar-chart" size={18} color={colors.text} />
+          <Text style={styles.ownerStatsCollapsedText}>
+            {formatCompactNumber(stats.views)}
+          </Text>
+          <Ionicons name="chevron-up" size={16} color="rgba(255,255,255,0.72)" />
+        </Pressable>
       </View>
-      <View style={styles.ownerStatsGrid}>
-        <OwnerStoryStat
-          label="Views"
-          value={formatCompactNumber(stats.views)}
-          detail={`${formatCompactNumber(stats.uniqueViewers)} unique`}
-        />
-        <OwnerStoryStat
-          label="Completion"
-          value={`${stats.completionRate}%`}
-          detail={`${formatCompactNumber(stats.completedViews)} complete`}
-        />
-        <OwnerStoryStat
-          label="Replies"
-          value={formatCompactNumber(stats.replies)}
-          detail={`${formatCompactNumber(stats.comments)} comments`}
-        />
-        <OwnerStoryStat
-          label="Avg."
-          value={`${stats.averageViewedSeconds}s`}
-          detail="watch time"
-        />
+    )
+  }
+
+  return (
+    <View pointerEvents="box-none" style={styles.ownerStatsPanelContainer}>
+      <View pointerEvents="box-none" style={styles.ownerStatsPanel}>
+        <View style={styles.ownerStatsHeader}>
+          <View style={styles.ownerStatsHeaderLeft}>
+            <Pressable
+              accessibilityLabel="Hide story stats"
+              accessibilityRole="button"
+              onPress={onToggle}
+              style={({ pressed }) => [
+                styles.ownerStatsToggle,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Ionicons name="chevron-down" size={18} color={colors.text} />
+            </Pressable>
+            <Text style={styles.ownerStatsTitle}>Story stats</Text>
+          </View>
+          <Text style={styles.ownerStatsEarnings}>
+            {formatMoney(stats.earningsCents)}
+          </Text>
+        </View>
+        <View style={styles.ownerStatsGrid}>
+          <OwnerStoryStat
+            label="Views"
+            value={formatCompactNumber(stats.views)}
+            detail={`${formatCompactNumber(stats.uniqueViewers)} unique`}
+          />
+          <OwnerStoryStat
+            label="Completion"
+            value={`${stats.completionRate}%`}
+            detail={`${formatCompactNumber(stats.completedViews)} complete`}
+          />
+          <OwnerStoryStat
+            label="Replies"
+            value={formatCompactNumber(stats.replies)}
+            detail={`${formatCompactNumber(stats.comments)} comments`}
+          />
+          <OwnerStoryStat
+            label="Avg."
+            value={`${stats.averageViewedSeconds}s`}
+            detail="watch time"
+          />
+        </View>
       </View>
     </View>
   )
@@ -1650,12 +1707,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  ownerStatsPanel: {
+  ownerStatsPanelContainer: {
     position: "absolute",
     left: 14,
     right: 14,
     bottom: 28,
     zIndex: 9,
+    alignItems: "flex-start",
+  },
+  ownerStatsPanel: {
+    alignSelf: "stretch",
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.16)",
@@ -1664,6 +1725,32 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     backgroundColor: "rgba(8,12,20,0.82)",
   },
+  ownerStatsToggle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  ownerStatsCollapsedPill: {
+    minWidth: 92,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    backgroundColor: "rgba(8,12,20,0.76)",
+  },
+  ownerStatsCollapsedText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: colors.text,
+  },
   ownerStatsHeader: {
     minHeight: 24,
     flexDirection: "row",
@@ -1671,13 +1758,22 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 10,
   },
+  ownerStatsHeaderLeft: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   ownerStatsTitle: {
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: "800",
     color: "rgba(255,255,255,0.72)",
     textTransform: "uppercase",
   },
   ownerStatsEarnings: {
+    flexShrink: 0,
     fontSize: 15,
     fontWeight: "800",
     color: colors.text,

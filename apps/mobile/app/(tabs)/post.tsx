@@ -1,11 +1,17 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
-import { CameraView, useCameraPermissions } from "expo-camera"
+import {
+  CameraView,
+  useCameraPermissions,
+  useMicrophonePermissions,
+} from "expo-camera"
 import * as ImagePicker from "expo-image-picker"
+import { VideoView, useVideoPlayer } from "expo-video"
 import { useRouter } from "expo-router"
 import type { ComponentProps } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Image,
+  type LayoutChangeEvent,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -13,6 +19,7 @@ import {
   TextInput,
   View,
 } from "react-native"
+import type { DimensionValue } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 
 import { useAuthFlow } from "@/lib/auth-flow"
@@ -87,24 +94,60 @@ const galleryItems: StoryMedia[] = [
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max)
+const DEFAULT_TEXT_VERTICAL_PERCENT = 47
+const MIN_TEXT_VERTICAL_PERCENT = 18
+const MAX_TEXT_VERTICAL_PERCENT = 82
+const HOLD_TO_RECORD_DELAY_MS = 240
+const CAMERA_MODE_SETTLE_MS = 180
+const STORY_FRAME_SECONDS = 10
+const STORY_FRAME_MS = STORY_FRAME_SECONDS * 1_000
+const MAX_RECORDED_STORY_FRAMES = 6
+const MAX_RECORDED_VIDEO_SECONDS =
+  STORY_FRAME_SECONDS * MAX_RECORDED_STORY_FRAMES
+const RECORDING_RING_TICK_COUNT = 48
 
 export default function PostScreen() {
   const router = useRouter()
   const { account } = useAuthFlow()
   const cameraRef = useRef<CameraView>(null)
   const cameraRequestStarted = useRef(false)
+  const shutterHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isPressRecording = useRef(false)
+  const isRecordingVideoRef = useRef(false)
+  const isStartingVideoRef = useRef(false)
+  const hasShutterPressMovedToRecording = useRef(false)
+  const cameraModeRef = useRef<"picture" | "video">("video")
+  const recordingStartedAt = useRef(0)
+  const recordingProgressTimer = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  )
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
+  const [microphonePermission, requestMicrophonePermission] =
+    useMicrophonePermissions()
   const [cameraFacing, setCameraFacing] = useState<"front" | "back">("back")
+  const [cameraMode, setCameraMode] = useState<"picture" | "video">("video")
   const [step, setStep] = useState<FlowStep>("camera")
   const [selectedMedia, setSelectedMedia] = useState<StoryMedia | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [isPublishing, setIsPublishing] = useState(false)
+  const [isRecordingVideo, setIsRecordingVideo] = useState(false)
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0)
   const [overlayText, setOverlayText] = useState("")
   const [linkUrl, setLinkUrl] = useState("")
   const [isTextEditing, setIsTextEditing] = useState(false)
   const [isLinkEditing, setIsLinkEditing] = useState(false)
-  const [textVerticalOffset, setTextVerticalOffset] = useState(0)
-  const textDragStartY = useRef(0)
+  const [textVerticalPercent, setTextVerticalPercent] = useState(
+    DEFAULT_TEXT_VERTICAL_PERCENT,
+  )
+  const [storyCanvasHeight, setStoryCanvasHeight] = useState(1)
+  const textInputRef = useRef<TextInput>(null)
+  const textDragStartPercent = useRef(DEFAULT_TEXT_VERTICAL_PERCENT)
+  const textGestureState = useRef({
+    hasOverlayText: false,
+    isTextEditing: false,
+    storyCanvasHeight: 1,
+    textVerticalPercent: DEFAULT_TEXT_VERTICAL_PERCENT,
+  })
   const hasCameraPermission = Boolean(cameraPermission?.granted)
 
   const activeMedia = useMemo(
@@ -113,25 +156,63 @@ export default function PostScreen() {
   )
   const hasOverlayText = overlayText.trim().length > 0
   const hasLink = linkUrl.trim().length > 0
-  const textPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_, gestureState) =>
-          hasOverlayText && Math.abs(gestureState.dy) > 6,
-        onMoveShouldSetPanResponder: (_, gestureState) =>
-          hasOverlayText && Math.abs(gestureState.dy) > 6,
-        onPanResponderGrant: () => {
-          textDragStartY.current = textVerticalOffset
-        },
-        onPanResponderMove: (_, gestureState) => {
-          setTextVerticalOffset(
-            clamp(textDragStartY.current + gestureState.dy, -240, 220),
-          )
-        },
-        onPanResponderTerminationRequest: () => false,
-      }),
-    [hasOverlayText, textVerticalOffset],
-  )
+
+  textGestureState.current = {
+    hasOverlayText,
+    isTextEditing,
+    storyCanvasHeight,
+    textVerticalPercent,
+  }
+
+  const textPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => {
+        const gesture = textGestureState.current
+
+        return gesture.hasOverlayText && !gesture.isTextEditing
+      },
+      onStartShouldSetPanResponderCapture: () => {
+        const gesture = textGestureState.current
+
+        return gesture.hasOverlayText && !gesture.isTextEditing
+      },
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+        const gesture = textGestureState.current
+
+        return (
+          gesture.hasOverlayText &&
+          !gesture.isTextEditing &&
+          Math.abs(gestureState.dy) > 3
+        )
+      },
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        const gesture = textGestureState.current
+
+        return (
+          gesture.hasOverlayText &&
+          !gesture.isTextEditing &&
+          Math.abs(gestureState.dy) > 3
+        )
+      },
+      onPanResponderGrant: () => {
+        textDragStartPercent.current =
+          textGestureState.current.textVerticalPercent
+      },
+      onPanResponderMove: (_, gestureState) => {
+        setTextVerticalPercent(
+          clamp(
+            textDragStartPercent.current +
+              (gestureState.dy /
+                Math.max(textGestureState.current.storyCanvasHeight, 1)) *
+                100,
+            MIN_TEXT_VERTICAL_PERCENT,
+            MAX_TEXT_VERTICAL_PERCENT,
+          ),
+        )
+      },
+      onPanResponderTerminationRequest: () => false,
+    }),
+  ).current
 
   const usePickedAsset = (asset: ImagePicker.ImagePickerAsset) => {
     const assetKind = asset.type === "video" ? "video" : "image"
@@ -150,6 +231,45 @@ export default function PostScreen() {
     setStep("edit")
   }
 
+  const wait = (durationMs: number) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, durationMs)
+    })
+
+  const setCameraModeIntent = (mode: "picture" | "video") => {
+    cameraModeRef.current = mode
+    setCameraMode(mode)
+  }
+
+  const switchCameraMode = async (mode: "picture" | "video") => {
+    if (cameraModeRef.current !== mode) {
+      setCameraModeIntent(mode)
+      await wait(CAMERA_MODE_SETTLE_MS)
+    }
+  }
+
+  const stopRecordingProgressTimer = () => {
+    if (recordingProgressTimer.current) {
+      clearInterval(recordingProgressTimer.current)
+      recordingProgressTimer.current = null
+    }
+  }
+
+  const startRecordingProgressTimer = () => {
+    stopRecordingProgressTimer()
+    recordingStartedAt.current = Date.now()
+    setRecordingElapsedMs(0)
+    recordingProgressTimer.current = setInterval(() => {
+      setRecordingElapsedMs(Date.now() - recordingStartedAt.current)
+    }, 80)
+  }
+
+  const resetRecordingProgressTimer = () => {
+    stopRecordingProgressTimer()
+    recordingStartedAt.current = 0
+    setRecordingElapsedMs(0)
+  }
+
   useEffect(() => {
     if (
       step === "camera" &&
@@ -164,6 +284,10 @@ export default function PostScreen() {
   }, [cameraPermission, requestCameraPermission, step])
 
   const captureStory = async () => {
+    if (isRecordingVideoRef.current || isStartingVideoRef.current) {
+      return
+    }
+
     if (!hasCameraPermission) {
       const permission = await requestCameraPermission()
 
@@ -174,6 +298,8 @@ export default function PostScreen() {
     }
 
     try {
+      await switchCameraMode("picture")
+
       const photo = await cameraRef.current?.takePictureAsync({
         quality: 0.9,
         shutterSound: true,
@@ -197,6 +323,122 @@ export default function PostScreen() {
       setUploadError(
         error instanceof Error ? error.message : "Could not capture photo.",
       )
+    } finally {
+      setCameraModeIntent("video")
+    }
+  }
+
+  const startVideoRecording = async () => {
+    if (isRecordingVideoRef.current || isStartingVideoRef.current) {
+      return
+    }
+
+    isStartingVideoRef.current = true
+
+    try {
+      if (!hasCameraPermission) {
+        const cameraStatus = await requestCameraPermission()
+
+        if (!cameraStatus.granted) {
+          setUploadError("Camera permission is required to record a story.")
+          return
+        }
+      }
+
+      const microphoneStatus = microphonePermission?.granted
+        ? microphonePermission
+        : await requestMicrophonePermission()
+
+      if (!microphoneStatus.granted) {
+        setUploadError("Microphone permission is required to record video.")
+        return
+      }
+
+      await switchCameraMode("video")
+
+      if (!isPressRecording.current) {
+        return
+      }
+
+      const recording = cameraRef.current?.recordAsync({
+        maxDuration: MAX_RECORDED_VIDEO_SECONDS,
+      })
+
+      if (!recording) {
+        setUploadError("Camera is not ready yet.")
+        return
+      }
+
+      isRecordingVideoRef.current = true
+      setIsRecordingVideo(true)
+      startRecordingProgressTimer()
+      setUploadError(null)
+
+      const video = await recording
+
+      if (!video?.uri) {
+        return
+      }
+
+      const videoExtension =
+        video.uri.split("?")[0]?.split(".").pop()?.toLowerCase() || "mp4"
+      const videoMimeType =
+        videoExtension === "mov" ? "video/quicktime" : "video/mp4"
+
+      setSelectedMedia({
+        id: `video-${Date.now()}`,
+        uri: video.uri,
+        assetKind: "video",
+        mimeType: videoMimeType,
+        fileName: `story-${Date.now()}.${videoExtension}`,
+      })
+      setStep("edit")
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : "Could not record video.",
+      )
+    } finally {
+      isStartingVideoRef.current = false
+      isRecordingVideoRef.current = false
+      isPressRecording.current = false
+      setIsRecordingVideo(false)
+      resetRecordingProgressTimer()
+      setCameraModeIntent("video")
+    }
+  }
+
+  const handleShutterPressIn = () => {
+    isPressRecording.current = true
+    hasShutterPressMovedToRecording.current = false
+    setCameraModeIntent("video")
+
+    if (shutterHoldTimer.current) {
+      clearTimeout(shutterHoldTimer.current)
+    }
+
+    shutterHoldTimer.current = setTimeout(() => {
+      shutterHoldTimer.current = null
+      hasShutterPressMovedToRecording.current = true
+      void startVideoRecording()
+    }, HOLD_TO_RECORD_DELAY_MS)
+  }
+
+  const handleShutterPressOut = () => {
+    if (shutterHoldTimer.current) {
+      clearTimeout(shutterHoldTimer.current)
+      shutterHoldTimer.current = null
+      isPressRecording.current = false
+      void captureStory()
+      return
+    }
+
+    isPressRecording.current = false
+
+    if (
+      hasShutterPressMovedToRecording.current &&
+      (isRecordingVideoRef.current || isStartingVideoRef.current)
+    ) {
+      cameraRef.current?.stopRecording()
     }
   }
 
@@ -240,6 +482,7 @@ export default function PostScreen() {
       formData.append("brandTags", "")
       formData.append("stickers", "")
       formData.append("textOverlays", overlayText.trim())
+      formData.append("textOverlayPositionY", textVerticalPercent.toFixed(2))
       formData.append("linkLabel", hasLink ? "Open link" : "")
       formData.append("linkUrl", linkUrl.trim())
       formData.append("media", {
@@ -274,40 +517,96 @@ export default function PostScreen() {
 
   const finishTextEditing = () => {
     setIsTextEditing(false)
+    textInputRef.current?.blur()
+  }
+
+  const handleStoryCanvasLayout = (event: LayoutChangeEvent) => {
+    setStoryCanvasHeight(Math.max(event.nativeEvent.layout.height, 1))
   }
 
   const finishLinkEditing = () => {
     setIsLinkEditing(false)
   }
 
-  const nudgeText = (amount: number) => {
-    setTextVerticalOffset((current) => clamp(current + amount, -240, 220))
-  }
-
   const flipCamera = () => {
+    if (isRecordingVideo) {
+      return
+    }
+
     setCameraFacing((current) => (current === "back" ? "front" : "back"))
   }
+
+  useEffect(
+    () => () => {
+      if (shutterHoldTimer.current) {
+        clearTimeout(shutterHoldTimer.current)
+      }
+      stopRecordingProgressTimer()
+      cameraRef.current?.stopRecording()
+    },
+    [],
+  )
+
+  const recordingFrameProgress = isRecordingVideo
+    ? (recordingElapsedMs % STORY_FRAME_MS) / STORY_FRAME_MS
+    : 0
+  const recordingFrameNumber = Math.min(
+    MAX_RECORDED_STORY_FRAMES,
+    Math.floor(recordingElapsedMs / STORY_FRAME_MS) + 1,
+  )
 
   if (step === "edit") {
     return (
       <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
         <View style={styles.previewScreen}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Add text to story"
-            onPress={openTextEditor}
+          <View
+            onLayout={handleStoryCanvasLayout}
             style={styles.storyCanvas}
           >
             {activeMedia.assetKind === "video" ? (
-              <View style={styles.videoPreviewPlaceholder}>
-                <Ionicons name="play-circle" size={54} color={colors.text} />
-                <Text style={styles.videoPreviewText}>Video selected</Text>
-              </View>
+              <StoryVideoPreview uri={activeMedia.uri} />
             ) : (
               <Image source={{ uri: activeMedia.uri }} style={styles.previewImage} />
             )}
             <View style={styles.previewShade} />
-          </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add text to story"
+              onPress={openTextEditor}
+              style={styles.storyCanvasPressLayer}
+            />
+
+            {isTextEditing || hasOverlayText ? (
+              <View
+                style={[
+                  styles.snapTextDragTarget,
+                  { top: `${textVerticalPercent}%` as DimensionValue },
+                ]}
+                {...textPanResponder.panHandlers}
+              >
+                <View style={styles.snapTextOverlay}>
+                  {isTextEditing ? (
+                    <TextInput
+                      ref={textInputRef}
+                      autoFocus
+                      value={overlayText}
+                      onChangeText={setOverlayText}
+                      placeholder="Add text"
+                      placeholderTextColor="rgba(255,255,255,0.68)"
+                      style={styles.snapTextInput}
+                      blurOnSubmit
+                      returnKeyType="done"
+                      onBlur={() => setIsTextEditing(false)}
+                      onSubmitEditing={finishTextEditing}
+                    />
+                  ) : (
+                    <Text style={styles.snapText}>{overlayText.trim()}</Text>
+                  )}
+                </View>
+              </View>
+            ) : null}
+          </View>
 
           <View style={styles.snapTopBar}>
             <Pressable
@@ -336,31 +635,6 @@ export default function PostScreen() {
               onPress={openLinkEditor}
             />
           </View>
-
-          {isTextEditing || hasOverlayText ? (
-            <View
-              style={[
-                styles.snapTextOverlay,
-                { transform: [{ translateY: textVerticalOffset }] },
-              ]}
-              {...textPanResponder.panHandlers}
-            >
-              {isTextEditing ? (
-                <TextInput
-                  autoFocus
-                  value={overlayText}
-                  onChangeText={setOverlayText}
-                  placeholder="Add text"
-                  placeholderTextColor="rgba(255,255,255,0.68)"
-                  style={styles.snapTextInput}
-                  returnKeyType="done"
-                  onSubmitEditing={finishTextEditing}
-                />
-              ) : (
-                <Text style={styles.snapText}>{overlayText.trim()}</Text>
-              )}
-            </View>
-          ) : null}
 
           {hasLink ? (
             <Pressable
@@ -411,44 +685,6 @@ export default function PostScreen() {
             </View>
           ) : null}
 
-          {isTextEditing ? (
-            <View style={styles.textMoveControls}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Move text up"
-                onPress={() => nudgeText(-28)}
-                style={({ pressed }) => [
-                  styles.textMoveButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Ionicons name="chevron-up" size={22} color={colors.text} />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Done editing text"
-                onPress={finishTextEditing}
-                style={({ pressed }) => [
-                  styles.textDoneButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Text style={styles.textDoneLabel}>Done</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Move text down"
-                onPress={() => nudgeText(28)}
-                style={({ pressed }) => [
-                  styles.textMoveButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Ionicons name="chevron-down" size={22} color={colors.text} />
-              </Pressable>
-            </View>
-          ) : null}
-
           <View style={styles.storyFooter}>
             {uploadError ? (
               <Text style={styles.uploadErrorText}>{uploadError}</Text>
@@ -485,8 +721,10 @@ export default function PostScreen() {
               active={step === "camera"}
               animateShutter
               facing={cameraFacing}
-              mode="picture"
+              mode={cameraMode}
+              mute={false}
               style={styles.liveCamera}
+              videoQuality="720p"
               onMountError={(event) => {
                 setUploadError(event.message)
               }}
@@ -540,7 +778,11 @@ export default function PostScreen() {
         </View>
 
         <View style={styles.cameraHint}>
-          <Text style={styles.cameraHintText}>Tap to capture</Text>
+          <Text style={styles.cameraHintText}>
+            {isRecordingVideo
+              ? `Frame ${recordingFrameNumber}/${MAX_RECORDED_STORY_FRAMES} - release to finish`
+              : "Tap for photo, hold for video"}
+          </Text>
         </View>
 
         <View style={styles.cameraControls}>
@@ -548,8 +790,10 @@ export default function PostScreen() {
             accessibilityLabel="Open camera roll"
             accessibilityRole="button"
             onPress={openGalleryPicker}
+            disabled={isRecordingVideo}
             style={({ pressed }) => [
               styles.galleryButton,
+              isRecordingVideo ? styles.controlDisabled : null,
               pressed ? styles.pressed : null,
             ]}
           >
@@ -558,23 +802,36 @@ export default function PostScreen() {
           </Pressable>
 
           <Pressable
-            accessibilityLabel="Capture story photo"
+            accessibilityLabel="Tap for photo or hold to record video"
             accessibilityRole="button"
-            onPress={captureStory}
+            onPressIn={handleShutterPressIn}
+            onPressOut={handleShutterPressOut}
             style={({ pressed }) => [
               styles.shutterOuter,
-              pressed ? styles.shutterPressed : null,
+              isRecordingVideo ? styles.shutterRecording : null,
+              pressed && !isRecordingVideo ? styles.shutterPressed : null,
             ]}
           >
-            <View style={styles.shutterInner} />
+            <RecordingTimerRing
+              progress={recordingFrameProgress}
+              visible={isRecordingVideo}
+            />
+            <View
+              style={[
+                styles.shutterInner,
+                isRecordingVideo ? styles.shutterInnerRecording : null,
+              ]}
+            />
           </Pressable>
 
           <Pressable
             accessibilityLabel="Open photo gallery"
             accessibilityRole="button"
             onPress={openGalleryPicker}
+            disabled={isRecordingVideo}
             style={({ pressed }) => [
               styles.secondaryControl,
+              isRecordingVideo ? styles.controlDisabled : null,
               pressed ? styles.pressed : null,
             ]}
           >
@@ -592,6 +849,65 @@ function StoryHeaderPill() {
       <Text numberOfLines={1} style={styles.storyHeaderTitle}>
         New Story
       </Text>
+    </View>
+  )
+}
+
+function StoryVideoPreview({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (instance) => {
+    instance.loop = true
+    instance.muted = true
+    instance.audioMixingMode = "mixWithOthers"
+    instance.play()
+  })
+
+  return (
+    <VideoView
+      player={player}
+      nativeControls={false}
+      contentFit="cover"
+      style={styles.previewImage}
+    />
+  )
+}
+
+function RecordingTimerRing({
+  progress,
+  visible,
+}: {
+  progress: number
+  visible: boolean
+}) {
+  if (!visible) {
+    return null
+  }
+
+  const elapsedTicks = Math.floor(
+    clamp(progress, 0, 1) * RECORDING_RING_TICK_COUNT,
+  )
+
+  return (
+    <View pointerEvents="none" style={styles.recordingTimerRing}>
+      {Array.from({ length: RECORDING_RING_TICK_COUNT }).map((_, index) => {
+        const angle = (index / RECORDING_RING_TICK_COUNT) * 360
+        const isTickRemaining = index >= elapsedTicks
+
+        return (
+          <View
+            key={index}
+            style={[
+              styles.recordingTimerTick,
+              {
+                opacity: isTickRemaining ? 1 : 0,
+                transform: [
+                  { rotate: `${angle}deg` },
+                  { translateY: -50 },
+                ],
+              },
+            ]}
+          />
+        )
+      })}
     </View>
   )
 }
@@ -749,8 +1065,38 @@ const styles = StyleSheet.create({
     borderRadius: 33,
     backgroundColor: colors.white,
   },
+  recordingTimerRing: {
+    position: "absolute",
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recordingTimerTick: {
+    position: "absolute",
+    left: 52,
+    top: 49,
+    width: 4,
+    height: 10,
+    borderRadius: 2,
+    backgroundColor: colors.accent,
+  },
+  shutterRecording: {
+    borderColor: "rgba(255,255,255,0.48)",
+    transform: [{ scale: 1.04 }],
+  },
+  shutterInnerRecording: {
+    width: 46,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+  },
   shutterPressed: {
     transform: [{ scale: 0.94 }],
+  },
+  controlDisabled: {
+    opacity: 0.42,
   },
   secondaryControl: {
     width: 58,
@@ -772,22 +1118,13 @@ const styles = StyleSheet.create({
     marginBottom: 96,
     borderRadius: 30,
   },
+  storyCanvasPressLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
   previewImage: {
     ...StyleSheet.absoluteFillObject,
     width: "100%",
     height: "100%",
-  },
-  videoPreviewPlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "#111827",
-  },
-  videoPreviewText: {
-    color: colors.text,
-    fontSize: 18,
-    fontWeight: "700",
   },
   previewShade: {
     ...StyleSheet.absoluteFillObject,
@@ -862,11 +1199,15 @@ const styles = StyleSheet.create({
   toolRailButtonActive: {
     backgroundColor: colors.accent,
   },
-  snapTextOverlay: {
+  snapTextDragTarget: {
     position: "absolute",
     left: 0,
     right: 0,
-    top: "47%",
+    zIndex: 3,
+    minHeight: 76,
+    justifyContent: "center",
+  },
+  snapTextOverlay: {
     minHeight: 42,
     backgroundColor: "rgba(11,13,17,0.36)",
     paddingHorizontal: 24,
@@ -890,34 +1231,6 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     fontWeight: "700",
     textAlign: "center",
-  },
-  textMoveControls: {
-    position: "absolute",
-    left: 22,
-    top: "37%",
-    gap: 10,
-    alignItems: "center",
-  },
-  textMoveButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(11,13,17,0.52)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textDoneButton: {
-    height: 38,
-    borderRadius: 19,
-    paddingHorizontal: 14,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textDoneLabel: {
-    color: colors.white,
-    fontSize: 13,
-    fontWeight: "700",
   },
   linkPreview: {
     position: "absolute",
