@@ -7,6 +7,7 @@ import sharp from "sharp"
 const maxAvatarUploadBytes = 8 * 1024 * 1024
 const avatarUploadDirectory = path.join(process.cwd(), "public", "uploads", "avatars")
 const localAvatarUrlPrefix = "/uploads/avatars"
+const profileAvatarMediaRoutePrefix = "/api/profile-avatar-media"
 
 type ResolvedAvatarUploadType = {
   extension: string
@@ -32,6 +33,17 @@ function withConfiguredPublicBaseUrl(mediaUrl: string) {
   }
 
   return `${baseUrl}${mediaUrl}`
+}
+
+function encodeProfileAvatarPathname(pathname: string) {
+  return pathname
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+}
+
+function buildProfileAvatarMediaRoute(pathname: string) {
+  return `${profileAvatarMediaRoutePrefix}/${encodeProfileAvatarPathname(pathname)}`
 }
 
 function hasPrefix(buffer: Buffer, bytes: number[]) {
@@ -83,6 +95,51 @@ function isVercelBlobUrl(mediaUrl: string) {
   }
 }
 
+function getPrivateVercelBlobPathname(mediaUrl: string) {
+  if (mediaUrl.startsWith(`${profileAvatarMediaRoutePrefix}/`)) {
+    const pathname = mediaUrl
+      .slice(profileAvatarMediaRoutePrefix.length + 1)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/")
+
+    return pathname.startsWith("avatars/") ? pathname : null
+  }
+
+  if (!/^https?:\/\//i.test(mediaUrl)) {
+    return null
+  }
+
+  try {
+    const url = new URL(mediaUrl)
+
+    if (!url.hostname.endsWith(".private.blob.vercel-storage.com")) {
+      return null
+    }
+
+    const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, ""))
+
+    return pathname.startsWith("avatars/") ? pathname : null
+  } catch {
+    return null
+  }
+}
+
+export function publicProfileAvatarUrl(value: string | null, request?: Request) {
+  if (!value) {
+    return null
+  }
+
+  const blobPathname = getPrivateVercelBlobPathname(value)
+  const avatarUrl = blobPathname ? buildProfileAvatarMediaRoute(blobPathname) : value
+
+  if (!request || /^https?:\/\//i.test(avatarUrl)) {
+    return avatarUrl
+  }
+
+  return new URL(avatarUrl, request.url).toString()
+}
+
 export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar> {
   if (!(file instanceof File) || file.size === 0) {
     throw new ProfileAvatarUploadError("Choose a profile photo first.")
@@ -122,12 +179,12 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
 
   if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
     const blob = await put(storageKey, normalizedBuffer, {
-      access: "public",
+      access: "private",
       contentType,
     })
 
     return {
-      avatarUrl: blob.url,
+      avatarUrl: buildProfileAvatarMediaRoute(blob.pathname),
       storageProvider: "vercel-blob",
       storageKey: blob.pathname,
       contentType,
@@ -157,6 +214,13 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
 
 export async function removeProfileAvatar(avatarUrl: string | null) {
   if (!avatarUrl) {
+    return
+  }
+
+  const privateBlobPathname = getPrivateVercelBlobPathname(avatarUrl)
+
+  if (privateBlobPathname) {
+    await del(privateBlobPathname)
     return
   }
 

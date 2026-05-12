@@ -40,6 +40,8 @@ import {
 } from "@/lib/story-validators"
 
 const MY_STORY_ROUTE_ID = "my-story"
+const storyVideoSegmentSeconds = 10
+const minFinalVideoSegmentSeconds = 2
 
 type FeedStoryRow = {
   id: string
@@ -343,6 +345,7 @@ function buildFeedStoryCard(
   row: FeedStoryRow,
   mentions: StoryMentionRecord[],
   elements: StoryElementRecord[] = [],
+  timelineSegmentCount = 1,
 ): FeedStoryCard {
   const ageHours = Math.max(
     0,
@@ -376,7 +379,46 @@ function buildFeedStoryCard(
         : undefined,
     lastUploadedAt: row.createdAt.toISOString(),
     progressPercent,
+    timelineSegmentCount,
   }
+}
+
+function getStoryTimelineSegmentCount(row: FeedStoryRow) {
+  if (row.assetKind === "image") {
+    return 1
+  }
+
+  const durationSeconds = Math.max(
+    row.durationMs ? Math.ceil(row.durationMs / 1_000) : storyVideoSegmentSeconds,
+    1,
+  )
+  let segmentCount = 0
+
+  for (let start = 0; start < durationSeconds; start += storyVideoSegmentSeconds) {
+    const remainingSeconds = durationSeconds - start
+
+    if (remainingSeconds < minFinalVideoSegmentSeconds && segmentCount > 0) {
+      break
+    }
+
+    segmentCount += 1
+  }
+
+  return Math.max(1, segmentCount)
+}
+
+function getTimelineSegmentCountByCreator(rows: FeedStoryRow[]) {
+  const segmentCountByCreator = new Map<string, number>()
+
+  rows.forEach((row) => {
+    segmentCountByCreator.set(
+      row.creatorId,
+      (segmentCountByCreator.get(row.creatorId) ?? 0) +
+        getStoryTimelineSegmentCount(row),
+    )
+  })
+
+  return segmentCountByCreator
 }
 
 function firstStoryPerCreator<T extends { creatorId: string }>(rows: T[]) {
@@ -803,6 +845,10 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
       ),
     ).map((story) => [story.creatorId, story]),
   )
+  const followingTimelineSegmentCountByCreator =
+    getTimelineSegmentCountByCreator(followingRankedStories)
+  const discoverTimelineSegmentCountByCreator =
+    getTimelineSegmentCountByCreator(discoverRankedStories)
   const featuredRow = followingRankedStories[0]
   const featuredStory = featuredRow
     ? buildFeedStory(featuredRow, mentionsByStory.get(featuredRow.id) ?? [])
@@ -843,6 +889,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
         story,
         mentionsByStory.get(story.id) ?? [],
         elementsByStory.get(story.id) ?? [],
+        followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
       ),
     )
 
@@ -854,6 +901,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
         story,
         mentionsByStory.get(story.id) ?? [],
         elementsByStory.get(story.id) ?? [],
+        discoverTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
       ),
     )
 

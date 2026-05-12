@@ -7,6 +7,7 @@ import {
   createStoryInteraction,
   listStoryInteractionsForCreator,
 } from "@/lib/story-interactions"
+import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
@@ -74,8 +75,24 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    interactions: interactions.map(withPublicMediaUrls),
-    sentInteractions: sentInteractions.map(withPublicMediaUrls),
+    interactions: interactions.map((interaction) => ({
+      ...withPublicMediaUrls(interaction),
+      actor: {
+        ...interaction.actor,
+        imageUrl: publicProfileAvatarUrl(interaction.actor.imageUrl, request),
+      },
+    })),
+    sentInteractions: sentInteractions.map((interaction) => ({
+      ...withPublicMediaUrls(interaction),
+      actor: {
+        ...interaction.actor,
+        imageUrl: publicProfileAvatarUrl(interaction.actor.imageUrl, request),
+      },
+      target: {
+        ...interaction.target,
+        imageUrl: publicProfileAvatarUrl(interaction.target.imageUrl, request),
+      },
+    })),
   })
 }
 

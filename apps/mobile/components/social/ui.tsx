@@ -1125,19 +1125,27 @@ function StoryCard({
             {story.title}
           </Text>
         ) : null}
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${story.progressPercent}%`,
-                backgroundColor: compact ? colors.accent : "#d8b4fe",
-              },
-            ]}
-          />
-        </View>
+        <StoryTimelinePreview segmentCount={story.timelineSegmentCount} />
       </View>
     </Pressable>
+  )
+}
+
+function StoryTimelinePreview({
+  segmentCount,
+}: {
+  segmentCount: number
+}) {
+  const segments = Array.from({
+    length: Math.max(1, Math.floor(segmentCount)),
+  })
+
+  return (
+    <View style={styles.storyTimeline}>
+      {segments.map((_, index) => (
+        <View key={index} style={styles.storyTimelineTrack} />
+      ))}
+    </View>
   )
 }
 
@@ -2104,16 +2112,16 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
   },
-  progressTrack: {
+  storyTimeline: {
     marginTop: 12,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.28)",
-    overflow: "hidden",
+    flexDirection: "row",
+    gap: 5,
   },
-  progressFill: {
-    height: "100%",
+  storyTimelineTrack: {
+    flex: 1,
+    height: 3,
     borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.78)",
   },
   discoverListContent: {
     paddingHorizontal: 16,

@@ -29,6 +29,7 @@ export interface SocialStoryCard {
   durationSeconds?: number
   lastUploadedAt: string
   progressPercent: number
+  timelineSegmentCount: number
 }
 
 export interface SocialDiscoverTile {

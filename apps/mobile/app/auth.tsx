@@ -502,6 +502,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.dark,
+    overflow: "hidden",
   },
   brandMarkImage: {
     width: 32,

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
+import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import {
   getMyStoryStack,
   getStoryStackForStory,
@@ -66,7 +67,9 @@ export async function GET(
     ok: true,
     story: {
       ...story,
-      avatarUrl: absoluteMediaUrl(story.avatarUrl, request),
+      avatarUrl:
+        publicProfileAvatarUrl(story.avatarUrl, request) ??
+        absoluteMediaUrl(story.avatarUrl, request),
       items: story.items.map((item) => ({
         ...item,
         mediaUrl: versionMediaUrl(

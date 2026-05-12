@@ -10,6 +10,7 @@ import {
 } from "@/lib/media-assets"
 import {
   ProfileAvatarUploadError,
+  publicProfileAvatarUrl,
   removeProfileAvatar,
   saveProfileAvatar,
 } from "@/lib/profile-avatar-storage"
@@ -21,18 +22,6 @@ import {
 import { updateUserAvatar } from "@/lib/user-store"
 
 export const runtime = "nodejs"
-
-function absoluteMediaUrl(value: string | null, request: Request) {
-  if (!value) {
-    return null
-  }
-
-  if (/^https?:\/\//i.test(value)) {
-    return value
-  }
-
-  return new URL(value, request.url).toString()
-}
 
 export async function POST(request: Request) {
   const session = await getCompleteMobileSession(request)
@@ -130,7 +119,7 @@ export async function POST(request: Request) {
       ok: true,
       user: {
         ...result.user,
-        avatarUrl: absoluteMediaUrl(result.user.avatarUrl, request),
+        avatarUrl: publicProfileAvatarUrl(result.user.avatarUrl, request),
       },
     })
   } catch (error) {

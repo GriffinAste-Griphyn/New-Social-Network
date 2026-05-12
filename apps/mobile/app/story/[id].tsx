@@ -489,6 +489,12 @@ export default function StoryScreen() {
       setKeyboardHeight(0)
       setIsEmojiTrayOpen(false)
       Keyboard.dismiss()
+      Alert.alert(
+        kind === "reaction" ? "Reaction sent" : "Reply sent",
+        kind === "reaction"
+          ? "Your reaction was sent."
+          : "Your reply was sent.",
+      )
     } catch (error) {
       Alert.alert(
         "Could not send reply",
@@ -886,14 +892,14 @@ export default function StoryScreen() {
             isReplyMode ? styles.mediaFrameReplyMode : null,
           ]}
         >
-          {!isReplyMode && activeItem?.assetKind === "video" ? (
+          {activeItem?.assetKind === "video" ? (
             <VideoView
               player={videoPlayer}
               nativeControls={false}
               contentFit="cover"
               style={styles.media}
             />
-          ) : !isReplyMode && activeItem?.mediaUrl ? (
+          ) : activeItem?.mediaUrl ? (
             <Image
               key={activeItem.playbackId}
               onError={() => {
@@ -2071,7 +2077,7 @@ const styles = StyleSheet.create({
   replyModeMediaLayer: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 20,
-    backgroundColor: "#050912",
+    backgroundColor: "rgba(0,0,0,0.08)",
   },
   replyModeHeader: {
     paddingTop: 26,

@@ -72,6 +72,9 @@ const storedAsset = {
   scanStatus: "passed" as const,
   scanReason: null,
 }
+const createdAt = "2026-05-12T00:00:00.000Z"
+const expiresAt = "2026-05-13T00:00:00.000Z"
+const createdStoryId = "11111111-1111-4111-8111-111111111111"
 
 function formRequest(path: string, formData: FormData) {
   return new Request(`https://app.example.com${path}`, {
@@ -100,8 +103,14 @@ function storyCard(id: string, handle = "@creator", creator = "Creator") {
     tags: ["coffee"],
     payoutHint: "$1.00 projected",
     engagement: "10 views",
-    createdAt: new Date("2026-05-12T00:00:00.000Z"),
-    expiresAt: new Date("2026-05-13T00:00:00.000Z"),
+    createdAt,
+    expiresAt,
+    lastUploadedAt: createdAt,
+    progressPercent: 80,
+    timelineSegmentCount: 1,
+    minutesRemaining: 60,
+    brandTags: ["coffee"],
+    elements: [],
     textOverlays: [],
   }
 }
@@ -111,7 +120,7 @@ describe("story upload and mobile feed API", () => {
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(saveStoryAsset).mockResolvedValue(storedAsset)
-    vi.mocked(createStory).mockResolvedValue("story_123")
+    vi.mocked(createStory).mockResolvedValue(createdStoryId)
     vi.mocked(publicStoryMediaUrl).mockImplementation((value) =>
       value ? `https://cdn.example.com${value}` : null,
     )
@@ -132,7 +141,7 @@ describe("story upload and mobile feed API", () => {
     expect(response.status).toBe(200)
     expect(await responseJson(response)).toMatchObject({
       ok: true,
-      storyId: "story_123",
+      storyId: createdStoryId,
       asset: {
         assetKind: "image",
         mediaUrl: "https://cdn.example.com/api/story-media/stories/story.jpg",
@@ -215,22 +224,24 @@ describe("story upload and mobile feed API", () => {
       followingProfiles: [
         {
           id: "profile_1",
-          creator: "Creator",
+          name: "Creator",
           handle: "@creator",
           imageUrl: "/avatar.jpg",
-          isFollowing: true,
-          hasStory: true,
         },
       ],
       suggestedAccounts: [],
       myStory: {
         owner: {
-          displayName: "Creator",
+          id: "user_123",
+          name: "Creator",
           handle: "@creator",
           imageUrl: "/me.jpg",
         },
+        hasActiveStory: true,
         liveCount: 1,
         latestThumbnailUrl: "/my-thumb.jpg",
+        latestAssetKind: "image",
+        expiresSoonLabel: null,
         items: [storyCard("my-story")],
       },
     })

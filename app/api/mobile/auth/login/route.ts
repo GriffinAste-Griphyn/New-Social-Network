@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { createMobileSessionToken, isProfileComplete } from "@/lib/auth"
 import { loginSchema } from "@/lib/auth-validators"
 import { sendUserVerificationEmail } from "@/lib/email-verification"
+import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
@@ -63,7 +64,10 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    user: result.user,
+    user: {
+      ...result.user,
+      avatarUrl: publicProfileAvatarUrl(result.user.avatarUrl, request),
+    },
     profileComplete: isProfileComplete(result.user),
     mobileToken: await createMobileSessionToken(result.user, request),
   })

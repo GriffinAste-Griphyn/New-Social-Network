@@ -17,6 +17,7 @@ type ReplyView = "received" | "sent"
 type StoryInteractionEvent = {
   id: string
   storyId: string
+  creatorId: string
   actor: {
     id: string
     name: string
@@ -30,9 +31,19 @@ type StoryInteractionEvent = {
   createdAt: string
 }
 
+type SentStoryInteractionEvent = StoryInteractionEvent & {
+  target: {
+    id: string
+    name: string
+    handle: string
+    imageUrl: string | null
+  }
+}
+
 type StoryInteractionsResponse = {
   ok: true
   interactions: StoryInteractionEvent[]
+  sentInteractions: SentStoryInteractionEvent[]
 }
 
 const colors = {
@@ -49,6 +60,9 @@ export default function RepliesScreen() {
   const { account } = useAuthFlow()
   const [activeView, setActiveView] = useState<ReplyView>("received")
   const [interactions, setInteractions] = useState<StoryInteractionEvent[]>([])
+  const [sentInteractions, setSentInteractions] = useState<
+    SentStoryInteractionEvent[]
+  >([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -56,6 +70,7 @@ export default function RepliesScreen() {
 
     if (!account?.mobileToken) {
       setInteractions([])
+      setSentInteractions([])
       setIsLoading(false)
       return
     }
@@ -68,11 +83,13 @@ export default function RepliesScreen() {
     )
       .then((payload) => {
         if (!isMounted) return
-        setInteractions(payload.interactions)
+        setInteractions(payload.interactions ?? [])
+        setSentInteractions(payload.sentInteractions ?? [])
       })
       .catch(() => {
         if (isMounted) {
           setInteractions([])
+          setSentInteractions([])
         }
       })
       .finally(() => {
@@ -96,14 +113,91 @@ export default function RepliesScreen() {
         {activeView === "received" ? (
           <ReceivedRepliesList interactions={interactions} isLoading={isLoading} />
         ) : (
-          <EmptyReplies
-            icon="paper-plane-outline"
-            title="No sent replies"
-            text="Replies you send to other creators will appear here once a live API endpoint supports sent-reply history."
+          <SentRepliesList
+            interactions={sentInteractions}
+            isLoading={isLoading}
           />
         )}
       </ScreenScroll>
     </ScreenFrame>
+  )
+}
+
+function SentRepliesList({
+  interactions,
+  isLoading,
+}: {
+  interactions: SentStoryInteractionEvent[]
+  isLoading: boolean
+}) {
+  if (isLoading) {
+    return (
+      <EmptyReplies
+        icon="sync-outline"
+        title="Loading sent replies"
+        text="Checking replies you sent."
+      />
+    )
+  }
+
+  if (interactions.length === 0) {
+    return (
+      <EmptyReplies
+        icon="paper-plane-outline"
+        title="No sent replies"
+        text="Replies you send to other creators will appear here."
+      />
+    )
+  }
+
+  return (
+    <View style={styles.threadList}>
+      {interactions.map((interaction) => (
+        <SentReplyRow key={interaction.id} interaction={interaction} />
+      ))}
+    </View>
+  )
+}
+
+function SentReplyRow({
+  interaction,
+}: {
+  interaction: SentStoryInteractionEvent
+}) {
+  const router = useRouter()
+
+  return (
+    <Pressable
+      accessibilityLabel={`Open chat with ${interaction.target.name}`}
+      accessibilityRole="button"
+      onPress={() => router.push(`/replies/${interaction.target.id}`)}
+      style={({ pressed }) => [
+        styles.threadRow,
+        pressed ? styles.threadRowPressed : null,
+      ]}
+    >
+      <View style={styles.avatar}>
+        {interaction.target.imageUrl ? (
+          <Image source={{ uri: interaction.target.imageUrl }} style={styles.avatarImage} />
+        ) : (
+          <Text style={styles.avatarText}>{initials(interaction.target.name)}</Text>
+        )}
+      </View>
+
+      <View style={styles.threadBody}>
+        <Text style={styles.threadName} numberOfLines={1}>
+          {interaction.target.name}
+        </Text>
+        <Text style={styles.statusText} numberOfLines={1}>
+          To @{interaction.target.handle} · {formatReplyTime(interaction.createdAt)}
+        </Text>
+        <Text style={styles.replyText} numberOfLines={2}>
+          {getReplyPreview(interaction)}
+        </Text>
+      </View>
+
+      <Ionicons name="chevron-forward" size={17} color={colors.faint} />
+    </Pressable>
   )
 }
 

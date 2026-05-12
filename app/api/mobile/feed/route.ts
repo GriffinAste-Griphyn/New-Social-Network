@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
 
@@ -102,7 +103,9 @@ export async function POST(request: Request) {
     },
     followingProfiles: feed.followingProfiles.map((profile) => ({
       ...profile,
-      imageUrl: absoluteMediaUrl(profile.imageUrl, request),
+      imageUrl:
+        publicProfileAvatarUrl(profile.imageUrl, request) ??
+        absoluteMediaUrl(profile.imageUrl, request),
     })),
     followingStories,
     discoverTiles: discoverStories.map((story) => ({
@@ -115,13 +118,17 @@ export async function POST(request: Request) {
     })),
     suggestedAccounts: feed.suggestedAccounts.map((account) => ({
       ...account,
-      imageUrl: absoluteMediaUrl(account.imageUrl, request),
+      imageUrl:
+        publicProfileAvatarUrl(account.imageUrl, request) ??
+        absoluteMediaUrl(account.imageUrl, request),
     })),
     myStory: {
       ...feed.myStory,
       owner: {
         ...feed.myStory.owner,
-        imageUrl: absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
+        imageUrl:
+          publicProfileAvatarUrl(feed.myStory.owner.imageUrl, request) ??
+          absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
       },
       latestThumbnailUrl: latestMyStoryThumbnailUrl,
       latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],

@@ -1,7 +1,7 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNotNull, or, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
-import { follows, users } from "@/lib/db/schema"
+import { follows, stories, users } from "@/lib/db/schema"
 import {
   assertUsersCanConnect,
   getBlockedPeerIds,
@@ -12,6 +12,11 @@ export type FollowProfile = {
   name: string
   handle: string
   imageUrl: string | null
+}
+
+export type DiscoverProfileSearchResult = FollowProfile & {
+  activeStoryId: string | null
+  hasActiveStory: boolean
 }
 
 function mapProfile(row: {
@@ -30,6 +35,14 @@ function mapProfile(row: {
     handle: row.handle,
     imageUrl: row.avatarUrl,
   }
+}
+
+function normalizeProfileSearchQuery(value: string) {
+  return value.trim().replace(/^@+/, "").toLowerCase()
+}
+
+function escapeLikePattern(value: string) {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
 async function ensureTargetExists(targetUserId: string) {
@@ -110,6 +123,100 @@ export async function listFollowerProfiles(userId: string): Promise<FollowProfil
     const profile = mapProfile(row)
 
     return profile ? [profile] : []
+  })
+}
+
+export async function searchDiscoverProfiles(input: {
+  viewerId: string
+  query: string
+  limit?: number
+}): Promise<DiscoverProfileSearchResult[]> {
+  const normalizedQuery = normalizeProfileSearchQuery(input.query)
+
+  if (!normalizedQuery) {
+    return []
+  }
+
+  const limit = Math.min(Math.max(input.limit ?? 12, 1), 25)
+  const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(input.viewerId)
+  const likeQuery = `%${escapeLikePattern(normalizedQuery)}%`
+  const prefixQuery = `${escapeLikePattern(normalizedQuery)}%`
+
+  const rows = await db
+    .select({
+      id: users.id,
+      displayName: users.displayName,
+      handle: users.handle,
+      avatarUrl: users.avatarUrl,
+    })
+    .from(users)
+    .where(
+      and(
+        sql`${users.id} <> ${input.viewerId}`,
+        isNotNull(users.displayName),
+        isNotNull(users.handle),
+        or(
+          sql`lower(${users.handle}) like ${likeQuery} escape '\\'`,
+          sql`lower(${users.displayName}) like ${likeQuery} escape '\\'`,
+        ),
+      ),
+    )
+    .orderBy(
+      sql`case
+        when lower(${users.handle}) = ${normalizedQuery} then 0
+        when lower(${users.handle}) like ${prefixQuery} escape '\\' then 1
+        when lower(${users.displayName}) like ${prefixQuery} escape '\\' then 2
+        else 3
+      end`,
+      asc(users.handle),
+    )
+    .limit(limit * 2)
+
+  const profiles = rows.flatMap((row) => {
+    if (blockedPeerIds.has(row.id)) {
+      return []
+    }
+
+    const profile = mapProfile(row)
+
+    return profile ? [profile] : []
+  }).slice(0, limit)
+  const profileIds = profiles.map((profile) => profile.id)
+  const liveStoryRows =
+    profileIds.length > 0
+      ? await db
+          .select({
+            id: stories.id,
+            creatorId: stories.creatorId,
+          })
+          .from(stories)
+          .where(
+            and(
+              inArray(stories.creatorId, profileIds),
+              eq(stories.status, "live"),
+              eq(stories.moderationStatus, "approved"),
+              gt(stories.expiresAt, new Date()),
+            ),
+          )
+          .orderBy(desc(stories.createdAt))
+      : []
+  const liveStoryByCreatorId = new Map<string, string>()
+
+  liveStoryRows.forEach((story) => {
+    if (!liveStoryByCreatorId.has(story.creatorId)) {
+      liveStoryByCreatorId.set(story.creatorId, story.id)
+    }
+  })
+
+  return profiles.map((profile) => {
+    const activeStoryId = liveStoryByCreatorId.get(profile.id) ?? null
+
+    return {
+      ...profile,
+      activeStoryId,
+      hasActiveStory: Boolean(activeStoryId),
+    }
   })
 }
 

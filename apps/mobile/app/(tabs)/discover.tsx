@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import type { RefObject } from "react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   FlatList,
   Image,
@@ -14,6 +14,7 @@ import {
 
 import { useFollowState } from "@/lib/follow-state"
 import { useAuthFlow } from "@/lib/auth-flow"
+import { getMobileApi } from "@/lib/mobile-api"
 import { useMobileFeed } from "@/lib/mobile-stories-api"
 import {
   AccountAvatarButton,
@@ -30,7 +31,20 @@ type DiscoverSearchResult = {
   coverUrl: string
   isAdded: boolean
   hasActiveStory: boolean
+  activeStoryId: string | null
   searchText: string
+}
+
+type DiscoverSearchResponse = {
+  ok: true
+  profiles: Array<{
+    id: string
+    name: string
+    handle: string
+    imageUrl: string | null
+    activeStoryId: string | null
+    hasActiveStory: boolean
+  }>
 }
 
 const colors = {
@@ -50,6 +64,9 @@ export default function DiscoverScreen() {
   const { account } = useAuthFlow()
   const inputRef = useRef<TextInput>(null)
   const [query, setQuery] = useState("")
+  const [results, setResults] = useState<DiscoverSearchResult[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const { isFollowing, revision, toggleFollow } = useFollowState()
   const liveFeed = useMobileFeed(account?.mobileToken, revision)
   const discoverTiles = liveFeed.data?.discoverTiles ?? []
@@ -63,29 +80,70 @@ export default function DiscoverScreen() {
     }
   }, [focus])
 
-  const results = useMemo(() => {
-    if (!normalizedQuery) return []
+  useEffect(() => {
+    let isMounted = true
 
-    return (
-      liveFeed.data?.suggestedAccounts.map((accountResult) => ({
-        id: accountResult.id,
-        name: accountResult.name,
-        handle: accountResult.handle.replace(/^@/, ""),
-        category: accountResult.reason,
-        avatarUrl:
-          accountResult.imageUrl ??
-          "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=500&q=80",
-        coverUrl:
-          accountResult.imageUrl ??
-          "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=1200&q=80",
-        isAdded: false,
-        hasActiveStory: true,
-        searchText: `${accountResult.name} ${accountResult.handle} ${accountResult.reason}`.toLowerCase(),
-      })) ?? []
-    )
-      .filter((profile) => profile.searchText.includes(normalizedQuery))
-      .slice(0, 12)
-  }, [liveFeed.data?.suggestedAccounts, normalizedQuery])
+    if (!normalizedQuery || !account?.mobileToken) {
+      setResults([])
+      setIsSearching(false)
+      setSearchError(null)
+      return
+    }
+
+    setIsSearching(true)
+    setSearchError(null)
+    setResults([])
+
+    const searchTimer = setTimeout(() => {
+      const params = new URLSearchParams({ q: normalizedQuery })
+
+      getMobileApi<DiscoverSearchResponse>(
+        `/api/mobile/discover/search?${params.toString()}`,
+        { authToken: account.mobileToken },
+      )
+        .then((payload) => {
+          if (!isMounted) return
+
+          setResults(
+            payload.profiles.map((profile) => ({
+              id: profile.id,
+              name: profile.name,
+              handle: profile.handle.replace(/^@/, ""),
+              category: profile.hasActiveStory ? "Active creator" : "Creator",
+              avatarUrl:
+                profile.imageUrl ??
+                "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=500&q=80",
+              coverUrl:
+                profile.imageUrl ??
+                "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=1200&q=80",
+              isAdded: false,
+              activeStoryId: profile.activeStoryId,
+              hasActiveStory: profile.hasActiveStory,
+              searchText: `${profile.name} ${profile.handle}`.toLowerCase(),
+            })),
+          )
+          setSearchError(null)
+        })
+        .catch((error) => {
+          if (!isMounted) return
+
+          setResults([])
+          setSearchError(
+            error instanceof Error ? error.message : "Could not search creators.",
+          )
+        })
+        .finally(() => {
+          if (!isMounted) return
+
+          setIsSearching(false)
+        })
+    }, 250)
+
+    return () => {
+      isMounted = false
+      clearTimeout(searchTimer)
+    }
+  }, [account?.mobileToken, normalizedQuery])
 
   return (
     <ScreenFrame>
@@ -107,7 +165,9 @@ export default function DiscoverScreen() {
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Ionicons name="search-outline" size={22} color={colors.faint} />
-              <Text style={styles.emptyText}>No results</Text>
+              <Text style={styles.emptyText}>
+                {isSearching ? "Searching" : searchError ?? "No results"}
+              </Text>
             </View>
           }
           initialNumToRender={8}
@@ -121,7 +181,11 @@ export default function DiscoverScreen() {
               onToggleFollow={() => toggleFollow(profile.id)}
               profile={profile}
               onOpenProfile={() => router.push(`/creator/${profile.id}`)}
-              onOpenStory={() => router.push(`/story/${profile.id}`)}
+              onOpenStory={() => {
+                if (profile.activeStoryId) {
+                  router.push(`/story/${profile.activeStoryId}`)
+                }
+              }}
             />
           )}
         />
