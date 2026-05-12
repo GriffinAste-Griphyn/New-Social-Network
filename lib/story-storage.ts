@@ -77,6 +77,31 @@ function withConfiguredPublicBaseUrl(mediaUrl: string) {
   return `${baseUrl}${mediaUrl}`
 }
 
+function getPublicRequestUrl(request: Request) {
+  const requestUrl = new URL(request.url)
+  const forwardedProto = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim()
+  const forwardedHost = request.headers
+    .get("x-forwarded-host")
+    ?.split(",")[0]
+    ?.trim()
+  const host = forwardedHost || request.headers.get("host")
+
+  if (forwardedProto) {
+    requestUrl.protocol = forwardedProto.endsWith(":")
+      ? forwardedProto
+      : `${forwardedProto}:`
+  }
+
+  if (host) {
+    requestUrl.host = host
+  }
+
+  return requestUrl
+}
+
 function encodeStoryMediaPathname(pathname: string) {
   return pathname
     .split("/")
@@ -215,7 +240,8 @@ export function publicStoryMediaUrl(
     return mediaUrl
   }
 
-  const url = new URL(mediaUrl, request.url)
+  const requestUrl = getPublicRequestUrl(request)
+  const url = new URL(mediaUrl, requestUrl)
 
   if (
     /^https?:\/\//i.test(mediaUrl) &&
@@ -226,7 +252,6 @@ export function publicStoryMediaUrl(
   }
 
   if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-    const requestUrl = new URL(request.url)
     url.protocol = requestUrl.protocol
     url.hostname = requestUrl.hostname
     url.port = requestUrl.port

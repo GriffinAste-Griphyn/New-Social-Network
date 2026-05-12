@@ -123,7 +123,11 @@ export function normalizeMobileMediaUrl(value: string | null | undefined) {
   try {
     const mediaUrl = new URL(value)
 
-    if (mediaUrl.hostname !== "localhost" && mediaUrl.hostname !== "127.0.0.1") {
+    if (
+      mediaUrl.hostname !== "localhost" &&
+      mediaUrl.hostname !== "127.0.0.1" &&
+      mediaUrl.hostname !== "0.0.0.0"
+    ) {
       return value
     }
 
