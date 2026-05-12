@@ -454,3 +454,22 @@ export async function postWalletFundingFromStripe(input: {
     postedAt: new Date(),
   })
 }
+
+export async function voidPendingWalletFundingFromStripe(input: {
+  stripeCheckoutSessionId: string
+}) {
+  await getDb()
+    .update(advertiserWalletTransactions)
+    .set({
+      status: "void",
+    })
+    .where(
+      and(
+        eq(
+          advertiserWalletTransactions.stripeCheckoutSessionId,
+          input.stripeCheckoutSessionId,
+        ),
+        eq(advertiserWalletTransactions.status, "pending"),
+      ),
+    )
+}

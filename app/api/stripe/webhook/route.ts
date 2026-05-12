@@ -5,6 +5,7 @@ import { env } from "@/lib/env"
 import {
   postWalletFundingFromStripe,
   upsertAdvertiserPaymentMethod,
+  voidPendingWalletFundingFromStripe,
 } from "@/lib/advertiser-store"
 import { syncCreatorLedgerTransferFromWebhook } from "@/lib/creator-earnings"
 import { getStripeClient } from "@/lib/stripe"
@@ -91,6 +92,16 @@ async function handlePaymentMethodSetupCompleted(
   })
 }
 
+async function handleCheckoutExpired(session: Stripe.Checkout.Session) {
+  if (session.metadata?.flow !== "advertiser_wallet_funding") {
+    return
+  }
+
+  await voidPendingWalletFundingFromStripe({
+    stripeCheckoutSessionId: session.id,
+  })
+}
+
 export async function POST(request: Request) {
   const stripe = getStripeClient()
 
@@ -133,6 +144,10 @@ export async function POST(request: Request) {
 
   if (event.type === "checkout.session.completed") {
     await handleCheckoutCompleted(stripe, event.data.object)
+  }
+
+  if (event.type === "checkout.session.expired") {
+    await handleCheckoutExpired(event.data.object)
   }
 
   if (stripeObject.object === "v2.core.account") {

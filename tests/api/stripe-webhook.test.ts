@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   postWalletFundingFromStripe,
   upsertAdvertiserPaymentMethod,
+  voidPendingWalletFundingFromStripe,
 } from "@/lib/advertiser-store"
 import { syncCreatorLedgerTransferFromWebhook } from "@/lib/creator-earnings"
 import { getStripeClient } from "@/lib/stripe"
@@ -21,6 +22,7 @@ vi.mock("@/lib/stripe", () => ({
 vi.mock("@/lib/advertiser-store", () => ({
   postWalletFundingFromStripe: vi.fn(),
   upsertAdvertiserPaymentMethod: vi.fn(),
+  voidPendingWalletFundingFromStripe: vi.fn(),
 }))
 
 vi.mock("@/lib/creator-earnings", () => ({
@@ -168,6 +170,30 @@ describe("Stripe webhook API", () => {
       expYear: 2030,
       billingName: "Brand Owner",
       billingEmail: "brand@example.com",
+    })
+  })
+
+  it("voids pending wallet funding when checkout expires", async () => {
+    constructEvent.mockReturnValue({
+      type: "checkout.session.expired",
+      data: {
+        object: {
+          object: "checkout.session",
+          id: "cs_expired",
+          metadata: {
+            flow: "advertiser_wallet_funding",
+            advertiserAccountId: "advertiser_123",
+          },
+        },
+      },
+    })
+
+    const { POST } = await import("@/app/api/stripe/webhook/route")
+    const response = await POST(webhookRequest())
+
+    expect(response.status).toBe(200)
+    expect(voidPendingWalletFundingFromStripe).toHaveBeenCalledWith({
+      stripeCheckoutSessionId: "cs_expired",
     })
   })
 
