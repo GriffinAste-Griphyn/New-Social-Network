@@ -25,12 +25,11 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^1.8.0",
-    "next": "16.2.4",
+    "next": "16.2.6",
     "radix-ui": "^1.4.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "resend": "^6.12.2",
-    "shadcn": "^4.3.0",
     "sharp": "^0.34.5",
     "stripe": "^22.1.0",
     "tailwind-merge": "^3.5.0",
@@ -44,8 +43,12 @@
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4",
+    "eslint-config-next": "16.2.6",
+    "shadcn": "^4.3.0",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }
