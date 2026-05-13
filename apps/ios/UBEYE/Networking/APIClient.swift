@@ -33,13 +33,15 @@ final class APIClient: ObservableObject {
 
     private static let baseURLKey = "ubeye.ios.apiBaseUrl"
     private static let deviceIdKey = "ubeye.ios.deviceId"
+    private static let productionBaseURL = "https://www.ubeye.ai"
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
     init(session: URLSession = .shared) {
         self.session = session
-        baseURLString = UserDefaults.standard.string(forKey: Self.baseURLKey) ?? "http://127.0.0.1:3000"
+        let storedBaseURL = UserDefaults.standard.string(forKey: Self.baseURLKey)
+        baseURLString = Self.usableBaseURL(from: storedBaseURL)
         decoder = JSONDecoder()
         encoder = JSONEncoder()
     }
@@ -367,5 +369,18 @@ final class APIClient: ObservableObject {
         body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(data)
         body.append("\r\n".data(using: .utf8)!)
+    }
+
+    private static func usableBaseURL(from storedBaseURL: String?) -> String {
+        let trimmed = storedBaseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lowercased = trimmed.lowercased()
+
+        if trimmed.isEmpty ||
+            lowercased == "http://127.0.0.1:3000" ||
+            lowercased == "http://localhost:3000" {
+            return productionBaseURL
+        }
+
+        return trimmed
     }
 }
