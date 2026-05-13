@@ -41,31 +41,17 @@ struct HomeView: View {
                     }
 
                     if let feed = store.feed {
-                        followingRail(feed)
+                        followingStoriesSection(feed)
 
-                        if !feed.followingStories.isEmpty {
-                            SectionHeader(title: "Live stories", actionTitle: "See all")
-                            horizontalStories(feed.followingStories)
-                        }
-
-                        SectionHeader(title: "Discover", actionTitle: "Explore")
+                        SectionHeader(title: "Discover", actionTitle: nil)
                         DiscoverGrid(tiles: feed.discoverTiles) { tile in
                             selectedStory = StoryRoute(id: tile.id)
                         }
-
-                        if !feed.suggestedAccounts.isEmpty {
-                            SectionHeader(title: "Suggested accounts", actionTitle: nil)
-                            VStack(spacing: 10) {
-                                ForEach(feed.suggestedAccounts.prefix(4)) { account in
-                                    SuggestedAccountCard(account: account)
-                                }
-                            }
-                        }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 24)
+                .padding(.horizontal, 18)
+                .padding(.top, 22)
+                .padding(.bottom, 32)
             }
             .refreshable {
                 await store.load(api: api)
@@ -83,32 +69,74 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            CircleIconButton(systemImage: "magnifyingglass")
+        HStack(spacing: 12) {
+            Button {} label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 29, weight: .regular))
+                    .frame(width: 56, height: 56)
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .background(Color.ubeyeSubtle, in: Circle())
+            }
+            .buttonStyle(.plain)
 
             Spacer()
 
             Text("Stories")
-                .font(.system(size: 22, weight: .black, design: .rounded))
+                .font(.system(size: 27, weight: .black, design: .rounded))
+                .foregroundStyle(Color.ubeyeInk)
 
             Spacer()
 
             NavigationLink {
-                SettingsView()
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .bold))
-                    .frame(width: 38, height: 38)
-                    .foregroundStyle(Color.ubeyeInk)
-                    .background(Color.ubeyeSubtle, in: Circle())
-            }
-
-            NavigationLink {
                 ProfileView()
             } label: {
-                RemoteAvatar(url: auth.account?.avatarUrl, size: 38, name: auth.account?.displayName ?? "UBEYE")
+                ZStack {
+                    Circle().fill(Color.ubeyeRed)
+                    Text(profileInitials)
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 56, height: 56)
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    private var profileInitials: String {
+        let name = auth.account?.displayName ?? auth.account?.handle ?? "U"
+        let parts = name.split(separator: " ")
+        let letters = parts.prefix(2).compactMap { $0.first }
+        let value = String(letters).uppercased()
+        return value.isEmpty ? "U" : value
+    }
+
+    private func followingStoriesSection(_ feed: MobileFeedResponse) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Following", actionTitle: nil, showsChevron: true)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    MyStoryHomeCard(myStory: feed.myStory) {
+                        if feed.myStory.hasActiveStory {
+                            selectedStory = StoryRoute(id: "my-story")
+                        }
+                    }
+
+                    ForEach(feed.followingStories) { story in
+                        StoryThumb(story: story)
+                            .onTapGesture {
+                                selectedStory = StoryRoute(id: story.id)
+                            }
+                    }
+                }
+                .padding(.trailing, 18)
+            }
+
+            if feed.followingStories.isEmpty && feed.followingProfiles.isEmpty {
+                Text("Follow people you want in your story feed.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ubeyeMuted)
+            }
         }
     }
 
@@ -146,11 +174,18 @@ struct HomeView: View {
 struct SectionHeader: View {
     let title: String
     let actionTitle: String?
+    var showsChevron = false
 
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 20, weight: .black, design: .rounded))
+                .font(.system(size: 25, weight: .black, design: .rounded))
+                .foregroundStyle(Color.ubeyeInk)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(Color.ubeyeMuted.opacity(0.45))
+            }
             Spacer()
             if let actionTitle {
                 Text(actionTitle)
@@ -159,6 +194,62 @@ struct SectionHeader: View {
             }
         }
         .padding(.top, 4)
+    }
+}
+
+struct MyStoryHomeCard: View {
+    let myStory: MyStorySummary
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .bottomLeading) {
+                AsyncImage(url: myStory.latestThumbnailUrl) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    LinearGradient(
+                        colors: [Color.ubeyeSubtle, Color.ubeyeYellow.opacity(0.45)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+                .frame(width: 140, height: 212)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.72)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 38, height: 38)
+                    .foregroundStyle(.white)
+                    .background(Color.ubeyeInk, in: Circle())
+                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(10)
+
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(Color.ubeyeRed)
+                        .frame(width: 8, height: 8)
+                    Text("My Story")
+                        .font(.system(size: 17, weight: .black, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(12)
+            }
+            .frame(width: 140, height: 212)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.ubeyeInk, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -237,27 +328,34 @@ struct StoryThumb: View {
             } placeholder: {
                 Color.ubeyeSubtle
             }
-            .frame(width: 132, height: 188)
+            .frame(width: 148, height: 212)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 2) {
-                UBEYEPill(title: story.assetKind == .video ? "Video" : "Image", systemImage: story.assetKind == .video ? "play.fill" : "photo.fill", tint: .white)
-                    .background(.black.opacity(0.1), in: Capsule())
-                    .padding(.bottom, 38)
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.78)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+            VStack(alignment: .leading, spacing: 5) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 10, weight: .black))
+                    .frame(width: 20, height: 20)
+                    .foregroundStyle(Color.ubeyeInk)
+                    .background(Color.yellow, in: Circle())
                 Text(story.creator)
-                    .font(.subheadline.bold())
-                    .lineLimit(1)
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .lineLimit(2)
                 Text(story.title)
-                    .font(.caption)
+                    .font(.caption.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(.white.opacity(0.74))
             }
             .padding(10)
-            .frame(width: 132, height: 188, alignment: .bottomLeading)
-            .background(.linearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .top, endPoint: .bottom))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(width: 148, height: 212, alignment: .bottomLeading)
         }
+        .frame(width: 148, height: 212)
     }
 }
 
@@ -282,21 +380,33 @@ struct DiscoverGrid: View {
                         } placeholder: {
                             Color.ubeyeSubtle
                         }
-                        .frame(height: 220)
+                        .frame(height: 318)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 2) {
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.76)],
+                            startPoint: .center,
+                            endPoint: .bottom
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 7) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10, weight: .black))
+                                .frame(width: 20, height: 20)
+                                .foregroundStyle(Color.ubeyeInk)
+                                .background(Color.yellow, in: Circle())
                             Text(tile.title)
-                                .font(.headline)
+                                .font(.system(size: 24, weight: .black, design: .rounded))
+                                .lineLimit(3)
                             if let subtitle = tile.subtitle {
                                 Text(subtitle)
-                                    .font(.caption)
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
                                     .foregroundStyle(.white.opacity(0.74))
                             }
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .background(.linearGradient(colors: [.clear, .black.opacity(0.76)], startPoint: .top, endPoint: .bottom))
                     }
                     .foregroundStyle(.white)
                 }
