@@ -38,9 +38,7 @@ struct ProfileView: View {
                     profileHeader
 
                     if let error = store.error {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
+                        InlineNotice(message: error, isError: true)
                     }
 
                     EarningsPanel(earnings: store.stripe?.earnings ?? store.stats?.stats.earnings)
@@ -48,9 +46,10 @@ struct ProfileView: View {
 
                     accountActions
                 }
-                .padding(18)
+                .padding(16)
             }
             .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.inline)
             .ubeyeScreen()
             .task {
                 await store.load(api: api)
@@ -79,16 +78,13 @@ struct ProfileView: View {
     private var profileHeader: some View {
         let account = auth.account
 
-        return HStack(spacing: 14) {
+        return VStack(alignment: .leading, spacing: 14) {
+            UBEYEWordmark(compact: true)
+
+            HStack(spacing: 14) {
             PhotosPicker(selection: $avatarPickerItem, matching: .images) {
                 ZStack(alignment: .bottomTrailing) {
-                    AsyncImage(url: account?.avatarUrl) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Circle().fill(.white.opacity(0.1))
-                    }
-                    .frame(width: 72, height: 72)
-                    .clipShape(Circle())
+                    RemoteAvatar(url: account?.avatarUrl, size: 76, name: account?.displayName ?? "Account")
 
                     Image(systemName: isUploadingAvatar ? "hourglass" : "camera.fill")
                         .font(.caption.bold())
@@ -103,12 +99,19 @@ struct ProfileView: View {
                 Text(account?.displayName ?? "Account")
                     .font(.title2.bold())
                 Text("@\(account?.handle ?? "account")")
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(Color.ubeyeMuted)
                 Text(account?.email ?? "")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .lineLimit(1)
+                UBEYEPill(title: "Creator profile", systemImage: "sparkles")
+                    .padding(.top, 3)
+            }
+            Spacer()
             }
         }
+        .padding(16)
+        .ubeyeCard()
     }
 
     private var accountActions: some View {
@@ -130,6 +133,8 @@ struct ProfileView: View {
             .buttonStyle(.bordered)
         }
         .tint(.red)
+        .padding(14)
+        .ubeyeCard()
     }
 
     private func uploadAvatar(_ item: PhotosPickerItem?) async {
@@ -181,8 +186,7 @@ struct EarningsPanel: View {
             }
         }
         .padding(16)
-        .background(Color.ubeyePanel)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .ubeyeCard()
     }
 
     private func metric(_ label: String, cents: Int) -> some View {
@@ -191,7 +195,7 @@ struct EarningsPanel: View {
                 .font(.title3.bold())
             Text(label)
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.62))
+                .foregroundStyle(Color.ubeyeMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -210,7 +214,7 @@ struct PayoutPanel: View {
             Text("Payouts")
                 .font(.headline)
             Text(statusText)
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(Color.ubeyeMuted)
             if let url = status?.onboardingUrl ?? status?.dashboardUrl {
                 Link(status?.onboardingUrl == nil ? "Open dashboard" : "Finish onboarding", destination: url)
                     .font(.subheadline.weight(.bold))
@@ -219,8 +223,7 @@ struct PayoutPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color.ubeyePanel)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .ubeyeCard()
     }
 
     private var statusText: String {

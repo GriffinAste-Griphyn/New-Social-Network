@@ -29,51 +29,49 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 20) {
                     header
 
                     if store.isLoading && store.feed == nil {
                         ProgressView()
-                            .tint(.white)
+                            .tint(.ubeyeRed)
                             .frame(maxWidth: .infinity, minHeight: 160)
                     } else if let error = store.error, store.feed == nil {
                         EmptyStateView(title: "Could not load stories", message: error, systemImage: "wifi.exclamationmark")
                     }
 
                     if let feed = store.feed {
-                        MyStoryCard(myStory: feed.myStory)
-                            .onTapGesture {
-                                if feed.myStory.hasActiveStory {
-                                    selectedStory = StoryRoute(id: "my-story")
-                                }
-                            }
+                        followingRail(feed)
 
                         if !feed.followingStories.isEmpty {
-                            sectionTitle("Following")
+                            SectionHeader(title: "Live stories", actionTitle: "See all")
                             horizontalStories(feed.followingStories)
                         }
 
-                        sectionTitle("Discover")
+                        SectionHeader(title: "Discover", actionTitle: "Explore")
                         DiscoverGrid(tiles: feed.discoverTiles) { tile in
                             selectedStory = StoryRoute(id: tile.id)
                         }
+
+                        if !feed.suggestedAccounts.isEmpty {
+                            SectionHeader(title: "Suggested accounts", actionTitle: nil)
+                            VStack(spacing: 10) {
+                                ForEach(feed.suggestedAccounts.prefix(4)) { account in
+                                    SuggestedAccountCard(account: account)
+                                }
+                            }
+                        }
                     }
                 }
-                .padding(18)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 24)
             }
             .refreshable {
                 await store.load(api: api)
             }
-            .navigationTitle("UBEYE")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
             .task {
                 await store.load(api: api)
@@ -85,18 +83,45 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("For You")
-                .font(.largeTitle.bold())
-            Text("@\(auth.account?.handle ?? "account")")
-                .foregroundStyle(.white.opacity(0.65))
+        HStack(spacing: 10) {
+            CircleIconButton(systemImage: "magnifyingglass")
+
+            Spacer()
+
+            Text("Stories")
+                .font(.system(size: 22, weight: .black, design: .rounded))
+
+            Spacer()
+
+            NavigationLink {
+                SettingsView()
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 38, height: 38)
+                    .foregroundStyle(Color.ubeyeInk)
+                    .background(Color.ubeyeSubtle, in: Circle())
+            }
+
+            RemoteAvatar(url: auth.account?.avatarUrl, size: 38, name: auth.account?.displayName ?? "UBEYE")
         }
     }
 
-    private func sectionTitle(_ title: String) -> some View {
-        Text(title)
-            .font(.title3.bold())
-            .padding(.top, 4)
+    private func followingRail(_ feed: MobileFeedResponse) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                MyStoryBubble(myStory: feed.myStory) {
+                    if feed.myStory.hasActiveStory {
+                        selectedStory = StoryRoute(id: "my-story")
+                    }
+                }
+
+                ForEach(feed.followingProfiles) { profile in
+                    FollowingBubble(profile: profile)
+                }
+            }
+            .padding(.vertical, 2)
+        }
     }
 
     private func horizontalStories(_ stories: [StoryCard]) -> some View {
@@ -113,35 +138,87 @@ struct HomeView: View {
     }
 }
 
-struct MyStoryCard: View {
-    let myStory: MyStorySummary
+struct SectionHeader: View {
+    let title: String
+    let actionTitle: String?
 
     var body: some View {
-        HStack(spacing: 14) {
-            AsyncImage(url: myStory.latestThumbnailUrl) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color.white.opacity(0.08)
-            }
-            .frame(width: 72, height: 96)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("My Story")
-                    .font(.headline)
-                Text(myStory.hasActiveStory ? "\(myStory.liveCount) live" : "No active story")
-                    .foregroundStyle(.white.opacity(0.68))
-                if let label = myStory.expiresSoonLabel {
-                    Text(label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.ubeyeRed)
-                }
-            }
+        HStack {
+            Text(title)
+                .font(.system(size: 20, weight: .black, design: .rounded))
             Spacer()
+            if let actionTitle {
+                Text(actionTitle)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.ubeyeRed)
+            }
         }
-        .padding(14)
-        .background(Color.ubeyePanel)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.top, 4)
+    }
+}
+
+struct MyStoryBubble: View {
+    let myStory: MyStorySummary
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                ZStack(alignment: .bottomTrailing) {
+                    RemoteAvatar(url: myStory.owner.imageUrl, size: 64, name: myStory.owner.name)
+                        .padding(3)
+                        .background(
+                            Circle()
+                                .fill(myStory.hasActiveStory ? Color.ubeyeRed : Color.ubeyeSubtle)
+                        )
+
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .black))
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.white)
+                        .background(Color.ubeyeRed, in: Circle())
+                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                }
+
+                Text("My Story")
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+                Text(myStory.hasActiveStory ? "\(myStory.liveCount) live" : "Add")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.ubeyeMuted)
+            }
+            .frame(width: 78)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct FollowingBubble: View {
+    let profile: FollowingProfile
+
+    var body: some View {
+        VStack(spacing: 7) {
+            RemoteAvatar(url: profile.imageUrl, size: 64, name: profile.name)
+                .padding(3)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.ubeyeRed, .ubeyePurple, .ubeyeYellow],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+            Text(profile.name)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+            Text("@\(profile.handle)")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.ubeyeMuted)
+                .lineLimit(1)
+        }
+        .frame(width: 78)
     }
 }
 
@@ -153,12 +230,16 @@ struct StoryThumb: View {
             AsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
-                Color.white.opacity(0.08)
+                Color.ubeyeSubtle
             }
-            .frame(width: 124, height: 172)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(width: 132, height: 188)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
+                UBEYEPill(title: story.assetKind == .video ? "Video" : "Image", systemImage: story.assetKind == .video ? "play.fill" : "photo.fill", tint: .white)
+                    .background(.black.opacity(0.1), in: Capsule())
+                    .padding(.bottom, 38)
+
                 Text(story.creator)
                     .font(.subheadline.bold())
                     .lineLimit(1)
@@ -168,9 +249,9 @@ struct StoryThumb: View {
                     .foregroundStyle(.white.opacity(0.74))
             }
             .padding(10)
-            .frame(maxWidth: 124, alignment: .leading)
-            .background(.linearGradient(colors: [.clear, .black.opacity(0.78)], startPoint: .top, endPoint: .bottom))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(width: 132, height: 188, alignment: .bottomLeading)
+            .background(.linearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .top, endPoint: .bottom))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
 }
@@ -194,10 +275,10 @@ struct DiscoverGrid: View {
                         AsyncImage(url: tile.thumbnailUrl ?? tile.imageUrl) { image in
                             image.resizable().scaledToFill()
                         } placeholder: {
-                            Color.white.opacity(0.08)
+                            Color.ubeyeSubtle
                         }
                         .frame(height: 220)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(tile.title)
@@ -209,11 +290,44 @@ struct DiscoverGrid: View {
                             }
                         }
                         .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .background(.linearGradient(colors: [.clear, .black.opacity(0.76)], startPoint: .top, endPoint: .bottom))
                     }
+                    .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+struct SuggestedAccountCard: View {
+    let account: SuggestedAccount
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RemoteAvatar(url: account.imageUrl, size: 48, name: account.name)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("@\(account.handle) - \(account.reason)")
+                    .font(.caption)
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .lineLimit(1)
+                Text(account.monetization)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.ubeyeRed)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            UBEYEPill(title: account.storyStreak, systemImage: "flame.fill", tint: .ubeyeRed)
+        }
+        .padding(12)
+        .ubeyeCard()
     }
 }
 

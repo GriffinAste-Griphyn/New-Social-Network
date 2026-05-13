@@ -63,28 +63,43 @@ struct DiscoverView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if let error = store.error {
-                    Text(error)
-                        .foregroundStyle(.red)
-                }
-
-                ForEach(store.profiles) { profile in
-                    CreatorRow(
-                        profile: profile,
-                        isFollowing: store.followedIds.contains(profile.id)
-                    ) {
-                        Task { await store.toggleFollow(profile: profile, api: api) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Discover")
+                            .font(.system(size: 30, weight: .black, design: .rounded))
+                        Text("Find creators and bring the same UBEYE following graph into the Swift app.")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ubeyeMuted)
                     }
-                    .listRowBackground(Color.ubeyeInk)
+                    .padding(.bottom, 4)
+
+                    if let error = store.error {
+                        InlineNotice(message: error, isError: true)
+                    }
+
+                    if store.isLoading && store.profiles.isEmpty {
+                        ProgressView()
+                            .tint(.ubeyeRed)
+                            .frame(maxWidth: .infinity, minHeight: 140)
+                    }
+
+                    ForEach(store.profiles) { profile in
+                        CreatorRow(
+                            profile: profile,
+                            isFollowing: store.followedIds.contains(profile.id)
+                        ) {
+                            Task { await store.toggleFollow(profile: profile, api: api) }
+                        }
+                    }
                 }
+                .padding(16)
             }
             .searchable(text: $store.query, prompt: "Search creators")
             .onSubmit(of: .search) {
                 Task { await store.search(api: api) }
             }
-            .scrollContentBackground(.hidden)
-            .navigationTitle("Discover")
+            .navigationBarTitleDisplayMode(.inline)
             .ubeyeScreen()
             .task {
                 await store.load(api: api)
@@ -100,20 +115,14 @@ struct CreatorRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: profile.imageUrl) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Circle().fill(.white.opacity(0.1))
-            }
-            .frame(width: 48, height: 48)
-            .clipShape(Circle())
+            RemoteAvatar(url: profile.imageUrl, size: 52, name: profile.name)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.name)
                     .font(.headline)
                 Text("@\(profile.handle)")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.64))
+                    .foregroundStyle(Color.ubeyeMuted)
             }
 
             Spacer()
@@ -122,10 +131,12 @@ struct CreatorRow: View {
                 .font(.caption.weight(.bold))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(isFollowing ? .white.opacity(0.14) : Color.ubeyeRed)
+                .foregroundStyle(isFollowing ? Color.ubeyeInk : .white)
+                .background(isFollowing ? Color.ubeyeSubtle : Color.ubeyeRed)
                 .clipShape(Capsule())
         }
-        .foregroundStyle(.white)
-        .padding(.vertical, 6)
+        .foregroundStyle(Color.ubeyeInk)
+        .padding(12)
+        .ubeyeCard()
     }
 }

@@ -86,29 +86,34 @@ struct StoryComposerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Post")
+                            .font(.system(size: 30, weight: .black, design: .rounded))
+                        Text("Capture or choose a vertical story for the UBEYE feed.")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ubeyeMuted)
+                    }
+
                     mediaStage
                     metadataFields
 
                     if let uploadStatus = store.uploadStatus {
-                        Text(uploadStatus)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.7))
+                        InlineNotice(message: uploadStatus)
                     }
 
                     if let error = store.error ?? camera.error {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
+                        InlineNotice(message: error, isError: true)
                     }
 
                     PrimaryButton(title: "Post story", isLoading: store.isUploading) {
                         Task { await store.upload(api: api) }
                     }
                 }
-                .padding(18)
+                .padding(16)
             }
             .navigationTitle("Post")
+            .navigationBarTitleDisplayMode(.inline)
             .ubeyeScreen()
             .task {
                 await camera.requestAccessAndConfigure()
@@ -128,8 +133,12 @@ struct StoryComposerView: View {
     private var mediaStage: some View {
         ZStack(alignment: .bottom) {
             mediaPreview
-                .frame(height: 480)
-                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .frame(height: 520)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.ubeyeBorder, lineWidth: 1)
+                )
 
             HStack(spacing: 18) {
                 PhotosPicker(selection: $photoPickerItem, matching: .any(of: [.images, .videos])) {
@@ -178,6 +187,7 @@ struct StoryComposerView: View {
             .foregroundStyle(.white)
             .padding(.bottom, 18)
         }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -206,26 +216,30 @@ struct StoryComposerView: View {
                 CameraPreview(session: camera.session)
             } else {
                 EmptyStateView(title: "Camera unavailable", message: "Enable camera access or choose media from your library.", systemImage: "camera")
-                    .background(Color.ubeyePanel)
             }
         }
     }
 
     private var metadataFields: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Story details")
+                .font(.headline)
             composerTextField("Caption", text: $store.caption)
             composerTextField("Brand tags", text: $store.brandTags)
             composerTextField("Text overlay", text: $store.textOverlay)
         }
+        .padding(14)
+        .ubeyeCard()
     }
 
     private func composerTextField(_ title: String, text: Binding<String>) -> some View {
         TextField(title, text: text)
             .padding()
             .frame(height: 52)
-            .background(.white.opacity(0.1))
+            .background(Color.ubeyeSubtle)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .textInputAutocapitalization(.sentences)
+            .foregroundStyle(Color.ubeyeInk)
     }
 
     private func loadPickedItem(_ item: PhotosPickerItem?) async {

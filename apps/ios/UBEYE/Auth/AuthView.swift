@@ -10,94 +10,129 @@ struct AuthView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Spacer()
-
-                VStack(spacing: 8) {
-                    Text("UBEYE")
-                        .font(.system(size: 48, weight: .black, design: .rounded))
-                    Text("Stories first. Followers second.")
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-
-                VStack(spacing: 12) {
-                    switch auth.stage {
-                    case .landing:
-                        PrimaryButton(title: "Create account") {
-                            auth.stage = .signup
-                        }
-                        Button("Sign in") {
-                            auth.stage = .login
-                        }
-                        .foregroundStyle(.white)
-                    case .login:
-                        AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
-                        AuthSecureField(title: "Password", text: $password)
-                        PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting) {
-                            Task { await auth.login(email: email, password: password, api: api) }
-                        }
-                        Button("Forgot password?") {
-                            auth.stage = .forgot
-                        }
-                        .foregroundStyle(.white.opacity(0.7))
-                    case .signup:
-                        AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
-                        AuthSecureField(title: "Password", text: $password)
-                        PrimaryButton(title: "Create account", isLoading: auth.isSubmitting) {
-                            Task { await auth.signup(email: email, password: password, api: api) }
-                        }
-                    case .verify:
-                        EmptyStateView(
-                            title: "Check your email",
-                            message: auth.message ?? "Verify your email, then return to continue.",
-                            systemImage: "envelope.badge"
-                        )
-                        PrimaryButton(title: "I verified", isLoading: auth.isSubmitting) {
-                            Task { await auth.checkVerification(api: api) }
-                        }
-                    case .profile:
-                        AuthTextField(title: "Display name", text: $displayName)
-                        AuthTextField(title: "Handle", text: $handle)
-                        PrimaryButton(title: "Finish setup", isLoading: auth.isSubmitting) {
-                            Task { await auth.completeProfile(displayName: displayName, handle: handle, api: api) }
-                        }
-                    case .forgot:
-                        AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
-                        PrimaryButton(title: "Send reset link", isLoading: auth.isSubmitting) {
-                            Task { await auth.requestPasswordReset(email: email, api: api) }
+            ScrollView {
+                VStack(spacing: 22) {
+                    HStack {
+                        UBEYEWordmark()
+                        Spacer()
+                        NavigationLink {
+                            SettingsView()
+                        } label: {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 38, height: 38)
+                                .foregroundStyle(Color.ubeyeInk)
+                                .background(Color.ubeyeSubtle, in: Circle())
                         }
                     }
-                }
 
-                if let error = auth.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.red.opacity(0.92))
-                        .multilineTextAlignment(.center)
-                }
-
-                if auth.stage != .landing {
-                    Button("Back") {
-                        auth.stage = .landing
-                        auth.error = nil
-                        auth.message = nil
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Stories first. Followers second.")
+                            .font(.system(size: 32, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.ubeyeInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Post fast vertical updates, follow creators, and keep the same UBEYE social experience on iPhone.")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ubeyeMuted)
                     }
-                    .foregroundStyle(.white.opacity(0.72))
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 18)
 
-                Spacer()
+                    authPanel
 
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Label("Settings", systemImage: "gear")
-                        .font(.footnote.weight(.semibold))
+                    if let error = auth.error {
+                        InlineNotice(message: error, isError: true)
+                    } else if let message = auth.message, auth.stage != .verify {
+                        InlineNotice(message: message)
+                    }
+
+                    if auth.stage != .landing {
+                        Button {
+                            auth.stage = .landing
+                            auth.error = nil
+                            auth.message = nil
+                        } label: {
+                            Label("Back", systemImage: "chevron.left")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.ubeyeMuted)
+                    }
                 }
-                .foregroundStyle(.white.opacity(0.72))
+                .padding(20)
             }
-            .padding(24)
             .ubeyeScreen()
         }
+    }
+
+    @ViewBuilder
+    private var authPanel: some View {
+        VStack(spacing: 14) {
+            switch auth.stage {
+            case .landing:
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Start watching")
+                        .font(.title3.bold())
+                    Text("Use your existing account or create a new creator profile.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ubeyeMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                PrimaryButton(title: "Create account") {
+                    auth.stage = .signup
+                }
+                Button {
+                    auth.stage = .login
+                } label: {
+                    Text("Sign in")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .foregroundStyle(Color.ubeyeInk)
+                        .background(Color.ubeyeSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            case .login:
+                AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
+                AuthSecureField(title: "Password", text: $password)
+                PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting) {
+                    Task { await auth.login(email: email, password: password, api: api) }
+                }
+                Button("Forgot password?") {
+                    auth.stage = .forgot
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ubeyeMuted)
+            case .signup:
+                AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
+                AuthSecureField(title: "Password", text: $password)
+                PrimaryButton(title: "Create account", isLoading: auth.isSubmitting) {
+                    Task { await auth.signup(email: email, password: password, api: api) }
+                }
+            case .verify:
+                EmptyStateView(
+                    title: "Check your email",
+                    message: auth.message ?? "Verify your email, then return to continue.",
+                    systemImage: "envelope.badge"
+                )
+                PrimaryButton(title: "I verified", isLoading: auth.isSubmitting) {
+                    Task { await auth.checkVerification(api: api) }
+                }
+            case .profile:
+                AuthTextField(title: "Display name", text: $displayName)
+                AuthTextField(title: "Handle", text: $handle)
+                PrimaryButton(title: "Finish setup", isLoading: auth.isSubmitting) {
+                    Task { await auth.completeProfile(displayName: displayName, handle: handle, api: api) }
+                }
+            case .forgot:
+                AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
+                PrimaryButton(title: "Send reset link", isLoading: auth.isSubmitting) {
+                    Task { await auth.requestPasswordReset(email: email, api: api) }
+                }
+            }
+        }
+        .padding(16)
+        .ubeyeCard()
     }
 }
 
@@ -113,8 +148,9 @@ private struct AuthTextField: View {
             .autocorrectionDisabled()
             .padding()
             .frame(height: 52)
-            .background(.white.opacity(0.12))
+            .background(Color.ubeyeSubtle)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .foregroundStyle(Color.ubeyeInk)
     }
 }
 
@@ -127,8 +163,9 @@ private struct AuthSecureField: View {
             .textInputAutocapitalization(.never)
             .padding()
             .frame(height: 52)
-            .background(.white.opacity(0.12))
+            .background(Color.ubeyeSubtle)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .foregroundStyle(Color.ubeyeInk)
     }
 }
 

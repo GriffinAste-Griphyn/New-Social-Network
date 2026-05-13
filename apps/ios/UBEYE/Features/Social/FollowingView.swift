@@ -10,7 +10,7 @@ struct FollowingView: View {
             Group {
                 if feed.isLoading && feed.feed == nil {
                     ProgressView()
-                        .tint(.white)
+                        .tint(.ubeyeRed)
                 } else if let profiles = feed.feed?.followingProfiles, profiles.isEmpty {
                     EmptyStateView(
                         title: "No follows yet",
@@ -18,9 +18,19 @@ struct FollowingView: View {
                         systemImage: "person.crop.circle.badge.plus"
                     )
                 } else {
-                    List {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Following")
+                                    .font(.system(size: 30, weight: .black, design: .rounded))
+                                Text("Creators and live stories from your UBEYE graph.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Color.ubeyeMuted)
+                            }
+
                         if let stories = feed.feed?.followingStories, !stories.isEmpty {
-                            Section("Live stories") {
+                            SectionHeader(title: "Live stories", actionTitle: nil)
+                            VStack(spacing: 10) {
                                 ForEach(stories) { story in
                                     Button {
                                         selectedStory = StoryRoute(id: story.id)
@@ -29,36 +39,45 @@ struct FollowingView: View {
                                             AsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
                                                 image.resizable().scaledToFill()
                                             } placeholder: {
-                                                Color.white.opacity(0.1)
+                                                Color.ubeyeSubtle
                                             }
                                             .frame(width: 52, height: 70)
-                                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                                             VStack(alignment: .leading) {
                                                 Text(story.creator)
                                                     .font(.headline)
                                                 Text(story.title)
                                                     .font(.subheadline)
-                                                    .foregroundStyle(.white.opacity(0.65))
+                                                    .foregroundStyle(Color.ubeyeMuted)
                                             }
+
+                                            Spacer()
+
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.bold())
+                                                .foregroundStyle(Color.ubeyeMuted)
                                         }
+                                        .padding(10)
+                                        .ubeyeCard()
                                     }
-                                    .listRowBackground(Color.ubeyeInk)
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
 
-                        Section("Creators") {
-                            ForEach(feed.feed?.followingProfiles ?? []) { profile in
-                                CreatorStaticRow(profile: profile)
-                                    .listRowBackground(Color.ubeyeInk)
+                            SectionHeader(title: "Creators", actionTitle: nil)
+                            VStack(spacing: 10) {
+                                ForEach(feed.feed?.followingProfiles ?? []) { profile in
+                                    CreatorStaticRow(profile: profile)
+                                }
                             }
                         }
+                        .padding(16)
                     }
-                    .scrollContentBackground(.hidden)
                 }
             }
-            .navigationTitle("Following")
+            .navigationBarTitleDisplayMode(.inline)
             .ubeyeScreen()
             .task {
                 await feed.load(api: api)
@@ -78,21 +97,20 @@ struct CreatorStaticRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: profile.imageUrl) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Circle().fill(.white.opacity(0.1))
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
+            RemoteAvatar(url: profile.imageUrl, size: 46, name: profile.name)
 
             VStack(alignment: .leading) {
                 Text(profile.name)
                     .font(.headline)
                 Text("@\(profile.handle)")
-                    .foregroundStyle(.white.opacity(0.64))
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ubeyeMuted)
             }
+
+            Spacer()
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Color.ubeyeInk)
+        .padding(12)
+        .ubeyeCard()
     }
 }
