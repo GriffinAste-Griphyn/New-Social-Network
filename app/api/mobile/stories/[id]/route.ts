@@ -8,12 +8,19 @@ import {
   getStoryStackForStory,
   removeStoryForOwner,
 } from "@/lib/story-store"
+import { formatStoryPostedAt } from "@/lib/story-time"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
-import { publicStoryMediaUrl, removeStoryAsset } from "@/lib/story-storage"
+import {
+  createCloudflareStreamPlaybackUrl,
+  createCloudflareStreamThumbnailUrl,
+  parseCloudflareStreamMediaPathname,
+  publicStoryMediaUrl,
+  removeStoryAsset,
+} from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
@@ -36,11 +43,52 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 
   try {
     const url = new URL(value)
+    if (url.hostname.endsWith("cloudflarestream.com")) {
+      return value
+    }
+
     url.searchParams.set("v", version)
     return url.toString()
   } catch {
     return value
   }
+}
+
+function parseCloudflareStoryMediaUrl(value: string | null, request: Request) {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const url = new URL(value, request.url)
+    const prefix = "/api/story-media/"
+
+    if (!url.pathname.startsWith(prefix)) {
+      return null
+    }
+
+    const mediaPathname = url.pathname
+      .slice(prefix.length)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/")
+
+    return parseCloudflareStreamMediaPathname(mediaPathname)
+  } catch {
+    return null
+  }
+}
+
+async function mobileStoryMediaUrl(value: string | null, request: Request) {
+  const cloudflareMedia = parseCloudflareStoryMediaUrl(value, request)
+
+  if (cloudflareMedia) {
+    return cloudflareMedia.kind === "thumbnail"
+      ? await createCloudflareStreamThumbnailUrl(cloudflareMedia.uid)
+      : await createCloudflareStreamPlaybackUrl(cloudflareMedia.uid)
+  }
+
+  return publicStoryMediaUrl(value, request, { signed: true }) ?? value
 }
 
 export async function GET(
@@ -63,6 +111,20 @@ export async function GET(
     return NextResponse.json({ error: "Story not found." }, { status: 404 })
   }
 
+  const storyItems = await Promise.all(
+    story.items.map(async (item) => ({
+      ...item,
+      mediaUrl: versionMediaUrl(
+        await mobileStoryMediaUrl(item.mediaUrl, request),
+        item.id,
+      ),
+      thumbnailUrl: versionMediaUrl(
+        await mobileStoryMediaUrl(item.thumbnailUrl, request),
+        item.id,
+      ),
+    })),
+  )
+
   return NextResponse.json({
     ok: true,
     story: {
@@ -70,20 +132,7 @@ export async function GET(
       avatarUrl:
         publicProfileAvatarUrl(story.avatarUrl, request) ??
         absoluteMediaUrl(story.avatarUrl, request),
-      items: story.items.map((item) => ({
-        ...item,
-        mediaUrl: versionMediaUrl(
-          publicStoryMediaUrl(item.mediaUrl, request, { signed: true }) ??
-            item.mediaUrl,
-          item.id,
-        ),
-        thumbnailUrl: versionMediaUrl(
-          publicStoryMediaUrl(item.thumbnailUrl, request, {
-            signed: true,
-          }),
-          item.id,
-        ),
-      })),
+      items: storyItems,
     },
   })
 }
@@ -154,7 +203,7 @@ async function getMobileMyStoryStack(userId: string) {
       mediaUrl: item.mediaUrl,
       thumbnailUrl: item.thumbnailUrl,
       title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
-      postedAt: "Today",
+      postedAt: formatStoryPostedAt(new Date(item.createdAt)),
       durationSeconds:
         item.assetKind === "video" ? item.durationSeconds ?? 10 : undefined,
       captionVerticalPercent: item.textOverlays?.[0]?.positionY ?? 74,

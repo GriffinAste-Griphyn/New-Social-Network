@@ -62,7 +62,11 @@ export async function POST(request: Request) {
     }
 
     const [currentUser] = await getDb()
-      .select({ avatarUrl: users.avatarUrl, avatarAssetId: users.avatarAssetId })
+      .select({
+        avatarUrl: users.avatarUrl,
+        avatarAssetId: users.avatarAssetId,
+        avatarSourceUrl: users.avatarSourceUrl,
+      })
       .from(users)
       .where(eq(users.id, session.id))
       .limit(1)
@@ -94,6 +98,12 @@ export async function POST(request: Request) {
       session.id,
       storedAvatar.avatarUrl,
       mediaAsset.id,
+      {
+        sourceUrl: storedAvatar.sourceUrl,
+        sourceStorageKey: storedAvatar.sourceStorageKey,
+        sourceContentType: storedAvatar.sourceContentType,
+        sourceByteSize: storedAvatar.sourceByteSize,
+      },
     )
 
     if (!result.ok) {
@@ -107,6 +117,9 @@ export async function POST(request: Request) {
     }
 
     await removeProfileAvatar(currentUser?.avatarUrl ?? null).catch(() => undefined)
+    await removeProfileAvatar(currentUser?.avatarSourceUrl ?? null).catch(
+      () => undefined,
+    )
     if (currentUser?.avatarAssetId) {
       await markMediaAssetDeleted({
         mediaAssetId: currentUser.avatarAssetId,
@@ -125,6 +138,7 @@ export async function POST(request: Request) {
   } catch (error) {
     if (storedAvatar) {
       await removeProfileAvatar(storedAvatar.avatarUrl).catch(() => undefined)
+      await removeProfileAvatar(storedAvatar.sourceUrl).catch(() => undefined)
     }
 
     const message =

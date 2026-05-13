@@ -12,9 +12,14 @@ import {
 export const runtime = "nodejs"
 
 const pushTokenSchema = z.object({
-  expoPushToken: z.string().min(1),
+  expoPushToken: z.string().trim().min(1).optional(),
+  apnsDeviceToken: z.string().trim().min(1).optional(),
+  apnsEnvironment: z.enum(["sandbox", "production"]).optional(),
   platform: z.string().min(1).max(32).nullable().optional(),
-})
+}).refine(
+  (payload) => Boolean(payload.expoPushToken || payload.apnsDeviceToken),
+  "Could not register this device for notifications.",
+)
 
 export async function POST(request: Request) {
   const session = await getCompleteMobileSession(request)
@@ -52,6 +57,8 @@ export async function POST(request: Request) {
     await registerMobilePushToken({
       userId: session.id,
       expoPushToken: parsed.data.expoPushToken,
+      apnsDeviceToken: parsed.data.apnsDeviceToken,
+      apnsEnvironment: parsed.data.apnsEnvironment,
       platform: parsed.data.platform ?? null,
     })
 

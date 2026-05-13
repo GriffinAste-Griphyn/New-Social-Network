@@ -163,6 +163,10 @@ export const users = pgTable(
     avatarAssetId: text("avatar_asset_id").references(
       (): AnyPgColumn => mediaAssets.id,
     ),
+    avatarSourceUrl: text("avatar_source_url"),
+    avatarSourceStorageKey: text("avatar_source_storage_key"),
+    avatarSourceContentType: text("avatar_source_content_type"),
+    avatarSourceByteSize: integer("avatar_source_byte_size"),
     onboardingIntent: userOnboardingIntent("onboarding_intent")
       .notNull()
       .default("explore"),
@@ -425,6 +429,9 @@ export const mobilePushTokens = pgTable(
       .notNull()
       .references(() => users.id),
     expoPushToken: text("expo_push_token").notNull(),
+    apnsDeviceToken: text("apns_device_token"),
+    pushProvider: text("push_provider").notNull().default("expo"),
+    apnsEnvironment: text("apns_environment"),
     platform: text("platform"),
     enabled: boolean("enabled").notNull().default(true),
     lastRegisteredAt: timestamp("last_registered_at", { withTimezone: true })
@@ -440,6 +447,7 @@ export const mobilePushTokens = pgTable(
   (table) => [
     index("mobile_push_tokens_user_idx").on(table.userId),
     uniqueIndex("mobile_push_tokens_token_idx").on(table.expoPushToken),
+    uniqueIndex("mobile_push_tokens_apns_token_idx").on(table.apnsDeviceToken),
   ],
 )
 

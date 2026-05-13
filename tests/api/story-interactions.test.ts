@@ -63,6 +63,11 @@ describe("mobile story interactions API", () => {
         id: "received_123",
         storyId: "story_123",
         creatorId: "viewer_123",
+        story: {
+          assetKind: "image",
+          mediaUrl: "/api/story-media/stories/original.jpg",
+          thumbnailUrl: "/api/story-media/stories/original-thumb.jpg",
+        },
         actor: {
           id: "actor_123",
           name: "Actor",
@@ -83,6 +88,11 @@ describe("mobile story interactions API", () => {
         id: "sent_123",
         storyId: "story_456",
         creatorId: "creator_123",
+        story: {
+          assetKind: "video",
+          mediaUrl: "/api/story-media/stories/creator-video.mp4",
+          thumbnailUrl: "/api/story-media/stories/creator-video-thumb.jpg",
+        },
         actor: {
           id: "viewer_123",
           name: "Viewer",
@@ -118,6 +128,11 @@ describe("mobile story interactions API", () => {
       interactions: [
         {
           id: "received_123",
+          story: {
+            mediaUrl: "https://cdn.example.com/api/story-media/stories/original.jpg",
+            thumbnailUrl:
+              "https://cdn.example.com/api/story-media/stories/original-thumb.jpg",
+          },
           actor: {
             imageUrl:
               "https://app.example.com/api/profile-avatar-media/avatars/actor.jpg",
@@ -128,6 +143,13 @@ describe("mobile story interactions API", () => {
         {
           id: "sent_123",
           body: "Sick story bro",
+          story: {
+            assetKind: "video",
+            mediaUrl:
+              "https://cdn.example.com/api/story-media/stories/creator-video.mp4",
+            thumbnailUrl:
+              "https://cdn.example.com/api/story-media/stories/creator-video-thumb.jpg",
+          },
           mediaUrl: "https://cdn.example.com/api/story-media/stories/reply.jpg",
           mediaThumbnailUrl:
             "https://cdn.example.com/api/story-media/stories/reply-thumb.jpg",

@@ -12,6 +12,7 @@ import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
 import {
   createCloudflareStreamPlaybackUrl,
+  createCloudflareStreamThumbnailUrl,
   parseCloudflareStreamMediaPathname,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-storage"
@@ -374,10 +375,11 @@ export async function GET(
   }
 
   if (cloudflareStreamMedia) {
-    const playbackUrl = await createCloudflareStreamPlaybackUrl(
-      cloudflareStreamMedia.uid,
-    )
-    const response = NextResponse.redirect(playbackUrl, { status: 302 })
+    const remoteUrl =
+      cloudflareStreamMedia.kind === "thumbnail"
+        ? await createCloudflareStreamThumbnailUrl(cloudflareStreamMedia.uid)
+        : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
+    const response = NextResponse.redirect(remoteUrl, { status: 302 })
 
     response.headers.set("Cache-Control", "private, no-store")
 

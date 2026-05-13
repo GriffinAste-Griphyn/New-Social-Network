@@ -21,13 +21,14 @@ That changes the architecture in a useful way. You do need a lightweight one-way
 
 ### Language
 
-Use TypeScript for the entire MVP.
+Use TypeScript for the backend, web app, admin surfaces, and shared product logic. Use SwiftUI for the iOS consumer app.
 
 Reason:
 
-- one language across UI, route handlers, validation, database code, and jobs
+- one language across route handlers, validation, database code, jobs, web, and admin tooling
 - faster iteration for a small team
 - easier shared types between product, moderation, and monetization logic
+- a native iOS client for camera, video, APNs, TestFlight, and App Store distribution
 
 Do not start with Python for the core backend. Add Python only later if you need offline ranking research, feature generation, or moderation experiments that are genuinely better there.
 
@@ -44,7 +45,7 @@ Reason:
 
 Important tradeoff:
 
-If this is ultimately a consumer mobile product, the long-term client should be native or React Native with Expo. `shadcn/ui` is the right choice for the web app and internal tools, but not the final consumer mobile UI stack.
+The consumer iOS client is native SwiftUI under `apps/ios`. `shadcn/ui` remains the right choice for the web app and internal tools, but not the final consumer mobile UI stack.
 
 ## Backend recommendation
 

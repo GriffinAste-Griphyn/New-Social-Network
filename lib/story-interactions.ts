@@ -17,6 +17,11 @@ export type StoryInteractionEvent = {
   id: string
   storyId: string
   creatorId: string
+  story: {
+    assetKind: "image" | "video"
+    mediaUrl: string
+    thumbnailUrl: string | null
+  }
   actor: {
     id: string
     name: string
@@ -50,6 +55,9 @@ function mapEvent(row: {
   handle: string | null
   avatarUrl: string | null
   kind: StoryInteractionKind
+  storyAssetKind: "image" | "video"
+  storyMediaUrl: string
+  storyThumbnailUrl: string | null
   body: string | null
   reaction: string | null
   mediaUrl: string | null
@@ -65,6 +73,11 @@ function mapEvent(row: {
     id: row.id,
     storyId: row.storyId,
     creatorId: row.creatorId,
+    story: {
+      assetKind: row.storyAssetKind,
+      mediaUrl: row.storyMediaUrl,
+      thumbnailUrl: row.storyThumbnailUrl,
+    },
     actor: {
       id: row.actorId,
       name: row.displayName,
@@ -93,6 +106,9 @@ function mapSentEvent(row: {
   creatorHandle: string | null
   creatorAvatarUrl: string | null
   kind: StoryInteractionKind
+  storyAssetKind: "image" | "video"
+  storyMediaUrl: string
+  storyThumbnailUrl: string | null
   body: string | null
   reaction: string | null
   mediaUrl: string | null
@@ -113,6 +129,11 @@ function mapSentEvent(row: {
     id: row.id,
     storyId: row.storyId,
     creatorId: row.creatorId,
+    story: {
+      assetKind: row.storyAssetKind,
+      mediaUrl: row.storyMediaUrl,
+      thumbnailUrl: row.storyThumbnailUrl,
+    },
     actor: {
       id: row.actorId,
       name: row.actorDisplayName,
@@ -239,6 +260,9 @@ export async function listStoryInteractionsForCreator(input: {
       displayName: users.displayName,
       handle: users.handle,
       avatarUrl: users.avatarUrl,
+      storyAssetKind: stories.assetKind,
+      storyMediaUrl: stories.mediaUrl,
+      storyThumbnailUrl: stories.thumbnailUrl,
       kind: storyInteractions.kind,
       body: storyInteractions.body,
       reaction: storyInteractions.reaction,
@@ -248,6 +272,7 @@ export async function listStoryInteractionsForCreator(input: {
       createdAt: storyInteractions.createdAt,
     })
     .from(storyInteractions)
+    .innerJoin(stories, eq(stories.id, storyInteractions.storyId))
     .innerJoin(users, eq(users.id, storyInteractions.actorId))
     .where(and(...filters))
     .orderBy(desc(storyInteractions.createdAt))
@@ -291,6 +316,9 @@ export async function listStoryInteractionsForActor(input: {
       creatorDisplayName: creatorUsers.displayName,
       creatorHandle: creatorUsers.handle,
       creatorAvatarUrl: creatorUsers.avatarUrl,
+      storyAssetKind: stories.assetKind,
+      storyMediaUrl: stories.mediaUrl,
+      storyThumbnailUrl: stories.thumbnailUrl,
       kind: storyInteractions.kind,
       body: storyInteractions.body,
       reaction: storyInteractions.reaction,
@@ -300,6 +328,7 @@ export async function listStoryInteractionsForActor(input: {
       createdAt: storyInteractions.createdAt,
     })
     .from(storyInteractions)
+    .innerJoin(stories, eq(stories.id, storyInteractions.storyId))
     .innerJoin(actorUsers, eq(actorUsers.id, storyInteractions.actorId))
     .innerJoin(creatorUsers, eq(creatorUsers.id, storyInteractions.creatorId))
     .where(and(...filters))

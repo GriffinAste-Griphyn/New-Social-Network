@@ -21,6 +21,7 @@ const storyMediaRoutePrefix = "/api/story-media"
 const localStoryMediaPrefix = "local"
 const cloudflareStreamMediaPrefix = "cloudflare-stream"
 const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
+const storyMediaAccessTokenBucketMs = 30 * 60 * 1000
 const execFileAsync = promisify(execFile)
 
 type ResolvedUploadType = {
@@ -185,6 +186,18 @@ function buildCloudflareStreamPathname(uid: string) {
   return `${cloudflareStreamMediaPrefix}/${uid}/manifest/video.m3u8`
 }
 
+function buildCloudflareStreamThumbnailPathname(uid: string) {
+  return `${cloudflareStreamMediaPrefix}/${uid}/thumbnails/thumbnail.jpg`
+}
+
+export function createCloudflareStreamThumbnailMediaUrl(uid: string) {
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  return buildStoryMediaRoute(buildCloudflareStreamThumbnailPathname(uid))
+}
+
 function signStoryMediaPathname(pathname: string, expiresAtMs: number) {
   return createHmac("sha256", env.AUTH_SECRET)
     .update(`${pathname}:${expiresAtMs}`)
@@ -192,7 +205,10 @@ function signStoryMediaPathname(pathname: string, expiresAtMs: number) {
 }
 
 export function createStoryMediaAccessToken(pathname: string) {
-  const expiresAtMs = Date.now() + storyMediaAccessTokenTtlMs
+  const stableIssuedAtMs =
+    Math.floor(Date.now() / storyMediaAccessTokenBucketMs) *
+    storyMediaAccessTokenBucketMs
+  const expiresAtMs = stableIssuedAtMs + storyMediaAccessTokenTtlMs
   const signature = signStoryMediaPathname(pathname, expiresAtMs)
 
   return `${expiresAtMs}.${signature}`
@@ -423,12 +439,48 @@ type CloudflareDirectUploadResponse = {
   }
 }
 
+type CloudflareDirectUpload = {
+  uid: string
+  uploadUrl: string
+  uploadProtocol: "form"
+}
+
+type CloudflareTusUpload = {
+  uid: string
+  uploadUrl: string
+  uploadProtocol: "tus"
+}
+
 type CloudflareStreamTokenResponse = {
   success: boolean
   errors?: Array<{ message?: string }>
   result?: {
     token?: string
   }
+}
+
+type CloudflareStreamVideoDetailsResponse = {
+  success: boolean
+  errors?: Array<{ message?: string }>
+  result?: {
+    readyToStream?: boolean
+    size?: number | null
+    status?: {
+      state?: string
+      errorReasonCode?: string
+      errorReasonText?: string
+    } | null
+    duration?: number | null
+    input?: {
+      width?: number | null
+      height?: number | null
+    } | null
+  }
+}
+
+type CloudflareStreamUpdateResponse = {
+  success: boolean
+  errors?: Array<{ message?: string }>
 }
 
 function getCloudflareStreamConfig() {
@@ -454,8 +506,50 @@ function buildCloudflarePlaybackUrl(customerSubdomain: string, playbackId: strin
   return `${origin}/${playbackId}/manifest/video.m3u8`
 }
 
+function buildCloudflareThumbnailUrl(customerSubdomain: string, playbackId: string) {
+  const origin = /^https?:\/\//i.test(customerSubdomain)
+    ? customerSubdomain
+    : `https://${customerSubdomain}`
+  const thumbnailUrl = new URL(`${origin}/${playbackId}/thumbnails/thumbnail.jpg`)
+
+  thumbnailUrl.searchParams.set("height", "1280")
+  thumbnailUrl.searchParams.set("fit", "clip")
+
+  return thumbnailUrl.toString()
+}
+
+function encodeCloudflareTusMetadataValue(value: string | number) {
+  return Buffer.from(String(value)).toString("base64")
+}
+
+function buildCloudflareTusUploadMetadata(input: {
+  fileName: string
+  maxDurationSeconds: number
+}) {
+  return [
+    `name ${encodeCloudflareTusMetadataValue(input.fileName)}`,
+    "requiresignedurls",
+    "thumbnailtimestamppct MS4w",
+    `maxdurationseconds ${encodeCloudflareTusMetadataValue(input.maxDurationSeconds)}`,
+  ].join(",")
+}
+
+function isCloudflareStreamUid(value: string) {
+  return /^[a-f0-9]{32}$/i.test(value)
+}
+
+function assertCloudflareStreamUploadsEnabled() {
+  if (process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
+    throw new StoryUploadError(
+      "Production video uploads require STORY_VIDEO_PROCESSOR=cloudflare-stream.",
+    )
+  }
+}
+
 function parseCloudflareStreamUid(mediaUrl: string) {
-  const match = mediaUrl.match(/\/([a-f0-9]{32})\/manifest\/video\.m3u8/i)
+  const match = mediaUrl.match(
+    /\/([a-f0-9]{32})\/(?:manifest\/video\.m3u8|thumbnails\/thumbnail\.jpg)/i,
+  )
 
   return match?.[1] ?? null
 }
@@ -474,21 +568,35 @@ export function parseCloudflareStreamMediaPathname(pathname: string) {
   const segments = pathname.split("/")
 
   if (
-    segments.length !== 4 ||
-    segments[0] !== cloudflareStreamMediaPrefix ||
-    segments[2] !== "manifest" ||
-    segments[3] !== "video.m3u8" ||
-    !/^[a-f0-9]{32}$/i.test(segments[1] ?? "")
+    segments.length === 4 &&
+    segments[0] === cloudflareStreamMediaPrefix &&
+    segments[2] === "manifest" &&
+    segments[3] === "video.m3u8" &&
+    /^[a-f0-9]{32}$/i.test(segments[1] ?? "")
   ) {
-    return null
+    return {
+      kind: "playback" as const,
+      uid: segments[1],
+    }
   }
 
-  return {
-    uid: segments[1],
+  if (
+    segments.length === 4 &&
+    segments[0] === cloudflareStreamMediaPrefix &&
+    segments[2] === "thumbnails" &&
+    segments[3] === "thumbnail.jpg" &&
+    /^[a-f0-9]{32}$/i.test(segments[1] ?? "")
+  ) {
+    return {
+      kind: "thumbnail" as const,
+      uid: segments[1],
+    }
   }
+
+  return null
 }
 
-export async function createCloudflareStreamPlaybackUrl(uid: string) {
+async function createCloudflareStreamToken(uid: string) {
   const { accountId, apiToken, customerSubdomain } = getCloudflareStreamConfig()
   const tokenResponse = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}/token`,
@@ -516,7 +624,109 @@ export async function createCloudflareStreamPlaybackUrl(uid: string) {
     )
   }
 
+  return { customerSubdomain, token }
+}
+
+export async function createCloudflareStreamPlaybackUrl(uid: string) {
+  const { customerSubdomain, token } = await createCloudflareStreamToken(uid)
+
   return buildCloudflarePlaybackUrl(customerSubdomain, token)
+}
+
+export async function createCloudflareStreamThumbnailUrl(uid: string) {
+  const { customerSubdomain, token } = await createCloudflareStreamToken(uid)
+
+  return buildCloudflareThumbnailUrl(customerSubdomain, token)
+}
+
+export async function setCloudflareStreamThumbnailToLastFrame(uid: string) {
+  assertCloudflareStreamUploadsEnabled()
+
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+  const updateResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        thumbnailTimestampPct: 1.0,
+      }),
+    },
+  )
+  const updatePayload = (await updateResponse.json().catch(() => null)) as
+    | CloudflareStreamUpdateResponse
+    | null
+
+  if (!updateResponse.ok || !updatePayload?.success) {
+    throw new StoryUploadError(
+      updatePayload?.errors?.[0]?.message ??
+        "Could not set the Cloudflare Stream thumbnail.",
+    )
+  }
+}
+
+export async function getCloudflareStreamVideoDetails(uid: string) {
+  assertCloudflareStreamUploadsEnabled()
+
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+  const detailsResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`,
+    {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    },
+  )
+  const detailsPayload = (await detailsResponse.json().catch(() => null)) as
+    | CloudflareStreamVideoDetailsResponse
+    | null
+
+  if (!detailsResponse.ok || !detailsPayload?.success) {
+    throw new StoryUploadError(
+      detailsPayload?.errors?.[0]?.message ??
+        "Could not read Cloudflare Stream video details.",
+    )
+  }
+
+  return {
+    readyToStream: detailsPayload.result?.readyToStream === true,
+    state: detailsPayload.result?.status?.state ?? null,
+    errorReason:
+      detailsPayload.result?.status?.errorReasonText ||
+      detailsPayload.result?.status?.errorReasonCode ||
+      null,
+    byteSize:
+      typeof detailsPayload.result?.size === "number" &&
+      Number.isFinite(detailsPayload.result.size) &&
+      detailsPayload.result.size > 0
+        ? Math.round(detailsPayload.result.size)
+        : null,
+    durationMs:
+      typeof detailsPayload.result?.duration === "number" &&
+      Number.isFinite(detailsPayload.result.duration) &&
+      detailsPayload.result.duration > 0
+        ? Math.round(detailsPayload.result.duration * 1_000)
+        : null,
+    width:
+      typeof detailsPayload.result?.input?.width === "number"
+        ? Math.round(detailsPayload.result.input.width)
+        : null,
+    height:
+      typeof detailsPayload.result?.input?.height === "number"
+        ? Math.round(detailsPayload.result.input.height)
+        : null,
+  }
 }
 
 async function saveCloudflareStreamVideo(
@@ -570,10 +780,12 @@ async function saveCloudflareStreamVideo(
     throw new StoryUploadError("Cloudflare Stream could not process the video upload.")
   }
 
+  await setCloudflareStreamThumbnailToLastFrame(uid).catch(() => undefined)
+
   return {
     assetKind: "video",
     mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(uid)),
-    thumbnailUrl: null,
+    thumbnailUrl: createCloudflareStreamThumbnailMediaUrl(uid),
     storageProvider: "cloudflare-stream",
     storageKey: uid,
     contentType,
@@ -583,6 +795,131 @@ async function saveCloudflareStreamVideo(
     height: metadata.height,
     durationMs: metadata.durationMs,
     processingStatus: "processing",
+  }
+}
+
+export async function createCloudflareStreamDirectUpload(input: {
+  fileName: string
+  maxDurationSeconds?: number
+  maxSizeBytes?: number
+}): Promise<CloudflareDirectUpload> {
+  assertCloudflareStreamUploadsEnabled()
+
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+  const createUploadResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        maxDurationSeconds: input.maxDurationSeconds ?? 60 * 60,
+        maxSizeBytes: input.maxSizeBytes,
+        meta: { name: input.fileName },
+        requireSignedURLs: true,
+      }),
+    },
+  )
+  const createUploadPayload =
+    (await createUploadResponse.json().catch(() => null)) as
+      | CloudflareDirectUploadResponse
+      | null
+  const uid = createUploadPayload?.result?.uid
+  const uploadUrl = createUploadPayload?.result?.uploadURL
+
+  if (!createUploadResponse.ok || !createUploadPayload?.success || !uid || !uploadUrl) {
+    throw new StoryUploadError(
+      createUploadPayload?.errors?.[0]?.message ??
+        "Could not create a Cloudflare Stream upload.",
+    )
+  }
+
+  return { uid, uploadUrl, uploadProtocol: "form" }
+}
+
+export async function createCloudflareStreamTusUpload(input: {
+  fileName: string
+  uploadLengthBytes: number
+  maxDurationSeconds: number
+}): Promise<CloudflareTusUpload> {
+  assertCloudflareStreamUploadsEnabled()
+
+  if (
+    !Number.isSafeInteger(input.uploadLengthBytes) ||
+    input.uploadLengthBytes <= 0
+  ) {
+    throw new StoryUploadError("Cloudflare Stream tus uploads require a file size.")
+  }
+
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+  const createUploadResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream?direct_user=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Tus-Resumable": "1.0.0",
+        "Upload-Length": input.uploadLengthBytes.toString(),
+        "Upload-Metadata": buildCloudflareTusUploadMetadata({
+          fileName: input.fileName,
+          maxDurationSeconds: input.maxDurationSeconds,
+        }),
+      },
+    },
+  )
+  const uploadUrl = createUploadResponse.headers.get("location")
+  const uid = createUploadResponse.headers.get("stream-media-id")
+
+  if (!createUploadResponse.ok || !uploadUrl || !uid) {
+    const errorPayload = (await createUploadResponse.json().catch(() => null)) as
+      | CloudflareDirectUploadResponse
+      | null
+
+    throw new StoryUploadError(
+      errorPayload?.errors?.[0]?.message ??
+        "Could not create a Cloudflare Stream resumable upload.",
+    )
+  }
+
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  return { uid, uploadUrl, uploadProtocol: "tus" }
+}
+
+export function createCloudflareStreamStoredVideoAsset(input: {
+  uid: string
+  contentType: string
+  byteSize: number
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+  processingStatus?: StoryAssetProcessingStatus
+}): StoredStoryAsset {
+  assertCloudflareStreamUploadsEnabled()
+
+  if (!isCloudflareStreamUid(input.uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  return {
+    assetKind: "video",
+    mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(input.uid)),
+    thumbnailUrl: createCloudflareStreamThumbnailMediaUrl(input.uid),
+    storageProvider: "cloudflare-stream",
+    storageKey: input.uid,
+    contentType: input.contentType.startsWith("video/")
+      ? input.contentType
+      : "video/mp4",
+    byteSize: Math.max(1, Math.floor(input.byteSize)),
+    checksum: input.uid,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+    processingStatus: input.processingStatus ?? "ready",
   }
 }
 
@@ -1090,9 +1427,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
     assetKind === "video" &&
     process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream"
   ) {
-    throw new StoryUploadError(
-      "Production video uploads require STORY_VIDEO_PROCESSOR=cloudflare-stream.",
-    )
+    assertCloudflareStreamUploadsEnabled()
   }
 
   if (

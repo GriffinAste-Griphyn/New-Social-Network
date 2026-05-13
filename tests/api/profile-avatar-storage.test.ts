@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const normalizedSourceBuffer = Buffer.from("normalized-source")
 const normalizedAvatarBuffer = Buffer.from("normalized-avatar")
+const sharpToBuffer = vi.fn()
 
 vi.mock("@vercel/blob", () => ({
   del: vi.fn(),
@@ -20,7 +22,11 @@ vi.mock("sharp", () => ({
     jpeg() {
       return this
     },
-    toBuffer: vi.fn(async () => normalizedAvatarBuffer),
+    extract() {
+      return this
+    },
+    metadata: vi.fn(async () => ({ width: 512, height: 512 })),
+    toBuffer: sharpToBuffer,
   })),
 }))
 
@@ -31,27 +37,53 @@ const pngHeader = new Uint8Array([
 describe("profile avatar storage", () => {
   beforeEach(() => {
     process.env.STORY_STORAGE_PROVIDER = "vercel-blob"
+    sharpToBuffer.mockReset()
+    sharpToBuffer.mockResolvedValue(normalizedAvatarBuffer)
   })
 
   it("stores Vercel Blob avatars privately and returns an app media route", async () => {
     const { put } = await import("@vercel/blob")
     const { saveProfileAvatar } = await import("@/lib/profile-avatar-storage")
 
-    vi.mocked(put).mockResolvedValue({
-      url: "https://store.private.blob.vercel-storage.com/avatars/avatar.jpg",
-      downloadUrl:
-        "https://store.private.blob.vercel-storage.com/avatars/avatar.jpg",
-      pathname: "avatars/avatar.jpg",
-      contentType: "image/jpeg",
-      contentDisposition: 'attachment; filename="avatar.jpg"',
-      etag: "avatar-etag",
-    })
+    sharpToBuffer
+      .mockResolvedValueOnce(normalizedSourceBuffer)
+      .mockResolvedValueOnce(normalizedAvatarBuffer)
+
+    vi.mocked(put)
+      .mockResolvedValueOnce({
+        url: "https://store.private.blob.vercel-storage.com/avatars/source/avatar-source.jpg",
+        downloadUrl:
+          "https://store.private.blob.vercel-storage.com/avatars/source/avatar-source.jpg",
+        pathname: "avatars/source/avatar-source.jpg",
+        contentType: "image/jpeg",
+        contentDisposition: 'attachment; filename="avatar-source.jpg"',
+        etag: "avatar-source-etag",
+      })
+      .mockResolvedValueOnce({
+        url: "https://store.private.blob.vercel-storage.com/avatars/avatar.jpg",
+        downloadUrl:
+          "https://store.private.blob.vercel-storage.com/avatars/avatar.jpg",
+        pathname: "avatars/avatar.jpg",
+        contentType: "image/jpeg",
+        contentDisposition: 'attachment; filename="avatar.jpg"',
+        etag: "avatar-etag",
+      })
 
     const avatar = await saveProfileAvatar(
       new File([pngHeader], "avatar.png", { type: "image/png" }),
     )
 
-    expect(put).toHaveBeenCalledWith(
+    expect(put).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^avatars\/source\/.+\.jpg$/),
+      normalizedSourceBuffer,
+      {
+        access: "private",
+        contentType: "image/jpeg",
+      },
+    )
+    expect(put).toHaveBeenNthCalledWith(
+      2,
       expect.stringMatching(/^avatars\/.+\.jpg$/),
       normalizedAvatarBuffer,
       {
@@ -61,8 +93,10 @@ describe("profile avatar storage", () => {
     )
     expect(avatar).toMatchObject({
       avatarUrl: "/api/profile-avatar-media/avatars/avatar.jpg",
+      sourceUrl: "/api/profile-avatar-media/avatars/source/avatar-source.jpg",
       storageProvider: "vercel-blob",
       storageKey: "avatars/avatar.jpg",
+      sourceStorageKey: "avatars/source/avatar-source.jpg",
     })
   })
 

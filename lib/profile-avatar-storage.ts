@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { del, put } from "@vercel/blob"
+import { del, get, put } from "@vercel/blob"
 import sharp from "sharp"
 
 const maxAvatarUploadBytes = 8 * 1024 * 1024
@@ -18,11 +18,22 @@ export class ProfileAvatarUploadError extends Error {}
 
 export type StoredProfileAvatar = {
   avatarUrl: string
+  sourceUrl: string
   storageProvider: "local" | "vercel-blob"
   storageKey: string
+  sourceStorageKey: string
+  sourceContentType: string
+  sourceByteSize: number
   contentType: string
   byteSize: number
   checksum: string
+}
+
+export type ProfileAvatarCrop = {
+  originX: number
+  originY: number
+  width: number
+  height: number
 }
 
 function withConfiguredPublicBaseUrl(mediaUrl: string) {
@@ -44,6 +55,10 @@ function encodeProfileAvatarPathname(pathname: string) {
 
 function buildProfileAvatarMediaRoute(pathname: string) {
   return `${profileAvatarMediaRoutePrefix}/${encodeProfileAvatarPathname(pathname)}`
+}
+
+function buildLocalAvatarPathname(fileName: string) {
+  return `${localAvatarUrlPrefix}/${fileName}`
 }
 
 function hasPrefix(buffer: Buffer, bytes: number[]) {
@@ -125,6 +140,20 @@ function getPrivateVercelBlobPathname(mediaUrl: string) {
   }
 }
 
+function getLocalAvatarFileName(mediaUrl: string) {
+  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
+  const localAvatarUrl =
+    baseUrl && mediaUrl.startsWith(baseUrl)
+      ? mediaUrl.slice(baseUrl.length)
+      : mediaUrl
+
+  if (!localAvatarUrl.startsWith(localAvatarUrlPrefix)) {
+    return null
+  }
+
+  return localAvatarUrl.replace(`${localAvatarUrlPrefix}/`, "")
+}
+
 export function publicProfileAvatarUrl(value: string | null, request?: Request) {
   if (!value) {
     return null
@@ -140,6 +169,128 @@ export function publicProfileAvatarUrl(value: string | null, request?: Request) 
   return new URL(avatarUrl, request.url).toString()
 }
 
+function normalizeCrop(crop: ProfileAvatarCrop, width: number, height: number) {
+  const maxSize = Math.min(width, height)
+  const cropSize = Math.min(
+    maxSize,
+    Math.max(1, Math.round(Math.min(crop.width, crop.height))),
+  )
+
+  return {
+    left: Math.min(width - cropSize, Math.max(0, Math.round(crop.originX))),
+    top: Math.min(height - cropSize, Math.max(0, Math.round(crop.originY))),
+    width: cropSize,
+    height: cropSize,
+  }
+}
+
+async function normalizeAvatarSource(buffer: Buffer) {
+  return sharp(buffer)
+    .rotate()
+    .resize(2048, 2048, {
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .jpeg({
+      quality: 94,
+      mozjpeg: true,
+    })
+    .toBuffer()
+}
+
+async function createAvatarBuffer(sourceBuffer: Buffer, crop?: ProfileAvatarCrop) {
+  const metadata = await sharp(sourceBuffer).metadata()
+  const width = metadata.width
+  const height = metadata.height
+
+  if (!width || !height) {
+    throw new ProfileAvatarUploadError("Could not read that profile photo.")
+  }
+
+  const defaultCropSize = Math.min(width, height)
+  const centeredCrop = {
+    left: Math.round((width - defaultCropSize) / 2),
+    top: Math.round((height - defaultCropSize) / 2),
+    width: defaultCropSize,
+    height: defaultCropSize,
+  }
+  const cropRect = crop ? normalizeCrop(crop, width, height) : centeredCrop
+
+  return sharp(sourceBuffer)
+    .extract(cropRect)
+    .resize(512, 512, {
+      fit: "cover",
+    })
+    .jpeg({
+      quality: 90,
+      mozjpeg: true,
+    })
+    .toBuffer()
+}
+
+async function storeAvatarBuffer(input: {
+  buffer: Buffer
+  fileName: string
+  storageKey: string
+  contentType: string
+}) {
+  if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
+    const blob = await put(input.storageKey, input.buffer, {
+      access: "private",
+      contentType: input.contentType,
+    })
+
+    return {
+      url: buildProfileAvatarMediaRoute(blob.pathname),
+      storageKey: blob.pathname,
+      storageProvider: "vercel-blob" as const,
+    }
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new ProfileAvatarUploadError(
+      "Production profile photo uploads require STORY_STORAGE_PROVIDER=vercel-blob.",
+    )
+  }
+
+  await mkdir(path.dirname(path.join(avatarUploadDirectory, input.fileName)), {
+    recursive: true,
+  })
+  await writeFile(path.join(avatarUploadDirectory, input.fileName), input.buffer)
+
+  return {
+    url: withConfiguredPublicBaseUrl(buildLocalAvatarPathname(input.fileName)),
+    storageKey: input.fileName,
+    storageProvider: "local" as const,
+  }
+}
+
+async function readStoredAvatarBuffer(sourceUrl: string) {
+  const privateBlobPathname = getPrivateVercelBlobPathname(sourceUrl)
+
+  if (privateBlobPathname) {
+    const result = await get(privateBlobPathname, { access: "private" })
+
+    if (!result) {
+      throw new ProfileAvatarUploadError("Could not load the original photo.")
+    }
+
+    if (result.statusCode !== 200 || !result.stream) {
+      throw new ProfileAvatarUploadError("Could not load the original photo.")
+    }
+
+    return Buffer.from(await new Response(result.stream).arrayBuffer())
+  }
+
+  const localFileName = getLocalAvatarFileName(sourceUrl)
+
+  if (localFileName) {
+    return readFile(path.join(avatarUploadDirectory, localFileName))
+  }
+
+  throw new ProfileAvatarUploadError("Could not load the original photo.")
+}
+
 export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar> {
   if (!(file instanceof File) || file.size === 0) {
     throw new ProfileAvatarUploadError("Choose a profile photo first.")
@@ -152,20 +303,12 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
   const buffer = Buffer.from(await file.arrayBuffer())
   resolveAvatarUploadType(buffer)
 
-  let normalizedBuffer: Buffer
+  let sourceBuffer: Buffer
+  let avatarBuffer: Buffer
 
   try {
-    normalizedBuffer = await sharp(buffer)
-      .rotate()
-      .resize(512, 512, {
-        fit: "cover",
-        position: "center",
-      })
-      .jpeg({
-        quality: 90,
-        mozjpeg: true,
-      })
-      .toBuffer()
+    sourceBuffer = await normalizeAvatarSource(buffer)
+    avatarBuffer = await createAvatarBuffer(sourceBuffer)
   } catch {
     throw new ProfileAvatarUploadError(
       "Could not process that profile photo. Choose a JPG, PNG, WEBP, or HEIC image.",
@@ -173,41 +316,77 @@ export async function saveProfileAvatar(file: File): Promise<StoredProfileAvatar
   }
 
   const contentType = "image/jpeg"
-  const checksum = createHash("sha256").update(normalizedBuffer).digest("hex")
+  const checksum = createHash("sha256").update(avatarBuffer).digest("hex")
   const fileName = `${randomUUID()}.jpg`
+  const sourceFileName = `source/${randomUUID()}.jpg`
   const storageKey = `avatars/${fileName}`
+  const sourceStorageKey = `avatars/${sourceFileName}`
+  const sourceContentType = "image/jpeg"
+  const sourceByteSize = sourceBuffer.byteLength
+  const sourceResult = await storeAvatarBuffer({
+    buffer: sourceBuffer,
+    fileName: sourceFileName,
+    storageKey: sourceStorageKey,
+    contentType: sourceContentType,
+  })
+  let avatarResult: Awaited<ReturnType<typeof storeAvatarBuffer>>
 
-  if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
-    const blob = await put(storageKey, normalizedBuffer, {
-      access: "private",
+  try {
+    avatarResult = await storeAvatarBuffer({
+      buffer: avatarBuffer,
+      fileName,
+      storageKey,
       contentType,
     })
-
-    return {
-      avatarUrl: buildProfileAvatarMediaRoute(blob.pathname),
-      storageProvider: "vercel-blob",
-      storageKey: blob.pathname,
-      contentType,
-      byteSize: normalizedBuffer.byteLength,
-      checksum,
-    }
+  } catch (error) {
+    await removeProfileAvatar(sourceResult.url).catch(() => undefined)
+    throw error
   }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new ProfileAvatarUploadError(
-      "Production profile photo uploads require STORY_STORAGE_PROVIDER=vercel-blob.",
-    )
-  }
-
-  await mkdir(avatarUploadDirectory, { recursive: true })
-  await writeFile(path.join(avatarUploadDirectory, fileName), normalizedBuffer)
 
   return {
-    avatarUrl: withConfiguredPublicBaseUrl(`${localAvatarUrlPrefix}/${fileName}`),
-    storageProvider: "local",
-    storageKey: fileName,
+    avatarUrl: avatarResult.url,
+    sourceUrl: sourceResult.url,
+    storageProvider: avatarResult.storageProvider,
+    storageKey: avatarResult.storageKey,
+    sourceStorageKey: sourceResult.storageKey,
+    sourceContentType,
+    sourceByteSize,
     contentType,
-    byteSize: normalizedBuffer.byteLength,
+    byteSize: avatarBuffer.byteLength,
+    checksum,
+  }
+}
+
+export async function saveRepositionedProfileAvatar(input: {
+  sourceUrl: string
+  sourceStorageKey: string
+  sourceContentType: string
+  sourceByteSize: number
+  crop: ProfileAvatarCrop
+}): Promise<StoredProfileAvatar> {
+  const sourceBuffer = await readStoredAvatarBuffer(input.sourceUrl)
+  const avatarBuffer = await createAvatarBuffer(sourceBuffer, input.crop)
+  const contentType = "image/jpeg"
+  const checksum = createHash("sha256").update(avatarBuffer).digest("hex")
+  const fileName = `${randomUUID()}.jpg`
+  const storageKey = `avatars/${fileName}`
+  const avatarResult = await storeAvatarBuffer({
+    buffer: avatarBuffer,
+    fileName,
+    storageKey,
+    contentType,
+  })
+
+  return {
+    avatarUrl: avatarResult.url,
+    sourceUrl: input.sourceUrl,
+    storageProvider: avatarResult.storageProvider,
+    storageKey: avatarResult.storageKey,
+    sourceStorageKey: input.sourceStorageKey,
+    sourceContentType: input.sourceContentType,
+    sourceByteSize: input.sourceByteSize,
+    contentType,
+    byteSize: avatarBuffer.byteLength,
     checksum,
   }
 }
@@ -229,16 +408,7 @@ export async function removeProfileAvatar(avatarUrl: string | null) {
     return
   }
 
-  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
-  const localAvatarUrl =
-    baseUrl && avatarUrl.startsWith(baseUrl)
-      ? avatarUrl.slice(baseUrl.length)
-      : avatarUrl
-
-  if (!localAvatarUrl.startsWith(localAvatarUrlPrefix)) {
-    return
-  }
-
-  const fileName = localAvatarUrl.replace(`${localAvatarUrlPrefix}/`, "")
+  const fileName = getLocalAvatarFileName(avatarUrl)
+  if (!fileName) return
   await rm(path.join(avatarUploadDirectory, fileName), { force: true })
 }

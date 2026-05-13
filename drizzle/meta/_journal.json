@@ -148,6 +148,20 @@
       "when": 1778558329970,
       "tag": "0020_long_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1778639837618,
+      "tag": "0021_add_avatar_source_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1778698800000,
+      "tag": "0022_add_apns_push_tokens",
+      "breakpoints": true
     }
   ]
 }

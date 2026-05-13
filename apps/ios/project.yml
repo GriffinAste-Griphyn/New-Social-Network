@@ -1,0 +1,49 @@
+name: UBEYE
+options:
+  bundleIdPrefix: com.griffinaste
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  configs:
+    Debug:
+      APS_ENVIRONMENT: development
+    Release:
+      APS_ENVIRONMENT: production
+targets:
+  UBEYE:
+    type: application
+    platform: iOS
+    sources:
+      - UBEYE
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.griffinaste.ubeye
+        INFOPLIST_FILE: UBEYE/Info.plist
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: UBEYE/UBEYE.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        SUPPORTS_MACCATALYST: NO
+        DEVELOPMENT_ASSET_PATHS: ""
+    info:
+      path: UBEYE/Info.plist
+      properties:
+        CFBundleDisplayName: UBEYE
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiresFullScreen: true
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.griffinaste.ubeye
+            CFBundleURLSchemes:
+              - ubeye
+        UILaunchScreen: {}
+        NSCameraUsageDescription: UBEYE uses the camera to create story posts.
+        NSMicrophoneUsageDescription: UBEYE uses the microphone when recording video stories.
+        NSPhotoLibraryUsageDescription: UBEYE uses your photo library when you choose media for a story.
+        NSPhotoLibraryAddUsageDescription: UBEYE can save edited story media to your library.

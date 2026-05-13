@@ -18,6 +18,7 @@ UBEYE is a story-first social network prototype with:
 - shadcn/ui
 - Drizzle ORM
 - Postgres
+- SwiftUI iOS app
 
 Recommended production integrations for the first serious build:
 
@@ -86,6 +87,7 @@ Use the printed webhook signing secret as `STRIPE_WEBHOOK_SECRET`.
 ## Project layout
 
 - [app/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/page.tsx): public landing page
+- [apps/ios](/Users/griffinaste/Desktop/New-Social-Network/apps/ios): native SwiftUI iOS app and Xcode project
 - [app/(auth)/login/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(auth)/login/page.tsx): sign-in page
 - [app/(auth)/signup/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(auth)/signup/page.tsx): sign-up page
 - [app/(protected)/feed/page.tsx](/Users/griffinaste/Desktop/New-Social-Network/app/(protected)/feed/page.tsx): authenticated feed
@@ -106,6 +108,19 @@ npm run dev
 Open `http://localhost:3000`.
 
 Set `DATABASE_URL` to your Neon connection string before using sign up or sign in. Auth users are now stored in the Neon `users` table.
+
+## iOS app
+
+The production mobile client is the native SwiftUI app in [apps/ios](/Users/griffinaste/Desktop/New-Social-Network/apps/ios). The old Expo app has been removed from the active repo.
+
+```bash
+npm run ios:generate
+npm run ios:open
+npm run ios:build:debug
+npm run ios:build:release
+```
+
+For TestFlight, open `apps/ios/UBEYE.xcodeproj`, set the Apple development team for bundle ID `com.griffinaste.ubeye`, archive from Xcode, and validate on a physical iPhone before public release.
 
 ## Database commands
 

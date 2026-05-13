@@ -58,11 +58,27 @@ export async function GET(request: Request) {
     TInteraction extends {
       mediaUrl: string | null
       mediaThumbnailUrl: string | null
+      story: {
+        mediaUrl: string
+        thumbnailUrl: string | null
+      }
     },
   >(
     interaction: TInteraction,
   ) => ({
     ...interaction,
+    story: {
+      ...interaction.story,
+      mediaUrl:
+        publicStoryMediaUrl(interaction.story.mediaUrl, request, {
+          signed: true,
+        }) ?? interaction.story.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(
+        interaction.story.thumbnailUrl,
+        request,
+        { signed: true },
+      ),
+    },
     mediaUrl:
       publicStoryMediaUrl(interaction.mediaUrl, request, { signed: true }) ??
       interaction.mediaUrl,

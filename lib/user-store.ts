@@ -495,12 +495,26 @@ export async function updateUserAvatar(
   userId: string,
   avatarUrl: string,
   avatarAssetId?: string,
+  source?: {
+    sourceUrl: string
+    sourceStorageKey: string
+    sourceContentType: string
+    sourceByteSize: number
+  },
 ): Promise<AuthResult> {
   const [user] = await getDb()
     .update(users)
     .set({
       avatarUrl,
       ...(avatarAssetId ? { avatarAssetId } : {}),
+      ...(source
+        ? {
+            avatarSourceUrl: source.sourceUrl,
+            avatarSourceStorageKey: source.sourceStorageKey,
+            avatarSourceContentType: source.sourceContentType,
+            avatarSourceByteSize: source.sourceByteSize,
+          }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(users.id, userId))
