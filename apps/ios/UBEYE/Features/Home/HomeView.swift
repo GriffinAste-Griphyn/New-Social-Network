@@ -103,7 +103,12 @@ struct HomeView: View {
                     .background(Color.ubeyeSubtle, in: Circle())
             }
 
-            RemoteAvatar(url: auth.account?.avatarUrl, size: 38, name: auth.account?.displayName ?? "UBEYE")
+            NavigationLink {
+                ProfileView()
+            } label: {
+                RemoteAvatar(url: auth.account?.avatarUrl, size: 38, name: auth.account?.displayName ?? "UBEYE")
+            }
+            .buttonStyle(.plain)
         }
     }
 

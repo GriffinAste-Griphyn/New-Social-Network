@@ -207,6 +207,63 @@ struct StoryInteractionResponse: Codable {
     let asset: Asset?
 }
 
+struct StoryInteractionInboxResponse: Codable {
+    let ok: Bool
+    let interactions: [StoryInteractionEvent]
+    let sentInteractions: [SentStoryInteractionEvent]
+}
+
+struct StoryInteractionEvent: Codable, Identifiable, Hashable {
+    struct Story: Codable, Hashable {
+        let assetKind: SocialAssetKind
+        let mediaUrl: URL
+        let thumbnailUrl: URL?
+    }
+
+    struct Actor: Codable, Hashable {
+        let id: String
+        let name: String
+        let handle: String
+        let imageUrl: URL?
+    }
+
+    let id: String
+    let storyId: String
+    let creatorId: String
+    let story: Story
+    let actor: Actor
+    let kind: String
+    let body: String?
+    let reaction: String?
+    let mediaUrl: URL?
+    let mediaThumbnailUrl: URL?
+    let mediaAssetKind: SocialAssetKind?
+    let createdAt: String
+}
+
+struct SentStoryInteractionEvent: Codable, Identifiable, Hashable {
+    struct Target: Codable, Hashable {
+        let id: String
+        let name: String
+        let handle: String
+        let imageUrl: URL?
+    }
+
+    let id: String
+    let storyId: String
+    let creatorId: String
+    let story: StoryInteractionEvent.Story
+    let actor: StoryInteractionEvent.Actor
+    let target: Target
+    let kind: String
+    let body: String?
+    let reaction: String?
+    let mediaUrl: URL?
+    let mediaThumbnailUrl: URL?
+    let mediaAssetKind: SocialAssetKind?
+    let createdAt: String
+}
+
 struct StoryImpressionResponse: Codable {
     let ok: Bool
 }

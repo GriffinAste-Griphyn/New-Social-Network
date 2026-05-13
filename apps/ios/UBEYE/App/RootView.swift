@@ -27,30 +27,31 @@ struct MainTabView: View {
 
     var body: some View {
         TabView {
-            HomeView()
+            FollowingView()
                 .tabItem {
-                    Label("Stories", systemImage: "play.rectangle.fill")
+                    Label("Following", systemImage: "mappin.and.ellipse")
                 }
 
-            DiscoverView()
+            HomeView()
                 .tabItem {
-                    Label("Discover", systemImage: "safari.fill")
+                    Label("Stories", systemImage: "message")
                 }
 
             StoryComposerView()
                 .tabItem {
-                    Label("Post", systemImage: "plus.circle.fill")
+                    Label("Add", systemImage: "camera.fill")
                 }
 
-            FollowingView()
+            DiscoverView()
                 .tabItem {
-                    Label("Following", systemImage: "person.2.fill")
+                    Label("Network", systemImage: "person.2.fill")
                 }
 
-            ProfileView()
+            RepliesView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle.fill")
+                    Label("Replies", systemImage: "paperplane.fill")
                 }
+                .badge("")
         }
         .tint(.ubeyeRed)
     }
