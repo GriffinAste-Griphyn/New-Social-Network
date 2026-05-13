@@ -7,11 +7,17 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    DEVELOPMENT_TEAM: 6BXL9AWXBG
   configs:
     Debug:
       APS_ENVIRONMENT: development
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Development
     Release:
       APS_ENVIRONMENT: production
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: Apple Distribution
+      PROVISIONING_PROFILE_SPECIFIER: UBEYE App Store 2026
 targets:
   UBEYE:
     type: application
@@ -23,17 +29,27 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.griffinaste.ubeye
         INFOPLIST_FILE: UBEYE/Info.plist
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "10"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: UBEYE/UBEYE.entitlements
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
         DEVELOPMENT_ASSET_PATHS: ""
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: Apple Development
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: UBEYE App Store 2026
     info:
       path: UBEYE/Info.plist
       properties:
         CFBundleDisplayName: UBEYE
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIRequiresFullScreen: true
