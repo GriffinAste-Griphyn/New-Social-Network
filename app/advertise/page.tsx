@@ -134,7 +134,7 @@ function SiteHeader() {
             asChild
             className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-white/88"
           >
-            <Link href={signupHref}>Get started</Link>
+            <Link href={signupHref}>Get the app</Link>
           </Button>
         </div>
       </div>
@@ -234,14 +234,20 @@ export default function AdvertisePage() {
                 <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-semibold uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
                   Advertiser-funded organic attention
                 </p>
-                <h1 className="mt-10 max-w-[15ch] text-[3rem] font-semibold leading-[0.94] text-white sm:text-[3.8rem] md:mt-7 md:text-[4.5rem] lg:text-[5.2rem]">
+                <h1 className="mt-10 max-w-[15ch] text-[3.65rem] font-semibold leading-[0.92] text-white sm:text-[4.8rem] md:mt-7 md:text-[4.5rem] md:leading-[0.94] lg:text-[5.2rem]">
                   Fund organic content people choose.
                 </h1>
                 <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
-                  UBEYE gives brands a way to put budget behind stories people
-                  already choose to watch, reply to, save, and share. The ad value
-                  attaches to organic attention, then the upside can flow back to
-                  the users who helped create it.
+                  <span className="md:hidden">
+                    UBEYE gives brands a way to fund stories people already
+                    choose to watch, reply to, save, and share.
+                  </span>
+                  <span className="hidden md:inline">
+                    UBEYE gives brands a way to put budget behind stories people
+                    already choose to watch, reply to, save, and share. The ad value
+                    attaches to organic attention, then the upside can flow back to
+                    the users who helped create it.
+                  </span>
                 </p>
               </div>
 
