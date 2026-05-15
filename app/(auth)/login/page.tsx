@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 
 import { AuthSubmitButton } from "@/components/app/auth-submit-button"
+import { PasswordInput } from "@/components/app/password-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { getSession, isProfileComplete, resolveNextPath } from "@/lib/auth"
@@ -120,13 +121,13 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                   Forgot?
                 </Link>
               </div>
-              <Input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete="current-password"
                 required
-                className="mt-2 h-11 rounded-[8px] border-white/12 bg-white text-black"
+                wrapperClassName="mt-2"
+                className="h-11 rounded-[8px] border-white/12 bg-white text-black"
               />
             </div>
 
