@@ -50,6 +50,7 @@ const profileSchema = z.object({
   domains: z.string().trim().max(2_000).optional(),
   products: z.string().trim().max(2_000).optional(),
   exclusions: z.string().trim().max(2_000).optional(),
+  creatorExclusions: z.string().trim().max(2_000).optional(),
   notes: z.string().trim().max(2_000).optional(),
 })
 
@@ -153,6 +154,10 @@ function buildTargets(parsed: z.infer<typeof profileSchema>) {
       kind: "exclusion" as const,
       value: value.toLowerCase(),
     })),
+    ...splitList(parsed.creatorExclusions).map((value) => ({
+      kind: "exclusion" as const,
+      value: `creator:${normalizeHandle(value)}`,
+    })),
   ]
 }
 
@@ -251,6 +256,7 @@ export async function saveBrandFundingProfileAction(formData: FormData) {
     domains: formData.get("domains"),
     products: formData.get("products"),
     exclusions: formData.get("exclusions"),
+    creatorExclusions: formData.get("creatorExclusions"),
     notes: formData.get("notes"),
   })
 
@@ -277,7 +283,7 @@ export async function saveBrandFundingProfileAction(formData: FormData) {
   })
 
   revalidatePath("/advertiser")
-  redirect("/advertiser?saved=preferences")
+  redirect("/advertiser?tab=rules&saved=preferences")
 }
 
 async function ensureStripeCustomer() {
@@ -347,8 +353,8 @@ export async function startAdvertiserFundingAction(formData: FormData) {
   const checkoutSession = await stripe.checkout.sessions.create({
     mode: "payment",
     customer: customerId,
-    success_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?funding=success`,
-    cancel_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?funding=cancelled`,
+    success_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?tab=wallet&funding=success`,
+    cancel_url: `${env.NEXT_PUBLIC_APP_URL}/advertiser?tab=wallet&funding=cancelled`,
     client_reference_id: workspace.account.id,
     metadata: {
       flow: "advertiser_wallet_funding",

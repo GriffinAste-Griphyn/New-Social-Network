@@ -2,26 +2,27 @@ import Link from "next/link"
 import type { ComponentType, ReactNode } from "react"
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
-  BadgeCheck,
-  Banknote,
+  Ban,
   Building2,
   CheckCircle2,
-  CircleDollarSign,
   CreditCard,
   FileText,
+  Gauge,
+  Hash,
   Landmark,
-  ListFilter,
   LogOut,
-  Plus,
   ReceiptText,
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  Target,
   Wallet,
 } from "lucide-react"
 
 import { AuthSubmitButton } from "@/components/app/auth-submit-button"
+import { ChipInputField } from "@/components/app/chip-input-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -55,9 +56,22 @@ type AdvertiserPageProps = {
   }>
 }
 
-type AdvertiserTab = "overview" | "wallet" | "rules" | "activity" | "account"
+type AdvertiserTab = "overview" | "account" | "rules" | "wallet" | "activity"
 
 const fundingPresets = [250, 1000, 5000]
+
+function resolveAdvertiserTab(value: string | undefined): AdvertiserTab {
+  if (
+    value === "account" ||
+    value === "rules" ||
+    value === "wallet" ||
+    value === "activity"
+  ) {
+    return value
+  }
+
+  return "overview"
+}
 
 function formatMoney(cents: number | null | undefined) {
   return new Intl.NumberFormat("en", {
@@ -94,19 +108,6 @@ function formatDateTime(date: Date | null | undefined) {
   }).format(date)
 }
 
-function resolveAdvertiserTab(value: string | undefined): AdvertiserTab {
-  if (
-    value === "wallet" ||
-    value === "rules" ||
-    value === "activity" ||
-    value === "account"
-  ) {
-    return value
-  }
-
-  return "overview"
-}
-
 function targetValues(
   targets: BrandFundingTarget[],
   kind: BrandFundingTarget["kind"],
@@ -115,6 +116,54 @@ function targetValues(
     .filter((target) => target.kind === kind)
     .map((target) => target.value)
     .join(", ")
+}
+
+function blockedTermValues(targets: BrandFundingTarget[]) {
+  return targets
+    .filter(
+      (target) =>
+        target.kind === "exclusion" && !target.value.startsWith("creator:"),
+    )
+    .map((target) => target.value)
+    .join(", ")
+}
+
+function creatorExclusionValues(targets: BrandFundingTarget[]) {
+  return targets
+    .filter(
+      (target) =>
+        target.kind === "exclusion" && target.value.startsWith("creator:"),
+    )
+    .map((target) => {
+      const value = target.value.replace(/^creator:/, "")
+
+      return value.startsWith("@") ? value : `@${value}`
+    })
+    .join(", ")
+}
+
+function payableTargetCount(targets: BrandFundingTarget[]) {
+  return targets.filter((target) => target.kind !== "exclusion").length
+}
+
+function fundedMatchCapacity(balanceCents: number, payoutAmountCents?: number | null) {
+  if (!payoutAmountCents || payoutAmountCents <= 0) {
+    return 0
+  }
+
+  return Math.floor(balanceCents / payoutAmountCents)
+}
+
+function matchingStatusLabel(status: string | null | undefined) {
+  if (status === "active") {
+    return "active"
+  }
+
+  if (status === "paused") {
+    return "paused"
+  }
+
+  return "inactive"
 }
 
 function statusTone(status: string) {
@@ -126,7 +175,7 @@ function statusTone(status: string) {
     return "border-[#fde68a] bg-[#fffbeb] text-[#92400e]"
   }
 
-  if (status === "paused" || status === "void") {
+  if (status === "paused" || status === "void" || status === "inactive") {
     return "border-[#e4e4e7] bg-[#f4f4f5] text-[#52525b]"
   }
 
@@ -341,7 +390,6 @@ export default async function AdvertiserPage({
     profile,
     payoutReports,
     targets,
-    totalPaidCents,
     transactions,
   } = workspace
   const brandNames = targetValues(targets, "brand_name")
@@ -350,41 +398,41 @@ export default async function AdvertiserPage({
   const hashtags = targetValues(targets, "hashtag")
   const domains = targetValues(targets, "domain")
   const products = targetValues(targets, "product")
-  const exclusions = targetValues(targets, "exclusion")
-  const capturedCents = Math.abs(
-    transactions
-      .filter((transaction) => transaction.type === "capture")
-      .reduce((sum, transaction) => sum + transaction.amountCents, 0),
-  )
+  const exclusions = blockedTermValues(targets)
+  const creatorExclusions = creatorExclusionValues(targets)
   const hasFundingRules =
     Boolean(profile?.payoutAmountCents && profile.payoutAmountCents > 0) &&
-    targets.some((target) => target.kind !== "exclusion")
+    payableTargetCount(targets) > 0
 
   return (
     <DesktopShell>
-      <main className="min-h-screen bg-[#f7f7f4] text-[#18181b]">
-        <div className="mx-auto grid min-h-screen max-w-[1440px] grid-cols-[280px_minmax(0,1fr)]">
-          <AdvertiserSidebar
+      <main className="min-h-screen bg-[#f6f7f5] text-[#18181b]">
+        <div className="mx-auto grid min-h-screen max-w-[1480px] grid-cols-[300px_minmax(0,1fr)]">
+          <FundingRail
             accountName={account.name}
             activeTab={activeTab}
             balanceCents={balanceCents}
+            hasFundingRules={hasFundingRules}
+            matchCapacity={fundedMatchCapacity(
+              balanceCents,
+              profile?.payoutAmountCents,
+            )}
             profileStatus={profile?.status ?? "draft"}
+            signalCount={payableTargetCount(targets)}
           />
 
           <div className="min-w-0 border-l border-[#e4e4e7] px-8 py-6">
-            <div className="mb-5">
-              <Flash
-                error={params.error}
-                funding={params.funding}
-                paymentMethod={params.payment_method}
-                saved={params.saved}
-              />
-            </div>
+            <Flash
+              error={params.error}
+              funding={params.funding}
+              paymentMethod={params.payment_method}
+              saved={params.saved}
+            />
 
-            <header className="mb-6 flex items-start justify-between gap-6">
+            <header className="mt-5 flex flex-wrap items-start justify-between gap-5">
               <div>
                 <p className="text-sm font-medium text-[#71717a]">
-                  Advertiser account
+                  Advertiser funding console
                 </p>
                 <h1 className="mt-1 text-3xl font-semibold tracking-tight">
                   {account.name}
@@ -401,54 +449,78 @@ export default async function AdvertiserPage({
                   variant="outline"
                   className={`h-8 rounded-[8px] px-3 capitalize ${statusTone(profile?.status ?? "draft")}`}
                 >
-                  Rules {profile?.status ?? "draft"}
+                  Matching {matchingStatusLabel(profile?.status)}
                 </Badge>
+                {activeTab === "rules" ? (
+                  <Button
+                    form="funding-rules-form"
+                    type="submit"
+                    className="h-9 rounded-[8px] bg-[#18181b] px-4 text-white hover:bg-[#27272a]"
+                  >
+                    <Save className="size-4" />
+                    Save rules
+                  </Button>
+                ) : null}
               </div>
             </header>
 
             {activeTab === "overview" ? (
-              <OverviewTab
+              <OverviewConsole
                 balanceCents={balanceCents}
-                capturedCents={capturedCents}
                 hasFundingRules={hasFundingRules}
                 pendingCents={pendingCents}
                 profile={profile}
-                recentReports={payoutReports}
-                recentTransactions={transactions}
-                targets={targets}
-                totalPaidCents={totalPaidCents}
               />
+            ) : null}
+
+            {activeTab === "account" ? <AccountConsole account={account} /> : null}
+
+            {activeTab === "rules" ? (
+              <div className="mt-6 grid items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+                <RulesConsole
+                  accountName={account.name}
+                  brandNames={brandNames}
+                  creatorExclusions={creatorExclusions}
+                  domains={domains}
+                  exclusions={exclusions}
+                  handles={handles}
+                  hashtags={hashtags}
+                  keywords={keywords}
+                  products={products}
+                  profile={profile}
+                />
+                <aside className="grid gap-4 2xl:sticky 2xl:top-6">
+                  <FundingSummary
+                    balanceCents={balanceCents}
+                    hasFundingRules={hasFundingRules}
+                    profile={profile}
+                    signalCount={payableTargetCount(targets)}
+                  />
+                  <GuardrailSummary
+                    creatorExclusions={creatorExclusions}
+                    exclusions={exclusions}
+                    profile={profile}
+                  />
+                </aside>
+              </div>
             ) : null}
 
             {activeTab === "wallet" ? (
-              <WalletTab
-                balanceCents={balanceCents}
-                pendingCents={pendingCents}
-                paymentMethod={paymentMethod}
-                transactions={transactions}
-              />
-            ) : null}
-
-            {activeTab === "rules" ? (
-              <RulesTab
-                accountName={account.name}
-                brandNames={brandNames}
-                domains={domains}
-                exclusions={exclusions}
-                handles={handles}
-                hashtags={hashtags}
-                keywords={keywords}
-                products={products}
-                profile={profile}
-              />
+              <div className="mt-6 grid gap-6">
+                <WalletConsole
+                  balanceCents={balanceCents}
+                  pendingCents={pendingCents}
+                  paymentMethod={paymentMethod}
+                />
+                <TransactionLedger transactions={transactions} />
+              </div>
             ) : null}
 
             {activeTab === "activity" ? (
-              <ActivityTab reports={payoutReports} totalPaidCents={totalPaidCents} />
-            ) : null}
-
-            {activeTab === "account" ? (
-              <AccountTab account={account} />
+              <div className="mt-6 grid gap-6 2xl:grid-cols-2">
+                <PayoutTable reports={payoutReports} />
+                <TransactionLedger transactions={transactions} />
+              </div>
             ) : null}
           </div>
         </div>
@@ -457,16 +529,115 @@ export default async function AdvertiserPage({
   )
 }
 
-function AdvertiserSidebar({
+function OverviewConsole({
+  balanceCents,
+  hasFundingRules,
+  pendingCents,
+  profile,
+}: {
+  balanceCents: number
+  hasFundingRules: boolean
+  pendingCents: number
+  profile: BrandFundingProfile | null
+}) {
+  const matchingStatus = matchingStatusLabel(profile?.status)
+
+  return (
+    <section className="mt-6 max-w-4xl rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+            <Activity className="size-4" />
+            Overview
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            Account funding
+          </h2>
+        </div>
+        <Badge
+          variant="outline"
+          className={`h-8 rounded-[8px] px-3 capitalize ${statusTone(matchingStatus)}`}
+        >
+          Matching {matchingStatus}
+        </Badge>
+      </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-3">
+        <div>
+          <p className="text-sm font-medium text-[#71717a]">Available funds</p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight">
+            {formatMoney(balanceCents)}
+          </p>
+          {pendingCents > 0 ? (
+            <p className="mt-1 text-sm text-[#71717a]">
+              {formatMoney(pendingCents)} pending
+            </p>
+          ) : null}
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[#71717a]">Rules</p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight">
+            {hasFundingRules ? "Ready" : "Needs setup"}
+          </p>
+          {hasFundingRules ? (
+            <p className="mt-1 text-sm text-[#71717a]">
+              {formatMoney(profile?.payoutAmountCents)} per match
+            </p>
+          ) : null}
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[#71717a]">Matching</p>
+          <p className="mt-2 text-2xl font-semibold capitalize tracking-tight">
+            {matchingStatus}
+          </p>
+        </div>
+      </div>
+
+      <Separator className="my-6 bg-[#e4e4e7]" />
+
+      <div className="flex flex-wrap gap-3">
+        <Button
+          asChild
+          className="h-10 rounded-[8px] bg-[#18181b] px-4 text-white hover:bg-[#27272a]"
+        >
+          <Link href="/advertiser?tab=wallet">
+            <Wallet className="size-4" />
+            Add funds
+          </Link>
+        </Button>
+        <Button
+          asChild
+          variant="outline"
+          className="h-10 rounded-[8px] border-[#d4d4d8] bg-white px-4"
+        >
+          <Link href="/advertiser?tab=rules">
+            <SlidersHorizontal className="size-4" />
+            Edit rules
+          </Link>
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function FundingRail({
   accountName,
   activeTab,
   balanceCents,
+  hasFundingRules,
+  matchCapacity,
   profileStatus,
+  signalCount,
 }: {
   accountName: string
   activeTab: AdvertiserTab
   balanceCents: number
+  hasFundingRules: boolean
+  matchCapacity: number
   profileStatus: string
+  signalCount: number
 }) {
   const navItems: Array<{
     href: string
@@ -475,17 +646,22 @@ function AdvertiserSidebar({
     value: AdvertiserTab
   }> = [
     { href: "/advertiser", icon: Activity, label: "Overview", value: "overview" },
-    { href: "/advertiser?tab=wallet", icon: Wallet, label: "Wallet", value: "wallet" },
     {
       href: "/advertiser?tab=rules",
       icon: SlidersHorizontal,
-      label: "Funding rules",
+      label: "Match rules",
       value: "rules",
+    },
+    {
+      href: "/advertiser?tab=wallet",
+      icon: Wallet,
+      label: "Wallet",
+      value: "wallet",
     },
     {
       href: "/advertiser?tab=activity",
       icon: ReceiptText,
-      label: "Creator payouts",
+      label: "Activity",
       value: "activity",
     },
     {
@@ -512,12 +688,24 @@ function AdvertiserSidebar({
         <p className="mt-1 text-xs text-[#71717a]">Available funds</p>
         <Separator className="my-4 bg-[#e4e4e7]" />
         <div className="flex items-center justify-between text-sm">
-          <span className="text-[#71717a]">Rules</span>
-          <span className="capitalize text-[#18181b]">{profileStatus}</span>
+          <span className="text-[#71717a]">Matching</span>
+          <span className="capitalize text-[#18181b]">
+            {matchingStatusLabel(profileStatus)}
+          </span>
         </div>
       </div>
 
-      <nav className="mt-5 grid gap-1" aria-label="Advertiser portal">
+      <div className="mt-5 grid gap-2">
+        <RailStat icon={Target} label="Funded matches" value={String(matchCapacity)} />
+        <RailStat icon={Hash} label="Payable signals" value={String(signalCount)} />
+        <RailStat
+          icon={Gauge}
+          label="Matching"
+          value={hasFundingRules && profileStatus === "active" ? "Active" : "Inactive"}
+        />
+      </div>
+
+      <nav className="mt-5 grid gap-1" aria-label="Advertiser console sections">
         {navItems.map((item) => {
           const isActive = activeTab === item.value
 
@@ -557,424 +745,27 @@ function AdvertiserSidebar({
   )
 }
 
-function OverviewTab({
-  balanceCents,
-  capturedCents,
-  hasFundingRules,
-  pendingCents,
-  profile,
-  recentReports,
-  recentTransactions,
-  targets,
-  totalPaidCents,
+function RailStat({
+  icon: Icon,
+  label,
+  value,
 }: {
-  balanceCents: number
-  capturedCents: number
-  hasFundingRules: boolean
-  pendingCents: number
-  profile: BrandFundingProfile | null
-  recentReports: AdvertiserPayoutReport[]
-  recentTransactions: AdvertiserWalletTransaction[]
-  targets: BrandFundingTarget[]
-  totalPaidCents: number
+  icon: ComponentType<{ className?: string }>
+  label: string
+  value: string
 }) {
   return (
-    <div className="grid gap-5">
-      <div className="grid gap-4 xl:grid-cols-4">
-        <MetricCard
-          icon={Wallet}
-          label="Available"
-          value={formatMoney(balanceCents)}
-          detail={pendingCents > 0 ? `${formatMoney(pendingCents)} pending` : "Posted funds"}
-        />
-        <MetricCard
-          icon={Banknote}
-          label="Creator payouts"
-          value={formatMoney(totalPaidCents)}
-          detail="Paid through ledger"
-        />
-        <MetricCard
-          icon={CircleDollarSign}
-          label="Captured"
-          value={formatMoney(capturedCents)}
-          detail="Debited from wallet"
-        />
-        <MetricCard
-          icon={ListFilter}
-          label="Signals"
-          value={String(targets.length)}
-          detail={`${targets.filter((target) => target.kind !== "exclusion").length} payable`}
-        />
+    <div className="flex items-center justify-between gap-3 rounded-[8px] border border-[#e4e4e7] px-3 py-2.5">
+      <div className="flex items-center gap-2 text-sm text-[#71717a]">
+        <Icon className="size-4" />
+        <span>{label}</span>
       </div>
-
-      <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-5">
-          <div>
-            <h2 className="text-xl font-semibold tracking-tight">
-              Account readiness
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-[#71717a]">
-              Complete the account, funding, and rules setup before creator
-              conversations can draw from this wallet.
-            </p>
-          </div>
-          <Button asChild className="h-10 rounded-[8px] bg-[#18181b] text-white hover:bg-[#27272a]">
-            <Link href="/advertiser?tab=wallet">
-              <Plus className="size-4" />
-              Add funds
-            </Link>
-          </Button>
-        </div>
-
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          <ReadinessItem
-            complete={balanceCents > 0}
-            title="Wallet funded"
-            detail={balanceCents > 0 ? formatMoney(balanceCents) : "No available funds"}
-          />
-          <ReadinessItem
-            complete={hasFundingRules}
-            title="Rules active"
-            detail={
-              hasFundingRules
-                ? `${formatMoney(profile?.payoutAmountCents)} per match`
-                : "Set payout and signals"
-            }
-          />
-          <ReadinessItem
-            complete={profile?.status === "active"}
-            title="Profile active"
-            detail={profile?.status ?? "Draft"}
-          />
-        </div>
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <TransactionLedger transactions={recentTransactions.slice(0, 6)} />
-        <PayoutTable reports={recentReports.slice(0, 6)} compact />
-      </div>
+      <span className="text-sm font-semibold text-[#18181b]">{value}</span>
     </div>
   )
 }
 
-function WalletTab({
-  balanceCents,
-  pendingCents,
-  paymentMethod,
-  transactions,
-}: {
-  balanceCents: number
-  pendingCents: number
-  paymentMethod: AdvertiserPaymentMethod | null
-  transactions: AdvertiserWalletTransaction[]
-}) {
-  return (
-    <div className="grid gap-5">
-      <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-5">
-          <div>
-            <h2 className="text-xl font-semibold tracking-tight">Wallet funding</h2>
-            <p className="mt-2 text-sm leading-6 text-[#71717a]">
-              Add prepaid funds for creator payouts. Stripe confirms funding
-              before the balance becomes available.
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-4xl font-semibold tracking-tight">
-              {formatMoney(balanceCents)}
-            </p>
-            <p className="mt-1 text-sm text-[#71717a]">
-              Available{pendingCents > 0 ? `, ${formatMoney(pendingCents)} pending` : ""}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
-          {fundingPresets.map((amount) => (
-            <form key={amount} action={startAdvertiserFundingAction}>
-              <input type="hidden" name="amountDollars" value={amount} />
-              <Button
-                type="submit"
-                variant="outline"
-                className="h-12 w-full rounded-[8px] border-[#d4d4d8] bg-white text-base hover:bg-[#f4f4f5]"
-              >
-                Add {formatMoney(amount * 100)}
-              </Button>
-            </form>
-          ))}
-        </div>
-
-        <form
-          action={startAdvertiserFundingAction}
-          className="mt-5 grid gap-3 border-t border-[#e4e4e7] pt-5 md:grid-cols-[1fr_auto]"
-        >
-          <Field label="Custom amount" htmlFor="amountDollars">
-            <Input
-              id="amountDollars"
-              name="amountDollars"
-              type="number"
-              min={25}
-              step={25}
-              defaultValue={250}
-              className="h-11 rounded-[8px]"
-            />
-          </Field>
-          <Button
-            type="submit"
-            className="mt-auto h-11 rounded-[8px] bg-[#18181b] px-5 text-white hover:bg-[#27272a]"
-          >
-            <CreditCard className="size-4" />
-            Continue to Stripe
-          </Button>
-        </form>
-
-        <form action={startAdvertiserPaymentMethodAction} className="mt-5">
-          <Button
-            type="submit"
-            variant="outline"
-            className="h-11 rounded-[8px] border-[#d4d4d8] bg-white px-4 text-[#18181b]"
-          >
-            <Landmark className="size-4" />
-            {paymentMethod ? "Update payment method" : "Set up payment method"}
-          </Button>
-          {paymentMethod ? (
-            <p className="mt-3 text-sm text-[#71717a]">
-              Default payment method:{" "}
-              <span className="font-medium capitalize text-[#18181b]">
-                {paymentMethod.brand ?? paymentMethod.type}
-              </span>
-              {paymentMethod.last4 ? ` ending in ${paymentMethod.last4}` : ""}
-              {paymentMethod.expMonth && paymentMethod.expYear
-                ? `, expires ${String(paymentMethod.expMonth).padStart(2, "0")}/${paymentMethod.expYear}`
-                : ""}
-            </p>
-          ) : (
-            <p className="mt-3 text-sm text-[#71717a]">
-              Add a reusable payment method for faster wallet funding.
-            </p>
-          )}
-        </form>
-      </section>
-
-      <TransactionLedger transactions={transactions} />
-    </div>
-  )
-}
-
-function RulesTab({
-  accountName,
-  brandNames,
-  domains,
-  exclusions,
-  handles,
-  hashtags,
-  keywords,
-  products,
-  profile,
-}: {
-  accountName: string
-  brandNames: string
-  domains: string
-  exclusions: string
-  handles: string
-  hashtags: string
-  keywords: string
-  products: string
-  profile: BrandFundingProfile | null
-}) {
-  return (
-    <form
-      action={saveBrandFundingProfileAction}
-      className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm"
-    >
-      <input type="hidden" name="profileId" value={profile?.id ?? ""} />
-
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold tracking-tight">Funding rules</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#71717a]">
-            These rules decide which creator conversations can debit the
-            advertiser wallet and credit creator earnings.
-          </p>
-        </div>
-        <Button
-          type="submit"
-          className="h-10 rounded-[8px] bg-[#18181b] px-4 text-white hover:bg-[#27272a]"
-        >
-          <Save className="size-4" />
-          Save rules
-        </Button>
-      </div>
-
-      <div className="mt-6 grid gap-4 xl:grid-cols-4">
-        <Field label="Profile status" htmlFor="status">
-          <select
-            id="status"
-            name="status"
-            defaultValue={profile?.status ?? "draft"}
-            className="h-11 w-full rounded-[8px] border border-[#d4d4d8] bg-white px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-[#a1a1aa]/40"
-          >
-            <option value="draft">Draft</option>
-            <option value="active">Active</option>
-            <option value="paused">Paused</option>
-          </select>
-        </Field>
-        <Field label="Approval mode" htmlFor="approvalMode">
-          <select
-            id="approvalMode"
-            name="approvalMode"
-            defaultValue={profile?.approvalMode ?? "auto"}
-            className="h-11 w-full rounded-[8px] border border-[#d4d4d8] bg-white px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-[#a1a1aa]/40"
-          >
-            <option value="auto">Auto qualify</option>
-            <option value="manual">Manual review</option>
-          </select>
-        </Field>
-        <Field label="Public brand name" htmlFor="displayName">
-          <Input
-            id="displayName"
-            name="displayName"
-            defaultValue={profile?.displayName ?? accountName}
-            required
-            className="h-11 rounded-[8px]"
-          />
-        </Field>
-        <Field label="Pay per qualified event" htmlFor="payoutAmountDollars">
-          <Input
-            id="payoutAmountDollars"
-            name="payoutAmountDollars"
-            type="number"
-            min={0}
-            step={1}
-            defaultValue={centsToDollars(profile?.payoutAmountCents)}
-            placeholder="25"
-            className="h-11 rounded-[8px]"
-          />
-        </Field>
-      </div>
-
-      <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <Field label="Daily cap" htmlFor="dailyCapDollars">
-          <Input
-            id="dailyCapDollars"
-            name="dailyCapDollars"
-            type="number"
-            min={0}
-            step={25}
-            defaultValue={centsToDollars(profile?.dailyCapCents)}
-            placeholder="500"
-            className="h-11 rounded-[8px]"
-          />
-        </Field>
-        <Field label="Monthly cap" htmlFor="monthlyCapDollars">
-          <Input
-            id="monthlyCapDollars"
-            name="monthlyCapDollars"
-            type="number"
-            min={0}
-            step={100}
-            defaultValue={centsToDollars(profile?.monthlyCapCents)}
-            placeholder="10000"
-            className="h-11 rounded-[8px]"
-          />
-        </Field>
-      </div>
-
-      <Separator className="my-6 bg-[#e4e4e7]" />
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <TextAreaField
-          label="Brand names"
-          name="brandNames"
-          defaultValue={brandNames || accountName}
-          placeholder="Nike, Nike Running"
-        />
-        <TextAreaField
-          label="Handles"
-          name="handles"
-          defaultValue={handles}
-          placeholder="@brand, @support"
-        />
-        <TextAreaField
-          label="Hashtags"
-          name="hashtags"
-          defaultValue={hashtags}
-          placeholder="#brand, #productdrop"
-        />
-        <TextAreaField
-          label="Domains"
-          name="domains"
-          defaultValue={domains}
-          placeholder="example.com"
-        />
-        <TextAreaField
-          label="Products"
-          name="products"
-          defaultValue={products}
-          placeholder="Product names, collection names, SKUs"
-        />
-        <TextAreaField
-          label="Keywords"
-          name="keywords"
-          defaultValue={keywords}
-          placeholder="Buying moments, use cases, category phrases"
-        />
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <TextAreaField
-          label="Allowed categories"
-          name="allowedCategories"
-          defaultValue={profile?.allowedCategories ?? ""}
-          placeholder="Fitness, travel, food"
-        />
-        <TextAreaField
-          label="Blocked categories"
-          name="blockedCategories"
-          defaultValue={profile?.blockedCategories ?? ""}
-          placeholder="Politics, adult, unsafe topics"
-        />
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <TextAreaField
-          label="Exclusions"
-          name="exclusions"
-          defaultValue={exclusions}
-          placeholder="Competitors, terms, categories, unsafe claims"
-        />
-        <TextAreaField
-          label="Internal notes"
-          name="notes"
-          defaultValue={profile?.notes ?? ""}
-          placeholder="Review guidance and operational notes"
-        />
-      </div>
-    </form>
-  )
-}
-
-function ActivityTab({
-  reports,
-  totalPaidCents,
-}: {
-  reports: AdvertiserPayoutReport[]
-  totalPaidCents: number
-}) {
-  return (
-    <div className="grid gap-5">
-      <MetricCard
-        icon={BadgeCheck}
-        label="Paid to creators"
-        value={formatMoney(totalPaidCents)}
-        detail={`${reports.length} recent payout events`}
-      />
-      <PayoutTable reports={reports} />
-    </div>
-  )
-}
-
-function AccountTab({
+function AccountConsole({
   account,
 }: {
   account: {
@@ -989,30 +780,29 @@ function AccountTab({
   }
 }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-      <form
-        action={saveAdvertiserAccountAction}
-        className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm"
-      >
-        <div className="flex items-start justify-between gap-4">
+    <section id="account" className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+      <form action={saveAdvertiserAccountAction}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">
-              Account details
+            <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+              <Building2 className="size-4" />
+              Account
+            </div>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight">
+              Brand identity and billing
             </h2>
-            <p className="mt-2 text-sm leading-6 text-[#71717a]">
-              Billing identity used for wallet funding and advertiser reporting.
-            </p>
           </div>
           <Button
             type="submit"
-            className="h-10 rounded-[8px] bg-[#18181b] px-4 text-white hover:bg-[#27272a]"
+            variant="outline"
+            className="h-10 rounded-[8px] border-[#d4d4d8] bg-white"
           >
             <Save className="size-4" />
             Save account
           </Button>
         </div>
 
-        <div className="mt-6 grid gap-4">
+        <div className="mt-5 grid gap-4 xl:grid-cols-3">
           <Field label="Company or brand name" htmlFor="name">
             <Input
               id="name"
@@ -1044,69 +834,408 @@ function AccountTab({
           </Field>
         </div>
       </form>
-
-      <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
-        <h2 className="text-xl font-semibold tracking-tight">System record</h2>
-        <div className="mt-5 grid gap-4 text-sm">
-          <RecordRow label="Account ID" value={account.id} />
-          <RecordRow label="Status" value={account.status} />
-          <RecordRow
-            label="Stripe customer"
-            value={account.stripeCustomerId ?? "Not created"}
-          />
-          <RecordRow label="Created" value={formatDate(account.createdAt)} />
-          <RecordRow label="Updated" value={formatDate(account.updatedAt)} />
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function MetricCard({
-  detail,
-  icon: Icon,
-  label,
-  value,
-}: {
-  detail: string
-  icon: ComponentType<{ className?: string }>
-  label: string
-  value: string
-}) {
-  return (
-    <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium text-[#71717a]">{label}</p>
-        <div className="flex size-9 items-center justify-center rounded-[8px] bg-[#f4f4f5] text-[#3f3f46]">
-          <Icon className="size-4" />
-        </div>
-      </div>
-      <p className="mt-4 text-3xl font-semibold tracking-tight">{value}</p>
-      <p className="mt-1 text-sm text-[#71717a]">{detail}</p>
     </section>
   )
 }
 
-function ReadinessItem({
-  complete,
-  detail,
+function RulesConsole({
+  accountName,
+  brandNames,
+  creatorExclusions,
+  domains,
+  exclusions,
+  handles,
+  hashtags,
+  keywords,
+  products,
+  profile,
+}: {
+  accountName: string
+  brandNames: string
+  creatorExclusions: string
+  domains: string
+  exclusions: string
+  handles: string
+  hashtags: string
+  keywords: string
+  products: string
+  profile: BrandFundingProfile | null
+}) {
+  return (
+    <section id="rules" className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+      <form id="funding-rules-form" action={saveBrandFundingProfileAction}>
+        <input type="hidden" name="profileId" value={profile?.id ?? ""} />
+        <input type="hidden" name="status" value={profile?.status ?? "draft"} />
+        <input
+          type="hidden"
+          name="approvalMode"
+          value={profile?.approvalMode ?? "auto"}
+        />
+        <input
+          type="hidden"
+          name="displayName"
+          value={profile?.displayName ?? accountName}
+        />
+        <input
+          type="hidden"
+          name="payoutAmountDollars"
+          value={centsToDollars(profile?.payoutAmountCents)}
+        />
+
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+              <SlidersHorizontal className="size-4" />
+              Match rules
+            </div>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight">
+              What should qualify for funding
+            </h2>
+          </div>
+          <Button
+            type="submit"
+            className="h-10 rounded-[8px] bg-[#18181b] px-4 text-white hover:bg-[#27272a]"
+          >
+            <Save className="size-4" />
+            Save rules
+          </Button>
+        </div>
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          <Field label="Daily cap" htmlFor="dailyCapDollars">
+            <Input
+              id="dailyCapDollars"
+              name="dailyCapDollars"
+              type="number"
+              min={0}
+              step={25}
+              defaultValue={centsToDollars(profile?.dailyCapCents)}
+              placeholder="500"
+              className="h-11 rounded-[8px]"
+            />
+          </Field>
+          <Field label="Monthly cap" htmlFor="monthlyCapDollars">
+            <Input
+              id="monthlyCapDollars"
+              name="monthlyCapDollars"
+              type="number"
+              min={0}
+              step={100}
+              defaultValue={centsToDollars(profile?.monthlyCapCents)}
+              placeholder="10000"
+              className="h-11 rounded-[8px]"
+            />
+          </Field>
+        </div>
+
+        <Separator className="my-6 bg-[#e4e4e7]" />
+
+        <div className="grid gap-5">
+          <SignalGroup title="Inclusions" icon={Target}>
+            <ChipInputField
+              label="Brand names"
+              name="brandNames"
+              defaultValue={brandNames || accountName}
+              placeholder="Nike"
+            />
+            <ChipInputField
+              label="Handles"
+              name="handles"
+              defaultValue={handles}
+              placeholder="@brand"
+            />
+            <ChipInputField
+              label="Hashtags"
+              name="hashtags"
+              defaultValue={hashtags}
+              placeholder="#productdrop"
+            />
+            <ChipInputField
+              label="Keywords"
+              name="keywords"
+              defaultValue={keywords}
+              placeholder="running shoes"
+            />
+            <ChipInputField
+              label="Products"
+              name="products"
+              defaultValue={products}
+              placeholder="Air Zoom"
+            />
+            <ChipInputField
+              label="Domains"
+              name="domains"
+              defaultValue={domains}
+              placeholder="example.com"
+            />
+          </SignalGroup>
+
+          <SignalGroup title="Guardrails" icon={Ban}>
+            <ChipInputField
+              label="Blocked terms"
+              name="exclusions"
+              defaultValue={exclusions}
+              placeholder="competitor"
+            />
+            <ChipInputField
+              label="Blocked creators"
+              name="creatorExclusions"
+              defaultValue={creatorExclusions}
+              placeholder="@creator"
+            />
+            <Field label="Allowed categories" htmlFor="allowedCategories">
+              <Input
+                id="allowedCategories"
+                name="allowedCategories"
+                defaultValue={profile?.allowedCategories ?? ""}
+                placeholder="Fitness, travel, food"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Blocked categories" htmlFor="blockedCategories">
+              <Input
+                id="blockedCategories"
+                name="blockedCategories"
+                defaultValue={profile?.blockedCategories ?? ""}
+                placeholder="Politics, adult, unsafe topics"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+          </SignalGroup>
+
+          <Field label="Internal notes" htmlFor="notes">
+            <Textarea
+              id="notes"
+              name="notes"
+              defaultValue={profile?.notes ?? ""}
+              placeholder="Review guidance and operational notes"
+              className="min-h-24 resize-none rounded-[8px]"
+            />
+          </Field>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+function SignalGroup({
+  children,
+  icon: Icon,
   title,
 }: {
-  complete: boolean
-  detail: string
+  children: ReactNode
+  icon: ComponentType<{ className?: string }>
   title: string
 }) {
   return (
-    <div className="rounded-[8px] border border-[#e4e4e7] bg-[#fafafa] p-4">
-      <div className="flex items-center gap-3">
-        {complete ? (
-          <CheckCircle2 className="size-5 text-[#15803d]" />
-        ) : (
-          <FileText className="size-5 text-[#a16207]" />
-        )}
-        <p className="font-medium">{title}</p>
+    <div>
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#18181b]">
+        <Icon className="size-4 text-[#52525b]" />
+        {title}
       </div>
-      <p className="mt-2 text-sm text-[#71717a]">{detail}</p>
+      <div className="grid gap-4 xl:grid-cols-2">{children}</div>
+    </div>
+  )
+}
+
+function WalletConsole({
+  balanceCents,
+  paymentMethod,
+  pendingCents,
+}: {
+  balanceCents: number
+  paymentMethod: AdvertiserPaymentMethod | null
+  pendingCents: number
+}) {
+  return (
+    <section id="wallet" className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-5">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+            <Wallet className="size-4" />
+            Wallet
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            Fund the account
+          </h2>
+        </div>
+        <div className="text-right">
+          <p className="text-3xl font-semibold tracking-tight">
+            {formatMoney(balanceCents)}
+          </p>
+          <p className="mt-1 text-sm text-[#71717a]">
+            Available{pendingCents > 0 ? `, ${formatMoney(pendingCents)} pending` : ""}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {fundingPresets.map((amount) => (
+          <form key={amount} action={startAdvertiserFundingAction}>
+            <input type="hidden" name="amountDollars" value={amount} />
+            <Button
+              type="submit"
+              variant="outline"
+              className="h-12 w-full rounded-[8px] border-[#d4d4d8] bg-white text-base hover:bg-[#f4f4f5]"
+            >
+              Add {formatMoney(amount * 100)}
+            </Button>
+          </form>
+        ))}
+      </div>
+
+      <form
+        action={startAdvertiserFundingAction}
+        className="mt-5 grid gap-3 border-t border-[#e4e4e7] pt-5 md:grid-cols-[1fr_auto]"
+      >
+        <Field label="Custom amount" htmlFor="amountDollars">
+          <Input
+            id="amountDollars"
+            name="amountDollars"
+            type="number"
+            min={25}
+            step={25}
+            defaultValue={250}
+            className="h-11 rounded-[8px]"
+          />
+        </Field>
+        <Button
+          type="submit"
+          className="mt-auto h-11 rounded-[8px] bg-[#18181b] px-5 text-white hover:bg-[#27272a]"
+        >
+          <CreditCard className="size-4" />
+          Continue to Stripe
+        </Button>
+      </form>
+
+      <form action={startAdvertiserPaymentMethodAction} className="mt-5">
+        <Button
+          type="submit"
+          variant="outline"
+          className="h-11 rounded-[8px] border-[#d4d4d8] bg-white px-4 text-[#18181b]"
+        >
+          <Landmark className="size-4" />
+          {paymentMethod ? "Update payment method" : "Set up payment method"}
+        </Button>
+        {paymentMethod ? (
+          <p className="mt-3 text-sm text-[#71717a]">
+            Default payment method:{" "}
+            <span className="font-medium capitalize text-[#18181b]">
+              {paymentMethod.brand ?? paymentMethod.type}
+            </span>
+            {paymentMethod.last4 ? ` ending in ${paymentMethod.last4}` : ""}
+          </p>
+        ) : null}
+      </form>
+    </section>
+  )
+}
+
+function FundingSummary({
+  balanceCents,
+  hasFundingRules,
+  profile,
+  signalCount,
+}: {
+  balanceCents: number
+  hasFundingRules: boolean
+  profile: BrandFundingProfile | null
+  signalCount: number
+}) {
+  const capacity = fundedMatchCapacity(balanceCents, profile?.payoutAmountCents)
+
+  return (
+    <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+        <ShieldCheck className="size-4" />
+        Funding summary
+      </div>
+      <div className="mt-4 grid gap-3">
+        <SummaryRow complete={balanceCents > 0} label="Wallet funded" value={formatMoney(balanceCents)} />
+        <SummaryRow
+          complete={Boolean(profile?.payoutAmountCents && profile.payoutAmountCents > 0)}
+          label="Payout set"
+          value={formatMoney(profile?.payoutAmountCents)}
+        />
+        <SummaryRow complete={signalCount > 0} label="Rules set" value={String(signalCount)} />
+        <SummaryRow
+          complete={profile?.status === "active" && hasFundingRules}
+          label="Matching status"
+          value={matchingStatusLabel(profile?.status)}
+        />
+      </div>
+      <Separator className="my-4 bg-[#e4e4e7]" />
+      <p className="text-sm leading-6 text-[#52525b]">
+        This account can fund up to{" "}
+        <span className="font-semibold text-[#18181b]">{capacity}</span> matched
+        post{capacity === 1 ? "" : "s"} before the wallet needs more funds.
+      </p>
+    </section>
+  )
+}
+
+function GuardrailSummary({
+  creatorExclusions,
+  exclusions,
+  profile,
+}: {
+  creatorExclusions: string
+  exclusions: string
+  profile: BrandFundingProfile | null
+}) {
+  return (
+    <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+        <AlertTriangle className="size-4" />
+        Enforcement notes
+      </div>
+      <div className="mt-4 grid gap-3 text-sm">
+        <p className="leading-6 text-[#52525b]">
+          Matching currently evaluates creator tags and `@/#` caption mentions.
+        </p>
+        <RecordRow
+          label="Blocked terms"
+          value={exclusions || "None"}
+        />
+        <RecordRow
+          label="Blocked creators"
+          value={creatorExclusions || "None"}
+        />
+        <RecordRow
+          label="Category filters"
+          value={
+            profile?.allowedCategories || profile?.blockedCategories
+              ? "Stored for review"
+              : "None"
+          }
+        />
+      </div>
+    </section>
+  )
+}
+
+function SummaryRow({
+  complete,
+  label,
+  value,
+}: {
+  complete: boolean
+  label: string
+  value: string
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <div className="flex items-center gap-2">
+        {complete ? (
+          <CheckCircle2 className="size-4 text-[#15803d]" />
+        ) : (
+          <FileText className="size-4 text-[#a16207]" />
+        )}
+        <span className="text-[#52525b]">{label}</span>
+      </div>
+      <span className="max-w-40 truncate font-medium capitalize text-[#18181b]">
+        {value}
+      </span>
     </div>
   )
 }
@@ -1282,33 +1411,6 @@ function Field({
         {label}
       </label>
       {children}
-    </div>
-  )
-}
-
-function TextAreaField({
-  defaultValue,
-  label,
-  name,
-  placeholder,
-}: {
-  defaultValue: string
-  label: string
-  name: string
-  placeholder: string
-}) {
-  return (
-    <div className="space-y-2">
-      <label htmlFor={name} className="text-sm font-medium">
-        {label}
-      </label>
-      <Textarea
-        id={name}
-        name={name}
-        defaultValue={defaultValue}
-        placeholder={placeholder}
-        className="min-h-28 resize-none rounded-[8px]"
-      />
     </div>
   )
 }
