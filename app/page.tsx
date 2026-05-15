@@ -258,7 +258,7 @@ export default function HomePage() {
                 <div className="mt-12 grid gap-4 md:grid-cols-2">
                   {modelRows.map((row) => (
                     <article key={row.label} className="border border-white/10 bg-white/[0.03] p-5">
-                      <p className="text-xs font-semibold uppercase text-white/38">{row.label}</p>
+                      <p className="text-xs font-semibold uppercase text-white/82">{row.label}</p>
                       <h3 className="mt-5 text-2xl font-semibold leading-tight text-white">{row.title}</h3>
                       <p className="mt-5 text-sm leading-7 text-white/56 md:text-base">{row.copy}</p>
                     </article>
