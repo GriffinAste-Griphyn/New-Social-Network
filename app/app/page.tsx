@@ -43,8 +43,9 @@ export default function MobileAppPage() {
 
           <div className="flex flex-1 items-center">
             <div className="max-w-5xl">
-              <h1 className="whitespace-nowrap text-[3.35rem] font-semibold leading-[0.92] text-white sm:text-[4.8rem] md:text-[5.8rem] lg:text-[6.4rem]">
-                Coming very soon.
+              <h1 className="text-[3.35rem] font-semibold leading-[0.92] text-white sm:text-[4.8rem] md:text-[5.8rem] lg:text-[6.4rem]">
+                <span className="block sm:inline">Coming very</span>{" "}
+                <span className="block sm:inline">soon.</span>
               </h1>
               <p className="mt-7 max-w-2xl text-base leading-8 text-white/68 md:text-lg">
                 Want to be a beta user in TestFlight? Text Griffin at{" "}
