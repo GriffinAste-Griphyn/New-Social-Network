@@ -209,7 +209,7 @@ export default function AdvertisePage() {
       <SiteHeader />
 
       <main className="overflow-hidden">
-        <section className="relative min-h-[88vh] border-b border-white/10 pt-16">
+        <section className="relative min-h-[100svh] border-b border-white/10 pt-16 md:min-h-[88vh]">
           <div
             className="absolute inset-0 bg-cover bg-center opacity-58 motion-reduce:block"
             style={{ backgroundImage: `url(${heroPoster})` }}
@@ -228,22 +228,24 @@ export default function AdvertisePage() {
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(6,6,6,0.96),rgba(6,6,6,0.72)_52%,rgba(6,6,6,0.38))]" />
           <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,6,6,0.2),rgba(6,6,6,0.44)_54%,rgba(6,6,6,1)_100%)]" />
 
-          <div className="relative mx-auto grid min-h-[calc(88vh-4rem)] max-w-[1180px] gap-10 px-4 py-10 md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
-            <div className="max-w-4xl">
-              <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-semibold uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
-                Advertiser-funded organic attention
-              </p>
-              <h1 className="mt-7 max-w-[15ch] text-[3rem] font-semibold leading-[0.94] text-white sm:text-[3.8rem] md:text-[4.5rem] lg:text-[5.2rem]">
-                Fund organic content people choose.
-              </h1>
-              <p className="mt-6 max-w-2xl text-base leading-8 text-white/68 md:text-lg md:leading-8">
-                UBEYE gives brands a way to put budget behind stories people
-                already choose to watch, reply to, save, and share. The ad value
-                attaches to organic attention, then the upside can flow back to
-                the users who helped create it.
-              </p>
+          <div className="relative mx-auto grid max-w-[1180px] gap-10 px-4 md:min-h-[calc(88vh-4rem)] md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
+            <div className="flex min-h-[calc(100svh-4rem)] max-w-4xl flex-col pb-8 pt-17 md:block md:min-h-0 md:py-0">
+              <div>
+                <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-semibold uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
+                  Advertiser-funded organic attention
+                </p>
+                <h1 className="mt-10 max-w-[15ch] text-[3rem] font-semibold leading-[0.94] text-white sm:text-[3.8rem] md:mt-7 md:text-[4.5rem] lg:text-[5.2rem]">
+                  Fund organic content people choose.
+                </h1>
+                <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
+                  UBEYE gives brands a way to put budget behind stories people
+                  already choose to watch, reply to, save, and share. The ad value
+                  attaches to organic attention, then the upside can flow back to
+                  the users who helped create it.
+                </p>
+              </div>
 
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <div className="mt-auto flex flex-col gap-3 pt-10 sm:flex-row md:mt-6 md:pt-0">
                 <Button
                   asChild
                   className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-semibold text-white hover:bg-[#c91414] sm:justify-center"
@@ -263,7 +265,9 @@ export default function AdvertisePage() {
               </div>
             </div>
 
-            <FundingPath />
+            <div className="pb-10 md:pb-0">
+              <FundingPath />
+            </div>
           </div>
         </section>
 
