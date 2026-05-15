@@ -14,7 +14,6 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { MarketingFooter } from "@/components/marketing-footer"
 
 const signupHref = "/signup?next=%2Fadvertiser"
 const portalHref = "/login?next=%2Fadvertiser"
@@ -24,7 +23,7 @@ const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 export const metadata: Metadata = {
   title: "Advertise on UBEYE",
   description:
-    "Fund real attention on UBEYE, define the moments that matter, and route advertiser dollars into the social network's wealth redistribution experiment.",
+    "Fund organic stories on UBEYE, define the attention that matters, and help route advertiser dollars back to the users creating value.",
 }
 
 const navLinks = [
@@ -33,66 +32,108 @@ const navLinks = [
   { label: "Controls", href: "#controls" },
 ]
 
+const attentionPath = [
+  { label: "User story", value: "A normal post starts earning attention" },
+  { label: "Organic activity", value: "Views, replies, saves, and shares show demand" },
+  { label: "Brand match", value: "The story fits the criteria you choose" },
+  { label: "User upside", value: "Funding can move back to eligible participants" },
+]
+
+const heroMetrics = [
+  { label: "Surface", value: "Stories" },
+  { label: "Funding", value: "Organic" },
+  { label: "Upside", value: "Users" },
+]
+
+const premiseRows = [
+  {
+    label: "Traditional social ads",
+    title: "Buy an ad slot around the attention users create.",
+    copy: "The platform sells impressions against the feed. Users create the culture, but most of the upside stays with the platform.",
+  },
+  {
+    label: "UBEYE",
+    title: "Fund the organic stories already creating attention.",
+    copy: "Advertiser funding can attach to qualified user stories, so the people creating and engaging with the value can participate in the upside.",
+  },
+]
+
 const setupSteps = [
   {
     icon: Megaphone,
     label: "01",
     title: "Create an advertiser account",
-    copy: "Set up the brand account that will define your funding strategy inside UBEYE.",
+    copy: "Set up the brand account that decides what kinds of organic stories your funding can support.",
   },
   {
     icon: SlidersHorizontal,
     label: "02",
-    title: "Define real-world signals",
-    copy: "Add brand names, handles, product terms, domains, categories, exclusions, and moments that matter.",
+    title: "Define the attention you value",
+    copy: "Add brand names, handles, product terms, domains, categories, exclusions, and the kinds of moments you want to be near.",
   },
   {
     icon: Wallet,
     label: "03",
-    title: "Allocate funding",
-    copy: "Fund the account once. Qualified social moments can draw from that budget as the network creates demand.",
+    title: "Fund qualified stories",
+    copy: "Set a budget once. When user stories qualify, that funding can move toward the people creating and engaging with the attention.",
   },
 ]
 
 const controls = [
   "Brand names, handles, domains, product terms, and exclusions",
   "Daily and monthly caps for account-funded payouts",
-  "Automatic or manual approval modes for organic matches",
-  "Funding controls that keep payouts tied to qualified social signal",
+  "Automatic or manual approval modes for qualified stories",
+  "Funding controls tied to views, replies, saves, and other organic activity",
 ]
 
 const fundingRows = [
-  { icon: CreditCard, label: "Account funding", value: "Allocated" },
+  { icon: CreditCard, label: "Account funding", value: "Pre-funded" },
   { icon: Gauge, label: "Spend limits", value: "Daily + monthly" },
   { icon: ShieldCheck, label: "Brand safety", value: "Exclusions" },
-  { icon: BadgeDollarSign, label: "User upside", value: "75% target share" },
+  { icon: BadgeDollarSign, label: "User upside", value: "Built in" },
+]
+
+const footerLinks = [
+  { label: "Privacy", href: "/privacy" },
+  { label: "Terms", href: "/terms" },
+  { label: "Guidelines", href: "/community-guidelines" },
 ]
 
 function SiteHeader() {
   return (
-    <header className="hidden border-b border-black/10 bg-[#f4f2ec]/82 backdrop-blur-xl md:block">
-      <div className="mx-auto grid h-16 w-full max-w-[1180px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-4">
-        <Link href="/" className="justify-self-start text-xl font-semibold tracking-[-0.04em]" aria-label="UBEYE home">
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-[#060606]/78 text-white backdrop-blur-xl">
+      <div className="relative mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between gap-4 px-4">
+        <Link href="/" className="text-xl font-semibold" aria-label="UBEYE home">
           UBEYE
         </Link>
 
-        <nav className="flex items-center justify-self-center text-sm text-black/58" aria-label="Primary">
+        <nav
+          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 text-sm text-white/62 md:flex"
+          aria-label="Primary"
+        >
           {navLinks.map((link) => (
             <Link
               key={link.label}
               href={link.href}
-              className="rounded-full px-4 py-2 transition hover:bg-black/5 hover:text-black"
+              className="rounded-[8px] px-3 py-2 transition hover:bg-white/8 hover:text-white"
             >
               {link.label}
             </Link>
           ))}
         </nav>
 
-        <div className="flex items-center gap-2 justify-self-end">
-          <Button asChild variant="ghost" className="h-9 rounded-full px-4 text-sm text-black/64">
+        <div className="flex items-center gap-2">
+          <Button
+            asChild
+            variant="ghost"
+            className="hidden h-9 rounded-[8px] px-3 text-sm text-white/70 hover:bg-white/8 hover:text-white sm:inline-flex"
+          >
             <Link href={portalHref}>Sign in</Link>
           </Button>
-          <Button asChild className="h-9 rounded-full bg-black px-4 text-sm text-white hover:bg-black/84">
+          <Button
+            asChild
+            className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-white/88"
+          >
             <Link href={signupHref}>Get started</Link>
           </Button>
         </div>
@@ -101,80 +142,111 @@ function SiteHeader() {
   )
 }
 
-function MobileHeroNav() {
+function FundingPath() {
   return (
-    <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] text-white md:hidden">
-      <Link href="/" className="text-[2rem] font-semibold tracking-[-0.08em]">
-        UBEYE
-      </Link>
-      <div className="flex items-center gap-5">
-        <Link href={portalHref} className="text-sm font-medium text-white/88">
-          Sign in
-        </Link>
-        <Link
-          href={signupHref}
-          className="inline-flex min-h-11 items-center rounded-full bg-white px-5 text-sm font-semibold text-black"
-        >
-          Join
-        </Link>
+    <div className="border border-white/12 bg-black/54 p-4 text-white shadow-[0_24px_80px_-56px_rgba(0,0,0,0.9)] backdrop-blur-md md:p-5">
+      <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
+        <div>
+          <p className="text-xs uppercase text-white/42">Funding path</p>
+          <p className="mt-1 text-sm font-medium text-white">One story can create value</p>
+        </div>
+        <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-semibold text-white">
+          <span className="size-1.5 rounded-full bg-white" />
+          Organic
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 divide-x divide-white/10 border-b border-white/10">
+        {heroMetrics.map((metric) => (
+          <div key={metric.label} className="px-3 py-4 first:pl-0 last:pr-0">
+            <p className="text-[0.7rem] uppercase text-white/38">{metric.label}</p>
+            <p className="mt-1 text-xl font-semibold text-white md:text-2xl">{metric.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="divide-y divide-white/10">
+        {attentionPath.map((item, index) => (
+          <div key={item.label} className="grid grid-cols-[1.35rem_1fr] gap-3 py-4">
+            <div className="pt-1">
+              <span className="flex size-5 items-center justify-center rounded-full border border-[#e01616]/50 bg-[#e01616]/16 text-[0.65rem] font-semibold text-[#ffb4a6]">
+                {index + 1}
+              </span>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-white/38">{item.label}</p>
+              <p className="mt-1 text-sm text-white/82">{item.value}</p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
+function SiteFooter() {
+  return (
+    <footer className="border-t border-white/10 bg-[#060606] text-white">
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-5 px-4 py-8 text-sm text-white/54 sm:flex-row sm:items-center sm:justify-between">
+        <Link href="/" className="w-fit text-xl font-semibold text-white" aria-label="UBEYE home">
+          UBEYE
+        </Link>
+        <nav className="flex flex-wrap gap-x-5 gap-y-3" aria-label="Legal">
+          {footerLinks.map((link) => (
+            <Link key={link.href} href={link.href} className="transition hover:text-white">
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+      </div>
+    </footer>
+  )
+}
+
 export default function AdvertisePage() {
   return (
-    <div className="min-h-screen bg-[#f4f2ec] text-black">
+    <div className="min-h-screen bg-[#060606] text-white">
       <SiteHeader />
 
       <main className="overflow-hidden">
-        <section className="border-b border-black/10">
-        <div className="mx-auto md:max-w-[1180px] md:px-4 md:py-10">
-          <div className="overflow-hidden bg-[#faf9f5] md:rounded-[2.5rem] md:border md:border-black/10 md:shadow-[0_20px_70px_-60px_rgba(15,23,42,0.28)]">
-            <div className="relative min-h-[34rem] overflow-hidden sm:min-h-[32rem] lg:min-h-[40rem]">
-              <MobileHeroNav />
-              <div
-                className="absolute inset-0 bg-cover bg-center motion-reduce:block"
-                style={{ backgroundImage: `url(${heroPoster})` }}
-              />
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                preload="auto"
-                poster={heroPoster}
-                className="absolute inset-0 hidden h-full w-full object-cover motion-safe:block [filter:brightness(0.98)_contrast(0.95)_saturate(0.88)]"
-              >
-                <source src={heroVideo} type="video/mp4" />
-              </video>
-              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(8,14,20,0.62),rgba(8,14,20,0.3)_44%,rgba(8,14,20,0.14)_74%,rgba(8,14,20,0.08))]" />
-              <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(247,245,239,0.06),rgba(247,245,239,0)_24%,rgba(8,14,20,0.1)_58%,rgba(8,14,20,0.58)_100%)]" />
+        <section className="relative min-h-[88vh] border-b border-white/10 pt-16">
+          <div
+            className="absolute inset-0 bg-cover bg-center opacity-58 motion-reduce:block"
+            style={{ backgroundImage: `url(${heroPoster})` }}
+          />
+          <video
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            poster={heroPoster}
+            className="absolute inset-0 hidden h-full w-full object-cover opacity-56 motion-safe:block [filter:contrast(1.05)_saturate(0.82)]"
+          >
+            <source src={heroVideo} type="video/mp4" />
+          </video>
+          <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(6,6,6,0.96),rgba(6,6,6,0.72)_52%,rgba(6,6,6,0.38))]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,6,6,0.2),rgba(6,6,6,0.44)_54%,rgba(6,6,6,1)_100%)]" />
 
-              <div className="relative flex min-h-[34rem] flex-col justify-between px-6 pb-6 pt-24 sm:min-h-[32rem] sm:px-8 sm:pb-8 sm:pt-7 lg:min-h-[40rem] lg:px-12 lg:pb-12 lg:pt-10">
-                <p className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-white/14 bg-white/8 px-3 py-1.5 text-[0.62rem] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/78 backdrop-blur-sm sm:px-4 sm:text-[0.68rem] sm:tracking-[0.28em]">
-                  <Landmark className="size-3.5" />
-                  Advertiser-funded, people-first
-                </p>
-
-                <div className="max-w-[22rem] sm:max-w-[33rem] lg:max-w-[62rem]">
-                  <h1 className="text-[3.05rem] font-semibold leading-[0.93] tracking-[-0.06em] text-white sm:text-6xl md:text-7xl lg:text-[6.2rem] lg:leading-[0.94]">
-                    Fund attention people choose
-                  </h1>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-6 border-t border-black/10 px-6 py-6 sm:px-8 sm:py-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10 lg:px-12 lg:py-8">
-              <p className="max-w-2xl text-base leading-8 text-black/62 md:text-lg">
-                UBEYE lets brands fund real social moments people choose to
-                watch, discuss, and share. The advertising layer exists to fund
-                the redistribution experiment, not interrupt it.
+          <div className="relative mx-auto grid min-h-[calc(88vh-4rem)] max-w-[1180px] gap-10 px-4 py-10 md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
+            <div className="max-w-4xl">
+              <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-semibold uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
+                Advertiser-funded organic attention
               </p>
-              <div className="flex flex-col gap-3 sm:flex-row lg:justify-end">
+              <h1 className="mt-7 max-w-[15ch] text-[3rem] font-semibold leading-[0.94] text-white sm:text-[3.8rem] md:text-[4.5rem] lg:text-[5.2rem]">
+                Fund organic content people choose.
+              </h1>
+              <p className="mt-6 max-w-2xl text-base leading-8 text-white/68 md:text-lg md:leading-8">
+                UBEYE gives brands a way to put budget behind stories people
+                already choose to watch, reply to, save, and share. The ad value
+                attaches to organic attention, then the upside can flow back to
+                the users who helped create it.
+              </p>
+
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
                 <Button
                   asChild
-                  className="h-11 justify-between rounded-full bg-black px-6 text-sm text-white hover:bg-black/84 sm:justify-center"
+                  className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-semibold text-white hover:bg-[#c91414] sm:justify-center"
                 >
                   <Link href={signupHref}>
                     Create advertiser account
@@ -184,161 +256,177 @@ export default function AdvertisePage() {
                 <Button
                   asChild
                   variant="outline"
-                  className="h-11 justify-between rounded-full border-black/12 bg-transparent px-6 text-sm text-black hover:bg-black/5 sm:justify-center"
+                  className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-semibold text-white hover:bg-white/10 sm:justify-center"
                 >
                   <Link href={portalHref}>Open advertiser portal</Link>
                 </Button>
               </div>
             </div>
+
+            <FundingPath />
           </div>
-        </div>
         </section>
 
-        <section id="premise" className="border-b border-black/10 bg-[#faf9f5]">
-        <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
-          <div className="grid gap-10 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-16">
-            <div className="pt-2">
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-black/42">
-                The premise
-              </p>
-            </div>
-            <div className="max-w-5xl">
-              <p className="text-4xl font-semibold tracking-[-0.07em] text-black md:text-6xl md:leading-[1.01]">
-                Brands should fund the attention people choose, not the
-                interruptions people skip.
-              </p>
-              <p className="mt-8 max-w-2xl text-base leading-8 text-black/58 md:text-lg">
-                UBEYE gives advertisers a way to participate in a social
-                network built around human attention, cultural signal, and user
-                upside. When your brand funds qualified moments, that spend can
-                become part of the wealth redistribution model.
-              </p>
+        <section id="premise" className="border-b border-white/10 bg-[#060606]">
+          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
+            <div className="grid gap-12 lg:grid-cols-[18rem_minmax(0,1fr)] lg:gap-16">
+              <div>
+                <p className="text-xs font-semibold uppercase text-[#e01616]">The premise</p>
+              </div>
+              <div>
+                <h2 className="max-w-4xl text-4xl font-semibold leading-tight text-white md:text-6xl md:leading-[1.02]">
+                  People already create the attention brands want to reach.
+                  UBEYE lets advertisers help pay the people creating it.
+                </h2>
+                <p className="mt-8 max-w-2xl text-base leading-8 text-white/62 md:text-lg">
+                  Instead of buying interruptions in a feed, advertisers can fund
+                  qualified stories already earning attention. Every user is a
+                  creator here, so the model is designed around broad
+                  participation instead of a small influencer class.
+                </p>
+
+                <div className="mt-12 grid gap-4 md:grid-cols-2">
+                  {premiseRows.map((row) => (
+                    <article key={row.label} className="border border-white/10 bg-white/[0.03] p-5">
+                      <p className="text-xs font-semibold uppercase text-white/36">{row.label}</p>
+                      <h3 className="mt-5 text-2xl font-semibold leading-tight text-white">
+                        {row.title}
+                      </h3>
+                      <p className="mt-4 text-sm leading-7 text-white/58">{row.copy}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         </section>
 
-        <section id="setup" className="border-b border-black/10">
-        <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
-          <div className="grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-20">
-            <div className="max-w-[25rem]">
-              <p className="text-4xl font-semibold tracking-[-0.07em] text-black md:text-6xl md:leading-[1.01]">
-                Set the signal. Fund the account.
-              </p>
-              <p className="mt-8 max-w-md text-base leading-8 text-black/62 md:text-lg">
-                Advertisers keep control over what qualifies, how much can be
-                spent, and how funding reaches eligible social moments.
-              </p>
-            </div>
+        <section id="setup" className="border-b border-white/10 bg-[#0b0b0b]">
+          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
+            <div className="grid gap-12 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-20">
+              <div className="max-w-[28rem]">
+                <p className="text-xs font-semibold uppercase text-[#e01616]">Setup</p>
+                <h2 className="mt-5 text-4xl font-semibold leading-tight text-white md:text-6xl md:leading-[1.02]">
+                  Choose what qualifies. Fund the stories.
+                </h2>
+                <p className="mt-7 max-w-md text-base leading-8 text-white/62 md:text-lg">
+                  Advertisers keep control over what qualifies, how much can be
+                  spent, and the kinds of organic moments their budget can
+                  support.
+                </p>
+              </div>
 
-            <div className="grid gap-4">
-              {setupSteps.map((step) => (
-                <article
-                  key={step.title}
-                  className="rounded-[2rem] border border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(250,249,245,1))] p-6 shadow-[0_18px_70px_-52px_rgba(15,23,42,0.16)] md:px-7 md:py-7"
-                >
-                  <div className="flex gap-5 md:gap-7">
-                    <div className="flex size-11 shrink-0 items-center justify-center rounded-full border border-black/10 bg-black text-white">
-                      <step.icon className="size-5" />
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-black/36">
-                          {step.label}
-                        </p>
-                        <h3 className="text-2xl font-semibold tracking-[-0.04em] text-black">
+              <div className="grid gap-4">
+                {setupSteps.map((step) => (
+                  <article key={step.title} className="border border-white/10 bg-[#060606] p-5 md:p-6">
+                    <div className="grid gap-5 sm:grid-cols-[3rem_1fr]">
+                      <div className="flex size-11 items-center justify-center rounded-[8px] border border-[#e01616]/30 bg-[#e01616]/14 text-[#ffb4a6]">
+                        <step.icon className="size-5" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase text-white/36">{step.label}</p>
+                        <h3 className="mt-2 text-2xl font-semibold leading-tight text-white">
                           {step.title}
                         </h3>
+                        <p className="mt-3 max-w-2xl text-sm leading-7 text-white/58 md:text-base">
+                          {step.copy}
+                        </p>
                       </div>
-                      <p className="mt-4 max-w-2xl text-sm leading-7 text-black/58 md:text-base">
-                        {step.copy}
-                      </p>
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
         </section>
 
-        <section id="controls" className="border-b border-black/10 bg-[#111311] text-white">
-        <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_28rem] lg:items-end">
-          <div>
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-white/42">
-              Controls
-            </p>
-            <h2 className="mt-5 max-w-4xl text-5xl font-semibold leading-[0.98] tracking-[-0.07em] md:text-7xl">
-              Define the moments that are worth funding.
-            </h2>
-            <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
-              Instead of buying a forced placement, define the brand signals and
-              guardrails. When real conversations naturally match those signals,
-              UBEYE can route funding toward eligible participants.
-            </p>
-          </div>
+        <section id="controls" className="border-b border-white/10 bg-[#060606]">
+          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_28rem] lg:items-start">
+            <div>
+              <p className="text-xs font-semibold uppercase text-[#e01616]">Controls</p>
+              <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight text-white md:text-6xl md:leading-[1.02]">
+                Define the organic attention worth funding.
+              </h2>
+              <p className="mt-8 max-w-2xl text-base leading-8 text-white/62 md:text-lg">
+                Instead of buying forced placements, define the brand criteria
+                and guardrails. When user stories naturally match those
+                criteria, UBEYE can route funding toward eligible participants.
+              </p>
 
-          <div className="divide-y divide-white/12 border-y border-white/12">
-            {controls.map((item) => (
-              <div key={item} className="grid grid-cols-[3rem_1fr] gap-4 py-6">
-                <div className="flex size-10 items-center justify-center rounded-full bg-white text-black">
-                  <Check className="size-5" />
-                </div>
-                <p className="self-center text-sm leading-6 text-white/64">{item}</p>
+              <div className="mt-10 grid gap-3 sm:grid-cols-2">
+                {controls.map((item) => (
+                  <div key={item} className="grid grid-cols-[2rem_1fr] gap-3 border border-white/10 bg-white/[0.03] p-4">
+                    <div className="flex size-7 items-center justify-center rounded-[8px] bg-[#e01616] text-white">
+                      <Check className="size-4" />
+                    </div>
+                    <p className="self-center text-sm leading-6 text-white/68">{item}</p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
-        </section>
+            </div>
 
-        <section id="funding" className="bg-[#f4f2ec]">
-        <div className="mx-auto max-w-[1180px] px-4 py-16 md:py-24">
-          <div className="grid overflow-hidden rounded-[2rem] border border-black/10 bg-[#faf9f5] md:grid-cols-[1.05fr_0.95fr]">
-            <div className="p-6 sm:p-8 lg:p-10">
-              <p className="inline-flex items-center gap-2 text-sm font-semibold text-black/48">
-                <Landmark className="size-4" />
+            <div className="border border-white/12 bg-black/54 p-5 text-white">
+              <p className="inline-flex items-center gap-2 text-sm font-semibold text-white/58">
+                <Landmark className="size-4 text-[#ffb4a6]" />
                 Funding
               </p>
-              <h2 className="mt-6 max-w-[12ch] text-4xl font-semibold leading-[1] tracking-[-0.06em] sm:text-6xl">
-                Let organic moments do the rest.
-              </h2>
-              <p className="mt-7 max-w-xl text-base leading-8 text-black/58 md:text-lg">
-                Your funds stay allocated to qualified brand moments. When UBEYE
-                users create attention that matches your criteria, spend can
-                move toward the people creating that value.
+              <h3 className="mt-6 text-3xl font-semibold leading-tight text-white">
+                Let organic stories do the rest.
+              </h3>
+              <p className="mt-5 text-sm leading-7 text-white/58">
+                Your funds stay allocated to qualified attention. When UBEYE
+                users create stories that match your criteria, spend can move
+                toward the people creating that value.
               </p>
+
+              <div className="mt-7 divide-y divide-white/10 border-y border-white/10">
+                {fundingRows.map((item) => (
+                  <div key={item.label} className="flex items-center justify-between gap-4 py-4">
+                    <div className="flex items-center gap-3">
+                      <span className="flex size-9 items-center justify-center rounded-[8px] bg-white text-black">
+                        <item.icon className="size-4" />
+                      </span>
+                      <p className="text-sm text-white/58">{item.label}</p>
+                    </div>
+                    <p className="text-sm font-semibold text-white">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-[#0b0b0b]">
+          <div className="mx-auto grid max-w-[1180px] gap-8 px-4 py-16 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:py-20">
+            <div>
+              <p className="text-xs font-semibold uppercase text-[#e01616]">Advertise on UBEYE</p>
+              <h2 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight text-white md:text-5xl">
+                Put brand budget behind the stories people already care about.
+              </h2>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row md:justify-end">
               <Button
                 asChild
-                className="mt-8 h-11 rounded-full bg-black px-6 text-sm text-white hover:bg-black/84"
+                className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-semibold text-white hover:bg-[#c91414] sm:justify-center"
               >
                 <Link href={signupHref}>
-                  Start funding UBEYE
+                  Start funding stories
                   <ArrowRight className="size-4" />
                 </Link>
               </Button>
-            </div>
-
-            <div className="grid gap-3 border-t border-black/10 bg-black p-6 text-white sm:p-8 md:border-l md:border-t-0 lg:p-10">
-              {fundingRows.map((item) => (
-                <div
-                  key={item.label}
-                  className="flex items-center justify-between gap-4 border-b border-white/12 pb-4 last:border-b-0 last:pb-0"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="flex size-10 items-center justify-center rounded-full bg-white text-black">
-                      <item.icon className="size-5" />
-                    </span>
-                    <p className="text-sm text-white/60">{item.label}</p>
-                  </div>
-                  <p className="text-sm font-semibold text-white">{item.value}</p>
-                </div>
-              ))}
+              <Button
+                asChild
+                variant="outline"
+                className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-semibold text-white hover:bg-white/10 sm:justify-center"
+              >
+                <Link href={portalHref}>Sign in</Link>
+              </Button>
             </div>
           </div>
-        </div>
         </section>
       </main>
-      <MarketingFooter />
+
+      <SiteFooter />
     </div>
   )
 }
