@@ -85,7 +85,7 @@ function StoryEditor({ story }: { story: MyStoryItem }) {
     <article className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <p className="font-semibold text-[#17191f]">
+          <p className="font-medium text-[#17191f]">
             {formatPostedAt(story.createdAt)}
           </p>
           <p className="mt-1 flex items-center gap-1.5 text-sm text-[#6b7280]">
@@ -202,7 +202,7 @@ export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
             </a>
             <div>
               <p className="text-sm text-[#6b7280]">@{session.handle}</p>
-              <h1 className="text-2xl font-semibold tracking-tight">
+              <h1 className="text-2xl font-[350] tracking-tight">
                 My Story
               </h1>
             </div>
@@ -242,7 +242,7 @@ export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
               className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]"
             >
               <section className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
-                <p className="text-lg font-semibold">Manage story</p>
+                <p className="text-lg font-medium">Manage story</p>
                 <p className="mt-1 text-sm text-[#6b7280]">
                   {myStory.liveCount} active item{myStory.liveCount === 1 ? "" : "s"}.
                   Each item expires independently after 24 hours.
@@ -261,7 +261,7 @@ export default async function MyStoryPage({ searchParams }: MyStoryPageProps) {
             <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-[#f5f6f8]">
               <ImagePlus className="size-7 text-[#374151]" />
             </div>
-            <h2 className="mt-4 text-2xl font-semibold">No active story yet</h2>
+            <h2 className="mt-4 text-2xl font-[350]">No active story yet</h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#6b7280]">
               Add a photo or video to start your story stack. Your story will
               appear first in Following and expire after 24 hours.

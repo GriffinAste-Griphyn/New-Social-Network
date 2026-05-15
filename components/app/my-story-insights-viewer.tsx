@@ -61,12 +61,12 @@ function Metric({ icon, label, value, detail }: MetricProps) {
   return (
     <div className="min-h-[104px] rounded-[8px] bg-[#f5f6f8] p-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-semibold uppercase text-[#6b7280]">{label}</p>
+        <p className="text-xs font-medium uppercase text-[#6b7280]">{label}</p>
         <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-[#374151]">
           {icon}
         </span>
       </div>
-      <p className="mt-3 text-2xl font-semibold tracking-tight text-[#17191f]">
+      <p className="mt-3 text-2xl font-medium tracking-tight text-[#17191f]">
         {value}
       </p>
       {detail ? <p className="mt-1 text-xs text-[#6b7280]">{detail}</p> : null}
@@ -208,14 +208,14 @@ export function MyStoryInsightsViewer({
                 {textElements.map((element) => (
                   <p
                     key={element.id}
-                    className="w-fit rounded-[8px] bg-white/14 px-3 py-2 text-xl font-semibold backdrop-blur"
+                    className="w-fit rounded-[8px] bg-white/14 px-3 py-2 text-xl font-medium backdrop-blur"
                   >
                     {element.label}
                   </p>
                 ))}
 
                 {activeStory.caption ? (
-                  <p className="text-3xl font-semibold leading-tight">
+                  <p className="text-3xl font-medium leading-tight">
                     {activeStory.caption}
                   </p>
                 ) : null}
@@ -227,7 +227,7 @@ export function MyStoryInsightsViewer({
                     <a
                       key={element.id}
                       href={element.href ?? "#"}
-                      className="inline-flex min-h-10 items-center rounded-full bg-white px-4 text-sm font-semibold text-[#17191f]"
+                      className="inline-flex min-h-10 items-center rounded-full bg-white px-4 text-sm font-medium text-[#17191f]"
                     >
                       {element.label}
                     </a>
@@ -266,7 +266,7 @@ export function MyStoryInsightsViewer({
             <p className="text-sm font-medium text-[#6b7280]">
               Live story insights
             </p>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight">
+            <h2 className="mt-1 text-xl font-[350] tracking-tight">
               {activeStory.caption || "Untitled story"}
             </h2>
           </div>
@@ -313,7 +313,7 @@ export function MyStoryInsightsViewer({
             <button
               type="button"
               onClick={goPrevious}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-[#f5f6f8] px-3 text-sm font-semibold text-[#374151]"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-[#f5f6f8] px-3 text-sm font-medium text-[#374151]"
             >
               <ChevronLeft className="size-4" />
               Previous
@@ -324,7 +324,7 @@ export function MyStoryInsightsViewer({
             <button
               type="button"
               onClick={goNext}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-[#111827] px-3 text-sm font-semibold text-white"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-[#111827] px-3 text-sm font-medium text-white"
             >
               Next
               <ChevronRight className="size-4" />
@@ -354,7 +354,7 @@ export function MyStoryInsightsViewer({
                 <Radio className="size-4" />
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold">
+                <span className="block truncate text-sm font-medium">
                   {story.caption || "Untitled story"}
                 </span>
                 <span
@@ -365,7 +365,7 @@ export function MyStoryInsightsViewer({
                   {formatPostedAt(story.createdAt)}
                 </span>
               </span>
-              <span className="inline-flex items-center gap-1 text-xs font-semibold">
+              <span className="inline-flex items-center gap-1 text-xs font-medium">
                 <Users className="size-3.5" />
                 {formatNumber(statsByStoryId.get(story.id)?.views ?? 0)}
               </span>

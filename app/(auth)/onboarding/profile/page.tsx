@@ -36,17 +36,17 @@ export default async function ProfileOnboardingPage({
       <section className="flex min-h-[42vh] flex-col justify-between border-b border-black/10 px-5 py-6 sm:px-8 lg:min-h-screen lg:border-b-0 lg:border-r lg:py-8">
         <Link
           href="/"
-          className="w-fit text-sm font-semibold uppercase tracking-[0.24em] text-black/72"
+          className="w-fit text-sm font-medium uppercase tracking-[0.24em] text-black/72"
         >
           UBEYE
         </Link>
 
         <div className="grid gap-8 py-10 lg:py-14">
           <div className="max-w-2xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-black/42">
+            <p className="text-xs font-medium uppercase tracking-[0.24em] text-black/42">
               Profile setup
             </p>
-            <h1 className="mt-5 max-w-[12ch] text-5xl font-semibold leading-[1] text-black sm:text-6xl">
+            <h1 className="mt-5 max-w-[12ch] text-5xl font-[350] leading-[1] text-black sm:text-6xl">
               Choose how people see you.
             </h1>
             <p className="mt-6 max-w-lg text-base leading-7 text-black/58">
@@ -68,10 +68,10 @@ export default async function ProfileOnboardingPage({
             <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/20 bg-white/92 p-4 text-black shadow-[0_18px_45px_rgba(0,0,0,0.18)] backdrop-blur">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-black/42">
+                  <p className="text-xs font-medium uppercase tracking-[0.2em] text-black/42">
                     Next
                   </p>
-                  <p className="mt-2 text-2xl font-semibold">Claim handle</p>
+                  <p className="mt-2 text-2xl font-medium">Claim handle</p>
                 </div>
                 <p className="rounded-full bg-black px-3 py-1 text-sm font-medium text-white">
                   Verified
@@ -85,10 +85,10 @@ export default async function ProfileOnboardingPage({
       <section className="flex items-center justify-center px-5 py-10 sm:px-6 lg:px-10">
         <div className="w-full max-w-sm space-y-6 rounded-2xl border border-black/10 bg-white p-6 shadow-[0_24px_70px_rgba(10,10,10,0.08)]">
           <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-black/42">
+            <p className="text-xs font-medium uppercase tracking-[0.22em] text-black/42">
               Final step
             </p>
-            <h2 className="text-3xl font-semibold text-foreground">
+            <h2 className="text-3xl font-[350] text-foreground">
               Claim your handle
             </h2>
           </div>

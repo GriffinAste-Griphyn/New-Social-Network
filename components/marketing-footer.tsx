@@ -12,7 +12,7 @@ export function MarketingFooter() {
       <div className="mx-auto flex max-w-[1180px] flex-col gap-5 px-4 py-8 text-sm text-black/56 sm:flex-row sm:items-center sm:justify-between">
         <Link
           href="/"
-          className="w-fit text-xl font-semibold tracking-[-0.04em] text-black"
+          className="w-fit text-xl font-medium tracking-[-0.04em] text-black"
           aria-label="UBEYE home"
         >
           UBEYE

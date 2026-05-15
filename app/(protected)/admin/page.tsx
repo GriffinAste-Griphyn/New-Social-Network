@@ -96,7 +96,7 @@ function MetricCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-[#6b7280]">{label}</p>
-          <p className="mt-3 text-3xl font-semibold tracking-tight text-[#111827]">
+          <p className="mt-3 text-3xl font-medium tracking-tight text-[#111827]">
             {value}
           </p>
         </div>
@@ -183,7 +183,7 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
           </span>
         </div>
 
-        <h2 className="mt-3 text-xl font-semibold text-[#111827]">
+        <h2 className="mt-3 text-xl font-[350] text-[#111827]">
           {story.creatorName ?? "Unnamed creator"}
         </h2>
         <p className="mt-1 text-sm text-[#6b7280]">
@@ -253,7 +253,7 @@ function SafetyReportRow({ report }: { report: AdminSafetyReport }) {
           </span>
         </div>
 
-        <h3 className="mt-3 text-lg font-semibold text-[#111827]">
+        <h3 className="mt-3 text-lg font-[350] text-[#111827]">
           {targetLabel}
         </h3>
         <p className="mt-1 text-sm text-[#6b7280]">
@@ -314,7 +314,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-[#e5e7eb] bg-white px-4 py-3 shadow-sm">
           <div>
             <p className="text-sm font-medium text-[#6b7280]">Admin</p>
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-[350] tracking-tight">
               Marketplace operations
             </h1>
           </div>
@@ -374,7 +374,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           <article className="rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Budget snapshot</h2>
+                <h2 className="text-lg font-[350]">Budget snapshot</h2>
                 <p className="mt-1 text-sm text-[#6b7280]">
                   Posted wallet movement across advertiser accounts.
                 </p>
@@ -387,7 +387,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                 <span className="text-sm font-medium text-[#6b7280]">
                   Funded
                 </span>
-                <span className="font-semibold">
+                <span className="font-medium">
                   {formatMoney(overview.fundedBudgetCents)}
                 </span>
               </div>
@@ -395,7 +395,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                 <span className="text-sm font-medium text-[#6b7280]">
                   Available
                 </span>
-                <span className="font-semibold">
+                <span className="font-medium">
                   {formatMoney(overview.activeBudgetCents)}
                 </span>
               </div>
@@ -403,7 +403,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
                 <span className="text-sm font-medium text-[#6b7280]">
                   Pending
                 </span>
-                <span className="font-semibold">
+                <span className="font-medium">
                   {formatMoney(overview.pendingBudgetCents)}
                 </span>
               </div>
@@ -413,7 +413,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           <article className="rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Moderation flow</h2>
+                <h2 className="text-lg font-[350]">Moderation flow</h2>
                 <p className="mt-1 text-sm text-[#6b7280]">
                   Flagged stories stay out of the live feed until reviewed.
                 </p>
@@ -423,7 +423,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               <div className="rounded-[8px] bg-[#f9fafb] p-4">
                 <p className="text-sm text-[#6b7280]">Flagged</p>
-                <p className="mt-2 text-2xl font-semibold">
+                <p className="mt-2 text-2xl font-medium">
                   {formatNumber(overview.flaggedStoryCount)}
                 </p>
               </div>
@@ -442,7 +442,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <section className="mt-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold">User reports</h2>
+              <h2 className="text-xl font-[350]">User reports</h2>
               <p className="mt-1 text-sm text-[#6b7280]">
                 Reports against stories, accounts, and replies.
               </p>
@@ -459,7 +459,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           ) : (
             <div className="rounded-[8px] border border-[#e5e7eb] bg-white p-8 text-center shadow-sm">
               <Flag className="mx-auto size-8 text-[#9ca3af]" />
-              <h3 className="mt-3 text-lg font-semibold">No user reports</h3>
+              <h3 className="mt-3 text-lg font-[350]">No user reports</h3>
               <p className="mt-1 text-sm text-[#6b7280]">
                 Reports submitted from web or mobile will appear here.
               </p>
@@ -470,7 +470,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
         <section className="mt-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold">Review queue</h2>
+              <h2 className="text-xl font-[350]">Review queue</h2>
               <p className="mt-1 text-sm text-[#6b7280]">
                 User reports and automated flags from captions, overlays, tags,
                 and links.
@@ -487,7 +487,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
           ) : (
             <div className="rounded-[8px] border border-[#e5e7eb] bg-white p-8 text-center shadow-sm">
               <ShieldAlert className="mx-auto size-8 text-[#9ca3af]" />
-              <h3 className="mt-3 text-lg font-semibold">No stories in review</h3>
+              <h3 className="mt-3 text-lg font-[350]">No stories in review</h3>
               <p className="mt-1 text-sm text-[#6b7280]">
                 New flags will appear here before they can enter the feed.
               </p>

@@ -24,7 +24,7 @@ export default async function NewStoryPage() {
             </a>
             <div>
               <p className="text-sm text-[#6b7280]">@{session.handle}</p>
-              <h1 className="text-2xl font-semibold tracking-tight">
+              <h1 className="text-2xl font-[350] tracking-tight">
                 New story
               </h1>
             </div>
@@ -44,7 +44,7 @@ export default async function NewStoryPage() {
           <section className="rounded-[8px] bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
             <div className="max-w-xl">
               <p className="text-sm font-medium text-[#6b7280]">Account setup</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+              <h2 className="mt-2 text-2xl font-[350] tracking-tight">
                 Turn on posting before creating a story.
               </h2>
               <p className="mt-2 text-sm leading-6 text-[#6b7280]">

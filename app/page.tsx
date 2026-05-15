@@ -99,7 +99,7 @@ function SiteHeader() {
   return (
     <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-[#060606]/78 text-white backdrop-blur-xl">
       <div className="relative mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between gap-4 px-4">
-        <Link href="/" className="text-xl font-semibold" aria-label="UBEYE home">
+        <Link href="/" className="text-xl font-medium" aria-label="UBEYE home">
           UBEYE
         </Link>
 
@@ -134,9 +134,9 @@ function AttentionLedger() {
       <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
         <div>
           <p className="text-xs uppercase text-white/42">How it works</p>
-          <p className="mt-1 text-sm font-medium text-white">One story creates value</p>
+          <p className="mt-1 text-sm font-normal text-white">One story creates value</p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-semibold text-white">
+        <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-medium text-white">
           <span className="size-1.5 rounded-full bg-white" />
           Active
         </span>
@@ -146,7 +146,7 @@ function AttentionLedger() {
         {heroSignals.map((signal) => (
           <div key={signal.label} className="px-3 py-4 first:pl-0 last:pr-0">
             <p className="text-[0.7rem] uppercase text-white/38">{signal.label}</p>
-            <p className="mt-1 text-2xl font-semibold text-white">{signal.value}</p>
+            <p className="mt-1 text-2xl font-normal text-white">{signal.value}</p>
           </div>
         ))}
       </div>
@@ -155,7 +155,7 @@ function AttentionLedger() {
         {ledgerEvents.map((event, index) => (
           <div key={event.label} className="grid grid-cols-[1.35rem_1fr] gap-3 py-4">
             <div className="pt-1">
-              <span className="flex size-5 items-center justify-center rounded-full border border-[#e01616]/50 bg-[#e01616]/16 text-[0.65rem] font-semibold text-[#ffb4a6]">
+              <span className="flex size-5 items-center justify-center rounded-full border border-[#e01616]/50 bg-[#e01616]/16 text-[0.65rem] font-medium text-[#ffb4a6]">
                 {index + 1}
               </span>
             </div>
@@ -174,7 +174,7 @@ function SiteFooter() {
   return (
     <footer className="border-t border-white/10 bg-[#060606] text-white">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-5 px-4 py-8 text-sm text-white/54 sm:flex-row sm:items-center sm:justify-between">
-        <Link href="/" className="w-fit text-xl font-semibold text-white" aria-label="UBEYE home">
+        <Link href="/" className="w-fit text-xl font-medium text-white" aria-label="UBEYE home">
           UBEYE
         </Link>
         <nav className="flex flex-wrap gap-x-5 gap-y-3" aria-label="Legal">
@@ -217,10 +217,10 @@ export default function HomePage() {
           <div className="relative mx-auto grid max-w-[1180px] gap-10 px-4 md:min-h-[calc(88vh-4rem)] md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
             <div className="flex min-h-[calc(100svh-4rem)] max-w-4xl flex-col pb-8 pt-17 md:block md:min-h-0 md:py-0">
               <div>
-                <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-semibold uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
+                <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-medium uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
                   A social experiment in wealth redistribution
                 </p>
-                <h1 className="mt-10 max-w-[12ch] text-[3.65rem] font-semibold leading-[0.92] text-white sm:text-[4.8rem] md:mt-7 md:text-[5.5rem] lg:text-[6.2rem]">
+                <h1 className="mt-10 max-w-[12ch] text-[3.65rem] font-[350] leading-[0.96] text-white sm:text-[4.8rem] md:mt-7 md:text-[5.5rem] lg:text-[6.2rem]">
                   Organic content, monetized.
                 </h1>
                 <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
@@ -231,13 +231,13 @@ export default function HomePage() {
               </div>
 
               <div className="mt-auto flex flex-col gap-3 pt-10 sm:flex-row md:mt-7 md:pt-0">
-                <Button asChild className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-semibold text-white hover:bg-[#c91414] sm:justify-center">
+                <Button asChild className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-medium text-white hover:bg-[#c91414] sm:justify-center">
                   <Link href={mobileAppHref}>
                     Get the app
                     <ArrowRight className="size-4" />
                   </Link>
                 </Button>
-                <Button asChild variant="outline" className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-semibold text-white hover:bg-white/10 sm:justify-center">
+                <Button asChild variant="outline" className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-medium text-white hover:bg-white/10 sm:justify-center">
                   <Link href="/advertise">Advertise on UBEYE</Link>
                 </Button>
               </div>
@@ -253,17 +253,17 @@ export default function HomePage() {
           <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
             <div className="grid gap-12 lg:grid-cols-[18rem_minmax(0,1fr)] lg:gap-16">
               <div>
-                <p className="text-xs font-semibold uppercase text-[#e01616]">The model</p>
+                <p className="text-xs font-medium uppercase text-[#e01616]">The model</p>
               </div>
               <div>
-                <h2 className="max-w-4xl text-4xl font-semibold leading-tight text-white md:text-6xl md:leading-[1.02]">
+                <h2 className="max-w-4xl text-4xl font-[350] leading-tight text-white md:text-6xl md:leading-[1.08]">
                   UBEYE changes what happens after people pay attention.
                 </h2>
                 <div className="mt-12 grid gap-4 md:grid-cols-2">
                   {modelRows.map((row) => (
                     <article key={row.label} className="border border-white/10 bg-white/[0.03] p-5">
-                      <p className="text-xs font-semibold uppercase text-white/82">{row.label}</p>
-                      <h3 className="mt-5 text-2xl font-semibold leading-tight text-white">{row.title}</h3>
+                      <p className="text-xs font-medium uppercase text-white/82">{row.label}</p>
+                      <h3 className="mt-5 text-2xl font-normal leading-tight text-white">{row.title}</h3>
                       <p className="mt-5 text-sm leading-7 text-white/56 md:text-base">{row.copy}</p>
                     </article>
                   ))}
@@ -277,8 +277,8 @@ export default function HomePage() {
           <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
             <div className="grid gap-12 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)] lg:gap-20">
               <div className="max-w-[29rem]">
-                <p className="text-xs font-semibold uppercase text-[#e01616]">The value loop</p>
-                <h2 className="mt-5 text-4xl font-semibold leading-tight md:text-6xl md:leading-[1.02]">
+                <p className="text-xs font-medium uppercase text-[#e01616]">The value loop</p>
+                <h2 className="mt-5 text-4xl font-[350] leading-tight md:text-6xl md:leading-[1.08]">
                   Same behavior. Better economics.
                 </h2>
                 <p className="mt-7 text-base leading-8 text-black/62 md:text-lg">
@@ -295,10 +295,10 @@ export default function HomePage() {
                       <step.icon className="size-5" />
                     </div>
                     <div>
-                      <p className="text-xs font-semibold uppercase text-[#e01616]">
+                      <p className="text-xs font-medium uppercase text-[#e01616]">
                         {String(index + 1).padStart(2, "0")} / {step.label}
                       </p>
-                      <h3 className="mt-2 text-2xl font-semibold leading-tight">{step.title}</h3>
+                      <h3 className="mt-2 text-2xl font-normal leading-tight">{step.title}</h3>
                       <p className="mt-3 max-w-2xl text-sm leading-7 text-black/58 md:text-base">{step.copy}</p>
                     </div>
                     <ArrowRight className="hidden size-5 text-black/28 sm:block" />
@@ -312,8 +312,8 @@ export default function HomePage() {
         <section className="border-b border-white/10 bg-[#060606] text-white">
           <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_25rem] lg:items-end">
             <div>
-              <p className="text-xs font-semibold uppercase text-[#e01616]">Participation</p>
-              <h2 className="mt-5 max-w-4xl text-5xl font-semibold leading-[0.98] md:text-7xl">
+              <p className="text-xs font-medium uppercase text-[#e01616]">Participation</p>
+              <h2 className="mt-5 max-w-4xl text-5xl font-[350] leading-[1.03] md:text-7xl">
                 Earning is not only for influencers.
               </h2>
               <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
@@ -339,11 +339,11 @@ export default function HomePage() {
           <div className="mx-auto max-w-[1180px] px-4 py-16 md:py-24">
             <div className="grid overflow-hidden border border-black/10 bg-white md:grid-cols-[1.05fr_0.95fr]">
               <div className="p-6 sm:p-8 lg:p-10">
-                <p className="inline-flex items-center gap-2 text-sm font-semibold text-[#e01616]">
+                <p className="inline-flex items-center gap-2 text-sm font-medium text-[#e01616]">
                   <ShieldCheck className="size-4" />
                   Advertiser-funded
                 </p>
-                <h2 className="mt-6 max-w-[12ch] text-4xl font-semibold leading-[1] sm:text-6xl">
+                <h2 className="mt-6 max-w-[12ch] text-4xl font-[350] leading-[1.08] sm:text-6xl">
                   Fund attention people choose.
                 </h2>
                 <p className="mt-7 max-w-xl text-base leading-8 text-black/58 md:text-lg">
@@ -363,7 +363,7 @@ export default function HomePage() {
                   <BadgeDollarSign className="size-6" />
                 </div>
                 <div>
-                  <p className="text-6xl font-semibold sm:text-7xl">75%</p>
+                  <p className="text-6xl font-[350] sm:text-7xl">75%</p>
                   <p className="mt-3 max-w-sm text-sm leading-6 text-white/56">
                     Target revenue share routed toward eligible users as the
                     experiment scales.

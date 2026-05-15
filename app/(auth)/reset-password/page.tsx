@@ -24,11 +24,11 @@ export default async function ResetPasswordPage({
         <div className="space-y-2">
           <Link
             href="/"
-            className="text-xs font-semibold uppercase tracking-[0.22em] text-black/42"
+            className="text-xs font-medium uppercase tracking-[0.22em] text-black/42"
           >
             UBEYE
           </Link>
-          <h1 className="text-3xl font-semibold text-foreground">
+          <h1 className="text-3xl font-[350] text-foreground">
             Choose a new password
           </h1>
           <p className="text-sm leading-6 text-muted-foreground">

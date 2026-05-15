@@ -27,7 +27,7 @@ export function CreatorRail({ creators }: CreatorRailProps) {
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-medium text-foreground">
+            <h2 className="text-lg font-[350] text-foreground">
               What the feed is learning
             </h2>
             <p className="text-sm text-muted-foreground">

@@ -80,7 +80,7 @@ function StatCard({
           {icon}
         </span>
       </div>
-      <p className="mt-4 text-3xl font-semibold tracking-tight text-[#17191f]">
+      <p className="mt-4 text-3xl font-medium tracking-tight text-[#17191f]">
         {value}
       </p>
       {subtext ? (
@@ -114,7 +114,7 @@ export default async function CreatorStatsPage() {
             </a>
             <div>
               <p className="text-sm text-[#6b7280]">@{session.handle}</p>
-              <h1 className="text-2xl font-semibold tracking-tight">
+              <h1 className="text-2xl font-[350] tracking-tight">
                 Creator stats
               </h1>
             </div>
@@ -187,7 +187,7 @@ export default async function CreatorStatsPage() {
           <article className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Story activity</h2>
+                <h2 className="text-lg font-[350]">Story activity</h2>
                 <p className="mt-1 text-sm text-[#6b7280]">
                   {stats.totalStories} total stories
                 </p>
@@ -200,21 +200,21 @@ export default async function CreatorStatsPage() {
             <div className="mt-5 grid gap-3">
               <div className="flex items-center justify-between rounded-[8px] bg-[#f5f6f8] px-4 py-3">
                 <span className="text-sm font-medium text-[#6b7280]">Live</span>
-                <span className="font-semibold">{stats.liveStories}</span>
+                <span className="font-medium">{stats.liveStories}</span>
               </div>
               <div className="flex items-center justify-between rounded-[8px] bg-[#f5f6f8] px-4 py-3">
                 <span className="text-sm font-medium text-[#6b7280]">Expired</span>
-                <span className="font-semibold">{stats.expiredStories}</span>
+                <span className="font-medium">{stats.expiredStories}</span>
               </div>
               <div className="flex items-center justify-between rounded-[8px] bg-[#f5f6f8] px-4 py-3">
                 <span className="text-sm font-medium text-[#6b7280]">Removed</span>
-                <span className="font-semibold">{stats.removedStories}</span>
+                <span className="font-medium">{stats.removedStories}</span>
               </div>
               <div className="flex items-center justify-between rounded-[8px] bg-[#f5f6f8] px-4 py-3">
                 <span className="text-sm font-medium text-[#6b7280]">
                   Avg. view time
                 </span>
-                <span className="font-semibold">
+                <span className="font-medium">
                   {stats.averageViewedSeconds}s
                 </span>
               </div>
@@ -224,7 +224,7 @@ export default async function CreatorStatsPage() {
           <article className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Recent stories</h2>
+                <h2 className="text-lg font-[350]">Recent stories</h2>
                 <p className="mt-1 text-sm text-[#6b7280]">
                   Per-item views and completion.
                 </p>
@@ -242,7 +242,7 @@ export default async function CreatorStatsPage() {
                     <StoryThumb story={story} />
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate font-semibold">
+                        <p className="truncate font-medium">
                           {story.caption || "Untitled story"}
                         </p>
                         <Badge className="border-none bg-[#f5f6f8] text-[#374151]">
@@ -254,7 +254,7 @@ export default async function CreatorStatsPage() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold">
+                      <p className="font-medium">
                         {formatNumber(story.views)} views
                       </p>
                       <p className="mt-1 text-sm text-[#6b7280]">
@@ -265,7 +265,7 @@ export default async function CreatorStatsPage() {
                 ))
               ) : (
                 <div className="rounded-[8px] bg-[#f5f6f8] p-6 text-center">
-                  <p className="font-semibold">No stories yet</p>
+                  <p className="font-medium">No stories yet</p>
                   <p className="mt-1 text-sm text-[#6b7280]">
                     Post a story to start building your creator stats.
                   </p>

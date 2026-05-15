@@ -131,7 +131,7 @@ export function StoryCreateForm() {
                 <Camera className="size-7" />
               </div>
               <div>
-                <p className="text-xl font-semibold">Create your story</p>
+                <p className="text-xl font-medium">Create your story</p>
                 <p className="mt-2 max-w-sm text-sm leading-6 text-white/62">
                   Take a photo or choose one from your camera roll.
                 </p>
@@ -149,7 +149,7 @@ export function StoryCreateForm() {
             >
               <ChevronDown className="size-5 rotate-90" />
             </a>
-            <div className="rounded-full bg-black/34 px-4 py-2 text-sm font-semibold backdrop-blur">
+            <div className="rounded-full bg-black/34 px-4 py-2 text-sm font-medium backdrop-blur">
               My Story
             </div>
           </div>
@@ -189,7 +189,7 @@ export function StoryCreateForm() {
               onPointerUp={endTextDrag}
               onPointerCancel={endTextDrag}
               className={cn(
-                "absolute left-0 right-0 top-[47%] cursor-ns-resize select-none bg-black/34 px-6 py-2 text-center text-[1.35rem] font-semibold leading-tight text-white backdrop-blur-[2px]",
+                "absolute left-0 right-0 top-[47%] cursor-ns-resize select-none bg-black/34 px-6 py-2 text-center text-[1.35rem] font-medium leading-tight text-white backdrop-blur-[2px]",
                 isDraggingText ? "bg-black/48" : null,
               )}
               style={{ transform: `translateY(${textOffset}px)` }}
@@ -202,7 +202,7 @@ export function StoryCreateForm() {
             <button
               type="button"
               onClick={() => setActivePanel("link")}
-              className="absolute bottom-24 left-5 right-5 flex min-h-10 items-center gap-2 rounded-full bg-black/42 px-4 text-left text-sm font-semibold text-white backdrop-blur lg:left-6 lg:right-auto lg:max-w-[320px]"
+              className="absolute bottom-24 left-5 right-5 flex min-h-10 items-center gap-2 rounded-full bg-black/42 px-4 text-left text-sm font-medium text-white backdrop-blur lg:left-6 lg:right-auto lg:max-w-[320px]"
             >
               <Link2 className="size-4 shrink-0" />
               <span className="min-w-0 truncate">{linkUrl.trim()}</span>
@@ -212,7 +212,7 @@ export function StoryCreateForm() {
           <div className="absolute bottom-5 left-6 right-6">
             <Button
               type="submit"
-              className="h-11 w-full rounded-full bg-[#e01616]/90 text-sm font-semibold text-white hover:bg-[#c91414] lg:mx-auto lg:max-w-[260px]"
+              className="h-11 w-full rounded-full bg-[#e01616]/90 text-sm font-medium text-white hover:bg-[#c91414] lg:mx-auto lg:max-w-[260px]"
             >
               Upload to Story
             </Button>
@@ -222,8 +222,8 @@ export function StoryCreateForm() {
 
       <section className="rounded-[8px] bg-white p-5 shadow-[0_14px_40px_rgba(15,23,42,0.06)] lg:sticky lg:top-6 lg:self-start">
         <div className="mb-5">
-          <p className="text-sm font-semibold text-[#e01616]">Web story editor</p>
-          <h2 className="mt-1 text-2xl font-semibold tracking-tight text-[#17191f]">
+          <p className="text-sm font-medium text-[#e01616]">Web story editor</p>
+          <h2 className="mt-1 text-2xl font-[350] tracking-tight text-[#17191f]">
             Upload to My Story
           </h2>
           <p className="mt-1 text-sm leading-6 text-[#6b7280]">
@@ -264,7 +264,7 @@ export function StoryCreateForm() {
             <button
               type="button"
               onClick={() => setActivePanel("text")}
-              className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#374151]"
+              className="mb-2 flex items-center gap-2 text-sm font-medium text-[#374151]"
             >
               <Type className="size-4" />
               Text
@@ -287,7 +287,7 @@ export function StoryCreateForm() {
             <button
               type="button"
               onClick={() => setActivePanel("link")}
-              className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#374151]"
+              className="mb-2 flex items-center gap-2 text-sm font-medium text-[#374151]"
             >
               <Link2 className="size-4" />
               Link

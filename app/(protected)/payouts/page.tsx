@@ -108,7 +108,7 @@ export default async function PayoutsPage({ searchParams }: PayoutsPageProps) {
               <p className="text-sm font-medium text-[#71717a]">
                 Creator monetization
               </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+              <h1 className="mt-2 text-3xl font-[350] tracking-tight">
                 Stripe payouts
               </h1>
               <p className="mt-3 text-sm leading-6 text-[#71717a]">
@@ -216,7 +216,7 @@ function StatusCard({
         <p className="text-sm font-medium">{label}</p>
         {icon}
       </div>
-      <p className="mt-3 text-xl font-semibold tracking-tight">{value}</p>
+      <p className="mt-3 text-xl font-medium tracking-tight">{value}</p>
     </article>
   )
 }

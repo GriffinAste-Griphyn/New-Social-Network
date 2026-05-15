@@ -36,20 +36,20 @@ export default function MobileAppPage() {
 
         <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1180px] flex-col px-4 py-5 sm:px-6 lg:px-4">
           <header className="flex items-center justify-between gap-4">
-            <Link href="/" className="text-xl font-semibold" aria-label="UBEYE home">
+            <Link href="/" className="text-xl font-medium" aria-label="UBEYE home">
               UBEYE
             </Link>
           </header>
 
           <div className="flex flex-1 items-center">
             <div className="max-w-5xl">
-              <h1 className="text-[3.35rem] font-semibold leading-[0.92] text-white sm:text-[4.8rem] md:text-[5.8rem] lg:text-[6.4rem]">
+              <h1 className="text-[3.35rem] font-[350] leading-[0.92] text-white sm:text-[4.8rem] md:text-[5.8rem] lg:text-[6.4rem]">
                 <span className="block sm:inline">Coming very</span>{" "}
                 <span className="block sm:inline">soon.</span>
               </h1>
               <p className="mt-7 max-w-2xl text-base leading-8 text-white/68 md:text-lg">
                 Want to be a beta user in TestFlight? Text Griffin at{" "}
-                <a href={betaPhoneHref} className="font-semibold text-white underline underline-offset-4">
+                <a href={betaPhoneHref} className="font-medium text-white underline underline-offset-4">
                   {betaPhoneDisplay}
                 </a>
                 .

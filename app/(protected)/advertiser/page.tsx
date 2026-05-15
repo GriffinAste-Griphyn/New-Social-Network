@@ -233,7 +233,7 @@ function DesktopOnlyNotice() {
         <div className="flex size-11 items-center justify-center rounded-[8px] bg-[#18181b] text-white">
           <MonitorIcon />
         </div>
-        <h1 className="mt-5 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-5 text-2xl font-[350] tracking-tight">
           Advertiser portal is desktop only
         </h1>
         <p className="mt-3 text-sm leading-6 text-[#71717a]">
@@ -283,14 +283,14 @@ function EmptyAdvertiserState({
       <main className="min-h-screen bg-[#f7f7f4] px-8 py-8 text-[#18181b]">
         <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,0.85fr)_minmax(28rem,1fr)] gap-8">
           <section className="pt-8">
-            <Link href="/" className="text-2xl font-semibold tracking-tight">
+            <Link href="/" className="text-2xl font-medium tracking-tight">
               UBEYE
             </Link>
             <div className="mt-16 max-w-xl">
               <p className="text-sm font-medium uppercase tracking-[0.18em] text-[#71717a]">
                 Advertiser portal
               </p>
-              <h1 className="mt-4 text-5xl font-semibold leading-[1.02] tracking-tight">
+              <h1 className="mt-4 text-5xl font-[350] leading-[1.02] tracking-tight">
                 Create the account that funds creator conversations.
               </h1>
               <div className="mt-8 grid gap-3 text-sm text-[#52525b]">
@@ -323,7 +323,7 @@ function EmptyAdvertiserState({
                 <Building2 className="size-5" />
               </div>
               <div>
-                <h2 className="text-xl font-semibold tracking-tight">
+                <h2 className="text-xl font-[350] tracking-tight">
                   Account setup
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-[#71717a]">
@@ -434,7 +434,7 @@ export default async function AdvertiserPage({
                 <p className="text-sm font-medium text-[#71717a]">
                   Advertiser funding console
                 </p>
-                <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+                <h1 className="mt-1 text-3xl font-[350] tracking-tight">
                   {account.name}
                 </h1>
               </div>
@@ -550,7 +550,7 @@ function OverviewConsole({
             <Activity className="size-4" />
             Overview
           </div>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+          <h2 className="mt-2 text-xl font-[350] tracking-tight">
             Account funding
           </h2>
         </div>
@@ -565,7 +565,7 @@ function OverviewConsole({
       <div className="mt-6 grid gap-4 md:grid-cols-3">
         <div>
           <p className="text-sm font-medium text-[#71717a]">Available funds</p>
-          <p className="mt-2 text-3xl font-semibold tracking-tight">
+          <p className="mt-2 text-3xl font-medium tracking-tight">
             {formatMoney(balanceCents)}
           </p>
           {pendingCents > 0 ? (
@@ -577,7 +577,7 @@ function OverviewConsole({
 
         <div>
           <p className="text-sm font-medium text-[#71717a]">Rules</p>
-          <p className="mt-2 text-2xl font-semibold tracking-tight">
+          <p className="mt-2 text-2xl font-medium tracking-tight">
             {hasFundingRules ? "Ready" : "Needs setup"}
           </p>
           {hasFundingRules ? (
@@ -589,7 +589,7 @@ function OverviewConsole({
 
         <div>
           <p className="text-sm font-medium text-[#71717a]">Matching</p>
-          <p className="mt-2 text-2xl font-semibold capitalize tracking-tight">
+          <p className="mt-2 text-2xl font-medium capitalize tracking-tight">
             {matchingStatus}
           </p>
         </div>
@@ -674,7 +674,7 @@ function FundingRail({
 
   return (
     <aside className="flex min-h-screen flex-col bg-white px-4 py-5">
-      <Link href="/" className="text-2xl font-semibold tracking-tight">
+      <Link href="/" className="text-2xl font-medium tracking-tight">
         UBEYE
       </Link>
 
@@ -682,7 +682,7 @@ function FundingRail({
         <p className="truncate text-sm font-medium text-[#71717a]">
           {accountName}
         </p>
-        <p className="mt-3 text-3xl font-semibold tracking-tight">
+        <p className="mt-3 text-3xl font-medium tracking-tight">
           {formatMoney(balanceCents)}
         </p>
         <p className="mt-1 text-xs text-[#71717a]">Available funds</p>
@@ -760,7 +760,7 @@ function RailStat({
         <Icon className="size-4" />
         <span>{label}</span>
       </div>
-      <span className="text-sm font-semibold text-[#18181b]">{value}</span>
+      <span className="text-sm font-medium text-[#18181b]">{value}</span>
     </div>
   )
 }
@@ -788,7 +788,7 @@ function AccountConsole({
               <Building2 className="size-4" />
               Account
             </div>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            <h2 className="mt-2 text-xl font-[350] tracking-tight">
               Brand identity and billing
             </h2>
           </div>
@@ -888,7 +888,7 @@ function RulesConsole({
               <SlidersHorizontal className="size-4" />
               Match rules
             </div>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            <h2 className="mt-2 text-xl font-[350] tracking-tight">
               What should qualify for funding
             </h2>
           </div>
@@ -1029,7 +1029,7 @@ function SignalGroup({
 }) {
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#18181b]">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[#18181b]">
         <Icon className="size-4 text-[#52525b]" />
         {title}
       </div>
@@ -1055,12 +1055,12 @@ function WalletConsole({
             <Wallet className="size-4" />
             Wallet
           </div>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+          <h2 className="mt-2 text-xl font-[350] tracking-tight">
             Fund the account
           </h2>
         </div>
         <div className="text-right">
-          <p className="text-3xl font-semibold tracking-tight">
+          <p className="text-3xl font-medium tracking-tight">
             {formatMoney(balanceCents)}
           </p>
           <p className="mt-1 text-sm text-[#71717a]">
@@ -1167,7 +1167,7 @@ function FundingSummary({
       <Separator className="my-4 bg-[#e4e4e7]" />
       <p className="text-sm leading-6 text-[#52525b]">
         This account can fund up to{" "}
-        <span className="font-semibold text-[#18181b]">{capacity}</span> matched
+        <span className="font-medium text-[#18181b]">{capacity}</span> matched
         post{capacity === 1 ? "" : "s"} before the wallet needs more funds.
       </p>
     </section>
@@ -1249,7 +1249,7 @@ function TransactionLedger({
     <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Wallet ledger</h2>
+          <h2 className="text-xl font-[350] tracking-tight">Wallet ledger</h2>
           <p className="mt-2 text-sm leading-6 text-[#71717a]">
             Posted and pending advertiser wallet movements.
           </p>
@@ -1323,7 +1323,7 @@ function PayoutTable({
     <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Creator payouts</h2>
+          <h2 className="text-xl font-[350] tracking-tight">Creator payouts</h2>
           <p className="mt-2 text-sm leading-6 text-[#71717a]">
             Qualified creator activity funded by this advertiser account.
           </p>

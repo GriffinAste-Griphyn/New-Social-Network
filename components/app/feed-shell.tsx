@@ -269,7 +269,7 @@ function MyStoryBubble({
                 className="object-cover"
               />
             ) : (
-              <span className="flex size-full items-center justify-center text-sm font-semibold text-[#17191f]">
+              <span className="flex size-full items-center justify-center text-sm font-medium text-[#17191f]">
                 {initials(myStory.owner.name)}
               </span>
             )}
@@ -288,7 +288,7 @@ function MyStoryBubble({
       </div>
       <p
         className={cn(
-          "mt-4 truncate font-semibold tracking-tight text-[#17191f]",
+          "mt-4 truncate font-medium tracking-tight text-[#17191f]",
           variant === "desktop" ? "text-sm" : "text-[1rem]",
         )}
       >
@@ -358,7 +358,7 @@ function SuggestionList({
           <div className="flex min-w-0 items-center gap-3">
             <AccountAvatar account={account} className="size-10" />
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-[#17191f]">
+              <p className="truncate text-sm font-medium text-[#17191f]">
                 {account.name}
               </p>
               <p className="truncate text-xs text-[#6b7280]">
@@ -428,7 +428,7 @@ function StoryMedia({
 
   return (
     <div className="absolute inset-0 bg-gradient-to-br from-[#111827] via-[#262626] to-[#4b5563]">
-      <div className="absolute right-3 top-3 rounded-full bg-white/14 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
+      <div className="absolute right-3 top-3 rounded-full bg-white/14 px-2 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-white">
         Video
       </div>
     </div>
@@ -472,7 +472,7 @@ function SectionHeading({
 }) {
   return (
     <div className={cn("mb-3 flex items-center gap-1", className)}>
-      <h2 className="text-[2rem] font-semibold tracking-tight text-[#17191f] sm:text-[2.15rem]">
+      <h2 className="text-[2rem] font-[350] tracking-tight text-[#17191f] sm:text-[2.15rem]">
         {title}
       </h2>
       {withChevron ? (
@@ -526,7 +526,7 @@ function FollowingStrip({
           </div>
           <p
             className={cn(
-              "mt-4 truncate font-semibold tracking-tight text-[#17191f]",
+              "mt-4 truncate font-medium tracking-tight text-[#17191f]",
               variant === "desktop" ? "text-sm" : "text-[1rem]",
             )}
           >
@@ -581,7 +581,7 @@ function FollowingCard({
 
       <div className="absolute left-3 top-3 flex size-11 items-center justify-center overflow-hidden rounded-full border-[3px] border-[#e01616] bg-white">
         <Avatar className="size-10">
-          <AvatarFallback className="bg-white text-xs font-semibold text-[#17191f]">
+          <AvatarFallback className="bg-white text-xs font-medium text-[#17191f]">
             {initials(story.creator)}
           </AvatarFallback>
         </Avatar>
@@ -590,7 +590,7 @@ function FollowingCard({
       <div className="absolute bottom-0 left-0 right-0 p-3">
         <p
           className={cn(
-            "line-clamp-4 font-semibold leading-[1.12] text-white",
+            "line-clamp-4 font-medium leading-[1.12] text-white",
             variant === "desktop" ? "text-[1.05rem]" : "text-[1rem]",
           )}
         >
@@ -647,7 +647,7 @@ function DiscoverCard({
             {tile.subtitle}
           </Badge>
         ) : null}
-        <p className="line-clamp-4 text-[1rem] font-semibold leading-[1.15] text-white">
+        <p className="line-clamp-4 text-[1rem] font-medium leading-[1.15] text-white">
           {tile.title}
         </p>
       </div>
@@ -673,7 +673,7 @@ function StoryComposerPanel({
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <p className="text-lg font-semibold tracking-tight text-[#17191f]">
+          <p className="text-lg font-medium tracking-tight text-[#17191f]">
             {session.creatorStatus === "active"
               ? "Post a story"
               : "Account setup"}
@@ -691,7 +691,7 @@ function StoryComposerPanel({
       {session.creatorStatus !== "active" ? (
         <div className="space-y-4 rounded-[8px] bg-[#f5f6f8] p-4">
           <div>
-            <p className="font-semibold text-[#17191f]">
+            <p className="font-medium text-[#17191f]">
               Turn on posting when you are ready to share.
             </p>
             <p className="mt-1 text-sm leading-6 text-[#6b7280]">
@@ -735,7 +735,7 @@ function StoryComposerPanel({
                 <Link2 className="size-4" />
               </span>
             </div>
-            <div className="absolute inset-x-0 top-[48%] bg-black/34 px-4 py-2 text-center text-lg font-semibold text-white">
+            <div className="absolute inset-x-0 top-[48%] bg-black/34 px-4 py-2 text-center text-lg font-medium text-white">
               Add text
             </div>
           </div>
@@ -745,7 +745,7 @@ function StoryComposerPanel({
           <a
             href="/stories/new"
             className={cn(
-              "flex h-11 items-center justify-center gap-2 rounded-[8px] bg-[#e01616] px-4 text-sm font-semibold text-white hover:bg-[#c91414]",
+              "flex h-11 items-center justify-center gap-2 rounded-[8px] bg-[#e01616] px-4 text-sm font-medium text-white hover:bg-[#c91414]",
               compact ? "mt-3" : "mt-4",
             )}
           >
@@ -754,14 +754,14 @@ function StoryComposerPanel({
           </a>
           <a
             href="/stats"
-            className="mt-2 flex h-10 items-center justify-center gap-2 rounded-[8px] bg-white px-4 text-sm font-semibold text-[#374151] hover:bg-[#eef0f3]"
+            className="mt-2 flex h-10 items-center justify-center gap-2 rounded-[8px] bg-white px-4 text-sm font-medium text-[#374151] hover:bg-[#eef0f3]"
           >
             <BarChart3 className="size-4" />
             View stats
           </a>
           <a
             href="/payouts"
-            className="mt-2 flex h-10 items-center justify-center gap-2 rounded-[8px] bg-white px-4 text-sm font-semibold text-[#374151] hover:bg-[#eef0f3]"
+            className="mt-2 flex h-10 items-center justify-center gap-2 rounded-[8px] bg-white px-4 text-sm font-medium text-[#374151] hover:bg-[#eef0f3]"
           >
             <WalletCards className="size-4" />
             Stripe payouts
@@ -864,7 +864,7 @@ function MobileAppFeed({
             </details>
           </div>
 
-          <p className="justify-self-center text-[2rem] font-semibold tracking-tight text-[#17191f]">
+          <p className="justify-self-center text-[2rem] font-medium tracking-tight text-[#17191f]">
             Stories
           </p>
 
@@ -965,7 +965,7 @@ function MobileWebFeed({
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm text-[#6b7280]">Mobile web</p>
-            <h1 className="text-[2.35rem] font-semibold tracking-tight text-[#17191f]">
+            <h1 className="text-[2.35rem] font-[350] tracking-tight text-[#17191f]">
               Stories
             </h1>
           </div>
@@ -982,7 +982,7 @@ function MobileWebFeed({
               <Bell className="size-5" />
             </div>
             <div className="flex size-11 items-center justify-center rounded-full bg-[#fde047] text-[#17191f]">
-              <span className="text-sm font-semibold">
+              <span className="text-sm font-medium">
                 {initials(session.displayName)}
               </span>
             </div>
@@ -1176,7 +1176,7 @@ function DesktopFeed({
               </a>
             </div>
 
-            <h1 className="justify-self-center text-2xl font-semibold tracking-normal text-[#17191f]">
+            <h1 className="justify-self-center text-2xl font-[350] tracking-normal text-[#17191f]">
               Stories
             </h1>
 
@@ -1185,7 +1185,7 @@ function DesktopFeed({
               aria-label="Open your profile tools"
               className="flex size-12 items-center justify-center justify-self-end rounded-full bg-[#e01616]"
             >
-              <span className="text-sm font-semibold text-white">
+              <span className="text-sm font-medium text-white">
                 {initials(session.displayName)}
               </span>
             </a>
@@ -1224,7 +1224,7 @@ function DesktopFeed({
             {leadStory ? (
               <section>
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-lg font-semibold text-[#17191f]">
+                  <p className="text-lg font-medium text-[#17191f]">
                     Watch now
                   </p>
                   <Badge className="rounded-full border-0 bg-[#e01616] text-white">
@@ -1242,18 +1242,18 @@ function DesktopFeed({
                   <div className="absolute inset-0 bg-gradient-to-b from-black/16 via-black/8 to-black/76" />
                   <div className="absolute left-4 right-4 top-4 flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-sm font-semibold text-white">
+                      <p className="text-sm font-medium text-white">
                         {leadStory.creator}
                       </p>
                       <p className="text-xs text-white/72">
                         {leadStory.handle}
                       </p>
                     </div>
-                    <p className="rounded-full bg-white/16 px-3 py-1 text-xs font-semibold text-white backdrop-blur">
+                    <p className="rounded-full bg-white/16 px-3 py-1 text-xs font-medium text-white backdrop-blur">
                       {leadStory.meta}
                     </p>
                   </div>
-                  <p className="absolute bottom-4 left-4 right-4 line-clamp-4 text-2xl font-semibold leading-[1.08] text-white">
+                  <p className="absolute bottom-4 left-4 right-4 line-clamp-4 text-2xl font-medium leading-[1.08] text-white">
                     {leadStory.title}
                   </p>
                 </article>
@@ -1293,7 +1293,7 @@ function DesktopFeed({
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
-                <p className="truncate text-base font-semibold text-[#17191f]">
+                <p className="truncate text-base font-medium text-[#17191f]">
                   {session.displayName}
                 </p>
                 <p className="truncate text-sm text-[#6b7280]">
@@ -1304,19 +1304,19 @@ function DesktopFeed({
 
             <div className="mt-4 grid grid-cols-3 gap-2">
               <div className="rounded-[8px] bg-[#f5f6f8] px-3 py-3">
-                <p className="text-sm font-semibold text-[#17191f]">
+                <p className="text-sm font-medium text-[#17191f]">
                   Unified
                 </p>
                 <p className="mt-1 text-[11px] text-[#6b7280]">Account</p>
               </div>
               <div className="rounded-[8px] bg-[#f5f6f8] px-3 py-3">
-                <p className="text-sm font-semibold text-[#17191f]">
+                <p className="text-sm font-medium text-[#17191f]">
                   {myStory.liveCount}
                 </p>
                 <p className="mt-1 text-[11px] text-[#6b7280]">Live</p>
               </div>
               <div className="rounded-[8px] bg-[#f5f6f8] px-3 py-3">
-                <p className="text-sm font-semibold text-[#17191f]">
+                <p className="text-sm font-medium text-[#17191f]">
                   {suggestedProfiles.length}
                 </p>
                 <p className="mt-1 text-[11px] text-[#6b7280]">To follow</p>

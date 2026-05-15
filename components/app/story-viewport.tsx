@@ -48,7 +48,7 @@ export function StoryViewport({ story }: StoryViewportProps) {
           <Badge className="w-fit border-none bg-white/12 text-white">
             Feed waiting on the first story
           </Badge>
-          <h2 className="max-w-lg text-3xl font-medium leading-9">
+          <h2 className="max-w-lg text-3xl font-[350] leading-9">
             The feed is real now. Post the first live story and it will render
             here from Neon, not from a mock constant.
           </h2>

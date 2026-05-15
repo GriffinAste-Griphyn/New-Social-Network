@@ -60,7 +60,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1180px] flex-col px-4 py-5 sm:px-6 lg:px-4">
         <header className="flex items-center justify-between gap-4">
-          <Link href="/" className="text-xl font-semibold" aria-label="UBEYE home">
+          <Link href="/" className="text-xl font-medium" aria-label="UBEYE home">
             UBEYE
           </Link>
           <Button asChild variant="ghost" className="h-10 rounded-[8px] px-4 text-sm text-white/70 hover:bg-white/8 hover:text-white">
@@ -70,10 +70,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
         <div className="flex flex-1 items-center justify-center py-12">
           <section className="w-full max-w-[25rem] border border-white/12 bg-black/54 p-5 text-white shadow-[0_24px_80px_-56px_rgba(0,0,0,0.9)] backdrop-blur-md sm:p-6">
-            <p className="text-xs font-semibold uppercase text-[#ffb4a6]">
+            <p className="text-xs font-medium uppercase text-[#ffb4a6]">
               Advertiser sign in
             </p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">
+            <h2 className="mt-3 text-2xl font-[350] tracking-tight text-white">
               Welcome back
             </h2>
             <p className="mt-2 text-sm leading-6 text-white/58">
