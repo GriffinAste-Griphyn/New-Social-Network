@@ -241,7 +241,9 @@ export default function HomePage() {
               </div>
             </div>
 
-            <AttentionLedger />
+            <div className="hidden md:block">
+              <AttentionLedger />
+            </div>
           </div>
         </section>
 
