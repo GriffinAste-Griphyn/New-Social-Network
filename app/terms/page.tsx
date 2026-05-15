@@ -1,7 +1,6 @@
-import Link from "next/link"
 import type { Metadata } from "next"
 
-import { MarketingFooter } from "@/components/marketing-footer"
+import { LegalPageLayout } from "@/components/legal-page-layout"
 
 export const metadata: Metadata = {
   title: "Terms | UBEYE",
@@ -102,59 +101,14 @@ const sections = [
 
 export default function TermsPage() {
   return (
-    <div className="min-h-screen bg-[#f4f2ec] text-black">
-      <main className="mx-auto max-w-[940px] px-4 py-10 md:py-16">
-        <Link
-          href="/"
-          className="text-xl font-semibold tracking-[-0.04em]"
-          aria-label="UBEYE home"
-        >
-          UBEYE
-        </Link>
-
-        <section className="mt-12 border-y border-black/10 py-10 md:py-14">
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-black/42">
-            Legal
-          </p>
-          <h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.07em] md:text-7xl">
-            Terms
-          </h1>
-          <p className="mt-6 max-w-2xl text-base leading-8 text-black/62 md:text-lg">
-            These Terms explain the rules for using UBEYE, including accounts,
-            user content, creator and user revenue-share features, advertisers,
-            payments, and moderation.
-          </p>
-          <p className="mt-5 text-sm font-semibold text-black/42">
-            Last updated: {lastUpdated}
-          </p>
-        </section>
-
-        <div className="divide-y divide-black/10">
-          {sections.map((section) => (
-            <section key={section.title} className="py-9">
-              <h2 className="text-2xl font-semibold tracking-[-0.04em]">
-                {section.title}
-              </h2>
-              <div className="mt-5 grid gap-4 text-base leading-8 text-black/64">
-                {section.body.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-
-        <section className="mt-6 rounded-[1.5rem] border border-black/10 bg-[#faf9f5] p-6">
-          <h2 className="text-2xl font-semibold tracking-[-0.04em]">
-            Contact
-          </h2>
-          <p className="mt-4 text-base leading-8 text-black/64">
-            For questions about these Terms, contact UBEYE support through the
-            support contact listed in the app or on the App Store listing.
-          </p>
-        </section>
-      </main>
-      <MarketingFooter />
-    </div>
+    <LegalPageLayout
+      eyebrow="Legal"
+      title="Terms"
+      intro="These Terms explain the rules for using UBEYE, including accounts, user content, creator and user revenue-share features, advertisers, payments, and moderation."
+      lastUpdated={lastUpdated}
+      sections={sections}
+      contactTitle="Terms questions"
+      contactBody="For questions about these Terms, contact UBEYE support through the support contact listed in the app or on the App Store listing."
+    />
   )
 }
