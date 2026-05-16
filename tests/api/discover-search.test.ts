@@ -51,6 +51,7 @@ describe("mobile discover search API", () => {
     expect(searchDiscoverProfiles).toHaveBeenCalledWith({
       viewerId: "viewer_123",
       query: "griffinaste",
+      limit: 12,
     })
     expect(await responseJson(response)).toMatchObject({
       ok: true,
@@ -60,6 +61,42 @@ describe("mobile discover search API", () => {
           handle: "griffinaste",
           imageUrl:
             "https://app.example.com/api/profile-avatar-media/avatars/avatar.jpg",
+        },
+      ],
+    })
+  })
+
+  it("loads suggested discover profiles when no query is entered", async () => {
+    vi.mocked(searchDiscoverProfiles).mockResolvedValue([
+      {
+        id: "user_lena",
+        name: "Lena Brooks",
+        handle: "lenabrooks",
+        imageUrl: null,
+        activeStoryId: "story_lena",
+        hasActiveStory: true,
+      },
+    ])
+
+    const { GET } = await import("@/app/api/mobile/discover/search/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/discover/search"),
+    )
+
+    expect(response.status).toBe(200)
+    expect(searchDiscoverProfiles).toHaveBeenCalledWith({
+      viewerId: "viewer_123",
+      query: "",
+      limit: 8,
+    })
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      profiles: [
+        {
+          id: "user_lena",
+          handle: "lenabrooks",
+          activeStoryId: "story_lena",
+          hasActiveStory: true,
         },
       ],
     })

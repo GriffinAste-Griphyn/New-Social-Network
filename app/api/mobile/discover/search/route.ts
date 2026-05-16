@@ -18,6 +18,7 @@ export async function GET(request: Request) {
   const profiles = await searchDiscoverProfiles({
     viewerId: session.id,
     query,
+    limit: query.trim() ? 12 : 8,
   })
 
   return NextResponse.json({

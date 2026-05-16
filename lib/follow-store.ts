@@ -133,17 +133,27 @@ export async function searchDiscoverProfiles(input: {
 }): Promise<DiscoverProfileSearchResult[]> {
   const normalizedQuery = normalizeProfileSearchQuery(input.query)
 
-  if (!normalizedQuery) {
-    return []
-  }
-
   const limit = Math.min(Math.max(input.limit ?? 12, 1), 25)
   const db = getDb()
   const blockedPeerIds = await getBlockedPeerIds(input.viewerId)
   const likeQuery = `%${escapeLikePattern(normalizedQuery)}%`
   const prefixQuery = `${escapeLikePattern(normalizedQuery)}%`
+  const filters = [
+    sql`${users.id} <> ${input.viewerId}`,
+    isNotNull(users.displayName),
+    isNotNull(users.handle),
+  ]
 
-  const rows = await db
+  if (normalizedQuery) {
+    filters.push(
+      or(
+        sql`lower(${users.handle}) like ${likeQuery} escape '\\'`,
+        sql`lower(${users.displayName}) like ${likeQuery} escape '\\'`,
+      )!,
+    )
+  }
+
+  const queryBuilder = db
     .select({
       id: users.id,
       displayName: users.displayName,
@@ -151,27 +161,21 @@ export async function searchDiscoverProfiles(input: {
       avatarUrl: users.avatarUrl,
     })
     .from(users)
-    .where(
-      and(
-        sql`${users.id} <> ${input.viewerId}`,
-        isNotNull(users.displayName),
-        isNotNull(users.handle),
-        or(
-          sql`lower(${users.handle}) like ${likeQuery} escape '\\'`,
-          sql`lower(${users.displayName}) like ${likeQuery} escape '\\'`,
-        ),
-      ),
-    )
-    .orderBy(
-      sql`case
+    .where(and(...filters))
+
+  const rows = normalizedQuery
+    ? await queryBuilder
+        .orderBy(
+          sql`case
         when lower(${users.handle}) = ${normalizedQuery} then 0
         when lower(${users.handle}) like ${prefixQuery} escape '\\' then 1
         when lower(${users.displayName}) like ${prefixQuery} escape '\\' then 2
         else 3
       end`,
-      asc(users.handle),
-    )
-    .limit(limit * 2)
+          asc(users.handle),
+        )
+        .limit(limit * 2)
+    : await queryBuilder.orderBy(desc(users.createdAt)).limit(limit * 2)
 
   const profiles = rows.flatMap((row) => {
     if (blockedPeerIds.has(row.id)) {
