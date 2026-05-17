@@ -18,40 +18,40 @@ const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
 export const metadata: Metadata = {
-  title: "UBEYE | Organic content, monetized",
+  title: "UBEYE | Get rewarded for attention",
   description:
-    "UBEYE lets people earn from the real attention their stories create by sharing advertiser funding with eligible users.",
+    "UBEYE is a wealth redistribution experiment that rewards everyday users for posting stories, watching stories, and creating attention funded by ad dollars.",
 }
 
 const navLinks = [
-  { label: "Model", href: "#model" },
-  { label: "Value loop", href: "#value-loop" },
+  { label: "Rewards", href: "#model" },
+  { label: "How it works", href: "#value-loop" },
   { label: "Advertisers", href: "/advertise" },
 ]
 
 const ledgerEvents = [
   { label: "Maya posts a story", value: "A normal moment from her day" },
-  { label: "People watch and react", value: "483 views / 61 replies" },
-  { label: "A brand funds the moment", value: "The attention matches what they support" },
-  { label: "Maya can earn", value: "Value moves back to the people who created it" },
+  { label: "People watch stories", value: "Attention builds across the feed" },
+  { label: "Advertisers fund attention", value: "Ad dollars support the network" },
+  { label: "Users can be rewarded", value: "Value moves back to the people who participate" },
 ]
 
 const heroSignals = [
-  { label: "Views", value: "483" },
-  { label: "Replies", value: "61" },
-  { label: "Saves", value: "22" },
+  { label: "Stories", value: "483" },
+  { label: "Watched", value: "61h" },
+  { label: "Rewards", value: "$22" },
 ]
 
 const modelRows = [
   {
     label: "Traditional platforms",
-    title: "You post. People watch. The platform keeps most of the money.",
-    copy: "The photos, videos, replies, and taste that people share every day become the attention traditional platforms sell.",
+    title: "You post. You watch. The platform sells the attention.",
+    copy: "The stories, reactions, time, and taste people share every day become the product traditional platforms monetize.",
   },
   {
     label: "UBEYE",
-    title: "You post. People watch. The upside can come back to users.",
-    copy: "UBEYE is built so advertiser funding can support the organic stories people already choose to watch.",
+    title: "You post. You watch. The rewards can come back to users.",
+    copy: "UBEYE is built so ad dollars can help reward the everyday people creating and spending attention in the feed.",
   },
 ]
 
@@ -59,34 +59,34 @@ const valueLoop = [
   {
     icon: Play,
     label: "Post",
-    title: "Share what you already share",
-    copy: "Post the everyday stories you already put on other apps: campus, work, food, fashion, products, taste, and real life.",
+    title: "Post everyday stories",
+    copy: "Share the normal moments you already share: campus, work, food, fashion, products, places, taste, and real life.",
   },
   {
     icon: Eye,
     label: "Watch",
-    title: "People show what they care about",
-    copy: "Views, replies, saves, follows, and replays help show which stories are actually getting attention.",
+    title: "Watch what other people post",
+    copy: "Viewing stories is part of the value. Attention, replies, saves, follows, and replays help show what people care about.",
   },
   {
     icon: Megaphone,
     label: "Fund",
-    title: "Brands support real moments",
-    copy: "Advertisers can fund organic attention people choose instead of only buying forced ad placements.",
+    title: "Ad dollars fund the system",
+    copy: "Advertisers fund attention in the network instead of only buying interruptive placements that users never share in.",
   },
   {
     icon: BadgeDollarSign,
     label: "Route",
-    title: "Users can share the upside",
-    copy: "When a story qualifies, value can move back to the users who helped create the attention.",
+    title: "Users can be rewarded",
+    copy: "When activity qualifies, value can move back to users who helped create the attention, including people posting and watching stories.",
   },
 ]
 
 const principles = [
-  "All users are creators. You do not need to be famous to participate.",
-  "Stories are the value surface, not interruptive ad slots.",
-  "Revenue share is part of the product model, not a limited creator fund.",
-  "No follower-count economy keeps status metrics from becoming the whole game.",
+  "You do not need to be famous to participate.",
+  "Posting stories and watching stories both help create value.",
+  "Rewards are funded from ad dollars, not a limited creator fund.",
+  "The goal is to redistribute more of the value created by everyday attention.",
 ]
 
 const footerLinks = [
@@ -134,7 +134,7 @@ function AttentionLedger() {
       <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
         <div>
           <p className="text-xs uppercase text-white/42">How it works</p>
-          <p className="mt-1 text-sm font-normal text-white">One story creates value</p>
+          <p className="mt-1 text-sm font-normal text-white">Everyday attention creates value</p>
         </div>
         <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-medium text-white">
           <span className="size-1.5 rounded-full bg-white" />
@@ -221,12 +221,12 @@ export default function HomePage() {
                   A social experiment in wealth redistribution
                 </p>
                 <h1 className="mt-10 max-w-[12ch] text-[3.65rem] font-[350] leading-[0.96] text-white sm:text-[4.8rem] md:mt-7 md:text-[5.5rem] lg:text-[6.2rem]">
-                  Organic content, monetized.
+                  Organic content monetized
                 </h1>
                 <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
-                  People already create attention every day. UBEYE lets you keep
-                  posting what you already post, with a chance to earn when your
-                  stories create value.
+                  UBEYE is a social experiment in wealth redistribution. Post
+                  everyday stories, watch other people's stories, and earn from
+                  the ad dollars your attention helps create.
                 </p>
               </div>
 
@@ -257,7 +257,7 @@ export default function HomePage() {
               </div>
               <div>
                 <h2 className="max-w-4xl text-4xl font-[350] leading-tight text-white md:text-6xl md:leading-[1.08]">
-                  UBEYE changes what happens after people pay attention.
+                  UBEYE changes who benefits when people pay attention.
                 </h2>
                 <div className="mt-12 grid gap-4 md:grid-cols-2">
                   {modelRows.map((row) => (
@@ -279,12 +279,12 @@ export default function HomePage() {
               <div className="max-w-[29rem]">
                 <p className="text-xs font-medium uppercase text-[#e01616]">The value loop</p>
                 <h2 className="mt-5 text-4xl font-[350] leading-tight md:text-6xl md:leading-[1.08]">
-                  Same behavior. Better economics.
+                  Post stories. Watch stories. Share in the value.
                 </h2>
                 <p className="mt-7 text-base leading-8 text-black/62 md:text-lg">
-                  UBEYE is designed around one simple loop: people post stories,
-                  other people watch and react, advertisers fund the moments
-                  that matter, and users can share the upside.
+                  UBEYE is designed around one simple loop: users post stories,
+                  users watch stories, advertisers fund the attention, and
+                  rewards can flow back to the people participating.
                 </p>
               </div>
 
@@ -314,11 +314,12 @@ export default function HomePage() {
             <div>
               <p className="text-xs font-medium uppercase text-[#e01616]">Participation</p>
               <h2 className="mt-5 max-w-4xl text-5xl font-[350] leading-[1.03] md:text-7xl">
-                Earning is not only for influencers.
+                Rewards are not only for influencers.
               </h2>
               <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
-                On UBEYE, all users are creators. Every user can post, watch,
-                reply, follow, save, and help create value in the network.
+                UBEYE is for everyday users. Posting, watching, replying,
+                following, and saving all help create the attention that ad
+                dollars can reward.
               </p>
             </div>
 
@@ -344,12 +345,12 @@ export default function HomePage() {
                   Advertiser-funded
                 </p>
                 <h2 className="mt-6 max-w-[12ch] text-4xl font-[350] leading-[1.08] sm:text-6xl">
-                  Fund attention people choose.
+                  Fund the attention users create.
                 </h2>
                 <p className="mt-7 max-w-xl text-base leading-8 text-black/58 md:text-lg">
-                  Brands can support stories people choose to watch instead of
-                  only buying interruptions. That funding can become part of the
-                  user revenue-share model.
+                  Brands can put ad dollars behind the stories people post and
+                  watch. That funding can become rewards for the everyday users
+                  creating the attention.
                 </p>
                 <Button asChild className="mt-8 h-11 rounded-[8px] bg-black px-5 text-sm text-white hover:bg-black/84">
                   <Link href="/advertise">
@@ -365,8 +366,8 @@ export default function HomePage() {
                 <div>
                   <p className="text-6xl font-[350] sm:text-7xl">75%</p>
                   <p className="mt-3 max-w-sm text-sm leading-6 text-white/56">
-                    Target revenue share routed toward eligible users as the
-                    experiment scales.
+                    Target share of eligible ad-funded value routed back to
+                    users as the experiment scales.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 divide-x divide-white/10 border-y border-white/10 text-sm">
