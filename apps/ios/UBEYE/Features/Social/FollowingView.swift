@@ -139,44 +139,36 @@ private struct FollowingStoryFeedCard: View {
                     FollowingStoryOverlayChip(overlay: overlay)
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .bottom, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(story.creator)
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
+                HStack(alignment: .bottom, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(story.creator)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
 
-                            HStack(spacing: 6) {
-                                Text(story.handle)
-                                if let postedLabel = story.relativePostedLabel {
-                                    Circle()
-                                        .fill(.white.opacity(0.58))
-                                        .frame(width: 3, height: 3)
-                                    Text(postedLabel)
-                                }
+                        HStack(spacing: 6) {
+                            Text(story.handle)
+                            if let postedLabel = story.relativePostedLabel {
+                                Circle()
+                                    .fill(.white.opacity(0.58))
+                                    .frame(width: 3, height: 3)
+                                Text(postedLabel)
                             }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.78))
-                            .lineLimit(1)
                         }
-
-                        Spacer(minLength: 12)
-
-                        if story.assetKind == .video {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 34)
-                                .background(.white.opacity(0.18), in: Circle())
-                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineLimit(1)
                     }
 
-                    Text(story.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 12)
+
+                    if story.assetKind == .video {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(.white.opacity(0.18), in: Circle())
+                    }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
