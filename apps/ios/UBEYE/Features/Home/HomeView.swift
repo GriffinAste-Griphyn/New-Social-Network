@@ -54,7 +54,7 @@ final class FeedStore: ObservableObject {
             ids.append("my-story")
         }
 
-        ids.append(contentsOf: feed.followingStories.prefix(4).map(\.id))
+        ids.append(contentsOf: feed.verticalFollowingStories.prefix(4).map(\.id))
         ids.append(contentsOf: feed.discoverTiles.prefix(4).map { $0.activeStoryId ?? $0.id })
 
         return ids

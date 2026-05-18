@@ -78,6 +78,9 @@ export async function POST(request: Request) {
   const followingStories = collapseStoryCardsByCreator(
     feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
   )
+  const followingTimelineStories = feed.followingTimelineStories.map((story) =>
+    absoluteStoryCardMedia(story, request),
+  )
   const followedCreatorNames = new Set(
     followingStories.map((story) => story.creator.toLowerCase()),
   )
@@ -108,6 +111,7 @@ export async function POST(request: Request) {
         absoluteMediaUrl(profile.imageUrl, request),
     })),
     followingStories,
+    followingTimelineStories,
     discoverTiles: discoverStories.map((story) => ({
       id: story.id,
       assetKind: story.assetKind,
