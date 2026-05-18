@@ -169,6 +169,13 @@
       "when": 1779127973048,
       "tag": "0023_brief_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1779129893744,
+      "tag": "0024_uneven_lifeguard",
+      "breakpoints": true
     }
   ]
 }

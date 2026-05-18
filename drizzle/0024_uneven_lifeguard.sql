@@ -1,0 +1,4 @@
+CREATE INDEX "stories_live_feed_idx" ON "stories" USING btree ("status","moderation_status","expires_at","created_at");--> statement-breakpoint
+CREATE INDEX "stories_creator_live_idx" ON "stories" USING btree ("creator_id","status","moderation_status","expires_at","created_at");--> statement-breakpoint
+CREATE INDEX "stories_processing_idx" ON "stories" USING btree ("storage_provider","processing_status","status","moderation_status","expires_at","created_at");--> statement-breakpoint
+CREATE INDEX "stories_cloudflare_uid_idx" ON "stories" USING btree ("storage_provider","storage_key","expires_at");

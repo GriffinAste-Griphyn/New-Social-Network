@@ -526,6 +526,32 @@ export const stories = pgTable(
   (table) => [
     index("stories_storage_key_idx").on(table.storageKey),
     index("stories_moderation_status_idx").on(table.moderationStatus),
+    index("stories_live_feed_idx").on(
+      table.status,
+      table.moderationStatus,
+      table.expiresAt,
+      table.createdAt,
+    ),
+    index("stories_creator_live_idx").on(
+      table.creatorId,
+      table.status,
+      table.moderationStatus,
+      table.expiresAt,
+      table.createdAt,
+    ),
+    index("stories_processing_idx").on(
+      table.storageProvider,
+      table.processingStatus,
+      table.status,
+      table.moderationStatus,
+      table.expiresAt,
+      table.createdAt,
+    ),
+    index("stories_cloudflare_uid_idx").on(
+      table.storageProvider,
+      table.storageKey,
+      table.expiresAt,
+    ),
   ],
 )
 
