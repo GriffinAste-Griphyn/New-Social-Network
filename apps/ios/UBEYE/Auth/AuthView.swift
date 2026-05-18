@@ -5,38 +5,32 @@ struct AuthView: View {
     @EnvironmentObject private var auth: AuthStore
     @State private var email = ""
     @State private var password = ""
+    @State private var verificationCode = ""
     @State private var displayName = ""
     @State private var handle = ""
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 22) {
-                    HStack {
-                        UBEYEWordmark()
-                        Spacer()
-                        NavigationLink {
-                            SettingsView()
-                        } label: {
-                            Image(systemName: "gearshape.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(width: 38, height: 38)
-                                .foregroundStyle(Color.ubeyeInk)
-                                .background(Color.ubeyeSubtle, in: Circle())
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 22) {
+                    Spacer(minLength: auth.stage == .landing ? 180 : 36)
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Stories first. Followers second.")
-                            .font(.system(size: 32, weight: .black, design: .rounded))
+                    UBEYEWordmark()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        if auth.stage != .landing {
+                            Text(stageEyebrow)
+                                .font(.system(size: 17, weight: .black))
+                                .foregroundStyle(Color.ubeyeMuted.opacity(0.7))
+                        }
+                        Text(stageTitle)
+                            .font(.system(size: auth.stage == .landing ? 34 : 30, weight: .bold))
                             .foregroundStyle(Color.ubeyeInk)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text("Post fast vertical updates, follow creators, and keep the same UBEYE social experience on iPhone.")
-                            .font(.subheadline)
+                        Text(stageSubtitle)
+                            .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(Color.ubeyeMuted)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 18)
 
                     authPanel
 
@@ -58,9 +52,55 @@ struct AuthView: View {
                         .foregroundStyle(Color.ubeyeMuted)
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
             }
+            .scrollIndicators(.hidden)
             .ubeyeScreen()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.ubeyeMuted)
+                    }
+                }
+            }
+        }
+    }
+
+    private var stageEyebrow: String {
+        switch auth.stage {
+        case .landing: ""
+        case .signup: "CREATE ACCOUNT"
+        case .login: "WELCOME BACK"
+        case .verify: "EMAIL CODE"
+        case .profile: "CREATOR PROFILE"
+        case .forgot: "PASSWORD RESET"
+        }
+    }
+
+    private var stageTitle: String {
+        switch auth.stage {
+        case .landing: "Welcome to UBEYE"
+        case .signup: "Create your account"
+        case .login: "Log in"
+        case .verify: "Enter your code"
+        case .profile: "Finish your profile"
+        case .forgot: "Reset password"
+        }
+    }
+
+    private var stageSubtitle: String {
+        switch auth.stage {
+        case .landing: "Sign up or log in to continue."
+        case .signup: "Start with email and password."
+        case .login: "Use your existing creator account."
+        case .verify: "Use the code we sent to your email."
+        case .profile: "Choose how creators and viewers see you."
+        case .forgot: "Send yourself a secure reset link."
         }
     }
 
@@ -69,33 +109,26 @@ struct AuthView: View {
         VStack(spacing: 14) {
             switch auth.stage {
             case .landing:
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Start watching")
-                        .font(.title3.bold())
-                    Text("Use your existing account or create a new creator profile.")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.ubeyeMuted)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                PrimaryButton(title: "Create account") {
+                PrimaryButton(title: "Sign up") {
                     auth.stage = .signup
                 }
                 Button {
                     auth.stage = .login
                 } label: {
-                    Text("Sign in")
-                        .font(.headline)
+                        Text("Log in")
+                        .font(.system(size: 16, weight: .bold))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
+                        .frame(height: 50)
                         .foregroundStyle(Color.ubeyeInk)
-                        .background(Color.ubeyeSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(Color.white)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Color.ubeyeBorder, lineWidth: 1))
                 }
             case .login:
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
                 PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting) {
+                    verificationCode = ""
                     Task { await auth.login(email: email, password: password, api: api) }
                 }
                 Button("Forgot password?") {
@@ -107,17 +140,24 @@ struct AuthView: View {
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
                 PrimaryButton(title: "Create account", isLoading: auth.isSubmitting) {
+                    verificationCode = ""
                     Task { await auth.signup(email: email, password: password, api: api) }
                 }
             case .verify:
                 EmptyStateView(
-                    title: "Check your email",
-                    message: auth.message ?? "Verify your email, then return to continue.",
+                    title: auth.pendingEmail,
+                    message: auth.message ?? "Enter the verification code we sent to your email.",
                     systemImage: "envelope.badge"
                 )
-                PrimaryButton(title: "I verified", isLoading: auth.isSubmitting) {
-                    Task { await auth.checkVerification(api: api) }
+                AuthTextField(title: "6-digit code", text: $verificationCode, keyboard: .numberPad)
+                PrimaryButton(title: "Verify email", isLoading: auth.isSubmitting) {
+                    Task { await auth.verifyCode(verificationCode, api: api) }
                 }
+                Button("Resend code") {
+                    Task { await auth.resendVerificationCode(api: api) }
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ubeyeMuted)
             case .profile:
                 AuthTextField(title: "Display name", text: $displayName)
                 AuthTextField(title: "Handle", text: $handle)
@@ -131,7 +171,7 @@ struct AuthView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(auth.stage == .landing ? 18 : 16)
         .ubeyeCard()
     }
 }
@@ -147,9 +187,9 @@ private struct AuthTextField: View {
             .keyboardType(keyboard)
             .autocorrectionDisabled()
             .padding()
-            .frame(height: 52)
+            .frame(height: 50)
             .background(Color.ubeyeSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .foregroundStyle(Color.ubeyeInk)
     }
 }
@@ -157,15 +197,37 @@ private struct AuthTextField: View {
 private struct AuthSecureField: View {
     let title: String
     @Binding var text: String
+    @State private var isPasswordVisible = false
 
     var body: some View {
-        SecureField(title, text: $text)
+        HStack(spacing: 10) {
+            Group {
+                if isPasswordVisible {
+                    TextField(title, text: $text)
+                } else {
+                    SecureField(title, text: $text)
+                }
+            }
             .textInputAutocapitalization(.never)
-            .padding()
-            .frame(height: 52)
-            .background(Color.ubeyeSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .foregroundStyle(Color.ubeyeInk)
+            .autocorrectionDisabled()
+
+            Button {
+                isPasswordVisible.toggle()
+            } label: {
+                Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isPasswordVisible ? "Hide password" : "Show password")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .frame(height: 50)
+        .background(Color.ubeyeSubtle)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .foregroundStyle(Color.ubeyeInk)
     }
 }
 

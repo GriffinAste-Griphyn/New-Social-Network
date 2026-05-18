@@ -13,10 +13,13 @@
 		1AD6BCC4CD515B5BC44FF4ED /* PushNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */; };
 		209C07B0805239729E7550C9 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */; };
 		2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */; };
+		41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12112239A2105E9146475DBB /* FollowingManagementView.swift */; };
+		456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */; };
 		51ADBD536257CD6560F637EC /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA619704F081F3123B00D7 /* ProfileView.swift */; };
 		7B321A79564A1C8F36C29E1B /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BD6709CE19C8AAD11B13A0 /* APIClient.swift */; };
 		8A0D4CD3CD2308FB686543F5 /* MobileModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28486780B71D96C7D6EE5C30 /* MobileModels.swift */; };
 		8B749B6B28A94F2B4B6F344F /* RepliesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */; };
+		8EEF12AD65B7A84BDFA8DB66 /* CreatorScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21255BE86F573D35C67EFC00 /* CreatorScreens.swift */; };
 		A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */; };
 		A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
@@ -29,12 +32,15 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignFixtures.swift; sourceTree = "<group>"; };
 		02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryComposerView.swift; sourceTree = "<group>"; };
 		03E023E109362F9ED0305266 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationStore.swift; sourceTree = "<group>"; };
+		12112239A2105E9146475DBB /* FollowingManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingManagementView.swift; sourceTree = "<group>"; };
 		1427E7CB5130FC83F36A8F19 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UBEYEApp.swift; sourceTree = "<group>"; };
+		21255BE86F573D35C67EFC00 /* CreatorScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorScreens.swift; sourceTree = "<group>"; };
 		28486780B71D96C7D6EE5C30 /* MobileModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModels.swift; sourceTree = "<group>"; };
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3B406ECDBADF19D651536B10 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
@@ -110,6 +116,7 @@
 		4B76157339B222704E069708 /* Profile */ = {
 			isa = PBXGroup;
 			children = (
+				21255BE86F573D35C67EFC00 /* CreatorScreens.swift */,
 				CEFA619704F081F3123B00D7 /* ProfileView.swift */,
 			);
 			path = Profile;
@@ -119,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */,
+				12112239A2105E9146475DBB /* FollowingManagementView.swift */,
 				B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */,
 				8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */,
 			);
@@ -145,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */,
+				024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */,
 				075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */,
 				5CEB3E2F66807A7319AD96A0 /* RootView.swift */,
 				03E023E109362F9ED0305266 /* Theme.swift */,
@@ -245,7 +254,10 @@
 				1711D1E6D918705F3AD50112 /* AuthStore.swift in Sources */,
 				209C07B0805239729E7550C9 /* AuthView.swift in Sources */,
 				ED73DCACD198363C47B0C2E3 /* CameraController.swift in Sources */,
+				8EEF12AD65B7A84BDFA8DB66 /* CreatorScreens.swift in Sources */,
+				456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */,
 				C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */,
+				41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */,
 				0D1863BA957CAA57945368E4 /* FollowingView.swift in Sources */,
 				2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */,
 				03E12EC442CBCF298798C41C /* KeychainStore.swift in Sources */,
@@ -271,7 +283,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 67;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -355,7 +367,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 67;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

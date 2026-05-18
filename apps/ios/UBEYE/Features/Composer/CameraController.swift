@@ -10,12 +10,15 @@ final class CameraController: NSObject, ObservableObject {
     @Published var capturedImage: UIImage?
     @Published var capturedVideoURL: URL?
     @Published var isRecording = false
+    @Published var cameraPosition: AVCaptureDevice.Position = .back
     @Published var error: String?
 
     private let output = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var photoDelegate: PhotoCaptureDelegate?
     private var movieDelegate: MovieCaptureDelegate?
+    private var videoInput: AVCaptureDeviceInput?
+    private var audioInput: AVCaptureDeviceInput?
     private var isConfigured = false
 
     func requestAccessAndConfigure() async {
@@ -81,12 +84,14 @@ final class CameraController: NSObject, ObservableObject {
 
         capturedImage = nil
         capturedVideoURL = nil
+        AppAudioSession.configureForVideoRecording()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mov")
         let delegate = MovieCaptureDelegate { [weak self] result in
             Task { @MainActor in
                 self?.isRecording = false
                 switch result {
                 case .success(let url):
+                    MediaDiagnostics.logCapturedVideo(url: url)
                     self?.capturedVideoURL = url
                 case .failure(let error):
                     self?.error = error.localizedDescription
@@ -107,6 +112,34 @@ final class CameraController: NSObject, ObservableObject {
         movieOutput.stopRecording()
     }
 
+    func switchCamera() {
+        guard isConfigured, !movieOutput.isRecording else {
+            return
+        }
+
+        let nextPosition: AVCaptureDevice.Position = cameraPosition == .back ? .front : .back
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: nextPosition),
+              let nextInput = try? AVCaptureDeviceInput(device: camera) else {
+            error = "Could not switch cameras."
+            return
+        }
+
+        session.beginConfiguration()
+        if let videoInput {
+            session.removeInput(videoInput)
+        }
+
+        if session.canAddInput(nextInput) {
+            session.addInput(nextInput)
+            videoInput = nextInput
+            cameraPosition = nextPosition
+            updateOutputOrientation()
+        } else if let videoInput, session.canAddInput(videoInput) {
+            session.addInput(videoInput)
+        }
+        session.commitConfiguration()
+    }
+
     private func configureIfNeeded() {
         guard !isConfigured else {
             return
@@ -114,12 +147,14 @@ final class CameraController: NSObject, ObservableObject {
 
         session.beginConfiguration()
         session.sessionPreset = .high
+        session.usesApplicationAudioSession = true
+        session.automaticallyConfiguresApplicationAudioSession = true
 
         defer {
             session.commitConfiguration()
         }
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input),
               session.canAddOutput(output),
@@ -129,15 +164,29 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         session.addInput(input)
+        videoInput = input
         if microphoneAuthorizationStatus == .authorized,
            let microphone = AVCaptureDevice.default(for: .audio),
            let microphoneInput = try? AVCaptureDeviceInput(device: microphone),
            session.canAddInput(microphoneInput) {
             session.addInput(microphoneInput)
+            audioInput = microphoneInput
         }
         session.addOutput(output)
         session.addOutput(movieOutput)
+        updateOutputOrientation()
         isConfigured = true
+    }
+
+    private func updateOutputOrientation() {
+        for connection in [output.connection(with: .video), movieOutput.connection(with: .video)].compactMap({ $0 }) {
+            if connection.isVideoRotationAngleSupported(90) {
+                connection.videoRotationAngle = 90
+            }
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = cameraPosition == .front
+            }
+        }
     }
 }
 

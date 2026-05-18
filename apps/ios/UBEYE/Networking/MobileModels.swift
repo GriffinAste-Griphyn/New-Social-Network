@@ -47,6 +47,8 @@ struct FollowingProfile: Codable, Identifiable, Hashable {
     let name: String
     let handle: String
     let imageUrl: URL?
+    let activeStoryId: String?
+    let hasActiveStory: Bool?
 }
 
 struct StoryTextOverlay: Codable, Hashable, Identifiable {
@@ -54,6 +56,8 @@ struct StoryTextOverlay: Codable, Hashable, Identifiable {
     let label: String
     let positionX: Double
     let positionY: Double
+    let kind: String?
+    let href: URL?
 }
 
 struct StoryCard: Codable, Identifiable, Hashable {
@@ -73,11 +77,13 @@ struct StoryCard: Codable, Identifiable, Hashable {
 
 struct DiscoverTile: Codable, Identifiable, Hashable {
     let id: String
-    let assetKind: SocialAssetKind
-    let imageUrl: URL
+    let assetKind: SocialAssetKind?
+    let imageUrl: URL?
     let thumbnailUrl: URL?
     let title: String
     let subtitle: String?
+    let activeStoryId: String?
+    let hasActiveStory: Bool?
 }
 
 struct SuggestedAccount: Codable, Identifiable, Hashable {
@@ -123,6 +129,12 @@ struct FollowStateResponse: Codable {
     let followedCreatorIds: [String]
 }
 
+struct FollowProfilesResponse: Codable {
+    let ok: Bool
+    let followers: [FollowingProfile]
+    let following: [FollowingProfile]
+}
+
 struct DiscoverSearchResponse: Codable {
     let ok: Bool
     let profiles: [FollowingProfile]
@@ -130,13 +142,53 @@ struct DiscoverSearchResponse: Codable {
 
 struct CreatorStatsResponse: Codable {
     struct Earnings: Codable {
-        let availableCents: Int
-        let pendingCents: Int
-        let paidCents: Int
+        let totalCents: Int?
+        let pendingCents: Int?
+        let approvedCents: Int?
+        let paidCents: Int?
+        let reversedCents: Int?
+        let availableCents: Int?
+        let nextAvailableAt: String?
     }
 
     struct Stats: Codable {
+        struct Story: Codable, Identifiable, Hashable {
+            let id: String
+            let assetKind: SocialAssetKind
+            let mediaUrl: URL
+            let thumbnailUrl: URL?
+            let caption: String?
+            let status: String
+            let createdAt: String
+            let expiresAt: String
+            let views: Int
+            let uniqueViewers: Int
+            let completedViews: Int
+            let completionRate: Int
+            let averageViewedSeconds: Double
+            let comments: Int
+            let replies: Int
+            let earningsCents: Int
+            let pendingEarningsCents: Int
+            let paidEarningsCents: Int
+        }
+
+        let followerCount: Int
+        let followingCount: Int
+        let totalStories: Int
+        let liveStories: Int
+        let expiredStories: Int
+        let removedStories: Int
+        let totalViews: Int
+        let uniqueViewers: Int
+        let completedViews: Int
+        let completionRate: Int
+        let averageViewedSeconds: Double
+        let totalViewedSeconds: Int
+        let comments: Int
+        let replies: Int
         let earnings: Earnings
+        let stories: [Story]
     }
 
     let ok: Bool
@@ -278,6 +330,13 @@ struct AvatarUploadResponse: Codable {
     let user: MobileAuthUser
 }
 
+struct AvatarCrop: Codable, Equatable {
+    let originX: Double
+    let originY: Double
+    let width: Double
+    let height: Double
+}
+
 struct AvatarSourceResponse: Codable {
     let ok: Bool
     let sourceUrl: URL?
@@ -314,6 +373,34 @@ struct VideoUploadResponse: Codable {
     let uid: String
     let uploadUrl: URL
     let uploadProtocol: String?
+    let thumbnailPathname: String?
+    let thumbnailUploadUrl: URL?
+    let thumbnailClientToken: String?
+    let thumbnailContentType: String?
+    let maxThumbnailSizeBytes: Int64?
+}
+
+struct OriginalVideoUploadResponse: Codable {
+    let ok: Bool
+    let pathname: String
+    let uploadUrl: URL
+    let clientToken: String
+    let contentType: String
+    let maxSizeBytes: Int64
+    let thumbnailPathname: String
+    let thumbnailUploadUrl: URL
+    let thumbnailClientToken: String
+    let thumbnailContentType: String
+    let maxThumbnailSizeBytes: Int64
+}
+
+struct OriginalVideoBlobUploadResult: Codable {
+    let url: URL
+    let downloadUrl: URL?
+    let pathname: String
+    let contentType: String?
+    let contentDisposition: String?
+    let etag: String?
 }
 
 struct StoryStatusResponse: Codable {

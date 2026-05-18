@@ -18,17 +18,22 @@ final class AuthStore: ObservableObject {
     @Published var message: String?
     @Published var error: String?
     @Published var isSubmitting = false
+    @Published var isRestoringSession = true
 
     private let keychainService = "com.griffinaste.ubeye.ios"
     private let accountKey = "mobile-account-v1"
+    #if DEBUG
+    private let debugAccountFallbackKey = "ubeye.ios.debug.mobileAccount"
+    #endif
 
     func restoreSession(api: APIClient) async {
-        guard let data = KeychainStore.load(service: keychainService, account: accountKey),
-              let stored = try? JSONDecoder().decode(MobileAccount.self, from: data) else {
+        defer { isRestoringSession = false }
+
+        guard let stored = loadStoredAccount() else {
             return
         }
-        account = stored
-        api.authToken = stored.mobileToken
+
+        applySession(stored, api: api)
     }
 
     func login(email: String, password: String, api: APIClient) async {
@@ -61,6 +66,11 @@ final class AuthStore: ObservableObject {
             } else {
                 stage = .profile
             }
+        } catchVerificationCodeRedirect: {
+            self.pendingEmail = normalizedEmail
+            self.pendingPassword = password
+            self.message = "Enter the verification code we sent to your email."
+            self.stage = .verify
         }
     }
 
@@ -80,15 +90,20 @@ final class AuthStore: ObservableObject {
             let response: SignupResponse = try await api.post("/api/mobile/auth/signup", body: Body(email: normalizedEmail, password: password))
             pendingEmail = response.pendingEmail
             pendingPassword = password
-            message = response.message ?? "Check your email, then return to continue."
+            message = response.message ?? "Enter the verification code we sent to your email."
             stage = .verify
         }
     }
 
-    func checkVerification(api: APIClient) async {
+    func verifyCode(_ code: String, api: APIClient) async {
+        let normalizedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pendingEmail.isEmpty, !pendingPassword.isEmpty else {
             stage = .signup
             error = "Enter your email and password again."
+            return
+        }
+        guard normalizedCode.range(of: #"^\d{6}$"#, options: .regularExpression) != nil else {
+            error = "Enter the 6-digit verification code."
             return
         }
 
@@ -96,11 +111,12 @@ final class AuthStore: ObservableObject {
             struct Body: Encodable {
                 let email: String
                 let password: String
+                let code: String
             }
 
             let response: AuthResponse = try await api.post(
-                "/api/mobile/auth/check-verification",
-                body: Body(email: pendingEmail, password: pendingPassword)
+                "/api/mobile/auth/verify-code",
+                body: Body(email: pendingEmail, password: pendingPassword, code: normalizedCode)
             )
             if response.profileComplete, let displayName = response.user.displayName, let handle = response.user.handle {
                 persist(
@@ -115,6 +131,39 @@ final class AuthStore: ObservableObject {
                 )
             } else {
                 stage = .profile
+            }
+        }
+    }
+
+    func resendVerificationCode(api: APIClient) async {
+        guard !pendingEmail.isEmpty, !pendingPassword.isEmpty else {
+            stage = .signup
+            error = "Enter your email and password again."
+            return
+        }
+
+        await submit {
+            struct Body: Encodable {
+                let email: String
+                let password: String
+            }
+
+            struct Response: Decodable {
+                let ok: Bool
+                let alreadyVerified: Bool?
+                let message: String?
+            }
+
+            let response: Response = try await api.post(
+                "/api/mobile/auth/resend-verification-code",
+                body: Body(email: pendingEmail, password: pendingPassword)
+            )
+
+            if response.alreadyVerified == true {
+                stage = .login
+                message = response.message ?? "Email is already verified. Sign in to continue."
+            } else {
+                message = response.message ?? "We sent you a new verification code."
             }
         }
     }
@@ -193,6 +242,10 @@ final class AuthStore: ObservableObject {
 
     func signOut(api: APIClient) {
         account = nil
+        api.clearCurrentUserMediaCache()
+        Task {
+            await MediaFileDiskCache.shared.removeAll()
+        }
         api.authToken = nil
         stage = .landing
         pendingEmail = ""
@@ -200,23 +253,54 @@ final class AuthStore: ObservableObject {
         message = nil
         error = nil
         KeychainStore.delete(service: keychainService, account: accountKey)
+        #if DEBUG
+        UserDefaults.standard.removeObject(forKey: debugAccountFallbackKey)
+        #endif
     }
 
     private func persist(_ next: MobileAccount, api: APIClient) {
-        account = next
-        api.authToken = next.mobileToken
+        applySession(next, api: api)
         stage = .landing
         if let data = try? JSONEncoder().encode(next) {
             KeychainStore.save(data, service: keychainService, account: accountKey)
+            #if DEBUG
+            UserDefaults.standard.set(data, forKey: debugAccountFallbackKey)
+            #endif
         }
     }
 
-    private func submit(_ operation: () async throws -> Void) async {
+    private func applySession(_ next: MobileAccount, api: APIClient) {
+        account = next
+        api.authToken = next.mobileToken
+    }
+
+    private func loadStoredAccount() -> MobileAccount? {
+        if let data = KeychainStore.load(service: keychainService, account: accountKey),
+           let stored = try? JSONDecoder().decode(MobileAccount.self, from: data) {
+            return stored
+        }
+
+        #if DEBUG
+        if let data = UserDefaults.standard.data(forKey: debugAccountFallbackKey),
+           let stored = try? JSONDecoder().decode(MobileAccount.self, from: data) {
+            return stored
+        }
+        #endif
+
+        return nil
+    }
+
+    private func submit(
+        _ operation: () async throws -> Void,
+        catchVerificationCodeRedirect: (() -> Void)? = nil
+    ) async {
         isSubmitting = true
         error = nil
         message = nil
         do {
             try await operation()
+        } catch APIClientError.server(let message, 403) where message.localizedCaseInsensitiveContains("verification code") {
+            catchVerificationCodeRedirect?()
         } catch {
             self.error = error.localizedDescription
         }

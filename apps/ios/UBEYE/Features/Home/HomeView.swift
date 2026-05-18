@@ -6,31 +6,90 @@ final class FeedStore: ObservableObject {
     @Published var feed: MobileFeedResponse?
     @Published var isLoading = false
     @Published var error: String?
+    private var storyStackPrefetchTask: Task<Void, Never>?
 
-    func load(api: APIClient) async {
-        isLoading = true
-        error = nil
-        do {
-            let response: MobileFeedResponse = try await api.postEmpty("/api/mobile/feed")
-            feed = response
-        } catch {
-            self.error = error.localizedDescription
+    func load(api: APIClient, showsLoading: Bool = true, useDiskCache: Bool = true) async {
+        let restoreStartedAt = Date()
+        if showsLoading {
+            isLoading = true
         }
-        isLoading = false
+        error = nil
+
+        if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed() {
+            feed = cached
+            MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
+            MediaPreheater.preheat(feed: cached)
+            let storyIds = storyStackPrefetchIds(from: cached)
+            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: storyIds)
+            MediaPerformance.mark("media_cache_summary feed=disk restored_story_stacks=\(restoredStoryCount)")
+        }
+
+        let networkStartedAt = Date()
+        do {
+            let response = try await api.mobileFeed()
+            feed = response
+            MediaPerformance.measure("feed_load", since: networkStartedAt)
+            MediaPreheater.preheat(feed: response)
+            scheduleStoryStackPrefetch(
+                ids: storyStackPrefetchIds(from: response),
+                api: api,
+                refresh: true
+            )
+        } catch {
+            if feed == nil {
+                self.error = error.localizedDescription
+            } else {
+                MediaPerformance.mark("feed_refresh_failed")
+            }
+        }
+        if showsLoading {
+            isLoading = false
+        }
+    }
+
+    private func storyStackPrefetchIds(from feed: MobileFeedResponse) -> [String] {
+        var ids: [String] = []
+
+        if feed.myStory.hasActiveStory {
+            ids.append("my-story")
+        }
+
+        ids.append(contentsOf: feed.followingStories.prefix(4).map(\.id))
+        ids.append(contentsOf: feed.discoverTiles.prefix(4).map { $0.activeStoryId ?? $0.id })
+
+        return ids
+    }
+
+    private func scheduleStoryStackPrefetch(ids: [String], api: APIClient, refresh: Bool) {
+        storyStackPrefetchTask?.cancel()
+        storyStackPrefetchTask = Task { @MainActor [weak self, api] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            api.prefetchStoryStacks(ids: ids, refresh: refresh)
+            self?.storyStackPrefetchTask = nil
+        }
     }
 }
 
 struct HomeView: View {
     @EnvironmentObject private var api: APIClient
-    @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
+    @Environment(\.scenePhase) private var scenePhase
+    var onSearchTap: () -> Void = {}
+    var onDiscoverTap: () -> Void = {}
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
+    @State private var selectedDiscoverCreator: DiscoverCreator?
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 18) {
                     header
+                    uploadNoticeBanner
 
                     if store.isLoading && store.feed == nil {
                         ProgressView()
@@ -43,18 +102,15 @@ struct HomeView: View {
                     if let feed = store.feed {
                         followingStoriesSection(feed)
 
-                        SectionHeader(title: "Discover", actionTitle: nil)
-                        DiscoverGrid(tiles: feed.discoverTiles) { tile in
-                            selectedStory = StoryRoute(id: tile.id)
-                        }
+                        discoverSection(feed)
                     }
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 22)
-                .padding(.bottom, 32)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 104)
             }
             .refreshable {
-                await store.load(api: api)
+                await store.load(api: api, useDiskCache: false)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
@@ -62,74 +118,132 @@ struct HomeView: View {
             .task {
                 await store.load(api: api)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
+                Task {
+                    api.invalidateStoryStacks()
+                    await store.load(api: api, useDiskCache: false)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
+                Task {
+                    api.invalidateStoryStacks(ids: ["my-story"])
+                    await store.load(api: api, useDiskCache: false)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, store.feed != nil else {
+                    return
+                }
+
+                Task {
+                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                }
+            }
             .fullScreenCover(item: $selectedStory) { route in
                 StoryStackViewer(route: route)
+            }
+            .fullScreenCover(item: $selectedDiscoverCreator) { creator in
+                DiscoverCreatorProfileView(
+                    creator: creator,
+                    isFollowing: false,
+                    onFollow: {
+                        await followDiscoverCreator(creator)
+                    }
+                )
             }
         }
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Button {} label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 29, weight: .regular))
-                    .frame(width: 56, height: 56)
-                    .foregroundStyle(Color.ubeyeMuted)
-                    .background(Color.ubeyeSubtle, in: Circle())
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
+        ZStack {
             Text("Stories")
-                .font(.system(size: 27, weight: .black, design: .rounded))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(Color.ubeyeInk)
+                .frame(maxWidth: .infinity)
 
-            Spacer()
+            HStack(spacing: 12) {
+                UBEYEWordmark(compact: true)
 
-            NavigationLink {
-                ProfileView()
-            } label: {
-                ZStack {
-                    Circle().fill(Color.ubeyeRed)
-                    Text(profileInitials)
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
+                Spacer()
+
+                Button(action: onSearchTap) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .foregroundStyle(Color.ubeyeInk)
+                        .background(Color.ubeyeSubtle, in: Circle())
                 }
-                .frame(width: 56, height: 56)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Search creators")
+
+                TopAvatarSpacer()
             }
-            .buttonStyle(.plain)
+        }
+        .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private var uploadNoticeBanner: some View {
+        if storyUploadNotice.state != nil {
+            HStack(spacing: 10) {
+                Image(systemName: storyUploadNotice.systemImage)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Color.ubeyeRed,
+                        in: Circle()
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(storyUploadNotice.title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.ubeyeInk)
+                    Text(storyUploadNotice.message)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+            }
+            .padding(12)
+            .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.ubeyeBorder, lineWidth: 1)
+            )
         }
     }
 
-    private var profileInitials: String {
-        let name = auth.account?.displayName ?? auth.account?.handle ?? "U"
-        let parts = name.split(separator: " ")
-        let letters = parts.prefix(2).compactMap { $0.first }
-        let value = String(letters).uppercased()
-        return value.isEmpty ? "U" : value
-    }
-
     private func followingStoriesSection(_ feed: MobileFeedResponse) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Following", actionTitle: nil, showsChevron: true)
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink {
+                FollowingManagementView()
+            } label: {
+                SectionHeader(title: "Following", actionTitle: nil, showsChevron: true)
+            }
+            .buttonStyle(.plain)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     MyStoryHomeCard(myStory: feed.myStory) {
                         if feed.myStory.hasActiveStory {
-                            selectedStory = StoryRoute(id: "my-story")
+                            selectedStory = StoryRoute(id: "my-story", source: .ownStory)
                         }
                     }
 
                     ForEach(feed.followingStories) { story in
                         StoryThumb(story: story)
+                            .onAppear {
+                                api.prefetchStoryStacks(ids: [story.id], limit: 1)
+                            }
                             .onTapGesture {
-                                selectedStory = StoryRoute(id: story.id)
+                                selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                             }
                     }
                 }
-                .padding(.trailing, 18)
+                .padding(.trailing, UBEYEMetrics.screenInset)
             }
 
             if feed.followingStories.isEmpty && feed.followingProfiles.isEmpty {
@@ -140,35 +254,56 @@ struct HomeView: View {
         }
     }
 
-    private func followingRail(_ feed: MobileFeedResponse) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
-                MyStoryBubble(myStory: feed.myStory) {
-                    if feed.myStory.hasActiveStory {
-                        selectedStory = StoryRoute(id: "my-story")
-                    }
-                }
-
-                ForEach(feed.followingProfiles) { profile in
-                    FollowingBubble(profile: profile)
-                }
+    @ViewBuilder
+    private func discoverSection(_ feed: MobileFeedResponse) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: onDiscoverTap) {
+                SectionHeader(title: "Discover", actionTitle: nil, showsChevron: true)
             }
-            .padding(.vertical, 2)
-        }
-    }
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open Discover")
+            .zIndex(1)
 
-    private func horizontalStories(_ stories: [StoryCard]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(stories) { story in
-                    StoryThumb(story: story)
-                        .onTapGesture {
-                            selectedStory = StoryRoute(id: story.id)
-                        }
-                }
+            if !feed.discoverTiles.isEmpty {
+                DiscoverGrid(
+                    tiles: feed.discoverTiles,
+                    onAppear: prefetchDiscoverTile,
+                    onTap: openDiscoverTile
+                )
+                .zIndex(0)
             }
         }
     }
+
+    private func prefetchDiscoverTile(_ tile: DiscoverTile) {
+        api.prefetchStoryStacks(ids: [tile.activeStoryId ?? tile.id], limit: 1)
+    }
+
+    private func openDiscoverTile(_ tile: DiscoverTile) {
+        selectedStory = StoryRoute(id: tile.activeStoryId ?? tile.id, source: .discover)
+    }
+
+    private func followDiscoverCreator(_ creator: DiscoverCreator) async -> Bool {
+        struct Body: Encodable {
+            let creatorId: String
+        }
+
+        do {
+            let _: BasicOkResponse = try await api.post(
+                "/api/mobile/follows",
+                body: Body(creatorId: creator.id)
+            )
+            NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
+            await store.load(api: api)
+            return true
+        } catch {
+            store.error = error.localizedDescription
+            return false
+        }
+    }
+
 }
 
 struct SectionHeader: View {
@@ -179,11 +314,11 @@ struct SectionHeader: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 25, weight: .black, design: .rounded))
+                .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(Color.ubeyeInk)
             if showsChevron {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.ubeyeMuted.opacity(0.45))
             }
             Spacer()
@@ -193,6 +328,7 @@ struct SectionHeader: View {
                     .foregroundStyle(Color.ubeyeRed)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
     }
 }
@@ -204,16 +340,12 @@ struct MyStoryHomeCard: View {
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
-                AsyncImage(url: myStory.latestThumbnailUrl) { image in
+                CachedAsyncImage(url: myStory.latestThumbnailUrl) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
-                    LinearGradient(
-                        colors: [Color.ubeyeSubtle, Color.ubeyeYellow.opacity(0.45)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+                    MyStoryCardSkeleton()
                 }
-                .frame(width: 140, height: 212)
+                .frame(width: 132, height: 192)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 LinearGradient(
@@ -223,98 +355,97 @@ struct MyStoryHomeCard: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+                if let overlay = thumbnailOverlay {
+                    MyStoryThumbnailOverlay(overlay: overlay)
+                        .frame(width: 132, height: 192)
+                }
+
                 Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .frame(width: 38, height: 38)
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 30, height: 30)
                     .foregroundStyle(.white)
                     .background(Color.ubeyeInk, in: Circle())
-                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                    .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(10)
+                    .padding(9)
 
                 HStack(spacing: 7) {
                     Circle()
                         .fill(Color.ubeyeRed)
                         .frame(width: 8, height: 8)
                     Text("My Story")
-                        .font(.system(size: 17, weight: .black, design: .rounded))
+                        .font(.system(size: 15, weight: .bold))
                         .lineLimit(1)
                 }
                 .foregroundStyle(.white)
                 .padding(12)
             }
-            .frame(width: 140, height: 212)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.ubeyeInk, lineWidth: 2)
-            )
+            .frame(width: 132, height: 192)
         }
         .buttonStyle(.plain)
     }
+
+    private var thumbnailOverlay: StoryTextOverlay? {
+        myStory.latestTextOverlays?.first {
+            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
 }
 
-struct MyStoryBubble: View {
-    let myStory: MyStorySummary
-    let action: () -> Void
+private struct MyStoryCardSkeleton: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.ubeyeSubtle,
+                    Color.ubeyeBorder.opacity(0.72),
+                    Color.ubeyeSubtle.opacity(0.92)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.62))
+                    .frame(width: 72, height: 10)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.42))
+                    .frame(width: 48, height: 10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(12)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct MyStoryThumbnailOverlay: View {
+    let overlay: StoryTextOverlay
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                ZStack(alignment: .bottomTrailing) {
-                    RemoteAvatar(url: myStory.owner.imageUrl, size: 64, name: myStory.owner.name)
-                        .padding(3)
-                        .background(
-                            Circle()
-                                .fill(myStory.hasActiveStory ? Color.ubeyeRed : Color.ubeyeSubtle)
-                        )
-
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .black))
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(.white)
-                        .background(Color.ubeyeRed, in: Circle())
-                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
+        GeometryReader { proxy in
+            HStack(spacing: 3) {
+                if overlay.kind == "link" {
+                    Image(systemName: "link")
+                        .font(.system(size: 7, weight: .bold))
                 }
 
-                Text("My Story")
-                    .font(.caption.weight(.bold))
-                    .lineLimit(1)
-                Text(myStory.hasActiveStory ? "\(myStory.liveCount) live" : "Add")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.ubeyeMuted)
+                Text(overlay.label)
+                    .font(.system(size: 9, weight: .bold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
             }
-            .frame(width: 78)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.46), in: Capsule())
+            .position(
+                x: proxy.size.width * CGFloat(min(max(overlay.positionX, 8), 92) / 100),
+                y: proxy.size.height * CGFloat(min(max(overlay.positionY, 8), 82) / 100)
+            )
         }
-        .buttonStyle(.plain)
-    }
-}
-
-struct FollowingBubble: View {
-    let profile: FollowingProfile
-
-    var body: some View {
-        VStack(spacing: 7) {
-            RemoteAvatar(url: profile.imageUrl, size: 64, name: profile.name)
-                .padding(3)
-                .background(
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [.ubeyeRed, .ubeyePurple, .ubeyeYellow],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-            Text(profile.name)
-                .font(.caption.weight(.bold))
-                .lineLimit(1)
-            Text("@\(profile.handle)")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Color.ubeyeMuted)
-                .lineLimit(1)
-        }
-        .frame(width: 78)
+        .allowsHitTesting(false)
     }
 }
 
@@ -323,12 +454,12 @@ struct StoryThumb: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            AsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
+            CachedAsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 Color.ubeyeSubtle
             }
-            .frame(width: 148, height: 212)
+            .frame(width: 132, height: 192)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             LinearGradient(
@@ -339,28 +470,21 @@ struct StoryThumb: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 5) {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 10, weight: .black))
-                    .frame(width: 20, height: 20)
-                    .foregroundStyle(Color.ubeyeInk)
-                    .background(Color.yellow, in: Circle())
                 Text(story.creator)
-                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
                     .lineLimit(2)
-                Text(story.title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(.white.opacity(0.74))
             }
             .padding(10)
-            .frame(width: 148, height: 212, alignment: .bottomLeading)
+            .frame(width: 132, height: 192, alignment: .bottomLeading)
         }
-        .frame(width: 148, height: 212)
+        .frame(width: 132, height: 192)
     }
 }
 
 struct DiscoverGrid: View {
     let tiles: [DiscoverTile]
+    var onAppear: (DiscoverTile) -> Void = { _ in }
     let onTap: (DiscoverTile) -> Void
 
     private let columns = [
@@ -375,12 +499,12 @@ struct DiscoverGrid: View {
                     onTap(tile)
                 } label: {
                     ZStack(alignment: .bottomLeading) {
-                        AsyncImage(url: tile.thumbnailUrl ?? tile.imageUrl) { image in
+                        CachedAsyncImage(url: tile.thumbnailUrl ?? tile.imageUrl) { image in
                             image.resizable().scaledToFill()
                         } placeholder: {
-                            Color.ubeyeSubtle
+                            DiscoverCardSkeleton()
                         }
-                        .frame(height: 318)
+                        .frame(height: 252)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         LinearGradient(
@@ -390,20 +514,10 @@ struct DiscoverGrid: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 7) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 10, weight: .black))
-                                .frame(width: 20, height: 20)
-                                .foregroundStyle(Color.ubeyeInk)
-                                .background(Color.yellow, in: Circle())
+                        VStack(alignment: .leading, spacing: 0) {
                             Text(tile.title)
-                                .font(.system(size: 24, weight: .black, design: .rounded))
+                                .font(.system(size: 18, weight: .bold))
                                 .lineLimit(3)
-                            if let subtitle = tile.subtitle {
-                                Text(subtitle)
-                                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.74))
-                            }
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -411,8 +525,40 @@ struct DiscoverGrid: View {
                     .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
+                .onAppear {
+                    onAppear(tile)
+                }
             }
         }
+    }
+
+}
+
+private struct DiscoverCardSkeleton: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.ubeyeSubtle,
+                    Color.ubeyeBorder.opacity(0.72),
+                    Color.ubeyeSubtle.opacity(0.92)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.62))
+                    .frame(width: 78, height: 10)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.42))
+                    .frame(width: 52, height: 10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(12)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -489,9 +635,9 @@ struct StoryMediaView: View {
 
     var body: some View {
         if story.assetKind == .video {
-            VideoPlayer(player: AVPlayer(url: story.mediaUrl))
+            AutoPlayVideoPlayer(url: story.mediaUrl, thumbnailUrl: story.thumbnailUrl)
         } else {
-            AsyncImage(url: story.mediaUrl) { image in
+            CachedAsyncImage(url: story.mediaUrl) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ProgressView().tint(.white)
