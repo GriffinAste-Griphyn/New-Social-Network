@@ -9,15 +9,18 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
-import { del, put } from "@vercel/blob"
+import { del, head, put } from "@vercel/blob"
 import sharp from "sharp"
 
 import { env } from "@/lib/env"
 
 const maxStoryUploadBytes = 25 * 1024 * 1024
+export const maxCloudflareStreamClientThumbnailUploadBytes = 2 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
 const localStoryUrlPrefix = "/uploads/stories"
 const storyMediaRoutePrefix = "/api/story-media"
+const cloudflareStreamClientThumbnailDirectory =
+  "stories/mobile-cloudflare-thumbnails"
 const localStoryMediaPrefix = "local"
 const cloudflareStreamMediaPrefix = "cloudflare-stream"
 const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
@@ -536,6 +539,56 @@ function buildCloudflareTusUploadMetadata(input: {
 
 function isCloudflareStreamUid(value: string) {
   return /^[a-f0-9]{32}$/i.test(value)
+}
+
+export function isAllowedOriginalQualityVideoThumbnailContentType(
+  contentType: string,
+) {
+  return contentType.toLowerCase() === "image/jpeg"
+}
+
+export function createCloudflareStreamClientThumbnailPathname(
+  userId: string,
+  uid: string,
+) {
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
+
+  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_")
+
+  return `${cloudflareStreamClientThumbnailDirectory}/${safeUserId}/${uid}-thumb.jpg`
+}
+
+export async function createCloudflareStreamClientThumbnailUrl(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+}) {
+  if (
+    !input.pathname.startsWith(`${cloudflareStreamClientThumbnailDirectory}/`) ||
+    input.pathname.includes("..") ||
+    !input.pathname.endsWith("-thumb.jpg") ||
+    !isAllowedOriginalQualityVideoThumbnailContentType(input.contentType) ||
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize <= 0 ||
+    input.byteSize > maxCloudflareStreamClientThumbnailUploadBytes
+  ) {
+    throw new StoryUploadError("Could not verify the story video thumbnail.")
+  }
+
+  const thumbnailMetadata = await head(input.pathname).catch(() => null)
+
+  if (
+    !thumbnailMetadata ||
+    thumbnailMetadata.size !== input.byteSize ||
+    thumbnailMetadata.contentType.toLowerCase() !==
+      input.contentType.toLowerCase()
+  ) {
+    throw new StoryUploadError("Could not verify the story video thumbnail.")
+  }
+
+  return buildStoryMediaRoute(input.pathname)
 }
 
 function assertCloudflareStreamUploadsEnabled() {

@@ -225,7 +225,7 @@ export default function HomePage() {
                 </h1>
                 <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
                   UBEYE is a social experiment in wealth redistribution. Post
-                  everyday stories, watch other people's stories, and earn from
+                  everyday stories, watch other people&apos;s stories, and earn from
                   the ad dollars your attention helps create.
                 </p>
               </div>
