@@ -186,14 +186,10 @@ struct HomeView: View {
     private var uploadNoticeBanner: some View {
         if storyUploadNotice.state != nil {
             HStack(spacing: 10) {
-                Image(systemName: storyUploadNotice.systemImage)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        Color.ubeyeRed,
-                        in: Circle()
-                    )
+                UploadNoticeIcon(
+                    systemImage: storyUploadNotice.systemImage,
+                    isSpinning: storyUploadNotice.isProcessing
+                )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(storyUploadNotice.title)
@@ -213,6 +209,32 @@ struct HomeView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.ubeyeBorder, lineWidth: 1)
             )
+        }
+    }
+
+    private struct UploadNoticeIcon: View {
+        let systemImage: String
+        let isSpinning: Bool
+
+        var body: some View {
+            TimelineView(.animation(paused: !isSpinning)) { context in
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .rotationEffect(.degrees(rotationDegrees(at: context.date)))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Color.ubeyeRed,
+                        in: Circle()
+                    )
+            }
+        }
+
+        private func rotationDegrees(at date: Date) -> Double {
+            guard isSpinning else {
+                return 0
+            }
+            return date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
         }
     }
 

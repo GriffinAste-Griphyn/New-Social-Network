@@ -149,6 +149,10 @@ final class StoryUploadNoticeStore: ObservableObject {
         }
     }
 
+    var isProcessing: Bool {
+        state == .processing
+    }
+
     func showProcessing() {
         dismissTask?.cancel()
         state = .processing
