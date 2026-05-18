@@ -59,7 +59,7 @@ final class StoryComposerStore: ObservableObject {
                     durationMs: nil
                 )
                 if response.processingStatus != "ready" {
-                    uploadStatus = "Processing video"
+                    uploadStatus = "Video is processing"
                     await api.waitForStoryLive(storyId: response.storyId)
                 }
             }
@@ -99,7 +99,11 @@ struct StoryComposerView: View {
                     metadataFields
 
                     if let uploadStatus = store.uploadStatus {
-                        InlineNotice(message: uploadStatus)
+                        InlineNotice(
+                            message: uploadStatus,
+                            detail: uploadStatus == "Video is processing" ? "It will appear in My Story as soon as it is ready." : nil,
+                            isLoading: store.isUploading && uploadStatus != "Story posted"
+                        )
                     }
 
                     if let error = store.error ?? camera.error {

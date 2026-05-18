@@ -166,23 +166,57 @@ struct UBEYEPill: View {
 
 struct InlineNotice: View {
     let message: String
+    var detail: String?
     var isError = false
+    var isLoading = false
 
     var body: some View {
+        let tint = isError || isLoading ? Color.ubeyeRed : Color.green
+
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(isError ? Color.ubeyeRed : Color.green)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(Color.ubeyeInk)
+            if isLoading {
+                RotatingNoticeIcon()
+            } else {
+                Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(tint)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(message)
+                    .font(.subheadline.weight(detail == nil ? .regular : .bold))
+                    .foregroundStyle(Color.ubeyeInk)
+                if let detail {
+                    Text(detail)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                }
+            }
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background((isError ? Color.ubeyeRed : Color.green).opacity(0.08))
+        .background(tint.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke((isError ? Color.ubeyeRed : Color.green).opacity(0.18), lineWidth: 1)
+                .stroke(tint.opacity(0.18), lineWidth: 1)
         )
+    }
+}
+
+private struct RotatingNoticeIcon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isRotating = false
+
+    var body: some View {
+        Image(systemName: "arrow.triangle.2.circlepath")
+            .foregroundStyle(Color.ubeyeRed)
+            .rotationEffect(.degrees(isRotating ? 360 : 0))
+            .animation(
+                reduceMotion ? nil : .linear(duration: 0.9).repeatForever(autoreverses: false),
+                value: isRotating
+            )
+            .onAppear {
+                isRotating = true
+            }
     }
 }
