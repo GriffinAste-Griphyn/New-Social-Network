@@ -238,7 +238,7 @@ struct AppBottomBar: View {
                         Image(systemName: tab.systemImage)
                             .font(.system(size: iconFontSize(for: tab), weight: .semibold))
                             .symbolVariant(selectedTab == tab && tab != .post ? .fill : .none)
-                            .foregroundStyle(tab == .post ? .white : (selectedTab == tab ? Color.ubeyeInk : Color.ubeyeMuted))
+                            .foregroundStyle(tab == .post ? .white : tabColor(for: tab))
                             .frame(width: iconFrameSize(for: tab), height: iconFrameSize(for: tab))
                             .offset(x: iconOpticalOffset(for: tab))
                     }
@@ -285,5 +285,9 @@ struct AppBottomBar: View {
 
     private func iconOpticalOffset(for tab: AppTab) -> CGFloat {
         tab == .following ? -1.5 : 0
+    }
+
+    private func tabColor(for tab: AppTab) -> Color {
+        selectedTab == tab ? .ubeyeRed : .ubeyeMuted.opacity(0.82)
     }
 }

@@ -173,6 +173,7 @@ private struct FollowingStoryFeedCard: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
+            .ubeyeMediaCardChrome()
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
