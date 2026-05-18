@@ -56,6 +56,6 @@ export async function POST(request: Request) {
     ok: true,
     pendingEmail: result.user.email,
     message:
-      "Check your email to verify your account, then return to the app.",
+      "Enter the verification code we sent to your email.",
   })
 }

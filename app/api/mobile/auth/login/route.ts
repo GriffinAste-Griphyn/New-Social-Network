@@ -52,7 +52,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Verify your email before signing in. We sent you a fresh verification link.",
+            "Verify your email before signing in. We sent you a fresh verification code.",
           pendingEmail: result.user.email,
         },
         { status: 403 },

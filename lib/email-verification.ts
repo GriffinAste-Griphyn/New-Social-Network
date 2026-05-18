@@ -1,6 +1,6 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto"
 
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq, gt, isNull } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { emailVerificationTokens, users } from "@/lib/db/schema"
@@ -12,6 +12,16 @@ const tokenTtlMs = 24 * 60 * 60 * 1000
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex")
+}
+
+function hashCode(userId: string, code: string) {
+  return createHash("sha256")
+    .update(`${env.AUTH_SECRET}:email-verification-code:${userId}:${code}`)
+    .digest("hex")
+}
+
+function createVerificationCode() {
+  return String(randomInt(100000, 1000000))
 }
 
 function buildVerificationUrl(token: string, nextPath?: string) {
@@ -33,6 +43,7 @@ export async function sendUserVerificationEmail(user: {
 }) {
   const db = getDb()
   const token = randomBytes(32).toString("base64url")
+  const code = createVerificationCode()
   const now = new Date()
 
   await db
@@ -51,6 +62,7 @@ export async function sendUserVerificationEmail(user: {
     id: randomUUID(),
     userId: user.id,
     tokenHash: hashToken(token),
+    codeHash: hashCode(user.id, code),
     expiresAt: new Date(now.getTime() + tokenTtlMs),
   })
 
@@ -58,7 +70,36 @@ export async function sendUserVerificationEmail(user: {
     displayName: user.displayName ?? "there",
     email: user.email,
     verificationUrl: buildVerificationUrl(token, user.nextPath),
+    verificationCode: code,
   })
+}
+
+async function markUserEmailVerified(userId: string) {
+  const db = getDb()
+  const now = new Date()
+
+  await db
+    .update(emailVerificationTokens)
+    .set({
+      usedAt: now,
+    })
+    .where(
+      and(
+        eq(emailVerificationTokens.userId, userId),
+        isNull(emailVerificationTokens.usedAt),
+      ),
+    )
+
+  const [user] = await db
+    .update(users)
+    .set({
+      emailVerifiedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(users.id, userId))
+    .returning()
+
+  return user
 }
 
 export async function verifyEmailToken(token: string) {
@@ -95,27 +136,58 @@ export async function verifyEmailToken(token: string) {
     }
   }
 
-  const now = new Date()
-
-  await db
-    .update(emailVerificationTokens)
-    .set({
-      usedAt: now,
-    })
-    .where(eq(emailVerificationTokens.id, record.id))
-
-  const [user] = await db
-    .update(users)
-    .set({
-      emailVerifiedAt: now,
-      updatedAt: now,
-    })
-    .where(eq(users.id, record.userId))
-    .returning()
+  const user = await markUserEmailVerified(record.userId)
 
   return {
     ok: true,
     user: user ? toAuthUser(user) : null,
     message: "Email verified. You can now sign in.",
+  }
+}
+
+export async function verifyEmailCode(input: {
+  userId: string
+  code: string
+}) {
+  const normalizedCode = input.code.trim()
+
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    return {
+      ok: false,
+      message: "Enter a valid 6-digit verification code.",
+    }
+  }
+
+  const db = getDb()
+  const [record] = await db
+    .select({
+      id: emailVerificationTokens.id,
+      userId: emailVerificationTokens.userId,
+      expiresAt: emailVerificationTokens.expiresAt,
+    })
+    .from(emailVerificationTokens)
+    .where(
+      and(
+        eq(emailVerificationTokens.userId, input.userId),
+        eq(emailVerificationTokens.codeHash, hashCode(input.userId, normalizedCode)),
+        isNull(emailVerificationTokens.usedAt),
+        gt(emailVerificationTokens.expiresAt, new Date()),
+      ),
+    )
+    .limit(1)
+
+  if (!record) {
+    return {
+      ok: false,
+      message: "Verification code is invalid or expired.",
+    }
+  }
+
+  const user = await markUserEmailVerified(record.userId)
+
+  return {
+    ok: true,
+    user: user ? toAuthUser(user) : null,
+    message: "Email verified.",
   }
 }

@@ -4,7 +4,10 @@ import {
   createMobileSessionToken,
   isProfileComplete,
 } from "@/lib/auth"
-import { sendUserVerificationEmail } from "@/lib/email-verification"
+import {
+  sendUserVerificationEmail,
+  verifyEmailCode,
+} from "@/lib/email-verification"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   authenticateUser,
@@ -36,6 +39,7 @@ vi.mock("@/lib/user-store", () => ({
 
 vi.mock("@/lib/email-verification", () => ({
   sendUserVerificationEmail: vi.fn(),
+  verifyEmailCode: vi.fn(),
 }))
 
 vi.mock("@/lib/auth", async () => {
@@ -74,6 +78,7 @@ async function responseJson(response: Response) {
 
 describe("mobile auth API", () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(createMobileSessionToken).mockResolvedValue("mobile-token")
   })
@@ -126,6 +131,121 @@ describe("mobile auth API", () => {
       handle: null,
       displayName: null,
     })
+  })
+
+  it("verifies a mobile email code and returns a mobile token", async () => {
+    vi.mocked(authenticateUser).mockResolvedValue({
+      ok: false,
+      reason: "email_unverified",
+      message: "Verify your email.",
+      user: { ...testUser, handle: null, displayName: null },
+    })
+    vi.mocked(verifyEmailCode).mockResolvedValue({
+      ok: true,
+      user: testUser,
+      message: "Email verified.",
+    })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/verify-code/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/verify-code", {
+        email: "creator@example.com",
+        password: "password123",
+        code: "123456",
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      user: testUser,
+      mobileToken: "mobile-token",
+    })
+    expect(verifyEmailCode).toHaveBeenCalledWith({
+      userId: "user_123",
+      code: "123456",
+    })
+  })
+
+  it("rejects an invalid mobile email verification code", async () => {
+    vi.mocked(authenticateUser).mockResolvedValue({
+      ok: false,
+      reason: "email_unverified",
+      message: "Verify your email.",
+      user: { ...testUser, handle: null, displayName: null },
+    })
+    vi.mocked(verifyEmailCode).mockResolvedValue({
+      ok: false,
+      message: "Verification code is invalid or expired.",
+    })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/verify-code/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/verify-code", {
+        email: "creator@example.com",
+        password: "password123",
+        code: "123456",
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await responseJson(response)).toMatchObject({
+      error: "Verification code is invalid or expired.",
+    })
+    expect(createMobileSessionToken).not.toHaveBeenCalled()
+  })
+
+  it("resends a mobile verification code for an unverified account", async () => {
+    const incompleteUser = { ...testUser, handle: null, displayName: null }
+
+    vi.mocked(authenticateUser).mockResolvedValue({
+      ok: false,
+      reason: "email_unverified",
+      message: "Verify your email.",
+      user: incompleteUser,
+    })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/resend-verification-code/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/resend-verification-code", {
+        email: "creator@example.com",
+        password: "password123",
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      alreadyVerified: false,
+    })
+    expect(sendUserVerificationEmail).toHaveBeenCalledWith(incompleteUser)
+  })
+
+  it("reports already verified when resending a code for a verified account", async () => {
+    vi.mocked(authenticateUser).mockResolvedValue({ ok: true, user: testUser })
+
+    const { POST } = await import(
+      "@/app/api/mobile/auth/resend-verification-code/route"
+    )
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/resend-verification-code", {
+        email: "creator@example.com",
+        password: "password123",
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      alreadyVerified: true,
+    })
+    expect(sendUserVerificationEmail).not.toHaveBeenCalled()
   })
 
   it("returns a mobile token for verified login", async () => {
