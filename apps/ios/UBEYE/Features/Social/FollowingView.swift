@@ -125,7 +125,7 @@ private struct FollowingStoryFeedCard: View {
                     FollowingStoryCardSkeleton()
                 }
                 .frame(maxWidth: .infinity)
-                .aspectRatio(0.78, contentMode: .fit)
+                .aspectRatio(1.08, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 LinearGradient(
