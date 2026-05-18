@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Email is not verified yet. We sent you a fresh verification link.",
+            "Email is not verified yet. We sent you a fresh verification code.",
         },
         { status: 403 },
       )

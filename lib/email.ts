@@ -35,14 +35,17 @@ export async function sendVerificationEmail({
   displayName,
   email,
   verificationUrl,
+  verificationCode,
 }: {
   displayName: string
   email: string
   verificationUrl: string
+  verificationCode: string
 }) {
   const resend = getResendClient()
   const safeDisplayName = escapeHtml(displayName)
   const safeVerificationUrl = escapeHtml(verificationUrl)
+  const safeVerificationCode = escapeHtml(verificationCode)
   const { error } = await resend.emails.send({
     from: env.RESEND_FROM_EMAIL,
     to: email,
@@ -50,22 +53,28 @@ export async function sendVerificationEmail({
     text: [
       `Hi ${displayName},`,
       "",
-      "Verify your email to finish setting up your UBEYE account:",
+      `Your UBEYE verification code is ${verificationCode}.`,
+      "",
+      "You can also verify your email with this secure link:",
       verificationUrl,
       "",
-      "This link expires in 24 hours.",
+      "This code and link expire in 24 hours.",
     ].join("\n"),
     html: `
       <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #17191f;">
         <h1 style="font-size: 24px;">Verify your email</h1>
         <p>Hi ${safeDisplayName},</p>
-        <p>Verify your email to finish setting up your UBEYE account.</p>
+        <p>Use this code in the UBEYE app to finish setting up your account.</p>
+        <p style="font-size: 30px; font-weight: 700; letter-spacing: 6px; color: #17191f; margin: 18px 0;">
+          ${safeVerificationCode}
+        </p>
+        <p>You can also verify your email with this secure link.</p>
         <p>
           <a href="${safeVerificationUrl}" style="display: inline-block; border-radius: 999px; background: #17191f; color: #ffffff; padding: 12px 18px; text-decoration: none;">
             Verify email
           </a>
         </p>
-        <p style="color: #62646d;">This link expires in 24 hours.</p>
+        <p style="color: #62646d;">This code and link expire in 24 hours.</p>
       </div>
     `,
   })
