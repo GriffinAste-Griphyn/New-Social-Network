@@ -78,8 +78,10 @@ export async function POST(request: Request) {
   const followingStories = collapseStoryCardsByCreator(
     feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
   )
-  const followingTimelineStories = feed.followingTimelineStories.map((story) =>
-    absoluteStoryCardMedia(story, request),
+  const followingTimelineStories = collapseStoryCardsByCreator(
+    feed.followingTimelineStories.map((story) =>
+      absoluteStoryCardMedia(story, request),
+    ),
   )
   const followedCreatorNames = new Set(
     followingStories.map((story) => story.creator.toLowerCase()),

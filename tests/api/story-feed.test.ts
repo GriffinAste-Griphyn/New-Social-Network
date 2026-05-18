@@ -219,7 +219,7 @@ describe("story upload and mobile feed API", () => {
       followingStories: [storyCard("following-a"), storyCard("following-b")],
       followingTimelineStories: [
         storyCard("following-a"),
-        storyCard("following-b", "@other", "Other Creator"),
+        storyCard("following-b"),
       ],
       discoverStories: [
         storyCard("discover-a", "@new", "New Creator"),
@@ -268,7 +268,7 @@ describe("story upload and mobile feed API", () => {
       },
     })
     expect(payload.followingStories).toHaveLength(1)
-    expect(payload.followingTimelineStories).toHaveLength(2)
+    expect(payload.followingTimelineStories).toHaveLength(1)
     expect(payload.discoverTiles).toHaveLength(1)
     expect(payload.myStory).toMatchObject({
       liveCount: 1,

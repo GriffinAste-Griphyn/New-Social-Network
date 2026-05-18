@@ -884,14 +884,16 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
         followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
       ),
     )
-  const followingTimelineStories = followingTimelineRows.slice(0, 24).map((story) =>
-    buildFeedStoryCard(
-      story,
-      mentionsByStory.get(story.id) ?? [],
-      elementsByStory.get(story.id) ?? [],
-      followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
-    ),
-  )
+  const followingTimelineStories = firstStoryPerCreator(followingTimelineRows)
+    .slice(0, 24)
+    .map((story) =>
+      buildFeedStoryCard(
+        story,
+        mentionsByStory.get(story.id) ?? [],
+        elementsByStory.get(story.id) ?? [],
+        followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
+      ),
+    )
 
   const discoverStories = firstStoryPerCreator(discoverRankedStories)
     .slice(0, 8)
