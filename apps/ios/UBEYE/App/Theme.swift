@@ -44,6 +44,20 @@ extension View {
                     .stroke(Color.ubeyeBorder.opacity(0.85), lineWidth: 1)
             )
     }
+
+    func ubeyeMediaCardChrome(cornerRadius: CGFloat = 8) -> some View {
+        self
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 6)
+    }
 }
 
 struct EmptyStateView: View {

@@ -403,6 +403,7 @@ struct MyStoryHomeCard: View {
                 .padding(12)
             }
             .frame(width: 132, height: 192)
+            .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
     }
@@ -501,6 +502,7 @@ struct StoryThumb: View {
             .frame(width: 132, height: 192, alignment: .bottomLeading)
         }
         .frame(width: 132, height: 192)
+        .ubeyeMediaCardChrome()
     }
 }
 
@@ -545,6 +547,7 @@ struct DiscoverGrid: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     }
                     .foregroundStyle(.white)
+                    .ubeyeMediaCardChrome()
                 }
                 .buttonStyle(.plain)
                 .onAppear {
