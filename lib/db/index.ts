@@ -1,5 +1,5 @@
-import { neon } from "@neondatabase/serverless"
-import { drizzle } from "drizzle-orm/neon-http"
+import { Pool } from "@neondatabase/serverless"
+import { drizzle } from "drizzle-orm/neon-serverless"
 
 import { env } from "@/lib/env"
 
@@ -7,12 +7,15 @@ import * as schema from "./schema"
 
 const globalForDatabase = globalThis as {
   database?: ReturnType<typeof createDatabase>
+  databasePool?: Pool
 }
 
 function createDatabase() {
-  const client = neon(env.DATABASE_URL)
+  globalForDatabase.databasePool ??= new Pool({
+    connectionString: env.DATABASE_URL,
+  })
 
-  return drizzle(client, { schema })
+  return drizzle(globalForDatabase.databasePool, { schema })
 }
 
 export function getDb() {
