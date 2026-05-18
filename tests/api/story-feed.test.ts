@@ -217,6 +217,10 @@ describe("story upload and mobile feed API", () => {
     vi.mocked(getFeedData).mockResolvedValue({
       featuredStory: storyCard("featured"),
       followingStories: [storyCard("following-a"), storyCard("following-b")],
+      followingTimelineStories: [
+        storyCard("following-a"),
+        storyCard("following-b", "@other", "Other Creator"),
+      ],
       discoverStories: [
         storyCard("discover-a", "@new", "New Creator"),
         storyCard("discover-b", "@new", "New Creator"),
@@ -264,6 +268,7 @@ describe("story upload and mobile feed API", () => {
       },
     })
     expect(payload.followingStories).toHaveLength(1)
+    expect(payload.followingTimelineStories).toHaveLength(2)
     expect(payload.discoverTiles).toHaveLength(1)
     expect(payload.myStory).toMatchObject({
       liveCount: 1,

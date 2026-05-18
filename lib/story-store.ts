@@ -168,6 +168,7 @@ export type FeedData = {
   myStory: MyStorySummary
   followingProfiles: Awaited<ReturnType<typeof listFollowingProfiles>>
   followingStories: FeedStoryCard[]
+  followingTimelineStories: FeedStoryCard[]
   suggestedAccounts: SuggestedAccount[]
   discoverStories: FeedStoryCard[]
 }
@@ -444,6 +445,12 @@ function firstStoryPerCreator<T extends { creatorId: string }>(rows: T[]) {
 function orderStoriesChronologically<T extends { createdAt: Date }>(rows: T[]) {
   return [...rows].sort(
     (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
+  )
+}
+
+function orderStoriesNewestFirst<T extends { createdAt: Date }>(rows: T[]) {
+  return [...rows].sort(
+    (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
   )
 }
 
@@ -790,6 +797,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
       myStory,
       followingProfiles,
       followingStories: [],
+      followingTimelineStories: [],
       suggestedAccounts: [],
       discoverStories: [],
     }
@@ -813,6 +821,9 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   const followedCreatorIds = new Set(followingProfiles.map((profile) => profile.id))
   const followingRankedStories = rankedStories.filter((story) =>
     followedCreatorIds.has(story.creatorId),
+  )
+  const followingTimelineRows = orderStoriesNewestFirst(
+    storyRows.filter((story) => followedCreatorIds.has(story.creatorId)),
   )
   const discoverRankedStories = rankedStories.filter(
     (story) =>
@@ -873,6 +884,14 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
         followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
       ),
     )
+  const followingTimelineStories = followingTimelineRows.slice(0, 24).map((story) =>
+    buildFeedStoryCard(
+      story,
+      mentionsByStory.get(story.id) ?? [],
+      elementsByStory.get(story.id) ?? [],
+      followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
+    ),
+  )
 
   const discoverStories = firstStoryPerCreator(discoverRankedStories)
     .slice(0, 8)
@@ -891,6 +910,7 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
     myStory,
     followingProfiles,
     followingStories,
+    followingTimelineStories,
     suggestedAccounts,
     discoverStories,
   }

@@ -744,6 +744,7 @@ enum MediaPreheater {
         ] +
         feed.followingProfiles.map(\.imageUrl) +
         feed.suggestedAccounts.map(\.imageUrl) +
+        feed.verticalFollowingStories.map { $0.thumbnailUrl ?? ($0.assetKind == .image ? $0.mediaUrl : nil) } +
         feed.followingStories.map { $0.thumbnailUrl ?? ($0.assetKind == .image ? $0.mediaUrl : nil) } +
         feed.discoverTiles.map { $0.thumbnailUrl ?? $0.imageUrl }
 

@@ -119,9 +119,16 @@ struct MobileFeedResponse: Codable {
     let session: SessionPreview
     let followingProfiles: [FollowingProfile]
     let followingStories: [StoryCard]
+    let followingTimelineStories: [StoryCard]?
     let discoverTiles: [DiscoverTile]
     let suggestedAccounts: [SuggestedAccount]
     let myStory: MyStorySummary
+}
+
+extension MobileFeedResponse {
+    var verticalFollowingStories: [StoryCard] {
+        followingTimelineStories ?? followingStories
+    }
 }
 
 struct FollowStateResponse: Codable {
