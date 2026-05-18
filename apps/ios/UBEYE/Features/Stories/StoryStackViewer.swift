@@ -632,11 +632,16 @@ struct StoryStackViewer: View {
 
     private func replyComposer(_ item: StoryStackItem) -> some View {
         HStack(spacing: 10) {
-            TextField("Reply", text: $store.replyText)
+            TextField(
+                "",
+                text: $store.replyText,
+                prompt: Text("Reply").foregroundStyle(.white.opacity(0.62))
+            )
                 .padding(.horizontal, 14)
                 .frame(height: 46)
                 .background(.white.opacity(0.14), in: Capsule())
                 .foregroundStyle(.white)
+                .tint(.white)
                 .focused($isReplyFieldFocused)
                 .submitLabel(.send)
                 .onSubmit {
