@@ -3,6 +3,7 @@ import SwiftUI
 extension Notification.Name {
     static let followingQueueDidChange = Notification.Name("ubeye.followingQueueDidChange")
     static let storyUploadDidComplete = Notification.Name("ubeye.storyUploadDidComplete")
+    static let storyDidDelete = Notification.Name("ubeye.storyDidDelete")
 }
 
 @MainActor

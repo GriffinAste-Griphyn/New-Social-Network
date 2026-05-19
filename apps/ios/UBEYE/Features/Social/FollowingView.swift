@@ -75,6 +75,18 @@ struct FollowingView: View {
                     await store.load(api: api, showsLoading: false, useDiskCache: false)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
+                let storyId = notification.object as? String
+                if let storyId {
+                    store.removeDeletedStory(storyId)
+                }
+
+                Task {
+                    api.invalidateMobileFeedCache()
+                    api.invalidateStoryStacks(ids: [storyId].compactMap { $0 })
+                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, store.feed != nil else {
                     return

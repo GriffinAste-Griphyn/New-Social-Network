@@ -189,6 +189,8 @@ final class StoryStackStore: ObservableObject {
         do {
             let _: BasicOkResponse = try await api.delete("/api/mobile/stories/\(item.id)", body: EmptyPayload())
             api.invalidateStoryStacks(ids: [item.id, "my-story", stack?.id].compactMap { $0 })
+            api.invalidateMobileFeedCache()
+            NotificationCenter.default.post(name: .storyDidDelete, object: item.id)
             return true
         } catch {
             self.error = error.localizedDescription

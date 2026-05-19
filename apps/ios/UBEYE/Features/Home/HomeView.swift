@@ -72,6 +72,46 @@ final class FeedStore: ObservableObject {
             self?.storyStackPrefetchTask = nil
         }
     }
+
+    func removeDeletedStory(_ storyId: String) {
+        guard let current = feed else {
+            return
+        }
+
+        let followingStories = current.followingStories.filter { $0.id != storyId }
+        let followingTimelineStories = current.followingTimelineStories?.filter { $0.id != storyId }
+        let discoverTiles = current.discoverTiles.filter { tile in
+            tile.id != storyId && tile.activeStoryId != storyId
+        }
+        let myStoryItems = current.myStory.items.filter { $0.id != storyId }
+        let myStoryWasDeleted = myStoryItems.count != current.myStory.items.count
+        let latestMyStoryItem = myStoryItems.last
+        let myStory = myStoryWasDeleted
+            ? MyStorySummary(
+                owner: current.myStory.owner,
+                hasActiveStory: !myStoryItems.isEmpty,
+                liveCount: myStoryItems.count,
+                latestThumbnailUrl: latestMyStoryItem.map {
+                    $0.assetKind == .image ? $0.mediaUrl : ($0.thumbnailUrl ?? $0.mediaUrl)
+                },
+                latestAssetKind: latestMyStoryItem?.assetKind,
+                latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
+                expiresSoonLabel: myStoryItems.isEmpty ? nil : current.myStory.expiresSoonLabel,
+                items: myStoryItems
+            )
+            : current.myStory
+
+        feed = MobileFeedResponse(
+            ok: current.ok,
+            session: current.session,
+            followingProfiles: current.followingProfiles,
+            followingStories: followingStories,
+            followingTimelineStories: followingTimelineStories,
+            discoverTiles: discoverTiles,
+            suggestedAccounts: current.suggestedAccounts,
+            myStory: myStory
+        )
+    }
 }
 
 struct HomeView: View {
@@ -128,6 +168,18 @@ struct HomeView: View {
                 Task {
                     api.invalidateStoryStacks(ids: ["my-story"])
                     await store.load(api: api, useDiskCache: false)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
+                let storyId = notification.object as? String
+                if let storyId {
+                    store.removeDeletedStory(storyId)
+                }
+
+                Task {
+                    api.invalidateMobileFeedCache()
+                    api.invalidateStoryStacks(ids: ["my-story"] + [storyId].compactMap { $0 })
+                    await store.load(api: api, showsLoading: false, useDiskCache: false)
                 }
             }
             .onChange(of: scenePhase) { _, phase in
