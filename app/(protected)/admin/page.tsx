@@ -6,6 +6,7 @@ import {
   Check,
   Clock3,
   Flag,
+  Link2,
   LogOut,
   ShieldAlert,
   Trash2,
@@ -81,6 +82,16 @@ function formatModerationCategories(value: string) {
   } catch {
     return []
   }
+}
+
+function parseOverlayPercent(value: string | null, fallback: number) {
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+
+  return Math.min(Math.max(parsed, 0), 100)
 }
 
 function flashMessage(params: Awaited<AdminPageProps["searchParams"]>) {
@@ -161,31 +172,71 @@ function Flash({
   )
 }
 
+function StoryPreviewOverlay({
+  element,
+}: {
+  element: AdminModerationStory["elements"][number]
+}) {
+  const positionX = parseOverlayPercent(element.positionX, 50)
+  const positionY = parseOverlayPercent(element.positionY, 74)
+  const isLink = element.kind === "link"
+
+  return (
+    <div
+      className="pointer-events-none absolute max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/45 px-3 py-2 text-center text-sm font-semibold leading-tight text-white shadow-[0_8px_20px_rgba(0,0,0,0.25)] backdrop-blur-[2px]"
+      style={{
+        left: `${positionX}%`,
+        top: `${positionY}%`,
+      }}
+    >
+      <span className="flex min-w-0 items-center justify-center gap-1.5">
+        {isLink ? <Link2 className="size-3.5 shrink-0" /> : null}
+        <span className="min-w-0 break-words">{element.label}</span>
+      </span>
+    </div>
+  )
+}
+
 function StoryPreview({ story }: { story: AdminModerationStory }) {
   const imageUrl = story.thumbnailUrl ?? story.mediaUrl
+  const overlayElements = story.elements.filter(
+    (element) => element.label.trim().length > 0,
+  )
 
   if (story.assetKind === "image" && imageUrl) {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={imageUrl}
-        alt=""
-        className="h-full w-full object-cover"
-      />
+      <div className="relative h-full w-full overflow-hidden bg-[#111827]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={imageUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/12 via-transparent to-black/28" />
+        {overlayElements.map((element) => (
+          <StoryPreviewOverlay key={element.id} element={element} />
+        ))}
+      </div>
     )
   }
 
   if (story.assetKind === "video" && story.mediaUrl) {
     return (
-      <video
-        src={story.mediaUrl}
-        poster={story.thumbnailUrl ?? undefined}
-        controls
-        muted
-        playsInline
-        preload="metadata"
-        className="h-full w-full object-cover"
-      />
+      <div className="relative h-full w-full overflow-hidden bg-[#111827]">
+        <video
+          src={story.mediaUrl}
+          poster={story.thumbnailUrl ?? undefined}
+          controls
+          muted
+          playsInline
+          preload="metadata"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/12 via-transparent to-black/28" />
+        {overlayElements.map((element) => (
+          <StoryPreviewOverlay key={element.id} element={element} />
+        ))}
+      </div>
     )
   }
 
