@@ -5,9 +5,12 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { users } from "@/lib/db/schema"
 import {
+  applyMediaModerationResult,
   createMediaAssetFromStoredProfileAvatar,
   markMediaAssetDeleted,
 } from "@/lib/media-assets"
+import { moderateUserContent } from "@/lib/safety/moderate-content"
+import { recordModerationCheck } from "@/lib/safety/moderation-checks"
 import {
   ProfileAvatarUploadError,
   publicProfileAvatarUrl,
@@ -76,20 +79,51 @@ export async function POST(request: Request) {
       ownerUserId: session.id,
       storedAvatar,
     })
+    const contentModeration = await moderateUserContent({
+      textParts: [],
+      media: {
+        assetKind: "image",
+        contentType: storedAvatar.contentType,
+        byteSize: storedAvatar.byteSize,
+        mediaUrl: publicProfileAvatarUrl(storedAvatar.avatarUrl, request),
+      },
+    })
+
+    await applyMediaModerationResult({
+      mediaAssetId: mediaAsset.id,
+      actorUserId: session.id,
+      result: contentModeration,
+    }).catch(() => undefined)
+    await recordModerationCheck({
+      targetKind: "avatar",
+      targetId: mediaAsset.id,
+      actorUserId: session.id,
+      mediaAssetId: mediaAsset.id,
+      result: contentModeration,
+    }).catch(() => undefined)
 
     if (
       mediaAsset.scanStatus === "flagged" ||
-      mediaAsset.scanStatus === "failed"
+      mediaAsset.scanStatus === "failed" ||
+      contentModeration.action !== "approve"
     ) {
       await removeProfileAvatar(storedAvatar.avatarUrl)
       await markMediaAssetDeleted({
         mediaAssetId: mediaAsset.id,
         actorUserId: session.id,
-        reason: mediaAsset.scanReason ?? "Avatar upload failed safety scanning.",
+        reason:
+          contentModeration.reason ??
+          mediaAsset.scanReason ??
+          "Avatar upload failed safety scanning.",
       })
 
       return NextResponse.json(
-        { error: mediaAsset.scanReason ?? "Choose a different profile photo." },
+        {
+          error:
+            contentModeration.reason ??
+            mediaAsset.scanReason ??
+            "Choose a different profile photo.",
+        },
         { status: 400 },
       )
     }

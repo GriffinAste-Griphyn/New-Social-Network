@@ -85,6 +85,11 @@ struct MainTabView: View {
             MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
         }
 
+        if response.moderationStatus != nil && response.moderationStatus != "approved" {
+            storyUploadNotice.showReview(reason: response.moderationReason)
+            return
+        }
+
         if response.asset.assetKind == .video && response.processingStatus != "ready" {
             storyUploadNotice.showProcessing()
             Task {
@@ -111,6 +116,7 @@ final class StoryUploadNoticeStore: ObservableObject {
     enum State: Equatable {
         case processing
         case posted
+        case review(String?)
     }
 
     @Published var state: State?
@@ -122,6 +128,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "Video is processing"
         case .posted:
             "Added to your story"
+        case .review:
+            "Story is under review"
         case nil:
             ""
         }
@@ -133,6 +141,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "It will appear in My Story as soon as it is ready."
         case .posted:
             "Your story is live."
+        case .review(let reason):
+            reason ?? "It will appear if it passes safety review."
         case nil:
             ""
         }
@@ -144,6 +154,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "arrow.triangle.2.circlepath"
         case .posted:
             "checkmark.circle.fill"
+        case .review:
+            "shield.lefthalf.filled"
         case nil:
             "checkmark.circle.fill"
         }
@@ -167,6 +179,11 @@ final class StoryUploadNoticeStore: ObservableObject {
                 self?.state = nil
             }
         }
+    }
+
+    func showReview(reason: String?) {
+        dismissTask?.cancel()
+        state = .review(reason)
     }
 }
 

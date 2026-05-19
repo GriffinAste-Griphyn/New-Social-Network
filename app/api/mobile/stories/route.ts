@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { createStory } from "@/lib/story-store"
+import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
   removeStoryAsset,
@@ -61,6 +61,14 @@ export async function POST(request: Request) {
     }
 
     storedAsset = await saveStoryAsset(mediaEntry)
+    const moderationMediaUrl =
+      publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+      storedAsset.mediaUrl
+    const moderationThumbnailUrl = publicStoryMediaUrl(
+      storedAsset.thumbnailUrl,
+      request,
+      { signed: true },
+    )
 
     const storyId = await createStory({
       session,
@@ -68,11 +76,17 @@ export async function POST(request: Request) {
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
       elements: parseStoryElements(formData),
       storedAsset,
+      moderationMediaUrl,
+      moderationThumbnailUrl,
     })
+    const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
 
     return NextResponse.json({
       ok: true,
       storyId,
+      processingStatus: storyStatus?.processingStatus,
+      moderationStatus: storyStatus?.moderationStatus,
+      moderationReason: storyStatus?.moderationReason,
       asset: {
         assetKind: storedAsset.assetKind,
         mediaUrl:

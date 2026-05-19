@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { createStory } from "@/lib/story-store"
+import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -174,13 +174,24 @@ export async function POST(request: Request) {
       : storedAsset
 
     const formData = payloadToFormData(parsed.data)
+    const moderationMediaUrl =
+      publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+      storedAsset.mediaUrl
+    const moderationThumbnailUrl = publicStoryMediaUrl(
+      storedAsset.thumbnailUrl,
+      request,
+      { signed: true },
+    )
     const storyId = await createStory({
       session,
       caption: parseStoryCaption(formData.get("caption")),
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
       elements: parseStoryElements(formData),
       storedAsset,
+      moderationMediaUrl,
+      moderationThumbnailUrl,
     })
+    const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
 
     return NextResponse.json({
       ok: true,
@@ -194,7 +205,9 @@ export async function POST(request: Request) {
           signed: true,
         }),
       },
-      processingStatus: storedAsset.processingStatus,
+      processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
+      moderationStatus: storyStatus?.moderationStatus,
+      moderationReason: storyStatus?.moderationReason,
     })
   } catch (error) {
     if (storedAsset) {

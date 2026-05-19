@@ -143,10 +143,28 @@ describe("mobile push and Stripe APIs", () => {
       stripeUpdatedAt: new Date("2026-05-02T00:00:00.000Z"),
     })
     vi.mocked(getCreatorStats).mockResolvedValue({
+      followerCount: 0,
+      followingCount: 0,
+      totalStories: 0,
+      liveStories: 0,
+      expiredStories: 0,
+      removedStories: 0,
+      totalViews: 0,
+      uniqueViewers: 0,
+      completedViews: 0,
+      completionRate: 0,
+      averageViewedSeconds: 0,
+      totalViewedSeconds: 0,
+      comments: 0,
+      replies: 0,
       earnings: {
+        totalCents: 6500,
         availableCents: 1200,
         pendingCents: 300,
+        approvedCents: 1200,
         paidCents: 5000,
+        reversedCents: 0,
+        nextAvailableAt: null,
       },
       stories: [],
     })

@@ -6,10 +6,17 @@ import { alias } from "drizzle-orm/pg-core"
 import { getDb } from "@/lib/db"
 import { follows, stories, storyInteractions, users } from "@/lib/db/schema"
 import {
+  applyMediaModerationResult,
+  createMediaAssetFromStoredStoryAsset,
+} from "@/lib/media-assets"
+import { moderateUserContent } from "@/lib/safety/moderate-content"
+import { recordModerationCheck } from "@/lib/safety/moderation-checks"
+import {
   assertUsersCanConnect,
   getBlockedPeerIds,
 } from "@/lib/social-safety"
 import type { StoredStoryAsset } from "@/lib/story-storage"
+import type { ContentModerationResult } from "@/lib/safety/policy"
 
 export type StoryInteractionKind = "reply" | "comment" | "reaction"
 
@@ -163,6 +170,8 @@ export async function createStoryInteraction(input: {
   body?: string | null
   reaction?: string | null
   storedAsset?: StoredStoryAsset | null
+  moderationMediaUrl?: string | null
+  moderationThumbnailUrl?: string | null
 }) {
   const db = getDb()
   const [story] = await db
@@ -210,6 +219,13 @@ export async function createStoryInteraction(input: {
   const body = input.body?.trim() || null
   const reaction = input.reaction?.trim() || null
   const storedAsset = input.storedAsset ?? null
+  const mediaAsset = storedAsset
+    ? await createMediaAssetFromStoredStoryAsset({
+        ownerUserId: input.actorId,
+        purpose: "story_reply",
+        storedAsset,
+      })
+    : null
 
   if ((input.kind === "reply" || input.kind === "comment") && !body && !storedAsset) {
     throw new Error("Enter a message before sending.")
@@ -219,10 +235,62 @@ export async function createStoryInteraction(input: {
     throw new Error("Choose a reaction before sending.")
   }
 
+  const mediaModerationReason =
+    mediaAsset &&
+    (mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed")
+      ? mediaAsset.scanReason ?? "Reply media was flagged by safety scanning."
+      : null
+  const contentModeration = await moderateUserContent({
+    textParts: [body, reaction],
+    media: storedAsset
+      ? {
+          assetKind: storedAsset.assetKind,
+          contentType: storedAsset.contentType,
+          byteSize: storedAsset.byteSize,
+          durationMs: storedAsset.durationMs,
+          mediaUrl: input.moderationMediaUrl ?? storedAsset.mediaUrl,
+          thumbnailUrl: input.moderationThumbnailUrl ?? storedAsset.thumbnailUrl,
+        }
+      : null,
+  })
+  const moderation: ContentModerationResult = mediaModerationReason
+    ? {
+        action: "hold",
+        provider: [contentModeration.provider, "local-media"].join("+"),
+        reason: mediaModerationReason,
+        categories: [
+          ...contentModeration.categories,
+          {
+            key: "unsupported_media",
+            confidence: 1,
+            reason: mediaModerationReason,
+            source: "local_media",
+          },
+        ],
+        rawResult: contentModeration.rawResult,
+        error: contentModeration.error,
+      }
+    : contentModeration
+  const moderationStatus =
+    moderation.action === "approve"
+      ? "approved"
+      : moderation.action === "reject"
+        ? "rejected"
+        : "flagged"
+  const interactionId = `story-interaction-${randomUUID()}`
+
+  if (mediaAsset) {
+    await applyMediaModerationResult({
+      mediaAssetId: mediaAsset.id,
+      actorUserId: input.actorId,
+      result: moderation,
+    }).catch(() => undefined)
+  }
+
   const [event] = await db
     .insert(storyInteractions)
     .values({
-      id: `story-interaction-${randomUUID()}`,
+      id: interactionId,
       storyId: story.id,
       creatorId: story.creatorId,
       actorId: input.actorId,
@@ -232,8 +300,19 @@ export async function createStoryInteraction(input: {
       mediaUrl: storedAsset?.mediaUrl ?? null,
       mediaThumbnailUrl: storedAsset?.thumbnailUrl ?? null,
       mediaAssetKind: storedAsset?.assetKind ?? null,
+      mediaAssetId: mediaAsset?.id ?? null,
+      moderationStatus,
+      moderationReason: moderation.reason,
     })
     .returning()
+
+  await recordModerationCheck({
+    targetKind: "interaction",
+    targetId: interactionId,
+    actorUserId: input.actorId,
+    mediaAssetId: mediaAsset?.id,
+    result: moderation,
+  }).catch(() => undefined)
 
   return event
 }
@@ -248,6 +327,7 @@ export async function listStoryInteractionsForCreator(input: {
   const kinds = input.kinds?.length ? input.kinds : undefined
   const filters = [
     eq(storyInteractions.creatorId, input.creatorId),
+    eq(storyInteractions.moderationStatus, "approved"),
     kinds ? inArray(storyInteractions.kind, kinds) : undefined,
   ].filter(Boolean)
 
@@ -301,6 +381,7 @@ export async function listStoryInteractionsForActor(input: {
   const kinds = input.kinds?.length ? input.kinds : undefined
   const filters = [
     eq(storyInteractions.actorId, input.actorId),
+    eq(storyInteractions.moderationStatus, "approved"),
     kinds ? inArray(storyInteractions.kind, kinds) : undefined,
   ].filter(Boolean)
 

@@ -174,6 +174,13 @@ export async function POST(
     if (mediaEntry instanceof File) {
       storedAsset = await saveStoryAsset(mediaEntry)
     }
+    const moderationMediaUrl = storedAsset
+      ? publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+        storedAsset.mediaUrl
+      : null
+    const moderationThumbnailUrl = storedAsset
+      ? publicStoryMediaUrl(storedAsset.thumbnailUrl, request, { signed: true })
+      : null
 
     await createStoryInteraction({
       storyId: id,
@@ -182,6 +189,8 @@ export async function POST(
       body: parsed.data.body,
       reaction: parsed.data.reaction,
       storedAsset,
+      moderationMediaUrl,
+      moderationThumbnailUrl,
     })
 
     return NextResponse.json({

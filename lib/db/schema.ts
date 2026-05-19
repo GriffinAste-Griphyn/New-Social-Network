@@ -77,6 +77,17 @@ export const safetyReportStatus = pgEnum("safety_report_status", [
   "actioned",
   "dismissed",
 ])
+export const moderationCheckTargetKind = pgEnum("moderation_check_target_kind", [
+  "story",
+  "interaction",
+  "avatar",
+  "user_profile",
+])
+export const moderationAction = pgEnum("moderation_action", [
+  "approve",
+  "hold",
+  "reject",
+])
 export const mentionType = pgEnum("mention_type", ["tag", "text", "detected"])
 export const campaignStatus = pgEnum("campaign_status", [
   "draft",
@@ -287,6 +298,39 @@ export const mediaAuditEvents = pgTable(
   (table) => [
     index("media_audit_events_asset_idx").on(table.mediaAssetId, table.createdAt),
     index("media_audit_events_actor_idx").on(table.actorUserId, table.createdAt),
+  ],
+)
+
+export const moderationChecks = pgTable(
+  "moderation_checks",
+  {
+    id: text("id").primaryKey(),
+    targetKind: moderationCheckTargetKind("target_kind").notNull(),
+    targetId: text("target_id").notNull(),
+    actorUserId: text("actor_user_id").references((): AnyPgColumn => users.id),
+    mediaAssetId: text("media_asset_id").references(() => mediaAssets.id),
+    provider: text("provider").notNull(),
+    action: moderationAction("action").notNull(),
+    reason: text("reason"),
+    categories: text("categories").notNull().default("[]"),
+    rawResult: text("raw_result"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("moderation_checks_target_idx").on(
+      table.targetKind,
+      table.targetId,
+      table.createdAt,
+    ),
+    index("moderation_checks_action_idx").on(table.action, table.createdAt),
+    index("moderation_checks_actor_idx").on(table.actorUserId, table.createdAt),
+    index("moderation_checks_media_asset_idx").on(
+      table.mediaAssetId,
+      table.createdAt,
+    ),
   ],
 )
 
@@ -627,6 +671,10 @@ export const storyInteractions = pgTable(
     mediaThumbnailUrl: text("media_thumbnail_url"),
     mediaAssetKind: storyAssetKind("media_asset_kind"),
     mediaAssetId: text("media_asset_id").references(() => mediaAssets.id),
+    moderationStatus: text("moderation_status").notNull().default("approved"),
+    moderationReason: text("moderation_reason"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -639,6 +687,10 @@ export const storyInteractions = pgTable(
     ),
     index("story_interactions_actor_id_idx").on(table.actorId, table.createdAt),
     index("story_interactions_kind_idx").on(table.kind, table.createdAt),
+    index("story_interactions_moderation_idx").on(
+      table.moderationStatus,
+      table.createdAt,
+    ),
   ],
 )
 

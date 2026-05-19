@@ -61,6 +61,28 @@ function formatDate(value: Date) {
   }).format(value)
 }
 
+function formatModerationCategories(value: string) {
+  try {
+    const categories = JSON.parse(value) as Array<{
+      key?: string
+      confidence?: number
+      source?: string
+    }>
+
+    return categories.slice(0, 4).map((category) => {
+      const confidence =
+        typeof category.confidence === "number"
+          ? ` ${(category.confidence * 100).toFixed(0)}%`
+          : ""
+      const source = category.source ? ` via ${category.source}` : ""
+
+      return `${category.key ?? "other"}${confidence}${source}`
+    })
+  } catch {
+    return []
+  }
+}
+
 function flashMessage(params: Awaited<AdminPageProps["searchParams"]>) {
   if (params.error) return { tone: "error" as const, message: params.error }
 
@@ -176,6 +198,9 @@ function StoryPreview({ story }: { story: AdminModerationStory }) {
 
 function ModerationRow({ story }: { story: AdminModerationStory }) {
   const isUserReport = story.moderationReason?.startsWith("User report:")
+  const moderationCategories = story.moderationCheck
+    ? formatModerationCategories(story.moderationCheck.categories)
+    : []
 
   return (
     <article className="grid gap-4 rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm lg:grid-cols-[12rem_1fr_auto]">
@@ -206,6 +231,36 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
         <p className="mt-1 text-sm leading-6 text-[#6b7280]">
           {story.moderationReason ?? "Flagged for review."}
         </p>
+        {story.moderationCheck ? (
+          <div className="mt-4 rounded-[8px] border border-[#e5e7eb] bg-[#f9fafb] p-3">
+            <div className="flex flex-wrap gap-2 text-xs font-medium text-[#374151]">
+              <span>Provider: {story.moderationCheck.provider}</span>
+              <span>Action: {story.moderationCheck.action}</span>
+            </div>
+            {story.moderationCheck.reason ? (
+              <p className="mt-2 text-sm leading-6 text-[#6b7280]">
+                {story.moderationCheck.reason}
+              </p>
+            ) : null}
+            {moderationCategories.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {moderationCategories.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded-full bg-white px-2 py-1 text-xs font-medium text-[#6b7280]"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {story.moderationCheck.error ? (
+              <p className="mt-2 text-xs text-[#be123c]">
+                {story.moderationCheck.error}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <p className="mt-5 text-sm font-medium text-[#374151]">Caption</p>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-[#111827]">

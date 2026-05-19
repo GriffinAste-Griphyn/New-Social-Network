@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
-import { createStory, getFeedData } from "@/lib/story-store"
+import {
+  createStory,
+  getFeedData,
+  getStoryUploadStatusForOwner,
+} from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
   removeStoryAsset,
@@ -29,6 +33,7 @@ vi.mock("@/lib/request-security", async () => {
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
   getFeedData: vi.fn(),
+  getStoryUploadStatusForOwner: vi.fn(),
 }))
 
 vi.mock("@/lib/story-storage", async () => {
@@ -121,6 +126,14 @@ describe("story upload and mobile feed API", () => {
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(saveStoryAsset).mockResolvedValue(storedAsset)
     vi.mocked(createStory).mockResolvedValue(createdStoryId)
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
+      id: createdStoryId,
+      status: "live",
+      processingStatus: "ready",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: true,
+    })
     vi.mocked(publicStoryMediaUrl).mockImplementation((value) =>
       value ? `https://cdn.example.com${value}` : null,
     )

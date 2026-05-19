@@ -421,7 +421,7 @@ export async function reportInteraction(input: {
     targetUserId,
   })
 
-  return upsertSafetyReport({
+  const reportId = await upsertSafetyReport({
     reporterId: input.reporterId,
     targetKind: "interaction",
     targetUserId,
@@ -430,6 +430,18 @@ export async function reportInteraction(input: {
     reason: input.reason,
     details: input.details,
   })
+
+  await getDb()
+    .update(storyInteractions)
+    .set({
+      moderationStatus: "flagged",
+      moderationReason: `User report: ${formatSafetyReportReason(input.reason)}`,
+      reviewedAt: null,
+      reviewedByUserId: null,
+    })
+    .where(eq(storyInteractions.id, interaction.id))
+
+  return reportId
 }
 
 export async function createSafetyReport(input: {
@@ -560,22 +572,32 @@ export async function reviewSafetyReport(input: {
     .returning({
       targetKind: safetyReports.targetKind,
       targetStoryId: safetyReports.targetStoryId,
+      targetInteractionId: safetyReports.targetInteractionId,
     })
 
-  if (
-    input.status === "actioned" &&
-    report?.targetKind === "story" &&
-    report.targetStoryId
-  ) {
-    await getDb()
-      .update(stories)
-      .set({
-        status: "removed",
-        moderationStatus: "rejected",
-        reviewedAt: now,
-        reviewedByUserId: input.reviewerId,
-      })
-      .where(eq(stories.id, report.targetStoryId))
+  if (input.status === "actioned") {
+    if (report?.targetKind === "story" && report.targetStoryId) {
+      await getDb()
+        .update(stories)
+        .set({
+          status: "removed",
+          moderationStatus: "rejected",
+          reviewedAt: now,
+          reviewedByUserId: input.reviewerId,
+        })
+        .where(eq(stories.id, report.targetStoryId))
+    }
+
+    if (report?.targetKind === "interaction" && report.targetInteractionId) {
+      await getDb()
+        .update(storyInteractions)
+        .set({
+          moderationStatus: "rejected",
+          reviewedAt: now,
+          reviewedByUserId: input.reviewerId,
+        })
+        .where(eq(storyInteractions.id, report.targetInteractionId))
+    }
   }
 }
 

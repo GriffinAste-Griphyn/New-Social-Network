@@ -18,8 +18,13 @@ import {
 } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
-import { createMediaAssetFromStoredStoryAsset } from "@/lib/media-assets"
-import { evaluateStoryModeration } from "@/lib/moderation"
+import {
+  applyMediaModerationResult,
+  createMediaAssetFromStoredStoryAsset,
+} from "@/lib/media-assets"
+import { moderateUserContent } from "@/lib/safety/moderate-content"
+import { recordModerationCheck } from "@/lib/safety/moderation-checks"
+import type { ContentModerationResult } from "@/lib/safety/policy"
 import {
   creatorProfiles,
   creatorScores,
@@ -215,6 +220,8 @@ type CreateStoryInput = {
   explicitBrandTags: string[]
   elements: StoryElementInput[]
   storedAsset: StoredStoryAsset
+  moderationMediaUrl?: string | null
+  moderationThumbnailUrl?: string | null
 }
 
 type UpdateStoryInput = {
@@ -424,6 +431,43 @@ function getTimelineSegmentCountByCreator(rows: FeedStoryRow[]) {
   })
 
   return segmentCountByCreator
+}
+
+function moderationStatusFromResult(result: ContentModerationResult) {
+  return result.action === "approve"
+    ? "approved"
+    : result.action === "reject"
+      ? "rejected"
+      : "flagged"
+}
+
+function storyStatusFromModeration(input: {
+  result: ContentModerationResult
+  isMediaReady: boolean
+}) {
+  if (input.result.action === "reject") {
+    return "removed"
+  }
+
+  return input.result.action === "approve" && input.isMediaReady
+    ? "live"
+    : "processing"
+}
+
+function storyModerationTextParts(input: {
+  caption: string
+  explicitBrandTags: string[]
+  elements: StoryElementInput[]
+}) {
+  return [
+    input.caption,
+    input.explicitBrandTags.join(" "),
+    ...input.elements.map((element) => element.label),
+  ]
+}
+
+function storyModerationLinkUrls(elements: StoryElementInput[]) {
+  return elements.flatMap((element) => (element.href ? [element.href] : []))
 }
 
 function firstStoryPerCreator<T extends { creatorId: string }>(rows: T[]) {
@@ -1084,11 +1128,6 @@ export async function createStory(input: CreateStoryInput) {
   )
   const storyId = randomUUID()
   const now = new Date()
-  const moderation = evaluateStoryModeration({
-    caption: input.caption,
-    explicitBrandTags: input.explicitBrandTags,
-    elements: input.elements,
-  })
   const mediaAsset = await createMediaAssetFromStoredStoryAsset({
     ownerUserId: input.session.id,
     purpose: "story",
@@ -1098,8 +1137,52 @@ export async function createStory(input: CreateStoryInput) {
     mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed"
       ? mediaAsset.scanReason ?? "Media upload was flagged by safety scanning."
       : null
-  const isApproved = moderation.status === "approved" && !mediaModerationReason
+  const mediaModerationUrl =
+    input.moderationMediaUrl ??
+    (input.storedAsset.assetKind === "image" ? input.storedAsset.mediaUrl : null)
+  const mediaModerationThumbnailUrl =
+    input.moderationThumbnailUrl ?? input.storedAsset.thumbnailUrl
+  const contentModeration = await moderateUserContent({
+    textParts: storyModerationTextParts(input),
+    linkUrls: storyModerationLinkUrls(input.elements),
+    media: {
+      assetKind: input.storedAsset.assetKind,
+      contentType: input.storedAsset.contentType,
+      byteSize: input.storedAsset.byteSize,
+      durationMs: input.storedAsset.durationMs,
+      mediaUrl: mediaModerationUrl,
+      thumbnailUrl: mediaModerationThumbnailUrl,
+    },
+  })
+  const moderation: ContentModerationResult = mediaModerationReason
+    ? {
+        action: "hold",
+        provider: [contentModeration.provider, "local-media"].join("+"),
+        reason: mediaModerationReason,
+        categories: [
+          ...contentModeration.categories,
+          {
+            key: "unsupported_media",
+            confidence: 1,
+            reason: mediaModerationReason,
+            source: "local_media",
+          },
+        ],
+        rawResult: contentModeration.rawResult,
+        error: contentModeration.error,
+      }
+    : contentModeration
   const isMediaReady = mediaAsset.processingStatus === "ready"
+  const nextStoryStatus = storyStatusFromModeration({
+    result: moderation,
+    isMediaReady,
+  })
+
+  await applyMediaModerationResult({
+    mediaAssetId: mediaAsset.id,
+    actorUserId: input.session.id,
+    result: moderation,
+  }).catch(() => undefined)
 
   await db
     .insert(creatorScores)
@@ -1133,11 +1216,19 @@ export async function createStory(input: CreateStoryInput) {
         ? (input.storedAsset.durationMs ?? 10_000)
         : null,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-    status: isApproved && isMediaReady ? "live" : "processing",
-    moderationStatus: mediaModerationReason ? "flagged" : moderation.status,
-    moderationReason: mediaModerationReason ?? moderation.reason,
+    status: nextStoryStatus,
+    moderationStatus: moderationStatusFromResult(moderation),
+    moderationReason: moderation.reason,
     brandSignalScore: brandSignalScore.toFixed(2),
   })
+
+  await recordModerationCheck({
+    targetKind: "story",
+    targetId: storyId,
+    actorUserId: input.session.id,
+    mediaAssetId: mediaAsset.id,
+    result: moderation,
+  }).catch(() => undefined)
 
   if (mergedMentions.length > 0) {
     await db.insert(storyMentions).values(
@@ -1165,7 +1256,7 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
-  if (isApproved && isMediaReady) {
+  if (moderation.action === "approve" && isMediaReady) {
     await processStoryCreatorEarnings(storyId)
     await notifyCreatorStoryPosted({
       creatorId: input.session.id,
@@ -1221,12 +1312,11 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
       0,
     ),
   )
-  const moderation = evaluateStoryModeration({
-    caption: input.caption,
-    explicitBrandTags: input.explicitBrandTags,
-    elements: input.elements,
+  const moderation = await moderateUserContent({
+    textParts: storyModerationTextParts(input),
+    linkUrls: storyModerationLinkUrls(input.elements),
   })
-  const isApproved = moderation.status === "approved"
+  const isApproved = moderation.action === "approve"
 
   await reverseUnpaidStoryEarnings(story.id)
 
@@ -1234,14 +1324,21 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     .update(stories)
     .set({
       caption: input.caption || null,
-      status: isApproved ? "live" : "processing",
-      moderationStatus: moderation.status,
+      status: moderation.action === "reject" ? "removed" : isApproved ? "live" : "processing",
+      moderationStatus: moderationStatusFromResult(moderation),
       moderationReason: moderation.reason,
       reviewedAt: null,
       reviewedByUserId: null,
       brandSignalScore: brandSignalScore.toFixed(2),
     })
     .where(eq(stories.id, input.storyId))
+
+  await recordModerationCheck({
+    targetKind: "story",
+    targetId: input.storyId,
+    actorUserId: input.ownerId,
+    result: moderation,
+  }).catch(() => undefined)
 
   await db.delete(storyMentions).where(eq(storyMentions.storyId, input.storyId))
   await db.delete(storyElements).where(eq(storyElements.storyId, input.storyId))

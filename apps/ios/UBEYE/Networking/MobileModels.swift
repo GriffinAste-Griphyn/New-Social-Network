@@ -373,6 +373,8 @@ struct StoryUploadResponse: Codable {
     let storyId: String
     let asset: Asset
     let processingStatus: String?
+    let moderationStatus: String?
+    let moderationReason: String?
 }
 
 struct VideoUploadResponse: Codable {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
-import { createStory } from "@/lib/story-store"
+import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -33,6 +33,7 @@ vi.mock("@/lib/request-security", async () => {
 
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
+  getStoryUploadStatusForOwner: vi.fn(),
 }))
 
 vi.mock("@/lib/story-storage", async () => {
@@ -87,6 +88,14 @@ describe("mobile Cloudflare video upload API", () => {
     vi.mocked(createStory).mockResolvedValue(
       "22222222-2222-4222-8222-222222222222",
     )
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      status: "processing",
+      processingStatus: "processing",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: false,
+    })
     vi.mocked(createCloudflareStreamClientThumbnailPathname).mockImplementation(
       (userId, uid) =>
         `stories/mobile-cloudflare-thumbnails/${userId}/${uid}-thumb.jpg`,
@@ -108,7 +117,7 @@ describe("mobile Cloudflare video upload API", () => {
         width: input.width ?? null,
         height: input.height ?? null,
         durationMs: input.durationMs ?? null,
-        processingStatus: input.processingStatus,
+        processingStatus: input.processingStatus ?? "processing",
       }),
     )
     vi.mocked(createCloudflareStreamTusUpload).mockReset()

@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db"
 import { mediaAssets, mediaAuditEvents } from "@/lib/db/schema"
 import type { StoredProfileAvatar } from "@/lib/profile-avatar-storage"
 import type { StoredStoryAsset } from "@/lib/story-storage"
+import type { ContentModerationResult } from "@/lib/safety/policy"
 
 type MediaScanStatus = "pending" | "passed" | "flagged" | "failed" | "skipped"
 
@@ -233,5 +234,52 @@ export async function markMediaAssetDeleted(input: {
     actorUserId: input.actorUserId,
     eventType: "deleted",
     message: input.reason,
+  })
+}
+
+export async function applyMediaModerationResult(input: {
+  mediaAssetId: string
+  actorUserId?: string | null
+  result: ContentModerationResult
+}) {
+  const now = new Date()
+  const scanStatus =
+    input.result.action === "approve"
+      ? "passed"
+      : input.result.action === "reject"
+        ? "failed"
+        : "flagged"
+  const processingStatus =
+    input.result.action === "reject"
+      ? "rejected"
+      : input.result.action === "hold"
+        ? "flagged"
+        : undefined
+
+  await getDb()
+    .update(mediaAssets)
+    .set({
+      scanStatus,
+      scanReason: input.result.reason,
+      ...(processingStatus ? { processingStatus } : {}),
+      providerStatus: input.result.provider,
+      providerError: input.result.error ?? null,
+      lastCheckedAt: now,
+      readyAt: input.result.action === "approve" ? now : null,
+      updatedAt: now,
+    })
+    .where(eq(mediaAssets.id, input.mediaAssetId))
+
+  await auditMediaAsset({
+    mediaAssetId: input.mediaAssetId,
+    actorUserId: input.actorUserId,
+    eventType: "content_moderated",
+    message: input.result.reason ?? "Media passed content moderation.",
+    metadata: {
+      action: input.result.action,
+      provider: input.result.provider,
+      categories: input.result.categories,
+      error: input.result.error ?? null,
+    },
   })
 }

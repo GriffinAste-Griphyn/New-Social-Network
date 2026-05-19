@@ -176,6 +176,13 @@
       "when": 1779129893744,
       "tag": "0024_uneven_lifeguard",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1779223086960,
+      "tag": "0025_tiny_zarda",
+      "breakpoints": true
     }
   ]
 }

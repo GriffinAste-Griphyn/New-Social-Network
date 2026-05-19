@@ -24,6 +24,10 @@ import {
   listPendingSafetyReports,
   type PendingSafetyReport,
 } from "@/lib/social-safety"
+import {
+  listLatestModerationChecksForTargets,
+  type ModerationCheckRecord,
+} from "@/lib/safety/moderation-checks"
 
 type DbNumber = bigint | number | string | null
 
@@ -51,6 +55,7 @@ export type AdminModerationStory = {
   creatorName: string | null
   creatorHandle: string | null
   creatorEmail: string
+  moderationCheck: ModerationCheckRecord | null
 }
 
 export type AdminCreatorPayout = {
@@ -240,11 +245,16 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
     .where(eq(stories.moderationStatus, "flagged"))
     .orderBy(desc(stories.createdAt))
     .limit(50)
+  const latestChecks = await listLatestModerationChecksForTargets({
+    targetKind: "story",
+    targetIds: flaggedStories.map((story) => story.id),
+  })
 
   return flaggedStories.map((story) => ({
     ...story,
     mediaUrl: publicStoryMediaUrl(story.mediaUrl) ?? story.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl),
+    moderationCheck: latestChecks.get(story.id) ?? null,
   }))
 }
 

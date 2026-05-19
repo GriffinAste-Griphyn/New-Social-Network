@@ -3,7 +3,12 @@ import { NextResponse } from "next/server"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
 import { createStory } from "@/lib/story-store"
-import { removeStoryAsset, saveStoryAsset, StoryUploadError } from "@/lib/story-storage"
+import {
+  publicStoryMediaUrl,
+  removeStoryAsset,
+  saveStoryAsset,
+  StoryUploadError,
+} from "@/lib/story-storage"
 import {
   parseBrandTags,
   parseStoryCaption,
@@ -91,6 +96,14 @@ export async function POST(request: Request) {
     const elements = parseStoryElements(formData)
 
     storedAsset = await saveStoryAsset(mediaEntry)
+    const moderationMediaUrl =
+      publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+      storedAsset.mediaUrl
+    const moderationThumbnailUrl = publicStoryMediaUrl(
+      storedAsset.thumbnailUrl,
+      request,
+      { signed: true },
+    )
 
     await createStory({
       session,
@@ -98,6 +111,8 @@ export async function POST(request: Request) {
       explicitBrandTags,
       elements,
       storedAsset,
+      moderationMediaUrl,
+      moderationThumbnailUrl,
     })
 
     revalidatePath("/feed")
