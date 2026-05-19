@@ -15,10 +15,8 @@ import {
   brandFundingProfiles,
   creatorProfiles,
   earningsLedger,
-  feedImpressions,
   stories,
   storyElements,
-  storyInteractions,
   users,
 } from "@/lib/db/schema"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
@@ -31,7 +29,6 @@ import {
   listLatestModerationChecksForTargets,
   type ModerationCheckRecord,
 } from "@/lib/safety/moderation-checks"
-import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 
 type DbNumber = bigint | number | string | null
 
@@ -59,16 +56,8 @@ export type AdminModerationStory = {
   creatorName: string | null
   creatorHandle: string | null
   creatorEmail: string
-  creatorAvatarUrl: string | null
-  stats: AdminModerationStoryStats
   moderationCheck: ModerationCheckRecord | null
   elements: AdminModerationStoryElement[]
-}
-
-export type AdminModerationStoryStats = {
-  views: number
-  replies: number
-  earningsCents: number
 }
 
 export type AdminModerationStoryElement = {
@@ -261,7 +250,6 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
       creatorName: users.displayName,
       creatorHandle: users.handle,
       creatorEmail: users.email,
-      creatorAvatarUrl: users.avatarUrl,
     })
     .from(stories)
     .innerJoin(users, eq(users.id, stories.creatorId))
@@ -289,45 +277,7 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
           .where(inArray(storyElements.storyId, storyIds))
           .orderBy(asc(storyElements.createdAt))
       : []
-  const [impressionRows, interactionRows, earningsRows] =
-    storyIds.length > 0
-      ? await Promise.all([
-          getDb()
-            .select({
-              storyId: feedImpressions.storyId,
-              views: sql<DbNumber>`count(*)::int`,
-            })
-            .from(feedImpressions)
-            .where(inArray(feedImpressions.storyId, storyIds))
-            .groupBy(feedImpressions.storyId),
-          getDb()
-            .select({
-              storyId: storyInteractions.storyId,
-              replies: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'reply' then 1 else 0 end), 0)::int`,
-            })
-            .from(storyInteractions)
-            .where(inArray(storyInteractions.storyId, storyIds))
-            .groupBy(storyInteractions.storyId),
-          getDb()
-            .select({
-              storyId: earningsLedger.storyId,
-              earningsCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
-            })
-            .from(earningsLedger)
-            .where(inArray(earningsLedger.storyId, storyIds))
-            .groupBy(earningsLedger.storyId),
-        ])
-      : [[], [], []]
   const elementsByStoryId = new Map<string, AdminModerationStoryElement[]>()
-  const viewsByStoryId = new Map(
-    impressionRows.map((row) => [row.storyId, toNumber(row.views)]),
-  )
-  const repliesByStoryId = new Map(
-    interactionRows.map((row) => [row.storyId, toNumber(row.replies)]),
-  )
-  const earningsByStoryId = new Map(
-    earningsRows.map((row) => [row.storyId, toNumber(row.earningsCents)]),
-  )
 
   for (const element of elementRows) {
     const current = elementsByStoryId.get(element.storyId) ?? []
@@ -347,12 +297,6 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
     ...story,
     mediaUrl: publicStoryMediaUrl(story.mediaUrl) ?? story.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl),
-    creatorAvatarUrl: publicProfileAvatarUrl(story.creatorAvatarUrl),
-    stats: {
-      views: viewsByStoryId.get(story.id) ?? 0,
-      replies: repliesByStoryId.get(story.id) ?? 0,
-      earningsCents: earningsByStoryId.get(story.id) ?? 0,
-    },
     moderationCheck: latestChecks.get(story.id) ?? null,
     elements: elementsByStoryId.get(story.id) ?? [],
   }))
