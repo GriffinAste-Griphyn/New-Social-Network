@@ -8,10 +8,12 @@ import {
   Flag,
   Link2,
   LogOut,
+  MoreHorizontal,
   ShieldAlert,
   Trash2,
   Users,
   WalletCards,
+  X,
 } from "lucide-react"
 
 import {
@@ -32,6 +34,7 @@ import {
 } from "@/lib/admin-store"
 import { formatSafetyReportReason } from "@/lib/social-safety"
 import { logoutAction } from "@/lib/auth-actions"
+import { formatStoryPostedAt } from "@/lib/story-time"
 
 type AdminPageProps = {
   searchParams: Promise<{
@@ -183,16 +186,88 @@ function StoryPreviewOverlay({
 
   return (
     <div
-      className="pointer-events-none absolute max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/45 px-3 py-2 text-center text-sm font-semibold leading-tight text-white shadow-[0_8px_20px_rgba(0,0,0,0.25)] backdrop-blur-[2px]"
+      className="pointer-events-none absolute max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/42 px-4 py-2.5 text-center text-[20px] font-bold leading-tight text-white"
       style={{
         left: `${positionX}%`,
         top: `${positionY}%`,
       }}
     >
-      <span className="flex min-w-0 items-center justify-center gap-1.5">
-        {isLink ? <Link2 className="size-3.5 shrink-0" /> : null}
-        <span className="min-w-0 break-words">{element.label}</span>
+      <span className="flex min-w-0 items-center justify-center gap-2">
+        {isLink ? <Link2 className="size-[15px] shrink-0 stroke-[3]" /> : null}
+        <span className="min-w-0 break-words line-clamp-2">{element.label}</span>
       </span>
+    </div>
+  )
+}
+
+function StoryPreviewHeader({ story }: { story: AdminModerationStory }) {
+  const creatorName = story.creatorName ?? "My Story"
+  const initials = creatorName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("")
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 px-4 pt-[18px] text-white">
+      <div className="mb-3 flex gap-1.5">
+        <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/32">
+          <div className="h-full w-1/3 rounded-full bg-white" />
+        </div>
+      </div>
+
+      <div className="flex min-h-[42px] items-center gap-3">
+        <div className="size-[42px] overflow-hidden rounded-full border border-white/24 bg-white/14">
+          {story.creatorAvatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={story.creatorAvatarUrl}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-sm font-bold">
+              {initials || "MS"}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[17px] font-bold leading-tight">My Story</p>
+          <p className="mt-0.5 truncate text-[13px] font-medium leading-tight text-white/72">
+            {formatStoryPostedAt(story.createdAt)}
+          </p>
+        </div>
+
+        <div className="flex gap-4">
+          <div className="flex size-[42px] items-center justify-center rounded-full bg-black/22">
+            <MoreHorizontal className="size-[19px] stroke-[3]" />
+          </div>
+          <div className="flex size-[42px] items-center justify-center rounded-full bg-black/22">
+            <X className="size-5 stroke-[3]" />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StoryOwnerStatsChrome({ story }: { story: AdminModerationStory }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 grid h-16 grid-cols-3 items-center rounded-2xl bg-black/50 px-3 text-center text-white">
+      {[
+        [formatNumber(story.stats.views), "Views"],
+        [formatNumber(story.stats.replies), "Replies"],
+        [formatMoney(story.stats.earningsCents).replace(".00", ""), "Earned"],
+      ].map(([value, label]) => (
+        <div key={label}>
+          <p className="text-[17px] font-semibold leading-tight">{value}</p>
+          <p className="mt-0.5 text-[11px] font-medium leading-tight text-white/62">
+            {label}
+          </p>
+        </div>
+      ))}
     </div>
   )
 }
@@ -202,40 +277,46 @@ function StoryPreview({ story }: { story: AdminModerationStory }) {
   const overlayElements = story.elements.filter(
     (element) => element.label.trim().length > 0,
   )
+  const storyCaptionLayer = (
+    <div className="pointer-events-none absolute inset-x-4 bottom-[94px] top-0 z-10">
+      {overlayElements.map((element) => (
+        <StoryPreviewOverlay key={element.id} element={element} />
+      ))}
+    </div>
+  )
 
   if (story.assetKind === "image" && imageUrl) {
     return (
-      <div className="relative h-full w-full overflow-hidden bg-[#111827]">
+      <div className="relative h-full w-full overflow-hidden bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imageUrl}
           alt=""
-          className="absolute inset-0 h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-contain"
         />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/12 via-transparent to-black/28" />
-        {overlayElements.map((element) => (
-          <StoryPreviewOverlay key={element.id} element={element} />
-        ))}
+        {storyCaptionLayer}
+        <StoryPreviewHeader story={story} />
+        <StoryOwnerStatsChrome story={story} />
       </div>
     )
   }
 
   if (story.assetKind === "video" && story.mediaUrl) {
     return (
-      <div className="relative h-full w-full overflow-hidden bg-[#111827]">
+      <div className="relative h-full w-full overflow-hidden bg-black">
         <video
           src={story.mediaUrl}
           poster={story.thumbnailUrl ?? undefined}
-          controls
+          autoPlay
+          loop
           muted
           playsInline
           preload="metadata"
-          className="absolute inset-0 h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-contain"
         />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/12 via-transparent to-black/28" />
-        {overlayElements.map((element) => (
-          <StoryPreviewOverlay key={element.id} element={element} />
-        ))}
+        {storyCaptionLayer}
+        <StoryPreviewHeader story={story} />
+        <StoryOwnerStatsChrome story={story} />
       </div>
     )
   }
