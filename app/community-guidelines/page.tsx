@@ -69,7 +69,7 @@ const sections = [
   {
     title: "If You Disagree",
     body: [
-      "If you believe moderation action was taken by mistake, contact UBEYE support through the support contact listed in the app or on the App Store listing.",
+      "If you believe moderation action was taken by mistake, contact UBEYE at griffin@ubeye.ai.",
       "Include the account, content, or action you are asking us to review and any relevant context.",
     ],
   },
@@ -84,7 +84,7 @@ export default function CommunityGuidelinesPage() {
       lastUpdated={lastUpdated}
       sections={sections}
       contactTitle="Safety questions"
-      contactBody="For safety, moderation, or appeal questions, contact UBEYE support through the support contact listed in the app or on the App Store listing."
+      contactBody="For safety, moderation, or appeal questions, contact UBEYE at griffin@ubeye.ai."
     />
   )
 }

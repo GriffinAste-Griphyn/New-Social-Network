@@ -96,7 +96,7 @@ final class APIClient: ObservableObject {
         try await request(path, method: "POST", body: Data("{}".utf8))
     }
 
-    func cachedMobileFeed() async -> MobileFeedResponse? {
+    func cachedMobileFeed(allowExpired: Bool = false) async -> MobileFeedResponse? {
         guard let cacheNamespace else {
             return nil
         }
@@ -105,13 +105,14 @@ final class APIClient: ObservableObject {
             MobileFeedResponse.self,
             namespace: cacheNamespace,
             key: "feed",
-            maxAge: feedDiskCacheMaxAge
+            maxAge: feedDiskCacheMaxAge,
+            allowExpired: allowExpired
         ) else {
             MediaPerformance.mark("feed_disk_cache_miss")
             return nil
         }
 
-        MediaPerformance.mark("feed_disk_cache_hit")
+        MediaPerformance.mark(allowExpired ? "feed_disk_cache_restore" : "feed_disk_cache_hit")
         return response
     }
 
@@ -932,14 +933,15 @@ private actor MobileResponseDiskCache {
         _ type: Value.Type,
         namespace: String,
         key: String,
-        maxAge: TimeInterval
+        maxAge: TimeInterval,
+        allowExpired: Bool = false
     ) -> Value? {
         let url = fileURL(namespace: namespace, key: key)
 
         do {
             let data = try Data(contentsOf: url)
             let envelope = try decoder.decode(DiskCacheEnvelope<Value>.self, from: data)
-            guard Date().timeIntervalSince(envelope.cachedAt) <= maxAge else {
+            guard allowExpired || Date().timeIntervalSince(envelope.cachedAt) <= maxAge else {
                 try? fileManager.removeItem(at: url)
                 return nil
             }

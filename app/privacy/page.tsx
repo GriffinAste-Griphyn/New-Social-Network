@@ -60,7 +60,7 @@ const sections = [
     title: "Your Choices",
     body: [
       "You can update certain account information in the app, including your profile photo where available.",
-      "You can request account deletion or data deletion by using in-app account deletion features where available or by contacting support.",
+      "You can request account deletion or data deletion by using in-app account deletion features where available or by contacting griffin@ubeye.ai.",
       "You can manage device permissions, including camera, photo library, and notification permissions, through your device settings.",
       "You can stop using UBEYE at any time. Some information may be retained where required for security, legal, fraud prevention, payment, tax, or accounting reasons.",
     ],
@@ -101,7 +101,7 @@ export default function PrivacyPage() {
       lastUpdated={lastUpdated}
       sections={sections}
       contactTitle="Privacy questions"
-      contactBody="For privacy, support, or deletion requests, contact UBEYE support through the support contact listed in the app or on the App Store listing."
+      contactBody="For privacy, support, or deletion requests, contact UBEYE at griffin@ubeye.ai."
     />
   )
 }

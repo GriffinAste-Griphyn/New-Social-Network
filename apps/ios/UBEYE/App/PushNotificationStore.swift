@@ -10,6 +10,21 @@ final class PushNotificationStore: ObservableObject {
     private var latestDeviceToken: String?
     private var isRequestingPermission = false
 
+    func registerIfAuthorizationAlreadyGranted(api: APIClient) async {
+        guard api.authToken != nil else {
+            return
+        }
+
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized ||
+            settings.authorizationStatus == .provisional ||
+            settings.authorizationStatus == .ephemeral else {
+            return
+        }
+
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
     func requestAuthorizationAndRegister(api: APIClient) async {
         guard !isRequestingPermission else {
             return

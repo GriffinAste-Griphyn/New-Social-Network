@@ -26,6 +26,7 @@ final class ProfileStore: ObservableObject {
 struct ProfileView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var push: PushNotificationStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = ProfileStore()
     @State private var avatarPickerItem: PhotosPickerItem?
@@ -68,17 +69,16 @@ struct ProfileView: View {
             .onChange(of: avatarPickerItem) { _, item in
                 Task { await uploadAvatar(item) }
             }
-            .confirmationDialog(
+            .alert(
                 "Delete this account?",
                 isPresented: $isShowingDeleteConfirmation,
-                titleVisibility: .visible
             ) {
+                Button("Cancel", role: .cancel) {}
                 Button("Delete account", role: .destructive) {
                     Task { await deleteAccount() }
                 }
-                Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This removes the signed-in account from the backend.")
+                Text("This deletes your account and personal profile data from UBEYE. Some records may be retained where required for security, legal, fraud prevention, payment, tax, or accounting reasons.")
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
@@ -202,13 +202,42 @@ struct ProfileView: View {
             NavigationLink(destination: BlockedAccountsView()) {
                 accountRow(icon: "person.crop.circle.badge.xmark", title: "Blocked accounts", subtitle: "Manage blocked users")
             }
+            Link(destination: supportURL) {
+                accountRow(icon: "envelope", title: "Contact support", subtitle: "griffin@ubeye.ai")
+            }
+            Button {
+                Task { await push.requestAuthorizationAndRegister(api: api) }
+            } label: {
+                accountRow(icon: "bell.badge", title: notificationTitle, subtitle: notificationSubtitle)
+            }
             Button {
                 auth.signOut(api: api)
             } label: {
                 accountRow(icon: "rectangle.portrait.and.arrow.right", title: "Log out", subtitle: "Sign out on this device", tint: .ubeyeRed)
             }
+            Button {
+                isShowingDeleteConfirmation = true
+            } label: {
+                accountRow(icon: "trash", title: "Delete account", subtitle: "Permanently remove this account", tint: .ubeyeRed)
+            }
         }
         .ubeyeCard()
+    }
+
+    private var supportURL: URL {
+        URL(string: "mailto:griffin@ubeye.ai?subject=UBEYE%20Support") ?? URL(string: "mailto:griffin@ubeye.ai")!
+    }
+
+    private var notificationTitle: String {
+        push.isRegistered ? "Notifications enabled" : "Enable notifications"
+    }
+
+    private var notificationSubtitle: String {
+        if push.isRegistered {
+            return "Story and reply alerts are on"
+        }
+
+        return push.lastError ?? "Story and reply alerts"
     }
 
     private func accountRow(icon: String, title: String, subtitle: String, tint: Color = .ubeyeInk) -> some View {

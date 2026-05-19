@@ -15,7 +15,7 @@ final class FeedStore: ObservableObject {
         }
         error = nil
 
-        if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed() {
+        if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
             feed = cached
             MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
             MediaPreheater.preheat(feed: cached)

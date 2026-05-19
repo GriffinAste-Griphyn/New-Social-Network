@@ -108,7 +108,7 @@ export default function TermsPage() {
       lastUpdated={lastUpdated}
       sections={sections}
       contactTitle="Terms questions"
-      contactBody="For questions about these Terms, contact UBEYE support through the support contact listed in the app or on the App Store listing."
+      contactBody="For questions about these Terms, contact UBEYE at griffin@ubeye.ai."
     />
   )
 }

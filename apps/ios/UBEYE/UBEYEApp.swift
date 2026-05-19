@@ -36,7 +36,7 @@ struct UBEYEApp: App {
                 .task {
                     await auth.restoreSession(api: api)
                     if auth.account != nil {
-                        await push.requestAuthorizationAndRegister(api: api)
+                        await push.registerIfAuthorizationAlreadyGranted(api: api)
                     }
                 }
                 .onChange(of: auth.account?.mobileToken) { _, token in
@@ -45,7 +45,7 @@ struct UBEYEApp: App {
                     }
 
                     Task {
-                        await push.requestAuthorizationAndRegister(api: api)
+                        await push.registerIfAuthorizationAlreadyGranted(api: api)
                     }
                 }
         }

@@ -52,20 +52,29 @@ npm run ios:build:release
 1. Open `UBEYE.xcodeproj`.
 2. Select the `UBEYE` target and set your Apple development team.
 3. Confirm bundle ID `com.griffinaste.ubeye` matches App Store Connect.
-4. Configure APNs backend credentials for the same bundle ID:
+4. Set the App Store Connect support/reviewer contact email to
+   `griffin@ubeye.ai`.
+5. Configure APNs backend credentials for the same bundle ID:
    - `APNS_KEY_ID`
    - `APNS_TEAM_ID`
    - `APNS_BUNDLE_ID`
    - `APNS_PRIVATE_KEY`
    - `APNS_ENVIRONMENT`
-5. Set the in-app API base URL to `https://www.ubeye.ai` before production QA.
-6. Run on a physical iPhone and test:
+6. Confirm production backend integrations are configured:
+   - `NEXT_PUBLIC_APP_URL=https://www.ubeye.ai`
+   - production database migrations applied
+   - Vercel Blob story image storage
+   - Cloudflare Stream video upload and webhook processing
+   - Stripe webhook delivery for payout status
+   - seeded reviewer demo account with visible story content
+7. Set the in-app API base URL to `https://www.ubeye.ai` before production QA.
+8. Run on a physical iPhone and test:
    - signup, email verification, login, sign out, session restore
-   - APNs permission prompt, token registration, and delivered notifications
+   - user-initiated APNs permission prompt, token registration, and delivered notifications
    - feed load, story stack playback, reactions, replies, reports, blocks
    - image post, recorded video post, picked video post, processing completion
-   - profile avatar upload, Stripe payout status, account deletion
-7. Archive with Xcode Product > Archive and distribute to TestFlight.
+   - profile avatar upload, support contact, Stripe payout status, account deletion
+9. Archive with Xcode Product > Archive and distribute to TestFlight.
 
 ## Known backend alignment note
 
