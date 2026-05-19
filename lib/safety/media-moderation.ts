@@ -14,6 +14,8 @@ type MediaModerationInput = {
   thumbnailUrl?: string | null
 }
 
+const videoThumbnailReadinessDelaysMs = [750, 1_500, 3_000]
+
 function contentModerationProvider() {
   return process.env.CONTENT_MODERATION_PROVIDER?.trim().toLowerCase() || "local"
 }
@@ -28,6 +30,64 @@ function productionRequiresProvider() {
 
 function isAbsoluteHttpUrl(value: string | null | undefined): value is string {
   return Boolean(value && /^https?:\/\//i.test(value))
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isModeratableImageResponse(response: Response) {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? ""
+
+  return response.ok && contentType.startsWith("image/")
+}
+
+async function discardResponseBody(response: Response) {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+async function resolveReviewableImageUrl(input: {
+  assetKind: "image" | "video"
+  scanUrl: string
+}) {
+  if (input.assetKind === "image") {
+    return { ok: true as const, url: input.scanUrl }
+  }
+
+  let lastError = "Video thumbnail was not available for safety scanning."
+
+  for (let attempt = 0; attempt <= videoThumbnailReadinessDelaysMs.length; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(videoThumbnailReadinessDelaysMs[attempt - 1] ?? 0)
+    }
+
+    try {
+      const response = await fetch(input.scanUrl, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(6_000),
+      })
+
+      if (isModeratableImageResponse(response)) {
+        await discardResponseBody(response)
+
+        return { ok: true as const, url: response.url || input.scanUrl }
+      }
+
+      lastError = `Video thumbnail returned ${response.status} ${response.statusText}.`
+      await discardResponseBody(response)
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? `Video thumbnail fetch failed: ${error.message}`
+          : "Video thumbnail fetch failed."
+    }
+  }
+
+  return { ok: false as const, error: lastError }
 }
 
 function scanStructuralMedia(input: MediaModerationInput): ContentModerationResult {
@@ -145,13 +205,32 @@ export async function moderateMediaContent(
     })
   }
 
-  const imageUrl = scanUrl
+  const reviewableImageUrl = await resolveReviewableImageUrl({
+    assetKind: input.assetKind,
+    scanUrl,
+  })
+
+  if (!reviewableImageUrl.ok) {
+    return resultFromSignals({
+      provider: "openai",
+      signals: [
+        {
+          key: "scanner_unavailable",
+          confidence: 1,
+          reason:
+            "Video thumbnail was not available for safety scanning; content requires review.",
+          source: "system",
+        },
+      ],
+      error: reviewableImageUrl.error,
+    })
+  }
 
   return moderateWithOpenAi([
     {
       type: "image_url",
       image_url: {
-        url: imageUrl,
+        url: reviewableImageUrl.url,
       },
     },
   ])
