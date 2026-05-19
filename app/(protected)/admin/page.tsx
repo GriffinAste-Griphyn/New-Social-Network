@@ -201,6 +201,11 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
   const moderationCategories = story.moderationCheck
     ? formatModerationCategories(story.moderationCheck.categories)
     : []
+  const textOverlays = story.elements.filter((element) => element.kind === "text")
+  const stickers = story.elements.filter((element) => element.kind === "sticker")
+  const links = story.elements.filter((element) => element.kind === "link")
+  const hasOverlayContent =
+    textOverlays.length > 0 || stickers.length > 0 || links.length > 0
 
   return (
     <article className="grid gap-4 rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm lg:grid-cols-[12rem_1fr_auto]">
@@ -266,6 +271,67 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
         <p className="mt-1 max-w-2xl text-sm leading-6 text-[#111827]">
           {story.caption?.trim() || "No caption."}
         </p>
+
+        <p className="mt-5 text-sm font-medium text-[#374151]">
+          Story overlay content
+        </p>
+        {hasOverlayContent ? (
+          <div className="mt-2 grid max-w-2xl gap-2">
+            {textOverlays.map((element) => (
+              <div
+                key={element.id}
+                className="rounded-[8px] border border-[#e5e7eb] bg-[#f9fafb] p-3"
+              >
+                <p className="text-xs font-medium uppercase text-[#6b7280]">
+                  Text overlay
+                </p>
+                <p className="mt-1 text-sm leading-6 text-[#111827]">
+                  {element.label}
+                </p>
+                {element.positionX && element.positionY ? (
+                  <p className="mt-1 text-xs text-[#6b7280]">
+                    Position: {element.positionX}%, {element.positionY}%
+                  </p>
+                ) : null}
+              </div>
+            ))}
+            {stickers.map((element) => (
+              <div
+                key={element.id}
+                className="rounded-[8px] border border-[#e5e7eb] bg-[#f9fafb] p-3"
+              >
+                <p className="text-xs font-medium uppercase text-[#6b7280]">
+                  Sticker
+                </p>
+                <p className="mt-1 text-sm leading-6 text-[#111827]">
+                  {element.label}
+                </p>
+              </div>
+            ))}
+            {links.map((element) => (
+              <div
+                key={element.id}
+                className="rounded-[8px] border border-[#e5e7eb] bg-[#f9fafb] p-3"
+              >
+                <p className="text-xs font-medium uppercase text-[#6b7280]">
+                  Link
+                </p>
+                <p className="mt-1 text-sm leading-6 text-[#111827]">
+                  {element.label}
+                </p>
+                {element.href ? (
+                  <p className="mt-1 break-all text-xs text-[#6b7280]">
+                    {element.href}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-[#6b7280]">
+            No overlay text, stickers, or links.
+          </p>
+        )}
       </div>
 
       <div className="flex gap-2 lg:flex-col">

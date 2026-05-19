@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation"
-import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm"
 
 import { isAdminSession } from "@/lib/admin-auth"
 import { requireSession } from "@/lib/auth"
@@ -16,6 +16,7 @@ import {
   creatorProfiles,
   earningsLedger,
   stories,
+  storyElements,
   users,
 } from "@/lib/db/schema"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
@@ -56,6 +57,16 @@ export type AdminModerationStory = {
   creatorHandle: string | null
   creatorEmail: string
   moderationCheck: ModerationCheckRecord | null
+  elements: AdminModerationStoryElement[]
+}
+
+export type AdminModerationStoryElement = {
+  id: string
+  kind: "text" | "sticker" | "link"
+  label: string
+  href: string | null
+  positionX: string | null
+  positionY: string | null
 }
 
 export type AdminCreatorPayout = {
@@ -245,16 +256,49 @@ export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
     .where(eq(stories.moderationStatus, "flagged"))
     .orderBy(desc(stories.createdAt))
     .limit(50)
+  const storyIds = flaggedStories.map((story) => story.id)
   const latestChecks = await listLatestModerationChecksForTargets({
     targetKind: "story",
-    targetIds: flaggedStories.map((story) => story.id),
+    targetIds: storyIds,
   })
+  const elementRows =
+    storyIds.length > 0
+      ? await getDb()
+          .select({
+            id: storyElements.id,
+            storyId: storyElements.storyId,
+            kind: storyElements.kind,
+            label: storyElements.label,
+            href: storyElements.href,
+            positionX: storyElements.positionX,
+            positionY: storyElements.positionY,
+          })
+          .from(storyElements)
+          .where(inArray(storyElements.storyId, storyIds))
+          .orderBy(asc(storyElements.createdAt))
+      : []
+  const elementsByStoryId = new Map<string, AdminModerationStoryElement[]>()
+
+  for (const element of elementRows) {
+    const current = elementsByStoryId.get(element.storyId) ?? []
+
+    current.push({
+      id: element.id,
+      kind: element.kind,
+      label: element.label,
+      href: element.href,
+      positionX: element.positionX,
+      positionY: element.positionY,
+    })
+    elementsByStoryId.set(element.storyId, current)
+  }
 
   return flaggedStories.map((story) => ({
     ...story,
     mediaUrl: publicStoryMediaUrl(story.mediaUrl) ?? story.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl),
     moderationCheck: latestChecks.get(story.id) ?? null,
+    elements: elementsByStoryId.get(story.id) ?? [],
   }))
 }
 
