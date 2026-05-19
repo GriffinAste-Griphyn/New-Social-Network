@@ -8,6 +8,7 @@ const originalEnv = { ...process.env }
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
   process.env = { ...originalEnv }
 })
 
@@ -238,6 +239,56 @@ describe("content moderation", () => {
     expect(openAiRequest.input[0].image_url.url).toBe(
       "https://customer.cloudflarestream.com/video/thumbnails/thumbnail.jpg",
     )
+  })
+
+  it("retries transient OpenAI media download failures before holding", async () => {
+    vi.useFakeTimers()
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              message:
+                "Failed to download image from file_url: https://www.ubeye.ai/api/story-media/story.jpg",
+              code: "image_url_unavailable",
+            },
+          },
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "modr_test",
+          model: "omni-moderation-latest",
+          results: [
+            {
+              flagged: false,
+              categories: {},
+              category_scores: {},
+            },
+          ],
+        }),
+      )
+
+    const resultPromise = moderateUserContent({
+      textParts: [],
+      media: {
+        assetKind: "image",
+        contentType: "image/jpeg",
+        byteSize: 12_000,
+        mediaUrl: "https://www.ubeye.ai/api/story-media/story.jpg?token=test",
+      },
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    const result = await resultPromise
+
+    expect(result.action).toBe("approve")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it("hides provider details from user-facing moderation reasons", () => {

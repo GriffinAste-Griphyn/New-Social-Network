@@ -15,6 +15,7 @@ type MediaModerationInput = {
 }
 
 const videoThumbnailReadinessDelaysMs = [750, 1_500, 3_000]
+const mediaModerationRetryDelaysMs = [1_000, 2_500]
 
 function contentModerationProvider() {
   return process.env.CONTENT_MODERATION_PROVIDER?.trim().toLowerCase() || "local"
@@ -150,6 +151,49 @@ function scanStructuralMedia(input: MediaModerationInput): ContentModerationResu
   return approvedModerationResult
 }
 
+function isRetryableOpenAiMediaError(result: ContentModerationResult) {
+  if (!result.error) {
+    return false
+  }
+
+  if (!result.categories.some((category) => category.key === "scanner_unavailable")) {
+    return false
+  }
+
+  return /(?:image_url_unavailable|could not download|failed to download|download image|file_url)/i.test(
+    result.error,
+  )
+}
+
+async function moderateReviewableImageUrl(url: string) {
+  let result = await moderateWithOpenAi([
+    {
+      type: "image_url",
+      image_url: {
+        url,
+      },
+    },
+  ])
+
+  for (const delayMs of mediaModerationRetryDelaysMs) {
+    if (!isRetryableOpenAiMediaError(result)) {
+      return result
+    }
+
+    await sleep(delayMs)
+    result = await moderateWithOpenAi([
+      {
+        type: "image_url",
+        image_url: {
+          url,
+        },
+      },
+    ])
+  }
+
+  return result
+}
+
 export async function moderateMediaContent(
   input: MediaModerationInput,
 ): Promise<ContentModerationResult> {
@@ -226,12 +270,5 @@ export async function moderateMediaContent(
     })
   }
 
-  return moderateWithOpenAi([
-    {
-      type: "image_url",
-      image_url: {
-        url: reviewableImageUrl.url,
-      },
-    },
-  ])
+  return moderateReviewableImageUrl(reviewableImageUrl.url)
 }
