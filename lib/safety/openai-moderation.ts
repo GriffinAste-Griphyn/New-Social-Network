@@ -52,6 +52,10 @@ const categoryMap: Record<string, SafetyCategory> = {
   "violence/graphic": "graphic_violence",
 }
 
+function isPlainHarassment(category: string) {
+  return category === "harassment"
+}
+
 function getOpenAiApiKey() {
   return process.env.OPENAI_API_KEY?.trim() || null
 }
@@ -66,6 +70,10 @@ function mapOpenAiResult(result: OpenAIModerationResult) {
   return Object.entries(result.categories ?? {}).flatMap<ModerationCategorySignal>(
     ([category, flagged]) => {
       if (!flagged) {
+        return []
+      }
+
+      if (isPlainHarassment(category)) {
         return []
       }
 

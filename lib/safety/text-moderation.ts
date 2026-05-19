@@ -32,16 +32,22 @@ const localTextRules: LocalTextRule[] = [
     confidence: 0.94,
   },
   {
+    pattern: /\b(?:rape|sexual assault|send nudes?|show me your nudes?|sexual abuse)\b/i,
+    category: "sexual_content",
+    reason: "Possible sexual abuse, harassment, or non-consensual sexual content.",
+    confidence: 0.9,
+  },
+  {
     pattern: /\b(?:cocaine|fentanyl|heroin|meth|xanax|oxycontin|illegal drugs?)\b/i,
     category: "illegal_goods",
     reason: "Possible illegal or regulated goods.",
     confidence: 0.82,
   },
   {
-    pattern: /\b(?:shoot|bomb|stab|murder|massacre|graphic gore|beheading)\b/i,
+    pattern: /\b(?:i(?:'| a)?m going to (?:kill|shoot|stab|hurt) you|i will (?:kill|shoot|stab|hurt) you|kill you|shoot you|stab you|bomb threat|murder you|massacre|graphic gore|beheading)\b/i,
     category: "violence",
     reason: "Possible violent content or threat.",
-    confidence: 0.78,
+    confidence: 0.88,
   },
   {
     pattern: /\b(?:nazi|white power|racial slur|ethnic cleansing)\b/i,

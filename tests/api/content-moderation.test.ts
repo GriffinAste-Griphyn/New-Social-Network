@@ -27,6 +27,103 @@ describe("content moderation", () => {
     )
   })
 
+  it("allows profanity when it is not a threat or sexual abuse", async () => {
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        id: "modr_test",
+        model: "omni-moderation-latest",
+        results: [
+          {
+            flagged: true,
+            categories: {
+              harassment: true,
+            },
+            category_scores: {
+              harassment: 0.88,
+            },
+            category_applied_input_types: {
+              harassment: ["text"],
+            },
+          },
+        ],
+      }),
+    )
+
+    const result = await moderateUserContent({
+      textParts: ["fuck you"],
+    })
+
+    expect(result.action).toBe("approve")
+    expect(result.categories).toEqual([])
+  })
+
+  it("holds threatening harassment even when profanity is allowed", async () => {
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        id: "modr_test",
+        model: "omni-moderation-latest",
+        results: [
+          {
+            flagged: true,
+            categories: {
+              harassment: true,
+              "harassment/threatening": true,
+            },
+            category_scores: {
+              harassment: 0.9,
+              "harassment/threatening": 0.95,
+            },
+            category_applied_input_types: {
+              harassment: ["text"],
+              "harassment/threatening": ["text"],
+            },
+          },
+        ],
+      }),
+    )
+
+    const result = await moderateUserContent({
+      textParts: ["fuck you, I will hurt you"],
+    })
+
+    expect(result.action).toBe("hold")
+    expect(result.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "harassment",
+          source: "openai",
+        }),
+      ]),
+    )
+  })
+
+  it("does not hold harmless words that contain violence terms", async () => {
+    const result = await moderateUserContent({
+      textParts: ["photo shoot tomorrow"],
+    })
+
+    expect(result.action).toBe("approve")
+  })
+
+  it("holds direct violent threats", async () => {
+    const result = await moderateUserContent({
+      textParts: ["I will kill you"],
+    })
+
+    expect(result.action).toBe("hold")
+    expect(result.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "violence",
+        }),
+      ]),
+    )
+  })
+
   it("rejects possible minor sexual safety text", async () => {
     const result = await moderateUserContent({
       textParts: ["underage sex material"],
