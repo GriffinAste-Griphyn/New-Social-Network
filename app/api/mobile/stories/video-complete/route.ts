@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
 import {
   createCloudflareStreamClientThumbnailPathname,
@@ -207,7 +208,10 @@ export async function POST(request: Request) {
       },
       processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
       moderationStatus: storyStatus?.moderationStatus,
-      moderationReason: storyStatus?.moderationReason,
+      moderationReason: userFacingModerationReason({
+        moderationStatus: storyStatus?.moderationStatus,
+        moderationReason: storyStatus?.moderationReason,
+      }),
     })
   } catch (error) {
     if (storedAsset) {

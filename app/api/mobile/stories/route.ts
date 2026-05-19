@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
@@ -86,7 +87,10 @@ export async function POST(request: Request) {
       storyId,
       processingStatus: storyStatus?.processingStatus,
       moderationStatus: storyStatus?.moderationStatus,
-      moderationReason: storyStatus?.moderationReason,
+      moderationReason: userFacingModerationReason({
+        moderationStatus: storyStatus?.moderationStatus,
+        moderationReason: storyStatus?.moderationReason,
+      }),
       asset: {
         assetKind: storedAsset.assetKind,
         mediaUrl:

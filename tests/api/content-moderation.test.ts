@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { moderateUserContent } from "@/lib/safety/moderate-content"
+import { userFacingModerationReason } from "@/lib/safety/user-facing"
 
 const originalEnv = { ...process.env }
 
@@ -140,5 +141,14 @@ describe("content moderation", () => {
     expect(openAiRequest.input[0].image_url.url).toBe(
       "https://customer.cloudflarestream.com/video/thumbnails/thumbnail.jpg",
     )
+  })
+
+  it("hides provider details from user-facing moderation reasons", () => {
+    expect(
+      userFacingModerationReason({
+        moderationStatus: "flagged",
+        moderationReason: "OpenAI moderation flagged harassment in text.",
+      }),
+    ).toBe("This story needs a safety review before it can go live.")
   })
 })

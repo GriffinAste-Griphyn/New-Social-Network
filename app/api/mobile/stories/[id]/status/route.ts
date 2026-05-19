@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
 export const runtime = "nodejs"
@@ -24,6 +25,12 @@ export async function GET(
 
   return NextResponse.json({
     ok: true,
-    story: storyStatus,
+    story: {
+      ...storyStatus,
+      moderationReason: userFacingModerationReason({
+        moderationStatus: storyStatus.moderationStatus,
+        moderationReason: storyStatus.moderationReason,
+      }),
+    },
   })
 }
