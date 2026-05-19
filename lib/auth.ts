@@ -357,10 +357,10 @@ export async function revokeAllUserSessions(userId: string) {
 }
 
 export async function requireSession(
-  nextPath = "/feed",
+  nextPath = "/app",
 ): Promise<CompleteAuthSession> {
   const session = await getSession()
-  const safeNextPath = resolveNextPath(nextPath, "/feed")
+  const safeNextPath = resolveNextPath(nextPath, "/app")
 
   if (!session) {
     redirect(`/login?next=${encodeURIComponent(safeNextPath)}`)

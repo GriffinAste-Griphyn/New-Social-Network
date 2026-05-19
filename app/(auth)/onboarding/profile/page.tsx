@@ -21,7 +21,7 @@ export default async function ProfileOnboardingPage({
 }: ProfileOnboardingPageProps) {
   const session = await getSession()
   const params = await searchParams
-  const nextPath = resolveNextPath(params.next, "/feed")
+  const nextPath = resolveNextPath(params.next, "/app")
 
   if (!session) {
     redirect(`/login?next=${encodeURIComponent(nextPath)}`)

@@ -12,8 +12,7 @@ final class ProfileStore: ObservableObject {
         do {
             async let statsResponse: CreatorStatsResponse = api.get("/api/mobile/creator/stats")
             async let stripeResponse: StripeConnectStatusResponse = api.get(
-                "/api/mobile/stripe/connect/status",
-                queryItems: [URLQueryItem(name: "sync", value: "1")]
+                "/api/mobile/stripe/connect/status"
             )
             stats = try await statsResponse
             stripe = try await stripeResponse
@@ -936,11 +935,6 @@ struct PayoutPanel: View {
                 .font(.headline)
             Text(statusText)
                 .foregroundStyle(Color.ubeyeMuted)
-            if let url = status?.onboardingUrl ?? status?.dashboardUrl {
-                Link(status?.onboardingUrl == nil ? "Open dashboard" : "Finish onboarding", destination: url)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(Color.ubeyeRed)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
@@ -953,13 +947,13 @@ struct PayoutPanel: View {
         }
 
         if status.payoutsEnabled == true {
-            return "Payouts are enabled."
+            return "Payout account is connected. UBEYE reviews approved earnings before settlement."
         }
 
         if status.connected == true {
-            return "Stripe is connected. Finish any remaining requirements."
+            return "Stripe is connected. Complete payout setup on ubeye.ai/creator/payouts."
         }
 
-        return "Connect Stripe to receive creator payouts."
+        return "Manage payout setup on ubeye.ai/creator/payouts from desktop."
     }
 }

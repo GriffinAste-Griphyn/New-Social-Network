@@ -372,7 +372,7 @@ struct PayoutsView: View {
     private func payoutsContent(_ stripe: StripeConnectStatusResponse) -> some View {
         let earnings = stripe.earnings
         let status = stripe.status
-        let isReady = status?.connected == true && status?.chargesEnabled == true && status?.payoutsEnabled == true
+        let hasConnectedAccount = status?.connected == true
 
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
@@ -380,15 +380,15 @@ struct PayoutsView: View {
                     Text("Payout account")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.ubeyeMuted)
-                    Text(isReady ? "Ready" : "Action needed")
+                    Text(hasConnectedAccount ? "Connected" : "Set up on web")
                         .font(.system(size: 28, weight: .bold))
-                    Text(isReady ? "Stripe payouts are enabled." : "Finish Stripe setup to receive payouts.")
+                    Text("Manage Stripe payout setup from ubeye.ai/creator/payouts on desktop.")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Color.ubeyeMuted)
                 }
                 Spacer()
                 Circle()
-                    .fill(isReady ? Color.green : Color.ubeyeYellow)
+                    .fill(Color.ubeyeYellow)
                     .frame(width: 24, height: 24)
             }
             .padding(16)
@@ -401,50 +401,12 @@ struct PayoutsView: View {
                 ExpoMetricCard(title: "Reversed", value: ubeyeCurrency(earnings?.reversedCents))
             }
 
-            VStack(spacing: 16) {
-                if let onboardingUrl = status?.onboardingUrl {
-                    Button {
-                        openURL(onboardingUrl)
-                    } label: {
-                        Label("Continue Stripe setup", systemImage: "creditcard")
-                            .font(.system(size: 16, weight: .bold))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .foregroundStyle(.white)
-                            .background(Color.ubeyePurple)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if let dashboardUrl = status?.dashboardUrl {
-                    Button {
-                        openURL(dashboardUrl)
-                    } label: {
-                        Label("Open Stripe dashboard", systemImage: "arrow.up.forward.app")
-                            .font(.system(size: 16, weight: .bold))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .foregroundStyle(Color.ubeyeInk)
-                            .background(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.ubeyeBorder, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Button {
-                    Task { await store.load(api: api) }
-                } label: {
-                    Label("Sync payout status", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .foregroundStyle(Color.ubeyeInk)
-                        .background(Color.ubeyeSubtle)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Payout setup is managed on web.", systemImage: "desktopcomputer")
+                    .font(.subheadline.weight(.bold))
+                Text(hasConnectedAccount ? "Your connected account status is saved. UBEYE reviews approved earnings before settlement." : "Go to ubeye.ai/creator/payouts on desktop to connect Stripe.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ubeyeMuted)
             }
             .padding(14)
             .ubeyeCard()
@@ -463,8 +425,7 @@ private final class PayoutsStore: ObservableObject {
         error = nil
         do {
             stripe = try await api.get(
-                "/api/mobile/stripe/connect/status",
-                queryItems: [URLQueryItem(name: "sync", value: "1")]
+                "/api/mobile/stripe/connect/status"
             )
         } catch {
             self.error = error.localizedDescription

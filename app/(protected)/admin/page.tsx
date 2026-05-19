@@ -1,4 +1,3 @@
-import Link from "next/link"
 import type { ReactNode } from "react"
 import {
   AlertTriangle,
@@ -18,12 +17,15 @@ import {
   approveModeratedStoryAction,
   rejectModeratedStoryAction,
   reviewSafetyReportAction,
+  settleCreatorPayoutAction,
 } from "@/lib/admin-actions"
 import {
   getAdminOverview,
+  listAdminCreatorPayouts,
   listAdminSafetyReports,
   listFlaggedStories,
   requireAdminSession,
+  type AdminCreatorPayout,
   type AdminSafetyReport,
   type AdminModerationStory,
 } from "@/lib/admin-store"
@@ -34,6 +36,7 @@ type AdminPageProps = {
   searchParams: Promise<{
     error?: string
     moderation?: string
+    paid?: string
   }>
 }
 
@@ -75,6 +78,13 @@ function flashMessage(params: Awaited<AdminPageProps["searchParams"]>) {
 
   if (params.moderation === "report-reviewed") {
     return { tone: "success" as const, message: "Report reviewed." }
+  }
+
+  if (params.moderation === "payout-settled") {
+    return {
+      tone: "success" as const,
+      message: `Creator payout settled. ${params.paid ?? "0"} transfer(s) created.`,
+    }
   }
 
   return null
@@ -296,15 +306,102 @@ function SafetyReportRow({ report }: { report: AdminSafetyReport }) {
   )
 }
 
+function CreatorPayoutRow({ payout }: { payout: AdminCreatorPayout }) {
+  const isReady =
+    Boolean(payout.stripeConnectedAccountId) &&
+    payout.stripePayoutsEnabled &&
+    payout.stripeOnboardingComplete
+  const statusLabel = isReady
+    ? "Ready"
+    : payout.stripeConnectedAccountId
+      ? "Stripe action needed"
+      : "No Stripe account"
+
+  return (
+    <article className="grid gap-4 rounded-[8px] border border-[#e5e7eb] bg-white p-4 shadow-sm lg:grid-cols-[1fr_auto]">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={
+              isReady
+                ? "rounded-full bg-[#dcfce7] px-3 py-1 text-xs font-medium text-[#166534]"
+                : "rounded-full bg-[#fef3c7] px-3 py-1 text-xs font-medium text-[#92400e]"
+            }
+          >
+            {statusLabel}
+          </span>
+          <span className="text-sm text-[#6b7280]">
+            {payout.ledgerCount} ledger item
+            {payout.ledgerCount === 1 ? "" : "s"}
+          </span>
+          <span className="text-sm text-[#6b7280]">
+            Latest {formatDate(payout.latestCreatedAt)}
+          </span>
+        </div>
+
+        <h3 className="mt-3 text-lg font-[350] text-[#111827]">
+          {payout.creatorName ?? "Unnamed creator"}
+        </h3>
+        <p className="mt-1 text-sm text-[#6b7280]">
+          {payout.creatorHandle
+            ? `@${payout.creatorHandle}`
+            : payout.creatorEmail}
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-[8px] bg-[#f9fafb] px-4 py-3">
+            <p className="text-sm text-[#6b7280]">Available</p>
+            <p className="mt-2 text-xl font-medium">
+              {formatMoney(payout.amountCents)}
+            </p>
+          </div>
+          <div className="rounded-[8px] bg-[#f9fafb] px-4 py-3">
+            <p className="text-sm text-[#6b7280]">Oldest available</p>
+            <p className="mt-2 text-sm font-medium">
+              {payout.oldestAvailableAt
+                ? formatDate(payout.oldestAvailableAt)
+                : "Now"}
+            </p>
+          </div>
+          <div className="rounded-[8px] bg-[#f9fafb] px-4 py-3">
+            <p className="text-sm text-[#6b7280]">Stripe requirements</p>
+            <p className="mt-2 text-sm font-medium">
+              {payout.stripeRequirementsStatus ?? "None reported"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-2 lg:flex-col">
+        <form action={settleCreatorPayoutAction}>
+          <input type="hidden" name="userId" value={payout.userId} />
+          <button
+            disabled={!isReady}
+            className={
+              isReady
+                ? "inline-flex h-10 items-center gap-2 rounded-[8px] bg-[#111827] px-4 text-sm font-medium text-white"
+                : "inline-flex h-10 cursor-not-allowed items-center gap-2 rounded-[8px] bg-[#e5e7eb] px-4 text-sm font-medium text-[#6b7280]"
+            }
+          >
+            <BadgeDollarSign className="size-4" />
+            Settle
+          </button>
+        </form>
+      </div>
+    </article>
+  )
+}
+
 export default async function AdminPage({ searchParams }: AdminPageProps) {
   const [session, params] = await Promise.all([
     requireAdminSession(),
     searchParams,
   ])
-  const [overview, flaggedStories, safetyReports] = await Promise.all([
+  const [overview, flaggedStories, safetyReports, creatorPayouts] = await Promise.all([
     getAdminOverview(),
     listFlaggedStories(),
     listAdminSafetyReports(),
+    listAdminCreatorPayouts(),
   ])
   const flash = flashMessage(params)
 
@@ -322,12 +419,6 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             <span className="rounded-full bg-[#f3f4f6] px-3 py-1 text-sm text-[#4b5563]">
               {session.email}
             </span>
-            <Link
-              href="/feed"
-              className="inline-flex h-10 items-center rounded-[8px] border border-[#d1d5db] bg-white px-4 text-sm font-medium text-[#374151]"
-            >
-              Feed
-            </Link>
             <form action={logoutAction}>
               <button className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-[#111827] px-4 text-sm font-medium text-white">
                 <LogOut className="size-4" />
@@ -437,6 +528,38 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
               </div>
             </div>
           </article>
+        </section>
+
+        <section className="mt-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-[350]">Creator payouts</h2>
+              <p className="mt-1 text-sm text-[#6b7280]">
+                Manually settle approved, available earnings for creators whose
+                Stripe payout account is ready.
+              </p>
+            </div>
+            <BadgeDollarSign className="size-5 text-[#374151]" />
+          </div>
+
+          {creatorPayouts.length > 0 ? (
+            <div className="grid gap-4">
+              {creatorPayouts.map((payout) => (
+                <CreatorPayoutRow key={payout.userId} payout={payout} />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[8px] border border-[#e5e7eb] bg-white p-8 text-center shadow-sm">
+              <BadgeDollarSign className="mx-auto size-8 text-[#9ca3af]" />
+              <h3 className="mt-3 text-lg font-[350]">
+                No payouts awaiting settlement
+              </h3>
+              <p className="mt-1 text-sm text-[#6b7280]">
+                Approved creator earnings will appear here once they are
+                available for review.
+              </p>
+            </div>
+          )}
         </section>
 
         <section className="mt-5">

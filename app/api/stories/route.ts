@@ -18,8 +18,8 @@ import {
 
 export const runtime = "nodejs"
 
-function redirectToFeed(request: Request, searchParams?: Record<string, string>) {
-  const url = new URL("/feed", request.url)
+function redirectToApp(request: Request, searchParams?: Record<string, string>) {
+  const url = new URL("/app", request.url)
 
   Object.entries(searchParams ?? {}).forEach(([key, value]) => {
     url.searchParams.set(key, value)
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.redirect(
-      new URL("/login?next=%2Ffeed", request.url),
+      new URL("/login?next=%2Fapp", request.url),
       {
         status: 303,
       },
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
 
   if (!isProfileComplete(session)) {
     return NextResponse.redirect(
-      new URL("/onboarding/profile?next=%2Ffeed", request.url),
+      new URL("/onboarding/profile?next=%2Fapp", request.url),
       {
         status: 303,
       },
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         options: mutationRateLimits.storyUploadIp,
       },
     ],
-    { redirectTo: "/feed" },
+    { redirectTo: "/app" },
   )
   if (rateLimitResponse) {
     return rateLimitResponse
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
     const mediaEntry = formData.get("media")
 
     if (!(mediaEntry instanceof File)) {
-      return redirectToFeed(request, {
+      return redirectToApp(request, {
         error: "Choose an image or video before posting.",
       })
     }
@@ -102,7 +102,7 @@ export async function POST(request: Request) {
 
     revalidatePath("/feed")
 
-    return redirectToFeed(request, {
+    return redirectToApp(request, {
       story: "created",
     })
   } catch (error) {
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
         ? error.message
         : "Story upload failed. Try again."
 
-    return redirectToFeed(request, {
+    return redirectToApp(request, {
       error: message,
     })
   }

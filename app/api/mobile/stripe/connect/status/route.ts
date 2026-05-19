@@ -1,12 +1,8 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { settleCreatorPayouts } from "@/lib/creator-earnings"
 import { getCreatorStats } from "@/lib/creator-stats"
-import {
-  getCreatorStripeStatus,
-  syncCreatorStripeAccount,
-} from "@/lib/stripe-connect"
+import { getCreatorStripeStatus } from "@/lib/stripe-connect"
 
 export const runtime = "nodejs"
 
@@ -45,17 +41,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const url = new URL(request.url)
-  const shouldSync = url.searchParams.get("sync") === "1"
-  const status = shouldSync
-    ? await syncCreatorStripeAccount(session.id).catch(() =>
-        getCreatorStripeStatus(session.id),
-      )
-    : await getCreatorStripeStatus(session.id)
-
-  if (shouldSync) {
-    await settleCreatorPayouts(session.id)
-  }
+  const status = await getCreatorStripeStatus(session.id)
 
   const stats = await getCreatorStats(session.id)
 

@@ -368,11 +368,9 @@ export async function processStoryCreatorEarnings(storyId: string) {
     }
   }
 
-  const settlement = await settleCreatorPayouts(story.creatorId)
-
   return {
     matched: eventIds.length,
-    settled: settlement.paidCount,
+    settled: 0,
   }
 }
 

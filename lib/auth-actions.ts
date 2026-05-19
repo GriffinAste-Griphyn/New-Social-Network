@@ -100,6 +100,109 @@ export async function loginAction(formData: FormData) {
   redirect(nextPath)
 }
 
+function buildCreatorAuthUrl(
+  pathname: "/creator/login" | "/creator/signup",
+  params: {
+    error?: string
+    message?: string
+    next?: string
+  },
+) {
+  const query = new URLSearchParams()
+
+  if (params.error) {
+    query.set("error", params.error)
+  }
+
+  if (params.message) {
+    query.set("message", params.message)
+  }
+
+  if (params.next) {
+    query.set("next", params.next)
+  }
+
+  const suffix = query.toString()
+
+  return suffix ? `${pathname}?${suffix}` : pathname
+}
+
+export async function creatorLoginAction(formData: FormData) {
+  const nextPath = resolveNextPath(formData.get("next"), "/creator/payouts")
+  try {
+    await enforceAuthActionRequest("web:auth:login-ip")
+  } catch (error) {
+    redirect(
+      buildCreatorAuthUrl("/creator/login", {
+        error: actionSecurityMessage(error),
+        next: nextPath,
+      }),
+    )
+  }
+  const parsed = loginSchema.safeParse({
+    email: formData.get("email"),
+    password: formData.get("password"),
+  })
+
+  if (!parsed.success) {
+    redirect(
+      buildCreatorAuthUrl("/creator/login", {
+        error: "Enter a valid email and password.",
+        next: nextPath,
+      }),
+    )
+  }
+
+  const result = await authenticateUser(parsed.data)
+
+  if (!result.ok) {
+    if ("reason" in result && result.reason === "email_unverified") {
+      try {
+        await sendUserVerificationEmail({ ...result.user, nextPath })
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not send a verification email."
+
+        redirect(
+          buildCreatorAuthUrl("/creator/login", {
+            error: message,
+            next: nextPath,
+          }),
+        )
+      }
+
+      redirect(
+        buildCreatorAuthUrl("/creator/login", {
+          message: result.message,
+          next: nextPath,
+        }),
+      )
+    }
+
+    redirect(
+      buildCreatorAuthUrl("/creator/login", {
+        error: result.message,
+        next: nextPath,
+      }),
+    )
+  }
+
+  await createSession(result.user)
+  if (!isProfileComplete(result.user)) {
+    redirect(
+      buildAuthMessageUrl(
+        "/onboarding/profile",
+        "Choose your display name and handle to finish setup.",
+        nextPath,
+      ),
+    )
+  }
+
+  redirect(nextPath)
+}
+
 export async function signupAction(formData: FormData) {
   const nextPath = "/advertiser"
   try {
@@ -141,6 +244,71 @@ export async function signupAction(formData: FormData) {
       "Check your email to verify your account, then you can choose your display name and handle.",
       nextPath,
     ),
+  )
+}
+
+export async function creatorSignupAction(formData: FormData) {
+  const nextPath = resolveNextPath(formData.get("next"), "/creator/payouts")
+  try {
+    await enforceAuthActionRequest("web:auth:signup-ip")
+  } catch (error) {
+    redirect(
+      buildCreatorAuthUrl("/creator/signup", {
+        error: actionSecurityMessage(error),
+        next: nextPath,
+      }),
+    )
+  }
+  const parsed = signupFlowSchema.safeParse({
+    email: formData.get("email"),
+    password: formData.get("password"),
+    accountType: "user",
+  })
+
+  if (!parsed.success) {
+    const issue =
+      parsed.error.issues[0]?.message ?? "Check your sign up details."
+    redirect(
+      buildCreatorAuthUrl("/creator/signup", {
+        error: issue,
+        next: nextPath,
+      }),
+    )
+  }
+
+  const result = await registerUser(parsed.data)
+
+  if (!result.ok) {
+    redirect(
+      buildCreatorAuthUrl("/creator/signup", {
+        error: result.message,
+        next: nextPath,
+      }),
+    )
+  }
+
+  try {
+    await sendUserVerificationEmail({ ...result.user, nextPath })
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `Account created, but verification email failed: ${error.message}`
+        : "Account created, but verification email failed."
+
+    redirect(
+      buildCreatorAuthUrl("/creator/login", {
+        error: message,
+        next: nextPath,
+      }),
+    )
+  }
+
+  redirect(
+    buildCreatorAuthUrl("/creator/login", {
+      message:
+        "Check your email to verify your account, then you can choose your display name and handle.",
+      next: nextPath,
+    }),
   )
 }
 
@@ -222,11 +390,11 @@ export async function resetPasswordAction(formData: FormData) {
     redirect(`/reset-password?${query.toString()}`)
   }
 
-  redirect(buildAuthMessageUrl("/login", result.message, "/feed"))
+  redirect(buildAuthMessageUrl("/login", result.message, "/advertiser"))
 }
 
 export async function completeProfileAction(formData: FormData) {
-  const nextPath = resolveNextPath(formData.get("next"), "/feed")
+  const nextPath = resolveNextPath(formData.get("next"), "/app")
   try {
     await enforceAuthActionRequest("web:auth:profile-ip")
   } catch (error) {
@@ -261,7 +429,7 @@ export async function completeProfileAction(formData: FormData) {
 }
 
 export async function enableCreatorToolsAction(formData: FormData) {
-  const nextPath = resolveNextPath(formData.get("next"), "/feed")
+  const nextPath = resolveNextPath(formData.get("next"), "/app")
   try {
     await enforceAuthActionRequest("web:auth:profile-ip")
   } catch (error) {

@@ -1,14 +1,20 @@
 import { redirect } from "next/navigation"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm"
 
 import { isAdminSession } from "@/lib/admin-auth"
 import { requireSession } from "@/lib/auth"
-import { processStoryCreatorEarnings, reverseUnpaidStoryEarnings } from "@/lib/creator-earnings"
+import {
+  processStoryCreatorEarnings,
+  reverseUnpaidStoryEarnings,
+  settleCreatorPayouts,
+} from "@/lib/creator-earnings"
 import { getDb } from "@/lib/db"
 import {
   advertiserAccounts,
   advertiserWalletTransactions,
   brandFundingProfiles,
+  creatorProfiles,
+  earningsLedger,
   stories,
   users,
 } from "@/lib/db/schema"
@@ -47,6 +53,21 @@ export type AdminModerationStory = {
   creatorEmail: string
 }
 
+export type AdminCreatorPayout = {
+  userId: string
+  creatorName: string | null
+  creatorHandle: string | null
+  creatorEmail: string
+  amountCents: number
+  ledgerCount: number
+  oldestAvailableAt: Date | null
+  latestCreatedAt: Date
+  stripeConnectedAccountId: string | null
+  stripePayoutsEnabled: boolean
+  stripeOnboardingComplete: boolean
+  stripeRequirementsStatus: string | null
+}
+
 function toNumber(value: DbNumber) {
   if (typeof value === "bigint") return Number(value)
   if (typeof value === "number") return value
@@ -59,7 +80,7 @@ export async function requireAdminSession() {
   const session = await requireSession("/admin")
 
   if (!isAdminSession(session)) {
-    redirect("/feed")
+    redirect("/app")
   }
 
   return session
@@ -141,6 +162,64 @@ export async function listAdminSafetyReports() {
   return listPendingSafetyReports()
 }
 
+export async function listAdminCreatorPayouts(): Promise<AdminCreatorPayout[]> {
+  const rows = await getDb()
+    .select({
+      userId: earningsLedger.userId,
+      creatorName: users.displayName,
+      creatorHandle: users.handle,
+      creatorEmail: users.email,
+      amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+      ledgerCount: sql<DbNumber>`count(*)::int`,
+      oldestAvailableAt: sql<Date | null>`min(${earningsLedger.availableAt})`,
+      latestCreatedAt: sql<Date>`max(${earningsLedger.createdAt})`,
+      stripeConnectedAccountId: creatorProfiles.stripeConnectedAccountId,
+      stripePayoutsEnabled: creatorProfiles.stripePayoutsEnabled,
+      stripeOnboardingComplete: creatorProfiles.stripeOnboardingComplete,
+      stripeRequirementsStatus: creatorProfiles.stripeRequirementsStatus,
+    })
+    .from(earningsLedger)
+    .innerJoin(users, eq(users.id, earningsLedger.userId))
+    .leftJoin(creatorProfiles, eq(creatorProfiles.userId, earningsLedger.userId))
+    .where(
+      and(
+        eq(earningsLedger.status, "approved"),
+        isNull(earningsLedger.stripeTransferId),
+        or(
+          isNull(earningsLedger.availableAt),
+          lte(earningsLedger.availableAt, new Date()),
+        ),
+      ),
+    )
+    .groupBy(
+      earningsLedger.userId,
+      users.displayName,
+      users.handle,
+      users.email,
+      creatorProfiles.stripeConnectedAccountId,
+      creatorProfiles.stripePayoutsEnabled,
+      creatorProfiles.stripeOnboardingComplete,
+      creatorProfiles.stripeRequirementsStatus,
+    )
+    .orderBy(desc(sql`sum(${earningsLedger.amountCents})`))
+    .limit(50)
+
+  return rows.map((row) => ({
+    userId: row.userId,
+    creatorName: row.creatorName,
+    creatorHandle: row.creatorHandle,
+    creatorEmail: row.creatorEmail,
+    amountCents: toNumber(row.amountCents),
+    ledgerCount: toNumber(row.ledgerCount),
+    oldestAvailableAt: row.oldestAvailableAt,
+    latestCreatedAt: row.latestCreatedAt,
+    stripeConnectedAccountId: row.stripeConnectedAccountId,
+    stripePayoutsEnabled: row.stripePayoutsEnabled ?? false,
+    stripeOnboardingComplete: row.stripeOnboardingComplete ?? false,
+    stripeRequirementsStatus: row.stripeRequirementsStatus,
+  }))
+}
+
 export async function listFlaggedStories(): Promise<AdminModerationStory[]> {
   const flaggedStories = await getDb()
     .select({
@@ -202,4 +281,8 @@ export async function rejectModeratedStory(input: {
       reviewedByUserId: input.reviewerId,
     })
     .where(eq(stories.id, input.storyId))
+}
+
+export async function settleAdminCreatorPayout(userId: string) {
+  return settleCreatorPayouts(userId)
 }

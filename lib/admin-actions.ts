@@ -7,6 +7,7 @@ import {
   approveModeratedStory,
   rejectModeratedStory,
   requireAdminSession,
+  settleAdminCreatorPayout,
 } from "@/lib/admin-store"
 import {
   reviewSafetyReport,
@@ -28,6 +29,12 @@ function getReportId(formData: FormData) {
   const reportId = formData.get("reportId")
 
   return typeof reportId === "string" ? reportId : ""
+}
+
+function getUserId(formData: FormData) {
+  const userId = formData.get("userId")
+
+  return typeof userId === "string" ? userId : ""
 }
 
 async function enforceAdminMutation(userId: string) {
@@ -123,4 +130,35 @@ export async function reviewSafetyReportAction(formData: FormData) {
       ? "/admin?moderation=report-actioned"
       : "/admin?moderation=report-reviewed",
   )
+}
+
+export async function settleCreatorPayoutAction(formData: FormData) {
+  await enforceAdminOrigin()
+  const session = await requireAdminSession()
+  await enforceAdminMutation(session.id)
+  const userId = getUserId(formData)
+
+  if (!userId) {
+    redirect("/admin?error=Choose%20a%20creator%20to%20settle.")
+  }
+
+  const result = await settleAdminCreatorPayout(userId)
+
+  if (result.skippedReason) {
+    const message =
+      result.skippedReason === "stripe_not_configured"
+        ? "Stripe is not configured."
+        : "Creator Stripe payout account is not ready."
+
+    redirect(`/admin?error=${encodeURIComponent(message)}`)
+  }
+
+  if (result.paidCount === 0) {
+    redirect(
+      "/admin?error=No%20Stripe%20transfers%20were%20created.%20Check%20the%20creator%20ledger%20status.",
+    )
+  }
+
+  revalidatePath("/admin")
+  redirect(`/admin?moderation=payout-settled&paid=${result.paidCount}`)
 }

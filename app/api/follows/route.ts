@@ -25,7 +25,7 @@ const followActionSchema = z.object({
 })
 
 function redirectToPath(request: Request, nextPath?: string, error?: string) {
-  const url = new URL(resolveNextPath(nextPath, "/feed"), request.url)
+  const url = new URL(resolveNextPath(nextPath, "/app"), request.url)
 
   if (error) {
     url.searchParams.set("error", error)
@@ -162,7 +162,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: message }, { status: 400 })
     }
 
-    return redirectToPath(request, "/feed", message)
+    return redirectToPath(request, "/app", message)
   }
 
   try {
