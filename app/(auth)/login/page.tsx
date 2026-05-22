@@ -12,11 +12,6 @@ import { loginAction } from "@/lib/auth-actions"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
-export const metadata: Metadata = {
-  title: "Advertiser sign in | UBEYE",
-  description: "Sign in to the UBEYE advertiser portal.",
-}
-
 type LoginPageProps = {
   searchParams: Promise<{
     error?: string
@@ -25,9 +20,29 @@ type LoginPageProps = {
   }>
 }
 
+export async function generateMetadata({
+  searchParams,
+}: LoginPageProps): Promise<Metadata> {
+  const params = await searchParams
+  const nextPath = resolveNextPath(params.next, "/advertiser")
+
+  if (nextPath === "/admin") {
+    return {
+      title: "Admin login | UBEYE",
+      description: "Sign in to the UBEYE admin portal.",
+    }
+  }
+
+  return {
+    title: "Advertiser sign in | UBEYE",
+    description: "Sign in to the UBEYE advertiser portal.",
+  }
+}
+
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = await searchParams
   const nextPath = resolveNextPath(params.next, "/advertiser")
+  const isAdminLogin = nextPath === "/admin"
   const session = await getSession()
 
   if (isProfileComplete(session)) {
@@ -71,13 +86,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <div className="flex flex-1 items-center justify-center py-12">
           <section className="w-full max-w-[25rem] border border-white/12 bg-black/54 p-5 text-white shadow-[0_24px_80px_-56px_rgba(0,0,0,0.9)] backdrop-blur-md sm:p-6">
             <p className="text-xs font-medium uppercase text-[#ffb4a6]">
-              Advertiser sign in
+              {isAdminLogin ? "Admin login" : "Advertiser sign in"}
             </p>
             <h2 className="mt-3 text-2xl font-[350] tracking-tight text-white">
               Welcome back
             </h2>
             <p className="mt-2 text-sm leading-6 text-white/58">
-              Access the desktop tools for advertiser accounts.
+              {isAdminLogin
+                ? "Access UBEYE marketplace operations."
+                : "Access the desktop tools for advertiser accounts."}
             </p>
 
           {params.error ? (
@@ -138,13 +155,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             />
           </form>
 
-          <Button
-            asChild
-            variant="outline"
-            className="mt-4 h-11 w-full rounded-[8px] border-white/16 bg-white/5 text-sm text-white hover:bg-white/10 hover:text-white"
-          >
-            <Link href="/signup?next=%2Fadvertiser">Create advertiser account</Link>
-          </Button>
+          {!isAdminLogin ? (
+            <Button
+              asChild
+              variant="outline"
+              className="mt-4 h-11 w-full rounded-[8px] border-white/16 bg-white/5 text-sm text-white hover:bg-white/10 hover:text-white"
+            >
+              <Link href="/signup?next=%2Fadvertiser">Create advertiser account</Link>
+            </Button>
+          ) : null}
           </section>
         </div>
       </div>
