@@ -229,7 +229,7 @@ export function resolveNextPath(
 }
 
 export function buildAuthErrorUrl(
-  pathname: "/login" | "/signup" | "/onboarding/profile",
+  pathname: "/admin/login" | "/login" | "/signup" | "/onboarding/profile",
   message: string,
   nextPath = "/",
 ) {
@@ -245,7 +245,7 @@ export function buildAuthErrorUrl(
 }
 
 export function buildAuthMessageUrl(
-  pathname: "/login" | "/signup" | "/onboarding/profile",
+  pathname: "/admin/login" | "/login" | "/signup" | "/onboarding/profile",
   message: string,
   nextPath = "/",
 ) {
@@ -363,6 +363,10 @@ export async function requireSession(
   const safeNextPath = resolveNextPath(nextPath, "/app")
 
   if (!session) {
+    if (safeNextPath === "/admin") {
+      redirect("/admin/login")
+    }
+
     redirect(`/login?next=${encodeURIComponent(safeNextPath)}`)
   }
 

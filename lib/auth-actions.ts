@@ -57,10 +57,12 @@ function actionSecurityMessage(error: unknown) {
 
 export async function loginAction(formData: FormData) {
   const nextPath = resolveNextPath(formData.get("next"), "/advertiser")
+  const loginPath = nextPath === "/admin" ? "/admin/login" : "/login"
+
   try {
     await enforceAuthActionRequest("web:auth:login-ip")
   } catch (error) {
-    redirect(buildAuthErrorUrl("/login", actionSecurityMessage(error), nextPath))
+    redirect(buildAuthErrorUrl(loginPath, actionSecurityMessage(error), nextPath))
   }
   const parsed = loginSchema.safeParse({
     email: formData.get("email"),
@@ -68,7 +70,7 @@ export async function loginAction(formData: FormData) {
   })
 
   if (!parsed.success) {
-    redirect(buildAuthErrorUrl("/login", "Enter a valid email and password.", nextPath))
+    redirect(buildAuthErrorUrl(loginPath, "Enter a valid email and password.", nextPath))
   }
 
   const result = await authenticateUser(parsed.data)
@@ -83,13 +85,13 @@ export async function loginAction(formData: FormData) {
             ? error.message
             : "Could not send a verification email."
 
-        redirect(buildAuthErrorUrl("/login", message, nextPath))
+        redirect(buildAuthErrorUrl(loginPath, message, nextPath))
       }
 
-      redirect(buildAuthMessageUrl("/login", result.message, nextPath))
+      redirect(buildAuthMessageUrl(loginPath, result.message, nextPath))
     }
 
-    redirect(buildAuthErrorUrl("/login", result.message, nextPath))
+    redirect(buildAuthErrorUrl(loginPath, result.message, nextPath))
   }
 
   await createSession(result.user)
