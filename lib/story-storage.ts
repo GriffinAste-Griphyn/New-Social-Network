@@ -27,6 +27,8 @@ export {
 } from "@/lib/story-media/access"
 
 const maxStoryUploadBytes = 25 * 1024 * 1024
+export const maxOriginalStoryVideoUploadBytes = 250 * 1024 * 1024
+export const maxOriginalStoryVideoThumbnailUploadBytes = 2 * 1024 * 1024
 export const maxCloudflareStreamClientThumbnailUploadBytes = 2 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
 const cloudflareStreamClientThumbnailDirectory =
@@ -347,6 +349,131 @@ export function isAllowedOriginalQualityVideoThumbnailContentType(
   contentType: string,
 ) {
   return contentType.toLowerCase() === "image/jpeg"
+}
+
+export function isAllowedOriginalQualityVideoContentType(contentType: string) {
+  return ["video/mp4", "video/quicktime", "video/x-m4v"].includes(
+    contentType.toLowerCase(),
+  )
+}
+
+export async function createOriginalQualityVideoStoryAsset(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  thumbnailPathname?: string | null
+  thumbnailContentType?: string | null
+  thumbnailByteSize?: number | null
+  thumbnailChecksum?: string | null
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+}): Promise<StoredStoryAsset> {
+  if (
+    input.pathname.includes("..") ||
+    !input.pathname.startsWith("stories/mobile-original/") ||
+    !isAllowedOriginalQualityVideoContentType(input.contentType) ||
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize <= 0 ||
+    input.byteSize > maxOriginalStoryVideoUploadBytes
+  ) {
+    throw new StoryUploadError("Could not verify the original story video.")
+  }
+
+  const videoMetadata = await head(input.pathname).catch(() => null)
+
+  if (
+    !videoMetadata ||
+    videoMetadata.size !== input.byteSize ||
+    videoMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
+  ) {
+    throw new StoryUploadError("Could not verify the original story video.")
+  }
+
+  let thumbnailUrl: string | null = null
+
+  if (input.thumbnailPathname) {
+    if (
+      input.thumbnailPathname.includes("..") ||
+      !input.thumbnailPathname.startsWith("stories/mobile-original/") ||
+      !input.thumbnailPathname.endsWith("-thumb.jpg") ||
+      input.thumbnailContentType !== "image/jpeg" ||
+      !input.thumbnailByteSize ||
+      input.thumbnailByteSize > maxOriginalStoryVideoThumbnailUploadBytes
+    ) {
+      throw new StoryUploadError("Could not verify the original story thumbnail.")
+    }
+
+    const thumbnailMetadata = await head(input.thumbnailPathname).catch(() => null)
+
+    if (
+      !thumbnailMetadata ||
+      thumbnailMetadata.size !== input.thumbnailByteSize ||
+      thumbnailMetadata.contentType.toLowerCase() !== "image/jpeg"
+    ) {
+      throw new StoryUploadError("Could not verify the original story thumbnail.")
+    }
+
+    thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
+  }
+
+  return {
+    assetKind: "video",
+    mediaUrl: buildStoryMediaRoute(input.pathname),
+    thumbnailUrl,
+    storageProvider: "vercel-blob",
+    storageKey: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+    processingStatus: "ready",
+  }
+}
+
+export async function createOriginalQualityVideoThumbnail(pathname: string) {
+  const extensionIndex = pathname.lastIndexOf(".")
+  const thumbnailPathname =
+    extensionIndex >= 0
+      ? `${pathname.slice(0, extensionIndex)}-thumb.jpg`
+      : `${pathname}-thumb.jpg`
+
+  const thumbnailMetadata = await head(thumbnailPathname).catch(() => null)
+
+  if (!thumbnailMetadata) {
+    throw new StoryUploadError("Original story video thumbnail is not available.")
+  }
+
+  return buildStoryMediaRoute(thumbnailPathname)
+}
+
+export async function backfillStoryImageThumbnails(input: {
+  dryRun?: boolean
+  limit?: number
+} = {}) {
+  return {
+    ok: true,
+    kind: "images" as const,
+    dryRun: input.dryRun ?? true,
+    limit: input.limit ?? null,
+    updated: 0,
+  }
+}
+
+export async function backfillCloudflareStreamPosterThumbnails(input: {
+  dryRun?: boolean
+  limit?: number
+} = {}) {
+  return {
+    ok: true,
+    kind: "cloudflare-posters" as const,
+    dryRun: input.dryRun ?? true,
+    limit: input.limit ?? null,
+    updated: 0,
+  }
 }
 
 export function createCloudflareStreamClientThumbnailPathname(
