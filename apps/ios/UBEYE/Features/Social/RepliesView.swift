@@ -488,7 +488,7 @@ private struct ReplyThreadStoryCard: View {
     let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(item.title)
                     .font(.system(size: 16, weight: .bold))
@@ -515,29 +515,30 @@ private struct ReplyThreadStoryCard: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
 
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
                 ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
-                    .frame(width: 218, height: 318)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 12)
-                    .padding(.bottom, 14)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(9.0 / 13.0, contentMode: .fit)
 
-                Text(item.message)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.ubeyeInk)
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.ubeyeRed.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.ubeyeRed.opacity(0.25), lineWidth: 1)
-                    )
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 46)
-                    .frame(maxWidth: 220, alignment: .trailing)
+                LinearGradient(
+                    colors: [
+                        .black.opacity(0),
+                        .black.opacity(0.58),
+                        .black.opacity(0.78)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 150)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+
+                ReplyMessageOverlay(message: item.message)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
         .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .leading) {
@@ -549,6 +550,28 @@ private struct ReplyThreadStoryCard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.ubeyeBorder, lineWidth: 1)
         )
+    }
+}
+
+private struct ReplyMessageOverlay: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.leading)
+            .lineLimit(5)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.white.opacity(0.22), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
     }
 }
 
