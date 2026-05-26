@@ -48,11 +48,16 @@ export const storyElementKind = pgEnum("story_element_kind", [
   "text",
   "sticker",
   "link",
+  "quote_reply",
 ])
 export const storyInteractionKind = pgEnum("story_interaction_kind", [
   "reply",
   "comment",
   "reaction",
+])
+export const notificationType = pgEnum("notification_type", [
+  "follow",
+  "reply",
 ])
 export const safetyReportTargetKind = pgEnum("safety_report_target_kind", [
   "story",
@@ -443,6 +448,39 @@ export const follows = pgTable(
   ],
 )
 
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    actorUserId: text("actor_user_id")
+      .notNull()
+      .references(() => users.id),
+    type: notificationType("type").notNull(),
+    entityId: text("entity_id").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("notifications_user_type_entity_idx").on(
+      table.userId,
+      table.type,
+      table.entityId,
+    ),
+    index("notifications_user_created_idx").on(table.userId, table.createdAt),
+    index("notifications_unread_idx").on(
+      table.userId,
+      table.readAt,
+      table.createdAt,
+    ),
+    index("notifications_actor_idx").on(table.actorUserId, table.createdAt),
+  ],
+)
+
 export const userBlocks = pgTable(
   "user_blocks",
   {
@@ -622,6 +660,12 @@ export const storyElements = pgTable(
     kind: storyElementKind("kind").notNull(),
     label: text("label").notNull(),
     href: text("href"),
+    sourceInteractionId: text("source_interaction_id").references(
+      (): AnyPgColumn => storyInteractions.id,
+    ),
+    sourceActorName: text("source_actor_name"),
+    sourceActorHandle: text("source_actor_handle"),
+    sourceActorAvatarUrl: text("source_actor_avatar_url"),
     positionX: numeric("position_x", { precision: 5, scale: 2 }).default("50"),
     positionY: numeric("position_y", { precision: 5, scale: 2 }).default("74"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -630,6 +674,7 @@ export const storyElements = pgTable(
   },
   (table) => [
     index("story_elements_story_id_idx").on(table.storyId, table.createdAt),
+    index("story_elements_source_interaction_idx").on(table.sourceInteractionId),
   ],
 )
 

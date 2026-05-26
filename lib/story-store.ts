@@ -30,12 +30,17 @@ import {
   creatorScores,
   stories,
   storyElements,
+  storyInteractions,
   storyMentions,
   users,
 } from "@/lib/db/schema"
 import { listFollowingProfiles } from "@/lib/follow-store"
 import { formatStoryPostedAt } from "@/lib/story-time"
-import { publicStoryMediaUrl, type StoredStoryAsset } from "@/lib/story-storage"
+import {
+  publicStoryMediaUrl,
+  StoryUploadError,
+  type StoredStoryAsset,
+} from "@/lib/story-storage"
 import { refreshProcessingCloudflareStories } from "@/lib/stories/cloudflare-status"
 import { getBlockedPeerIds, isBlockedBetween } from "@/lib/social-safety"
 import {
@@ -81,11 +86,19 @@ type StoryMentionRecord = {
 type StoryElementRecord = {
   id: string
   storyId: string
-  kind: "text" | "sticker" | "link"
+  kind: "text" | "sticker" | "link" | "quote_reply"
   label: string
   href: string | null
+  sourceInteractionId: string | null
+  sourceActorName: string | null
+  sourceActorHandle: string | null
+  sourceActorAvatarUrl: string | null
   positionX: string | null
   positionY: string | null
+}
+
+type StoryOverlayElementRecord = StoryElementRecord & {
+  kind: "text" | "link" | "quote_reply"
 }
 
 type RankedStoryRow = FeedStoryRow & {
@@ -137,9 +150,13 @@ export type FeedStoryCard = SocialStoryCard
 
 export type MyStoryElement = {
   id: string
-  kind: "text" | "sticker" | "link"
+  kind: "text" | "sticker" | "link" | "quote_reply"
   label: string
   href: string | null
+  sourceInteractionId: string | null
+  sourceActorName: string | null
+  sourceActorHandle: string | null
+  sourceActorAvatarUrl: string | null
   positionX: number
   positionY: number
 }
@@ -190,6 +207,12 @@ export type StoryStackItem = {
   textOverlays: Array<{
     id: string
     label: string
+    kind: "text" | "link" | "quote_reply"
+    href: string | null
+    sourceInteractionId: string | null
+    sourceActorName: string | null
+    sourceActorHandle: string | null
+    sourceActorAvatarUrl: string | null
     positionX: number
     positionY: number
   }>
@@ -253,12 +276,28 @@ function positionStringToNumber(
   return Math.min(Math.max(numericStringToNumber(value), 0), 100)
 }
 
+function isStoryOverlayElement(
+  element: StoryElementRecord,
+): element is StoryOverlayElementRecord {
+  return (
+    element.kind === "text" ||
+    element.kind === "link" ||
+    element.kind === "quote_reply"
+  )
+}
+
 function textOverlaysFromElements(elements: StoryElementRecord[]) {
   return elements
-    .filter((element) => element.kind === "text")
+    .filter(isStoryOverlayElement)
     .map((element) => ({
       id: element.id,
       label: element.label,
+      kind: element.kind,
+      href: element.href,
+      sourceInteractionId: element.sourceInteractionId,
+      sourceActorName: element.sourceActorName,
+      sourceActorHandle: element.sourceActorHandle,
+      sourceActorAvatarUrl: element.sourceActorAvatarUrl,
       positionX: positionStringToNumber(element.positionX, 50),
       positionY: positionStringToNumber(element.positionY, 74),
     }))
@@ -470,6 +509,89 @@ function storyModerationLinkUrls(elements: StoryElementInput[]) {
   return elements.flatMap((element) => (element.href ? [element.href] : []))
 }
 
+function truncateQuoteReplyLabel(value: string) {
+  const trimmed = value.trim().replace(/\s+/g, " ")
+
+  if (trimmed.length <= 240) {
+    return trimmed
+  }
+
+  return `${trimmed.slice(0, 237).trimEnd()}...`
+}
+
+async function resolveStoryElementsForOwner(input: {
+  ownerId: string
+  elements: StoryElementInput[]
+}) {
+  const quoteIds = [
+    ...new Set(
+      input.elements
+        .filter((element) => element.kind === "quote_reply")
+        .flatMap((element) =>
+          element.sourceInteractionId ? [element.sourceInteractionId] : [],
+        ),
+    ),
+  ]
+
+  if (quoteIds.length === 0) {
+    return input.elements
+  }
+
+  const db = getDb()
+  const rows = await db
+    .select({
+      id: storyInteractions.id,
+      actorId: storyInteractions.actorId,
+      body: storyInteractions.body,
+      reaction: storyInteractions.reaction,
+      displayName: users.displayName,
+      handle: users.handle,
+      avatarUrl: users.avatarUrl,
+    })
+    .from(storyInteractions)
+    .innerJoin(users, eq(users.id, storyInteractions.actorId))
+    .where(
+      and(
+        inArray(storyInteractions.id, quoteIds),
+        eq(storyInteractions.creatorId, input.ownerId),
+        eq(storyInteractions.moderationStatus, "approved"),
+        inArray(storyInteractions.kind, ["reply", "comment"]),
+      ),
+    )
+
+  const rowsById = new Map(rows.map((row) => [row.id, row]))
+  const blockedActorIds = new Set<string>()
+
+  for (const row of rows) {
+    if (await isBlockedBetween(input.ownerId, row.actorId)) {
+      blockedActorIds.add(row.actorId)
+    }
+  }
+
+  return input.elements.map((element) => {
+    if (element.kind !== "quote_reply") {
+      return element
+    }
+
+    const quoteId = element.sourceInteractionId
+    const row = quoteId ? rowsById.get(quoteId) : undefined
+    const quoteText = row?.body?.trim() || row?.reaction?.trim() || ""
+
+    if (!quoteId || !row || blockedActorIds.has(row.actorId) || !quoteText) {
+      throw new StoryUploadError("That reply is no longer available to quote.")
+    }
+
+    return {
+      ...element,
+      label: truncateQuoteReplyLabel(quoteText),
+      sourceInteractionId: quoteId,
+      sourceActorName: row.displayName ?? row.handle ?? "Someone",
+      sourceActorHandle: row.handle,
+      sourceActorAvatarUrl: row.avatarUrl,
+    }
+  })
+}
+
 function firstStoryPerCreator<T extends { creatorId: string }>(rows: T[]) {
   const seenCreatorIds = new Set<string>()
   const firstStories: T[] = []
@@ -592,6 +714,10 @@ function buildMyStorySummary(
         kind: element.kind,
         label: element.label,
         href: element.href,
+        sourceInteractionId: element.sourceInteractionId,
+        sourceActorName: element.sourceActorName,
+        sourceActorHandle: element.sourceActorHandle,
+        sourceActorAvatarUrl: element.sourceActorAvatarUrl,
         positionX: positionStringToNumber(element.positionX, 50),
         positionY: positionStringToNumber(element.positionY, 74),
       })),
@@ -747,6 +873,10 @@ async function getStoryElements(storyIds: string[]) {
       kind: storyElements.kind,
       label: storyElements.label,
       href: storyElements.href,
+      sourceInteractionId: storyElements.sourceInteractionId,
+      sourceActorName: storyElements.sourceActorName,
+      sourceActorHandle: storyElements.sourceActorHandle,
+      sourceActorAvatarUrl: storyElements.sourceActorAvatarUrl,
       positionX: storyElements.positionX,
       positionY: storyElements.positionY,
     })
@@ -1105,6 +1235,10 @@ export async function createStory(input: CreateStoryInput) {
     })
     .onConflictDoNothing()
 
+  const elements = await resolveStoryElementsForOwner({
+    ownerId: input.session.id,
+    elements: input.elements,
+  })
   const textMentions = extractCaptionMentions(input.caption)
   const mergedMentions = [
     ...input.explicitBrandTags.map((brandSlug) => ({
@@ -1143,8 +1277,8 @@ export async function createStory(input: CreateStoryInput) {
   const mediaModerationThumbnailUrl =
     input.moderationThumbnailUrl ?? input.storedAsset.thumbnailUrl
   const contentModeration = await moderateUserContent({
-    textParts: storyModerationTextParts(input),
-    linkUrls: storyModerationLinkUrls(input.elements),
+    textParts: storyModerationTextParts({ ...input, elements }),
+    linkUrls: storyModerationLinkUrls(elements),
     media: {
       assetKind: input.storedAsset.assetKind,
       contentType: input.storedAsset.contentType,
@@ -1242,14 +1376,18 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
-  if (input.elements.length > 0) {
+  if (elements.length > 0) {
     await db.insert(storyElements).values(
-      input.elements.map((element) => ({
+      elements.map((element) => ({
         id: randomUUID(),
         storyId,
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        sourceInteractionId: element.sourceInteractionId ?? null,
+        sourceActorName: element.sourceActorName ?? null,
+        sourceActorHandle: element.sourceActorHandle ?? null,
+        sourceActorAvatarUrl: element.sourceActorAvatarUrl ?? null,
         positionX: element.positionX ?? "50.00",
         positionY: element.positionY ?? "74.00",
       })),
@@ -1267,6 +1405,13 @@ export async function createStory(input: CreateStoryInput) {
   }
 
   return storyId
+}
+
+export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {
+  await getDb()
+    .update(stories)
+    .set({ thumbnailUrl })
+    .where(eq(stories.id, storyId))
 }
 
 export async function updateStoryForOwner(input: UpdateStoryInput) {
@@ -1292,6 +1437,10 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     throw new Error("Story not found or no longer editable.")
   }
 
+  const elements = await resolveStoryElementsForOwner({
+    ownerId: input.ownerId,
+    elements: input.elements,
+  })
   const textMentions = extractCaptionMentions(input.caption)
   const mergedMentions = [
     ...input.explicitBrandTags.map((brandSlug) => ({
@@ -1313,8 +1462,8 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     ),
   )
   const moderation = await moderateUserContent({
-    textParts: storyModerationTextParts(input),
-    linkUrls: storyModerationLinkUrls(input.elements),
+    textParts: storyModerationTextParts({ ...input, elements }),
+    linkUrls: storyModerationLinkUrls(elements),
   })
   const isApproved = moderation.action === "approve"
 
@@ -1355,14 +1504,18 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     )
   }
 
-  if (input.elements.length > 0) {
+  if (elements.length > 0) {
     await db.insert(storyElements).values(
-      input.elements.map((element) => ({
+      elements.map((element) => ({
         id: randomUUID(),
         storyId: input.storyId,
         kind: element.kind,
         label: element.label,
         href: element.href ?? null,
+        sourceInteractionId: element.sourceInteractionId ?? null,
+        sourceActorName: element.sourceActorName ?? null,
+        sourceActorHandle: element.sourceActorHandle ?? null,
+        sourceActorAvatarUrl: element.sourceActorAvatarUrl ?? null,
         positionX: element.positionX ?? "50.00",
         positionY: element.positionY ?? "74.00",
       })),

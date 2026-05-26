@@ -23,6 +23,12 @@ export interface SocialStoryCard {
   textOverlays?: Array<{
     id: string
     label: string
+    kind?: "text" | "link" | "quote_reply"
+    href?: string | null
+    sourceInteractionId?: string | null
+    sourceActorName?: string | null
+    sourceActorHandle?: string | null
+    sourceActorAvatarUrl?: string | null
     positionX: number
     positionY: number
   }>

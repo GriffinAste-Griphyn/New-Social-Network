@@ -58,6 +58,11 @@ const completeVideoSchema = z.object({
   textOverlayPositionY: z.string().optional(),
   linkLabel: z.string().default(""),
   linkUrl: z.string().default(""),
+  linkOverlayPositionX: z.string().optional(),
+  linkOverlayPositionY: z.string().optional(),
+  quoteReplyId: z.string().default(""),
+  quoteReplyPositionX: z.string().optional(),
+  quoteReplyPositionY: z.string().optional(),
 })
 
 function payloadToFormData(payload: z.infer<typeof completeVideoSchema>) {
@@ -71,6 +76,11 @@ function payloadToFormData(payload: z.infer<typeof completeVideoSchema>) {
   formData.set("textOverlayPositionY", payload.textOverlayPositionY ?? "74.00")
   formData.set("linkLabel", payload.linkLabel)
   formData.set("linkUrl", payload.linkUrl)
+  formData.set("linkOverlayPositionX", payload.linkOverlayPositionX ?? "50.00")
+  formData.set("linkOverlayPositionY", payload.linkOverlayPositionY ?? "78.00")
+  formData.set("quoteReplyId", payload.quoteReplyId)
+  formData.set("quoteReplyPositionX", payload.quoteReplyPositionX ?? "50.00")
+  formData.set("quoteReplyPositionY", payload.quoteReplyPositionY ?? "58.00")
 
   return formData
 }

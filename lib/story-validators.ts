@@ -2,6 +2,7 @@ import { z } from "zod"
 
 export const storyCaptionSchema = z.string().trim().max(220)
 export const storyElementLabelSchema = z.string().trim().min(1).max(64)
+export const storyQuoteReplyIdSchema = z.string().trim().min(1).max(120)
 export const storyLinkUrlSchema = z.url().max(320)
 
 const brandSlugSchema = z
@@ -48,9 +49,13 @@ export function extractCaptionMentions(caption: string) {
 }
 
 export type StoryElementInput = {
-  kind: "text" | "sticker" | "link"
+  kind: "text" | "sticker" | "link" | "quote_reply"
   label: string
   href?: string
+  sourceInteractionId?: string
+  sourceActorName?: string | null
+  sourceActorHandle?: string | null
+  sourceActorAvatarUrl?: string | null
   positionX?: string
   positionY?: string
 }
@@ -98,6 +103,10 @@ export function parseStoryElements(formData: FormData): StoryElementInput[] {
     positionX: parsePositionPercent(formData.get("textOverlayPositionX"), 50),
     positionY: parsePositionPercent(formData.get("textOverlayPositionY"), 74),
   }
+  const quoteReplyPosition = {
+    positionX: parsePositionPercent(formData.get("quoteReplyPositionX"), 50),
+    positionY: parsePositionPercent(formData.get("quoteReplyPositionY"), 58),
+  }
   const elements: StoryElementInput[] = [
     ...parseDelimitedElements(formData.get("textOverlays"), "text", textPosition),
     ...parseDelimitedElements(formData.get("stickers"), "sticker"),
@@ -115,6 +124,16 @@ export function parseStoryElements(formData: FormData): StoryElementInput[] {
       kind: "link",
       label: storyElementLabelSchema.parse(linkLabel),
       href: storyLinkUrlSchema.parse(linkUrl.trim()),
+    })
+  }
+
+  const quoteReplyId = formData.get("quoteReplyId")
+  if (typeof quoteReplyId === "string" && quoteReplyId.trim().length > 0) {
+    elements.push({
+      kind: "quote_reply",
+      label: "Quoted reply",
+      sourceInteractionId: storyQuoteReplyIdSchema.parse(quoteReplyId),
+      ...quoteReplyPosition,
     })
   }
 

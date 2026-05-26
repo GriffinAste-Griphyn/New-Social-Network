@@ -62,7 +62,7 @@ export type AdminModerationStory = {
 
 export type AdminModerationStoryElement = {
   id: string
-  kind: "text" | "sticker" | "link"
+  kind: "text" | "sticker" | "link" | "quote_reply"
   label: string
   href: string | null
   positionX: string | null
