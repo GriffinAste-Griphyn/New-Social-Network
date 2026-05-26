@@ -637,18 +637,24 @@ export const stories = pgTable(
   ],
 )
 
-export const storyMentions = pgTable("story_mentions", {
-  id: text("id").primaryKey(),
-  storyId: text("story_id")
-    .notNull()
-    .references(() => stories.id),
-  brandSlug: text("brand_slug").notNull(),
-  mentionType: mentionType("mention_type").notNull(),
-  confidence: numeric("confidence", { precision: 5, scale: 2 }).default("0"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-})
+export const storyMentions = pgTable(
+  "story_mentions",
+  {
+    id: text("id").primaryKey(),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    brandSlug: text("brand_slug").notNull(),
+    mentionType: mentionType("mention_type").notNull(),
+    confidence: numeric("confidence", { precision: 5, scale: 2 }).default("0"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("story_mentions_story_id_idx").on(table.storyId, table.createdAt),
+  ],
+)
 
 export const storyElements = pgTable(
   "story_elements",

@@ -121,7 +121,7 @@ final class APIClient: ObservableObject {
     }
 
     func mobileFeed() async throws -> MobileFeedResponse {
-        let response: MobileFeedResponse = try await postEmpty("/api/mobile/feed")
+        let response: MobileFeedResponse = try await get("/api/mobile/feed")
         await saveFeedToDisk(response)
         return response
     }

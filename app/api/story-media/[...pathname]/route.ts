@@ -135,6 +135,16 @@ function rangeNotSatisfiable(size: number) {
   })
 }
 
+function getStoryMediaCacheControl(request: Request, mediaPathname: string) {
+  const token = new URL(request.url).searchParams.get("token")
+
+  if (verifyStoryMediaAccessToken(mediaPathname, token)) {
+    return "private, max-age=1800, stale-while-revalidate=1800"
+  }
+
+  return "private, no-store"
+}
+
 function getLocalStoryMediaFileName(mediaPathname: string) {
   if (!isSafeLocalStoryMediaPathname(mediaPathname)) {
     return null
@@ -313,7 +323,7 @@ async function serveLocalStoryMedia(request: Request, mediaPathname: string) {
   }
 
   const headers = new Headers({
-    "Cache-Control": "private, no-store",
+    "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
     ETag: metadata.etag,
     "Content-Type": metadata.contentType,
   })
@@ -381,7 +391,10 @@ export async function GET(
         : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
     const response = NextResponse.redirect(remoteUrl, { status: 302 })
 
-    response.headers.set("Cache-Control", "private, no-store")
+    response.headers.set(
+      "Cache-Control",
+      getStoryMediaCacheControl(request, mediaPathname),
+    )
 
     return response
   }
@@ -423,7 +436,7 @@ export async function GET(
   }
 
   const headers = new Headers({
-    "Cache-Control": "private, no-store",
+    "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
     ETag: result.blob.etag || blobMetadata.etag,
   })
 

@@ -237,6 +237,10 @@ export type MobileCreatorProfile = {
   hasActiveStory: boolean
 }
 
+type FeedDataOptions = {
+  refreshProcessing?: boolean
+}
+
 type CreateStoryInput = {
   session: CompleteAuthSession
   caption: string
@@ -909,7 +913,10 @@ function groupElements(elements: StoryElementRecord[]) {
   return elementsByStory
 }
 
-export async function getMyStoryStack(viewerId: string): Promise<MyStorySummary> {
+export async function getMyStoryStack(
+  viewerId: string,
+  options: FeedDataOptions = {},
+): Promise<MyStorySummary> {
   const db = getDb()
   const [owner] = await db
     .select({
@@ -932,7 +939,9 @@ export async function getMyStoryStack(viewerId: string): Promise<MyStorySummary>
     handle: owner.handle,
   }
 
-  await refreshProcessingCloudflareStories({ creatorId: viewerId })
+  if (options.refreshProcessing) {
+    await refreshProcessingCloudflareStories({ creatorId: viewerId })
+  }
 
   const rows = (await getLiveStoryRowsForCreator(viewerId)).filter(
     (story) => story.id !== MY_STORY_ROUTE_ID,
@@ -951,15 +960,21 @@ export async function getMyStoryStack(viewerId: string): Promise<MyStorySummary>
   )
 }
 
-export async function getFeedData(viewerId: string): Promise<FeedData> {
-  await refreshProcessingCloudflareStories({ limit: 12 })
+export async function getFeedData(
+  viewerId: string,
+  options: FeedDataOptions = {},
+): Promise<FeedData> {
+  if (options.refreshProcessing) {
+    await refreshProcessingCloudflareStories({ limit: 12 })
+  }
 
-  const [rawStoryRows, followingProfiles, myStory, blockedPeerIds] = await Promise.all([
-    getLiveStoryRows(),
-    listFollowingProfiles(viewerId),
-    getMyStoryStack(viewerId),
-    getBlockedPeerIds(viewerId),
-  ])
+  const [rawStoryRows, followingProfiles, myStory, blockedPeerIds] =
+    await Promise.all([
+      getLiveStoryRows(),
+      listFollowingProfiles(viewerId),
+      getMyStoryStack(viewerId, options),
+      getBlockedPeerIds(viewerId),
+    ])
   const storyRows = rawStoryRows.filter(
     (story) =>
       story.creatorId === viewerId || !blockedPeerIds.has(story.creatorId),
@@ -978,12 +993,8 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
   }
 
   const storyIds = storyRows.map((story) => story.id)
-  const [mentionRows, elementRows] = await Promise.all([
-    getStoryMentions(storyIds),
-    getStoryElements(storyIds),
-  ])
+  const mentionRows = await getStoryMentions(storyIds)
   const mentionsByStory = groupMentions(mentionRows)
-  const elementsByStory = groupElements(elementRows)
 
   const rankedStories: RankedStoryRow[] = storyRows
     .map((row) => ({
@@ -1048,30 +1059,42 @@ export async function getFeedData(viewerId: string): Promise<FeedData> {
     )
   })
 
-  const followingStories = firstStoryPerCreator(followingRankedStories)
-    .slice(0, 8)
-    .map((story) =>
-      buildFeedStoryCard(
-        story,
-        mentionsByStory.get(story.id) ?? [],
-        elementsByStory.get(story.id) ?? [],
-        followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
-      ),
-    )
-  const followingTimelineStories = firstStoryPerCreator(followingTimelineRows)
-    .slice(0, 24)
-    .map((story) =>
-      buildFeedStoryCard(
-        story,
-        mentionsByStory.get(story.id) ?? [],
-        elementsByStory.get(story.id) ?? [],
-        followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
-      ),
-    )
-
-  const discoverStories = firstStoryPerCreator(discoverRankedStories)
+  const followingStoryRows = firstStoryPerCreator(followingRankedStories).slice(
+    0,
+    8,
+  )
+  const followingTimelineStoryRows = firstStoryPerCreator(
+    followingTimelineRows,
+  ).slice(0, 24)
+  const discoverStoryRows = firstStoryPerCreator(discoverRankedStories)
     .slice(0, 8)
     .map((story) => latestDiscoverStoryByCreator.get(story.creatorId) ?? story)
+
+  const visibleStoryIds = [
+    ...followingStoryRows,
+    ...followingTimelineStoryRows,
+    ...discoverStoryRows,
+  ].map((story) => story.id)
+  const elementsByStory = groupElements(await getStoryElements(visibleStoryIds))
+
+  const followingStories = followingStoryRows.map((story) =>
+    buildFeedStoryCard(
+      story,
+      mentionsByStory.get(story.id) ?? [],
+      elementsByStory.get(story.id) ?? [],
+      followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
+    ),
+  )
+  const followingTimelineStories = followingTimelineStoryRows.map((story) =>
+    buildFeedStoryCard(
+      story,
+      mentionsByStory.get(story.id) ?? [],
+      elementsByStory.get(story.id) ?? [],
+      followingTimelineSegmentCountByCreator.get(story.creatorId) ?? 1,
+    ),
+  )
+
+  const discoverStories = discoverStoryRows
     .map((story) =>
       buildFeedStoryCard(
         story,

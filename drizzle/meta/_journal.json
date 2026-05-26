@@ -197,6 +197,13 @@
       "when": 1779818761357,
       "tag": "0027_add_story_quote_replies",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1779820000000,
+      "tag": "0028_story_mentions_story_id_index",
+      "breakpoints": true
     }
   ]
 }

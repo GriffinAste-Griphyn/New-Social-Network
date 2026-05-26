@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
@@ -64,7 +65,48 @@ function collapseStoryCardsByCreator<T extends { handle: string }>(stories: T[])
   return collapsedStories
 }
 
-export async function POST(request: Request) {
+function jsonResponse(
+  payload: unknown,
+  request: Request,
+  options: { allowNotModified?: boolean } = {},
+) {
+  const body = JSON.stringify(payload)
+  const etag = `"${createHash("sha256").update(body).digest("base64url")}"`
+  const cacheControl = "private, max-age=15, stale-while-revalidate=60"
+  const vary = "Authorization, X-Device-Id"
+
+  if (
+    options.allowNotModified &&
+    request.headers
+      .get("if-none-match")
+      ?.split(",")
+      .map((value) => value.trim())
+      .includes(etag)
+  ) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        "Cache-Control": cacheControl,
+        ETag: etag,
+        Vary: vary,
+      },
+    })
+  }
+
+  return new Response(body, {
+    headers: {
+      "Cache-Control": cacheControl,
+      "Content-Type": "application/json",
+      ETag: etag,
+      Vary: vary,
+    },
+  })
+}
+
+async function feedResponse(
+  request: Request,
+  options: { allowNotModified: boolean },
+) {
   const user = await getCompleteMobileSession(request)
 
   if (!user) {
@@ -100,47 +142,59 @@ export async function POST(request: Request) {
     latestMyStoryItem?.id,
   )
 
-  return NextResponse.json({
-    ok: true,
-    session: {
-      displayName: user.displayName,
-      handle: user.handle,
-    },
-    followingProfiles: feed.followingProfiles.map((profile) => ({
-      ...profile,
-      imageUrl:
-        publicProfileAvatarUrl(profile.imageUrl, request) ??
-        absoluteMediaUrl(profile.imageUrl, request),
-    })),
-    followingStories,
-    followingTimelineStories,
-    discoverTiles: discoverStories.map((story) => ({
-      id: story.id,
-      assetKind: story.assetKind,
-      imageUrl: story.mediaUrl,
-      thumbnailUrl: story.thumbnailUrl,
-      title: story.creator,
-      subtitle: story.title,
-    })),
-    suggestedAccounts: feed.suggestedAccounts.map((account) => ({
-      ...account,
-      imageUrl:
-        publicProfileAvatarUrl(account.imageUrl, request) ??
-        absoluteMediaUrl(account.imageUrl, request),
-    })),
-    myStory: {
-      ...feed.myStory,
-      owner: {
-        ...feed.myStory.owner,
-        imageUrl:
-          publicProfileAvatarUrl(feed.myStory.owner.imageUrl, request) ??
-          absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
+  return jsonResponse(
+    {
+      ok: true,
+      session: {
+        displayName: user.displayName,
+        handle: user.handle,
       },
-      latestThumbnailUrl: latestMyStoryThumbnailUrl,
-      latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
-      items: feed.myStory.items.map((story) =>
-        absoluteStoryCardMedia(story, request),
-      ),
+      followingProfiles: feed.followingProfiles.map((profile) => ({
+        ...profile,
+        imageUrl:
+          publicProfileAvatarUrl(profile.imageUrl, request) ??
+          absoluteMediaUrl(profile.imageUrl, request),
+      })),
+      followingStories,
+      followingTimelineStories,
+      discoverTiles: discoverStories.map((story) => ({
+        id: story.id,
+        assetKind: story.assetKind,
+        imageUrl: story.mediaUrl,
+        thumbnailUrl: story.thumbnailUrl,
+        title: story.creator,
+        subtitle: story.title,
+      })),
+      suggestedAccounts: feed.suggestedAccounts.map((account) => ({
+        ...account,
+        imageUrl:
+          publicProfileAvatarUrl(account.imageUrl, request) ??
+          absoluteMediaUrl(account.imageUrl, request),
+      })),
+      myStory: {
+        ...feed.myStory,
+        owner: {
+          ...feed.myStory.owner,
+          imageUrl:
+            publicProfileAvatarUrl(feed.myStory.owner.imageUrl, request) ??
+            absoluteMediaUrl(feed.myStory.owner.imageUrl, request),
+        },
+        latestThumbnailUrl: latestMyStoryThumbnailUrl,
+        latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
+        items: feed.myStory.items.map((story) =>
+          absoluteStoryCardMedia(story, request),
+        ),
+      },
     },
-  })
+    request,
+    options,
+  )
+}
+
+export async function GET(request: Request) {
+  return feedResponse(request, { allowNotModified: true })
+}
+
+export async function POST(request: Request) {
+  return feedResponse(request, { allowNotModified: false })
 }
