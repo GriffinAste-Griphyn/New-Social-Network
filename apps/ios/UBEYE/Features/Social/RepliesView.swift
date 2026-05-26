@@ -515,30 +515,34 @@ private struct ReplyThreadStoryCard: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
 
-            ZStack(alignment: .bottom) {
-                ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(9.0 / 13.0, contentMode: .fit)
+            ZStack(alignment: .bottomLeading) {
+                ZStack(alignment: .bottom) {
+                    ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
+                        .frame(width: 218, height: 318)
 
-                LinearGradient(
-                    colors: [
-                        .black.opacity(0),
-                        .black.opacity(0.58),
-                        .black.opacity(0.78)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 150)
-                .frame(maxHeight: .infinity, alignment: .bottom)
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0),
+                            .black.opacity(0.48),
+                            .black.opacity(0.70)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 145)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+                .frame(width: 218, height: 318)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 ReplyMessageOverlay(message: item.message)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
+                    .frame(width: 214, alignment: .leading)
+                    .offset(x: 148, y: -32)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, minHeight: 318, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 12)
+            .padding(.bottom, 14)
         }
         .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .leading) {
@@ -563,10 +567,10 @@ private struct ReplyMessageOverlay: View {
             .multilineTextAlignment(.leading)
             .lineLimit(5)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(.white.opacity(0.22), lineWidth: 1)
