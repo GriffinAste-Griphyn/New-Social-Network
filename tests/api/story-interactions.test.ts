@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  deleteStoryInteractionForUser,
   listStoryInteractionsForActor,
   listStoryInteractionsForCreator,
 } from "@/lib/story-interactions"
@@ -22,11 +23,19 @@ vi.mock("@/lib/request-security", async () => {
   }
 })
 
-vi.mock("@/lib/story-interactions", () => ({
-  createStoryInteraction: vi.fn(),
-  listStoryInteractionsForActor: vi.fn(),
-  listStoryInteractionsForCreator: vi.fn(),
-}))
+vi.mock("@/lib/story-interactions", async () => {
+  class StoryInteractionNotFoundError extends Error {}
+  class StoryInteractionForbiddenError extends Error {}
+
+  return {
+    createStoryInteraction: vi.fn(),
+    deleteStoryInteractionForUser: vi.fn(),
+    listStoryInteractionsForActor: vi.fn(),
+    listStoryInteractionsForCreator: vi.fn(),
+    StoryInteractionNotFoundError,
+    StoryInteractionForbiddenError,
+  }
+})
 
 vi.mock("@/lib/story-storage", async () => {
   class StoryUploadError extends Error {}
@@ -83,6 +92,10 @@ describe("mobile story interactions API", () => {
         createdAt: "2026-05-12T00:00:00.000Z",
       },
     ])
+    vi.mocked(deleteStoryInteractionForUser).mockResolvedValue({
+      id: "received_123",
+      storyId: "story_123",
+    })
     vi.mocked(listStoryInteractionsForActor).mockResolvedValue([
       {
         id: "sent_123",
@@ -161,6 +174,51 @@ describe("mobile story interactions API", () => {
         },
       ],
     })
+  })
+
+
+  it("deletes a reply for the sender or receiver", async () => {
+    const { DELETE } = await import(
+      "@/app/api/mobile/stories/interactions/[interactionId]/route"
+    )
+    const response = await DELETE(
+      new Request(
+        "https://app.example.com/api/mobile/stories/interactions/received_123",
+        { method: "DELETE" },
+      ),
+      { params: Promise.resolve({ interactionId: "received_123" }) } as never,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      interaction: {
+        id: "received_123",
+        storyId: "story_123",
+      },
+    })
+    expect(deleteStoryInteractionForUser).toHaveBeenCalledWith({
+      interactionId: "received_123",
+      userId: "viewer_123",
+    })
+  })
+
+  it("requires a mobile session before deleting a reply", async () => {
+    vi.mocked(getCompleteMobileSession).mockResolvedValue(null)
+
+    const { DELETE } = await import(
+      "@/app/api/mobile/stories/interactions/[interactionId]/route"
+    )
+    const response = await DELETE(
+      new Request(
+        "https://app.example.com/api/mobile/stories/interactions/received_123",
+        { method: "DELETE" },
+      ),
+      { params: Promise.resolve({ interactionId: "received_123" }) } as never,
+    )
+
+    expect(response.status).toBe(401)
+    expect(deleteStoryInteractionForUser).not.toHaveBeenCalled()
   })
 
   it("requires a mobile session", async () => {

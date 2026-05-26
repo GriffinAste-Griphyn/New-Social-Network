@@ -92,6 +92,10 @@ final class APIClient: ObservableObject {
         return try await request(path, method: "DELETE", body: data)
     }
 
+    func deleteEmpty<T: Decodable>(_ path: String) async throws -> T {
+        try await request(path, method: "DELETE", body: Optional<Data>.none)
+    }
+
     func postEmpty<T: Decodable>(_ path: String) async throws -> T {
         try await request(path, method: "POST", body: Data("{}".utf8))
     }
@@ -120,6 +124,10 @@ final class APIClient: ObservableObject {
         let response: MobileFeedResponse = try await postEmpty("/api/mobile/feed")
         await saveFeedToDisk(response)
         return response
+    }
+
+    func deleteStoryInteraction(id: String) async throws {
+        let _: BasicOkResponse = try await deleteEmpty("/api/mobile/stories/interactions/\(id)")
     }
 
     func invalidateMobileFeedCache() {

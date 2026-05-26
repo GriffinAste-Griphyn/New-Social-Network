@@ -5,6 +5,7 @@ final class RepliesStore: ObservableObject {
     @Published var inbox: StoryInteractionInboxResponse?
     @Published var isLoading = false
     @Published var error: String?
+    @Published var deletingReplyIds: Set<String> = []
 
     func load(api: APIClient) async {
         isLoading = true
@@ -15,6 +16,38 @@ final class RepliesStore: ObservableObject {
             self.error = error.localizedDescription
         }
         isLoading = false
+    }
+
+    func deleteReply(id: String, api: APIClient) async {
+        guard !deletingReplyIds.contains(id) else {
+            return
+        }
+
+        let previousInbox = inbox
+        deletingReplyIds.insert(id)
+        error = nil
+        removeReply(id: id)
+
+        do {
+            try await api.deleteStoryInteraction(id: id)
+        } catch {
+            inbox = previousInbox
+            self.error = error.localizedDescription
+        }
+
+        deletingReplyIds.remove(id)
+    }
+
+    private func removeReply(id: String) {
+        guard let inbox else {
+            return
+        }
+
+        self.inbox = StoryInteractionInboxResponse(
+            ok: inbox.ok,
+            interactions: inbox.interactions.filter { $0.id != id },
+            sentInteractions: inbox.sentInteractions.filter { $0.id != id }
+        )
     }
 }
 
@@ -50,10 +83,30 @@ struct RepliesView: View {
                     } else {
                         VStack(spacing: 10) {
                             ForEach(displayedReplyThreads) { thread in
-                                NavigationLink(destination: ReplyThreadView(thread: thread)) {
-                                    ExpoReplyCard(row: thread.row)
+                                NavigationLink(
+                                    destination: ReplyThreadView(
+                                        thread: thread,
+                                        onDelete: { interactionId in
+                                            await store.deleteReply(id: interactionId, api: api)
+                                        }
+                                    )
+                                ) {
+                                    ExpoReplyCard(
+                                        row: thread.row,
+                                        isDeleting: store.deletingReplyIds.contains(thread.id)
+                                    )
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(store.deletingReplyIds.contains(thread.id))
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        Task {
+                                            await store.deleteReply(id: thread.id, api: api)
+                                        }
+                                    } label: {
+                                        Label("Delete Reply", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
@@ -184,6 +237,7 @@ struct ExpoReplyRowData: Identifiable {
 
 struct ExpoReplyCard: View {
     let row: ExpoReplyRowData
+    var isDeleting = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -204,9 +258,14 @@ struct ExpoReplyCard: View {
 
             Spacer(minLength: 8)
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.ubeyeMuted.opacity(0.65))
+            if isDeleting {
+                ProgressView()
+                    .tint(.ubeyeRed)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.ubeyeMuted.opacity(0.65))
+            }
         }
         .padding(14)
         .ubeyeCard()
@@ -275,10 +334,14 @@ struct ReplyThreadItem: Identifiable, Hashable {
 struct ReplyThreadView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: ReplyThreadData
+    let onDelete: (String) async -> Void
     @State private var message = ""
+    @State private var visibleItems: [ReplyThreadItem]
 
-    init(thread: ReplyThreadData) {
+    init(thread: ReplyThreadData, onDelete: @escaping (String) async -> Void) {
         self.thread = thread
+        self.onDelete = onDelete
+        _visibleItems = State(initialValue: thread.items)
     }
 
     init(creator: FixtureCreator) {
@@ -305,6 +368,8 @@ struct ReplyThreadView: View {
                 )
             ]
         )
+        self.onDelete = { _ in }
+        _visibleItems = State(initialValue: self.thread.items)
     }
 
     var body: some View {
@@ -337,9 +402,11 @@ struct ReplyThreadView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        ForEach(thread.items) { item in
-                            ReplyThreadStoryCard(item: item)
-                                .id(item.id)
+                        ForEach(visibleItems) { item in
+                            ReplyThreadStoryCard(item: item) {
+                                delete(item)
+                            }
+                            .id(item.id)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -350,7 +417,7 @@ struct ReplyThreadView: View {
                 .onAppear {
                     scrollToBottom(proxy)
                 }
-                .onChange(of: thread.items.count) { _, _ in
+                .onChange(of: visibleItems.count) { _, _ in
                     scrollToBottom(proxy)
                 }
             }
@@ -386,7 +453,7 @@ struct ReplyThreadView: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        guard let last = thread.items.last else {
+        guard let last = visibleItems.last else {
             return
         }
 
@@ -399,10 +466,26 @@ struct ReplyThreadView: View {
             }
         }
     }
+
+    private func delete(_ item: ReplyThreadItem) {
+        withAnimation(.snappy) {
+            visibleItems.removeAll { $0.id == item.id }
+        }
+
+        Task {
+            await onDelete(item.id)
+            await MainActor.run {
+                if visibleItems.isEmpty {
+                    dismiss()
+                }
+            }
+        }
+    }
 }
 
 private struct ReplyThreadStoryCard: View {
     let item: ReplyThreadItem
+    let onDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -418,6 +501,16 @@ private struct ReplyThreadStoryCard: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.ubeyeMuted.opacity(0.7))
                     .lineLimit(1)
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.ubeyeRed)
+                        .frame(width: 30, height: 30)
+                        .background(Color.ubeyeRed.opacity(0.08), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete reply")
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)

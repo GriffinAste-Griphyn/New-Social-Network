@@ -317,6 +317,61 @@ export async function createStoryInteraction(input: {
   return event
 }
 
+export class StoryInteractionNotFoundError extends Error {}
+
+export class StoryInteractionForbiddenError extends Error {}
+
+export async function deleteStoryInteractionForUser(input: {
+  interactionId: string
+  userId: string
+}) {
+  const db = getDb()
+  const [interaction] = await db
+    .select({
+      id: storyInteractions.id,
+      storyId: storyInteractions.storyId,
+      creatorId: storyInteractions.creatorId,
+      actorId: storyInteractions.actorId,
+      kind: storyInteractions.kind,
+      moderationStatus: storyInteractions.moderationStatus,
+    })
+    .from(storyInteractions)
+    .where(eq(storyInteractions.id, input.interactionId))
+    .limit(1)
+
+  if (
+    !interaction ||
+    interaction.moderationStatus !== "approved" ||
+    (interaction.kind !== "reply" && interaction.kind !== "comment")
+  ) {
+    throw new StoryInteractionNotFoundError(
+      "That reply is no longer available.",
+    )
+  }
+
+  if (interaction.actorId !== input.userId && interaction.creatorId !== input.userId) {
+    throw new StoryInteractionForbiddenError("You cannot delete this reply.")
+  }
+
+  await db
+    .update(storyInteractions)
+    .set({
+      moderationStatus: "deleted",
+      moderationReason:
+        interaction.actorId === input.userId
+          ? "Deleted by sender."
+          : "Deleted by creator.",
+      reviewedAt: new Date(),
+      reviewedByUserId: input.userId,
+    })
+    .where(eq(storyInteractions.id, interaction.id))
+
+  return {
+    id: interaction.id,
+    storyId: interaction.storyId,
+  }
+}
+
 export async function listStoryInteractionsForCreator(input: {
   creatorId: string
   kinds?: StoryInteractionKind[]
