@@ -440,7 +440,9 @@ struct StoryStackViewer: View {
 
     @ViewBuilder
     private func storyOverlayChip(_ overlay: StoryTextOverlay) -> some View {
-        if overlay.kind == "link", let href = overlay.href {
+        if overlay.kind == "quote_reply" {
+            storyQuoteReplyOverlay(overlay)
+        } else if overlay.kind == "link", let href = overlay.href {
             Link(destination: href) {
                 storyOverlayChipContent(overlay)
             }
@@ -450,6 +452,48 @@ struct StoryStackViewer: View {
         } else {
             storyOverlayChipContent(overlay)
         }
+    }
+
+    private func storyQuoteReplyOverlay(_ overlay: StoryTextOverlay) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let actorName = overlay.sourceActorName {
+                HStack(spacing: 8) {
+                    RemoteAvatar(
+                        url: overlay.sourceActorAvatarUrl,
+                        size: 24,
+                        name: actorName
+                    )
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(actorName)
+                            .font(.system(size: 13, weight: .bold))
+                            .lineLimit(1)
+
+                        if let handle = overlay.sourceActorHandle {
+                            Text("@\(handle)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+
+            Text(overlay.label)
+                .font(.system(size: 18, weight: .bold))
+                .lineLimit(4)
+                .multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 300, alignment: .leading)
+        .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 7)
     }
 
     private func storyOverlayChipContent(_ overlay: StoryTextOverlay) -> some View {

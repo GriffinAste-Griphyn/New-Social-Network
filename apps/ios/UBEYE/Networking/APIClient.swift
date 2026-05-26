@@ -308,7 +308,10 @@ final class APIClient: ObservableObject {
         linkLabel: String,
         linkUrl: String,
         linkOverlayPositionX: Double,
-        linkOverlayPositionY: Double
+        linkOverlayPositionY: Double,
+        quoteReplyId: String,
+        quoteReplyPositionX: Double,
+        quoteReplyPositionY: Double
     ) async throws -> StoryUploadResponse {
         guard let imageData = image.jpegData(compressionQuality: 0.88) else {
             throw APIClientError.invalidResponse
@@ -326,6 +329,9 @@ final class APIClient: ObservableObject {
         appendField("linkUrl", linkUrl, boundary: boundary, to: &body)
         appendField("linkOverlayPositionX", String(format: "%.2f", linkOverlayPositionX), boundary: boundary, to: &body)
         appendField("linkOverlayPositionY", String(format: "%.2f", linkOverlayPositionY), boundary: boundary, to: &body)
+        appendField("quoteReplyId", quoteReplyId, boundary: boundary, to: &body)
+        appendField("quoteReplyPositionX", String(format: "%.2f", quoteReplyPositionX), boundary: boundary, to: &body)
+        appendField("quoteReplyPositionY", String(format: "%.2f", quoteReplyPositionY), boundary: boundary, to: &body)
         appendFile(
             fieldName: "media",
             fileName: "story.jpg",
@@ -599,6 +605,9 @@ final class APIClient: ObservableObject {
         linkUrl: String,
         linkOverlayPositionX: Double,
         linkOverlayPositionY: Double,
+        quoteReplyId: String,
+        quoteReplyPositionX: Double,
+        quoteReplyPositionY: Double,
         durationMs: Int?,
         thumbnailData: Data?
     ) async throws -> StoryUploadResponse {
@@ -622,6 +631,9 @@ final class APIClient: ObservableObject {
             let linkUrl: String
             let linkOverlayPositionX: String
             let linkOverlayPositionY: String
+            let quoteReplyId: String
+            let quoteReplyPositionX: String
+            let quoteReplyPositionY: String
         }
 
         let byteSize = try videoFileSize(fileURL)
@@ -647,7 +659,10 @@ final class APIClient: ObservableObject {
                 linkLabel: linkLabel,
                 linkUrl: linkUrl,
                 linkOverlayPositionX: String(format: "%.2f", linkOverlayPositionX),
-                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY)
+                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY),
+                quoteReplyId: quoteReplyId,
+                quoteReplyPositionX: String(format: "%.2f", quoteReplyPositionX),
+                quoteReplyPositionY: String(format: "%.2f", quoteReplyPositionY)
             )
         )
     }
@@ -664,6 +679,9 @@ final class APIClient: ObservableObject {
         linkUrl: String,
         linkOverlayPositionX: Double,
         linkOverlayPositionY: Double,
+        quoteReplyId: String,
+        quoteReplyPositionX: Double,
+        quoteReplyPositionY: Double,
         durationMs: Int?,
         thumbnailData: Data?
     ) async throws -> StoryUploadResponse {
@@ -686,6 +704,9 @@ final class APIClient: ObservableObject {
             let linkUrl: String
             let linkOverlayPositionX: String
             let linkOverlayPositionY: String
+            let quoteReplyId: String
+            let quoteReplyPositionX: String
+            let quoteReplyPositionY: String
         }
 
         let byteSize = try videoFileSize(fileURL)
@@ -709,7 +730,10 @@ final class APIClient: ObservableObject {
                 linkLabel: linkLabel,
                 linkUrl: linkUrl,
                 linkOverlayPositionX: String(format: "%.2f", linkOverlayPositionX),
-                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY)
+                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY),
+                quoteReplyId: quoteReplyId,
+                quoteReplyPositionX: String(format: "%.2f", quoteReplyPositionX),
+                quoteReplyPositionY: String(format: "%.2f", quoteReplyPositionY)
             )
         )
     }

@@ -56,6 +56,7 @@ struct RepliesView: View {
     @StateObject private var store = RepliesStore()
     @State private var selectedStory: StoryRoute?
     @State private var selectedSegment = "Received"
+    var onQuoteReply: (QuotedStoryReply) -> Void = { _ in }
 
     var body: some View {
         NavigationStack {
@@ -86,6 +87,7 @@ struct RepliesView: View {
                                 NavigationLink(
                                     destination: ReplyThreadView(
                                         thread: thread,
+                                        onQuote: onQuoteReply,
                                         onDelete: { interactionId in
                                             await store.deleteReply(id: interactionId, api: api)
                                         }
@@ -287,6 +289,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL?
     let thumbnailUrl: URL?
+    let quotedReply: QuotedStoryReply?
 
     init(
         id: String,
@@ -295,7 +298,8 @@ struct ReplyThreadItem: Identifiable, Hashable {
         createdAt: String,
         assetKind: SocialAssetKind,
         mediaUrl: URL?,
-        thumbnailUrl: URL?
+        thumbnailUrl: URL?,
+        quotedReply: QuotedStoryReply?
     ) {
         self.id = id
         self.title = title
@@ -304,17 +308,26 @@ struct ReplyThreadItem: Identifiable, Hashable {
         self.assetKind = assetKind
         self.mediaUrl = mediaUrl
         self.thumbnailUrl = thumbnailUrl
+        self.quotedReply = quotedReply
     }
 
     init(received interaction: StoryInteractionEvent) {
+        let message = interaction.body ?? interaction.reaction ?? "Sent a photo reply."
         self.init(
             id: interaction.id,
             title: "\(interaction.actor.name) replied to your Story",
-            message: interaction.body ?? interaction.reaction ?? "Sent a photo reply.",
+            message: message,
             createdAt: interaction.createdAt,
             assetKind: interaction.story.assetKind,
             mediaUrl: interaction.story.mediaUrl,
-            thumbnailUrl: interaction.story.thumbnailUrl
+            thumbnailUrl: interaction.story.thumbnailUrl,
+            quotedReply: QuotedStoryReply(
+                id: interaction.id,
+                actorName: interaction.actor.name,
+                actorHandle: interaction.actor.handle,
+                actorAvatarUrl: interaction.actor.imageUrl,
+                message: message
+            )
         )
     }
 
@@ -326,7 +339,8 @@ struct ReplyThreadItem: Identifiable, Hashable {
             createdAt: interaction.createdAt,
             assetKind: interaction.story.assetKind,
             mediaUrl: interaction.story.mediaUrl,
-            thumbnailUrl: interaction.story.thumbnailUrl
+            thumbnailUrl: interaction.story.thumbnailUrl,
+            quotedReply: nil
         )
     }
 }
@@ -334,12 +348,18 @@ struct ReplyThreadItem: Identifiable, Hashable {
 struct ReplyThreadView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: ReplyThreadData
+    let onQuote: (QuotedStoryReply) -> Void
     let onDelete: (String) async -> Void
     @State private var message = ""
     @State private var visibleItems: [ReplyThreadItem]
 
-    init(thread: ReplyThreadData, onDelete: @escaping (String) async -> Void) {
+    init(
+        thread: ReplyThreadData,
+        onQuote: @escaping (QuotedStoryReply) -> Void,
+        onDelete: @escaping (String) async -> Void
+    ) {
         self.thread = thread
+        self.onQuote = onQuote
         self.onDelete = onDelete
         _visibleItems = State(initialValue: thread.items)
     }
@@ -364,10 +384,12 @@ struct ReplyThreadView: View {
                     createdAt: row.timestamp,
                     assetKind: .image,
                     mediaUrl: story?.imageUrl,
-                    thumbnailUrl: story?.imageUrl
+                    thumbnailUrl: story?.imageUrl,
+                    quotedReply: nil
                 )
             ]
         )
+        self.onQuote = { _ in }
         self.onDelete = { _ in }
         _visibleItems = State(initialValue: self.thread.items)
     }
@@ -403,9 +425,15 @@ struct ReplyThreadView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(visibleItems) { item in
-                            ReplyThreadStoryCard(item: item) {
-                                delete(item)
-                            }
+                            ReplyThreadStoryCard(
+                                item: item,
+                                onQuote: {
+                                    quote(item)
+                                },
+                                onDelete: {
+                                    delete(item)
+                                }
+                            )
                             .id(item.id)
                         }
                     }
@@ -452,6 +480,15 @@ struct ReplyThreadView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
+    private func quote(_ item: ReplyThreadItem) {
+        guard let quotedReply = item.quotedReply else {
+            return
+        }
+
+        dismiss()
+        onQuote(quotedReply)
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         guard let last = visibleItems.last else {
             return
@@ -485,6 +522,7 @@ struct ReplyThreadView: View {
 
 private struct ReplyThreadStoryCard: View {
     let item: ReplyThreadItem
+    let onQuote: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -501,6 +539,18 @@ private struct ReplyThreadStoryCard: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.ubeyeMuted.opacity(0.7))
                     .lineLimit(1)
+
+                if item.quotedReply != nil {
+                    Button(action: onQuote) {
+                        Image(systemName: "quote.bubble")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.ubeyeInk)
+                            .frame(width: 30, height: 30)
+                            .background(Color.ubeyeSubtle, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Quote reply")
+                }
 
                 Button(role: .destructive, action: onDelete) {
                     Image(systemName: "trash")

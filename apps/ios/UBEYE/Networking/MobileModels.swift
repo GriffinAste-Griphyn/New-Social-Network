@@ -58,6 +58,18 @@ struct StoryTextOverlay: Codable, Hashable, Identifiable {
     let positionY: Double
     let kind: String?
     let href: URL?
+    let sourceInteractionId: String?
+    let sourceActorName: String?
+    let sourceActorHandle: String?
+    let sourceActorAvatarUrl: URL?
+}
+
+struct QuotedStoryReply: Identifiable, Hashable {
+    let id: String
+    let actorName: String
+    let actorHandle: String
+    let actorAvatarUrl: URL?
+    let message: String
 }
 
 struct StoryCard: Codable, Identifiable, Hashable {

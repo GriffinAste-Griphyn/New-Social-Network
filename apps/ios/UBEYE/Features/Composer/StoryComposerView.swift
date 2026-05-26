@@ -36,6 +36,9 @@ final class StoryComposerStore: ObservableObject {
     @Published var linkLabel = ""
     @Published var linkOverlayPositionX: Double = 50
     @Published var linkOverlayPositionY: Double = 78
+    @Published var quotedReply: QuotedStoryReply?
+    @Published var quoteReplyPositionX: Double = 50
+    @Published var quoteReplyPositionY: Double = 58
     @Published var selectedMedia: PickedStoryMedia?
     @Published var uploadStatus: String?
     @Published var error: String?
@@ -67,7 +70,10 @@ final class StoryComposerStore: ObservableObject {
                     linkLabel: linkLabel,
                     linkUrl: normalizedLinkUrl,
                     linkOverlayPositionX: linkOverlayPositionX,
-                    linkOverlayPositionY: linkOverlayPositionY
+                    linkOverlayPositionY: linkOverlayPositionY,
+                    quoteReplyId: quotedReply?.id ?? "",
+                    quoteReplyPositionX: quoteReplyPositionX,
+                    quoteReplyPositionY: quoteReplyPositionY
                 )
             case .video(let url):
                 uploadResponse = try await uploadVideoStory(url: url, api: api)
@@ -85,6 +91,7 @@ final class StoryComposerStore: ObservableObject {
             linkLabel = ""
             linkOverlayPositionX = 50
             linkOverlayPositionY = 78
+            clearQuotedReply()
             self.selectedMedia = nil
         } catch {
             self.error = error.localizedDescription
@@ -135,6 +142,9 @@ final class StoryComposerStore: ObservableObject {
             linkUrl: normalizedLinkUrl,
             linkOverlayPositionX: linkOverlayPositionX,
             linkOverlayPositionY: linkOverlayPositionY,
+            quoteReplyId: quotedReply?.id ?? "",
+            quoteReplyPositionX: quoteReplyPositionX,
+            quoteReplyPositionY: quoteReplyPositionY,
             durationMs: durationMs,
             thumbnailData: completedThumbnailData
         )
@@ -223,6 +233,22 @@ final class StoryComposerStore: ObservableObject {
         }
     }
 
+    func applyQuotedReply(_ quote: QuotedStoryReply?) {
+        guard quotedReply != quote else {
+            return
+        }
+
+        quotedReply = quote
+        quoteReplyPositionX = 50
+        quoteReplyPositionY = 58
+    }
+
+    func clearQuotedReply() {
+        quotedReply = nil
+        quoteReplyPositionX = 50
+        quoteReplyPositionY = 58
+    }
+
     private func normalizedUrlString(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -257,6 +283,8 @@ struct StoryComposerView: View {
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
     @FocusState private var isOverlayInputFocused: Bool
+    let quotedReply: QuotedStoryReply?
+    var clearQuotedReply: () -> Void = {}
     var onUploadRegistered: (StoryUploadResponse) -> Void = { _ in }
 
     private let maxVideoSegments = 6
@@ -286,7 +314,7 @@ struct StoryComposerView: View {
 
                     HStack(alignment: .top) {
                         Button {
-                            resetCapture()
+                            resetCapture(clearQuote: true)
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 18, weight: .bold))
@@ -386,8 +414,12 @@ struct StoryComposerView: View {
 
         }
         .task {
+            store.applyQuotedReply(quotedReply)
             await camera.requestAccessAndConfigure()
             await refreshLatestLibraryThumbnail()
+        }
+        .onChange(of: quotedReply) { _, quote in
+            store.applyQuotedReply(quote)
         }
         .onDisappear {
             camera.stop()
@@ -489,6 +521,19 @@ struct StoryComposerView: View {
                         store.linkOverlayPositionY = y
                     }
                 }
+
+                if let quotedReply = store.quotedReply {
+                    DraggableQuoteReplyOverlay(
+                        quote: quotedReply,
+                        positionX: store.quoteReplyPositionX,
+                        positionY: store.quoteReplyPositionY,
+                        size: proxy.size,
+                        clear: clearCurrentQuotedReply
+                    ) { x, y in
+                        store.quoteReplyPositionX = x
+                        store.quoteReplyPositionY = y
+                    }
+                }
             }
         }
     }
@@ -514,6 +559,11 @@ struct StoryComposerView: View {
 
         isOverlayInputFocused = false
         overlayInputMode = nil
+    }
+
+    private func clearCurrentQuotedReply() {
+        store.clearQuotedReply()
+        clearQuotedReply()
     }
 
     @ViewBuilder
@@ -735,7 +785,7 @@ struct StoryComposerView: View {
         camera.stopRecording()
     }
 
-    private func resetCapture() {
+    private func resetCapture(clearQuote: Bool = false) {
         store.selectedMedia = nil
         store.error = nil
         store.textOverlay = ""
@@ -745,6 +795,10 @@ struct StoryComposerView: View {
         store.linkLabel = ""
         store.linkOverlayPositionX = 50
         store.linkOverlayPositionY = 78
+        if clearQuote {
+            store.clearQuotedReply()
+            clearQuotedReply()
+        }
         overlayInputMode = nil
         isOverlayInputFocused = false
         camera.capturedImage = nil
@@ -840,6 +894,95 @@ private struct EditableStoryOverlayChip: View {
         }
 
         return min(max(Double(value / dimension) * 100, 8), 92)
+    }
+}
+
+private struct DraggableQuoteReplyOverlay: View {
+    let quote: QuotedStoryReply
+    let positionX: Double
+    let positionY: Double
+    let size: CGSize
+    let clear: () -> Void
+    let onPositionChanged: (Double, Double) -> Void
+
+    var body: some View {
+        QuoteReplyOverlayBubble(
+            quote: quote,
+            includesCloseButton: true,
+            clear: clear
+        )
+        .frame(width: min(size.width - 44, 300), alignment: .leading)
+        .position(
+            x: size.width * CGFloat(positionX / 100),
+            y: size.height * CGFloat(positionY / 100)
+        )
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let nextX = clampedPercent(value.location.x, dimension: size.width)
+                    let nextY = clampedPercent(value.location.y, dimension: size.height)
+                    onPositionChanged(nextX, nextY)
+                }
+        )
+    }
+
+    private func clampedPercent(_ value: CGFloat, dimension: CGFloat) -> Double {
+        guard dimension > 0 else {
+            return 50
+        }
+
+        return min(max(Double(value / dimension) * 100, 12), 88)
+    }
+}
+
+private struct QuoteReplyOverlayBubble: View {
+    let quote: QuotedStoryReply
+    var includesCloseButton = false
+    var clear: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                RemoteAvatar(url: quote.actorAvatarUrl, size: 24, name: quote.actorName)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(quote.actorName)
+                        .font(.system(size: 13, weight: .bold))
+                        .lineLimit(1)
+                    Text("@\(quote.actorHandle)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 6)
+
+                if includesCloseButton {
+                    Button(action: clear) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .frame(width: 24, height: 24)
+                            .background(.white.opacity(0.14), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove quoted reply")
+                }
+            }
+
+            Text(quote.message)
+                .font(.system(size: 18, weight: .bold))
+                .lineLimit(4)
+                .multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 7)
     }
 }
 

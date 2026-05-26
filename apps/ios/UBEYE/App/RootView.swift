@@ -37,6 +37,7 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .home
     @State private var discoverSearchFocusRequest = 0
     @State private var isShowingProfile = false
+    @State private var pendingQuotedReply: QuotedStoryReply?
 
     var body: some View {
         ZStack {
@@ -54,13 +55,22 @@ struct MainTabView: View {
             case .following:
                 FollowingView()
             case .post:
-                StoryComposerView { response in
-                    handleStoryUpload(response)
-                }
+                StoryComposerView(
+                    quotedReply: pendingQuotedReply,
+                    clearQuotedReply: {
+                        pendingQuotedReply = nil
+                    },
+                    onUploadRegistered: { response in
+                        handleStoryUpload(response)
+                    }
+                )
             case .discover:
                 DiscoverView(searchFocusRequest: discoverSearchFocusRequest)
             case .replies:
-                RepliesView()
+                RepliesView { quote in
+                    pendingQuotedReply = quote
+                    selectedTab = .post
+                }
             }
         }
         .environmentObject(storyUploadNotice)
@@ -80,6 +90,7 @@ struct MainTabView: View {
     }
 
     private func handleStoryUpload(_ response: StoryUploadResponse) {
+        pendingQuotedReply = nil
         selectedTab = .home
         if let thumbnailUrl = response.asset.thumbnailUrl {
             MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
