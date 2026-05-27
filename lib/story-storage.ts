@@ -1364,18 +1364,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
 
   if (assetKind === "image") {
     try {
-      storedBuffer = Buffer.from(await sharp(buffer)
-        .rotate()
-        .jpeg({
-          quality: 90,
-          progressive: false,
-        })
-        .toBuffer())
-      storedUploadType = {
-        assetKind: "image",
-        extension: "jpg",
-        contentType: "image/jpeg",
-      }
+      await sharp(buffer).metadata()
     } catch {
       throw new StoryUploadError(
         "Could not process that image. Choose a JPG, PNG, WEBP, or HEIC story photo.",

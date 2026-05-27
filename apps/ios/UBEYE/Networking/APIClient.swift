@@ -353,7 +353,7 @@ final class APIClient: ObservableObject {
     }
 
     func uploadImageStory(
-        image: UIImage,
+        upload: StoryImageUpload,
         caption: String,
         brandTags: String,
         textOverlay: String,
@@ -367,10 +367,6 @@ final class APIClient: ObservableObject {
         quoteReplyPositionX: Double,
         quoteReplyPositionY: Double
     ) async throws -> StoryUploadResponse {
-        guard let imageData = image.jpegData(compressionQuality: 0.88) else {
-            throw APIClientError.invalidResponse
-        }
-
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
         appendField("caption", caption, boundary: boundary, to: &body)
@@ -388,9 +384,9 @@ final class APIClient: ObservableObject {
         appendField("quoteReplyPositionY", String(format: "%.2f", quoteReplyPositionY), boundary: boundary, to: &body)
         appendFile(
             fieldName: "media",
-            fileName: "story.jpg",
-            mimeType: "image/jpeg",
-            data: imageData,
+            fileName: upload.fileName,
+            mimeType: upload.mimeType,
+            data: upload.data,
             boundary: boundary,
             to: &body
         )

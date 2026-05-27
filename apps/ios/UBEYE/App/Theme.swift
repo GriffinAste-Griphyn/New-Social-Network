@@ -680,7 +680,7 @@ final class MediaImageCache {
     static let shared = MediaImageCache()
 
     private let cache = NSCache<NSURL, UIImage>()
-    private let maxDecodedPixelDimension: CGFloat = 1_800
+    private let maxDecodedPixelDimension: CGFloat = 2_800
 
     private init() {
         cache.countLimit = 220

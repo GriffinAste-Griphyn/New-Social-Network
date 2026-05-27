@@ -6,8 +6,80 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum PickedStoryMedia {
-    case image(UIImage)
+    case image(StoryImageUpload)
     case video(URL)
+}
+
+struct StoryImageUpload: Equatable {
+    let image: UIImage
+    let data: Data
+    let fileName: String
+    let mimeType: String
+
+    init?(data: Data, fallbackFileName: String = "story-photo") {
+        guard let image = UIImage(data: data) else {
+            return nil
+        }
+
+        let format = StoryImageFormat(data: data)
+        self.image = image
+        self.data = data
+        fileName = Self.normalizedFileName(fallbackFileName, fileExtension: format.fileExtension)
+        mimeType = format.mimeType
+    }
+
+    private static func normalizedFileName(_ value: String, fileExtension: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? "story-photo" : trimmed
+
+        if base.lowercased().hasSuffix(".\(fileExtension)") {
+            return base
+        }
+
+        let stem = (base as NSString).deletingPathExtension
+        return "\(stem.isEmpty ? "story-photo" : stem).\(fileExtension)"
+    }
+
+    static func == (lhs: StoryImageUpload, rhs: StoryImageUpload) -> Bool {
+        lhs.data == rhs.data &&
+            lhs.fileName == rhs.fileName &&
+            lhs.mimeType == rhs.mimeType
+    }
+}
+
+private struct StoryImageFormat {
+    let fileExtension: String
+    let mimeType: String
+
+    init(data: Data) {
+        let bytes = [UInt8](data.prefix(16))
+
+        if bytes.starts(with: [0xff, 0xd8, 0xff]) {
+            fileExtension = "jpg"
+            mimeType = "image/jpeg"
+        } else if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+            fileExtension = "png"
+            mimeType = "image/png"
+        } else if data.count >= 12,
+                  String(data: data.prefix(4), encoding: .ascii) == "RIFF",
+                  String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
+            fileExtension = "webp"
+            mimeType = "image/webp"
+        } else if data.count >= 12,
+                  String(data: data.dropFirst(4).prefix(4), encoding: .ascii) == "ftyp" {
+            let brand = String(data: data.dropFirst(8).prefix(4), encoding: .ascii) ?? ""
+            if ["avif", "avis"].contains(brand) {
+                fileExtension = "avif"
+                mimeType = "image/avif"
+            } else {
+                fileExtension = "heic"
+                mimeType = "image/heic"
+            }
+        } else {
+            fileExtension = "jpg"
+            mimeType = "image/jpeg"
+        }
+    }
 }
 
 private enum ComposerOverlayInputMode: Identifiable {
@@ -58,10 +130,10 @@ final class StoryComposerStore: ObservableObject {
 
         do {
             switch selectedMedia {
-            case .image(let image):
+            case .image(let upload):
                 uploadStatus = "Uploading image"
                 uploadResponse = try await api.uploadImageStory(
-                    image: image,
+                    upload: upload,
                     caption: caption,
                     brandTags: brandTags,
                     textOverlay: textOverlay,
@@ -429,9 +501,9 @@ struct StoryComposerView: View {
                 await loadPickedItem(item)
             }
         }
-        .onChange(of: camera.capturedImage) { _, image in
-            if let image {
-                store.selectedMedia = .image(image)
+        .onChange(of: camera.capturedPhoto) { _, photo in
+            if let photo {
+                store.selectedMedia = .image(photo)
             }
         }
         .onChange(of: camera.capturedVideoURL) { _, url in
@@ -587,8 +659,8 @@ struct StoryComposerView: View {
 
                 Button {
                     camera.capturePhoto()
-                    if let image = camera.capturedImage {
-                        store.selectedMedia = .image(image)
+                    if let photo = camera.capturedPhoto {
+                        store.selectedMedia = .image(photo)
                     }
                 } label: {
                     Circle()
@@ -612,7 +684,7 @@ struct StoryComposerView: View {
 
                 Button {
                     store.selectedMedia = nil
-                    camera.capturedImage = nil
+                    camera.capturedPhoto = nil
                     camera.capturedVideoURL = nil
                 } label: {
                     Image(systemName: "arrow.counterclockwise")
@@ -630,19 +702,19 @@ struct StoryComposerView: View {
     @ViewBuilder
     private var mediaPreview: some View {
         switch store.selectedMedia {
-        case .image(let image):
-            Image(uiImage: image)
+        case .image(let upload):
+            Image(uiImage: upload.image)
                 .resizable()
                 .scaledToFill()
         case .video(let url):
             StoryVideoPreview(url: url)
         case nil:
-            if let image = camera.capturedImage {
-                Image(uiImage: image)
+            if let photo = camera.capturedPhoto {
+                Image(uiImage: photo.image)
                     .resizable()
                     .scaledToFill()
                     .onAppear {
-                        store.selectedMedia = .image(image)
+                        store.selectedMedia = .image(photo)
                     }
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(url: videoURL)
@@ -691,9 +763,8 @@ struct StoryComposerView: View {
             return
         }
 
-        if let data = try? await item.loadTransferable(type: Data.self),
-           let image = UIImage(data: data) {
-            store.selectedMedia = .image(image)
+        if let pickedImage = try? await item.loadTransferable(type: PickedImage.self) {
+            store.selectedMedia = .image(pickedImage.upload)
         }
     }
 
@@ -801,7 +872,7 @@ struct StoryComposerView: View {
         }
         overlayInputMode = nil
         isOverlayInputFocused = false
-        camera.capturedImage = nil
+        camera.capturedPhoto = nil
         camera.capturedVideoURL = nil
     }
 
@@ -1001,6 +1072,29 @@ private struct PickedVideo: Transferable {
             }
             try FileManager.default.copyItem(at: received.file, to: copy)
             return PickedVideo(url: copy)
+        }
+    }
+}
+
+private struct PickedImage: Transferable {
+    let upload: StoryImageUpload
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .image) { image in
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent("picked-\(UUID().uuidString).\(image.upload.fileName)")
+            try image.upload.data.write(to: copy, options: .atomic)
+            return SentTransferredFile(copy)
+        } importing: { received in
+            let data = try Data(contentsOf: received.file)
+            guard let upload = StoryImageUpload(
+                data: data,
+                fallbackFileName: received.file.lastPathComponent
+            ) else {
+                throw APIClientError.invalidResponse
+            }
+
+            return PickedImage(upload: upload)
         }
     }
 }

@@ -7,7 +7,7 @@ final class CameraController: NSObject, ObservableObject {
     @Published var session = AVCaptureSession()
     @Published var authorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
     @Published var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-    @Published var capturedImage: UIImage?
+    @Published var capturedPhoto: StoryImageUpload?
     @Published var capturedVideoURL: URL?
     @Published var isRecording = false
     @Published var cameraPosition: AVCaptureDevice.Position = .back
@@ -65,8 +65,8 @@ final class CameraController: NSObject, ObservableObject {
         let delegate = PhotoCaptureDelegate { [weak self] result in
             Task { @MainActor in
                 switch result {
-                case .success(let image):
-                    self?.capturedImage = image
+                case .success(let photo):
+                    self?.capturedPhoto = photo
                 case .failure(let error):
                     self?.error = error.localizedDescription
                 }
@@ -82,7 +82,7 @@ final class CameraController: NSObject, ObservableObject {
             return
         }
 
-        capturedImage = nil
+        capturedPhoto = nil
         capturedVideoURL = nil
         AppAudioSession.configureForVideoRecording()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mov")
@@ -191,9 +191,9 @@ final class CameraController: NSObject, ObservableObject {
 }
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let completion: (Result<UIImage, Error>) -> Void
+    private let completion: (Result<StoryImageUpload, Error>) -> Void
 
-    init(completion: @escaping (Result<UIImage, Error>) -> Void) {
+    init(completion: @escaping (Result<StoryImageUpload, Error>) -> Void) {
         self.completion = completion
     }
 
@@ -203,12 +203,13 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             return
         }
 
-        guard let data = photo.fileDataRepresentation(), let image = UIImage(data: data) else {
+        guard let data = photo.fileDataRepresentation(),
+              let upload = StoryImageUpload(data: data, fallbackFileName: "story-photo") else {
             completion(.failure(APIClientError.invalidResponse))
             return
         }
 
-        completion(.success(image))
+        completion(.success(upload))
     }
 }
 
