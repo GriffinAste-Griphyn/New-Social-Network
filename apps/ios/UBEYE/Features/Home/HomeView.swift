@@ -7,10 +7,12 @@ final class FeedStore: ObservableObject {
     @Published var isLoading = false
     @Published var error: String?
     private var storyStackPrefetchTask: Task<Void, Never>?
+    private var lastNetworkLoadAt: Date?
+    private let foregroundRefreshCooldown: TimeInterval = 45
 
     func load(api: APIClient, showsLoading: Bool = true, useDiskCache: Bool = true) async {
         let restoreStartedAt = Date()
-        if showsLoading {
+        if showsLoading, feed == nil {
             isLoading = true
         }
         error = nil
@@ -26,6 +28,7 @@ final class FeedStore: ObservableObject {
         let networkStartedAt = Date()
         do {
             let response = try await api.mobileFeed()
+            lastNetworkLoadAt = Date()
             feed = response
             MediaPerformance.measure("feed_load", since: networkStartedAt)
             MediaPreheater.preheat(feed: response)
@@ -51,6 +54,31 @@ final class FeedStore: ObservableObject {
         }
     }
 
+    func refreshIfStale(api: APIClient) async {
+        guard shouldRefreshAfterForeground else {
+            if let feed {
+                restoreInitialStoryStacks(ids: storyStackPrefetchIds(from: feed), api: api, refresh: false)
+            }
+            return
+        }
+
+        await load(api: api, showsLoading: false, useDiskCache: false)
+    }
+
+    func warmStoryOpen(storyId: String, in feed: MobileFeedResponse, api: APIClient) {
+        let ids = storyStackPrefetchIds(from: feed)
+        let adjacentIds = adjacentStoryIds(to: storyId, in: ids)
+        api.warmStoryOpening(storyId: storyId, adjacentIds: adjacentIds)
+    }
+
+    private var shouldRefreshAfterForeground: Bool {
+        guard let lastNetworkLoadAt else {
+            return true
+        }
+
+        return Date().timeIntervalSince(lastNetworkLoadAt) >= foregroundRefreshCooldown
+    }
+
     private func storyStackPrefetchIds(from feed: MobileFeedResponse) -> [String] {
         var ids: [String] = []
 
@@ -58,22 +86,22 @@ final class FeedStore: ObservableObject {
             ids.append("my-story")
         }
 
-        ids.append(contentsOf: feed.verticalFollowingStories.prefix(4).map(\.id))
-        ids.append(contentsOf: feed.discoverTiles.prefix(4).map { $0.activeStoryId ?? $0.id })
+        ids.append(contentsOf: feed.verticalFollowingStories.prefix(8).map(\.id))
+        ids.append(contentsOf: feed.discoverTiles.prefix(8).map { $0.activeStoryId ?? $0.id })
 
         return ids
     }
 
     private func restoreInitialStoryStacks(ids: [String], api: APIClient, refresh: Bool) {
-        let initialIds = Array(ids.prefix(2))
+        let initialIds = Array(ids.prefix(4))
         guard !initialIds.isEmpty else {
             return
         }
 
         Task { @MainActor [api] in
-            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: initialIds, limit: 2)
+            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: initialIds, limit: 4)
             MediaPerformance.mark("media_cache_summary feed=visible restored_story_stacks=\(restoredStoryCount)")
-            api.prefetchStoryStacks(ids: initialIds, refresh: refresh, limit: 2)
+            api.prefetchStoryStacks(ids: initialIds, refresh: refresh, limit: 4)
         }
     }
 
@@ -88,6 +116,16 @@ final class FeedStore: ObservableObject {
             api.prefetchStoryStacks(ids: ids, refresh: refresh)
             self?.storyStackPrefetchTask = nil
         }
+    }
+
+    private func adjacentStoryIds(to storyId: String, in ids: [String]) -> [String] {
+        guard let index = ids.firstIndex(of: storyId) else {
+            return Array(ids.prefix(3).filter { $0 != storyId })
+        }
+
+        let lowerBound = max(ids.startIndex, index - 2)
+        let upperBound = min(ids.index(before: ids.endIndex), index + 2)
+        return ids[lowerBound...upperBound].filter { $0 != storyId }
     }
 
     func removeDeletedStory(_ storyId: String) {
@@ -205,7 +243,7 @@ struct HomeView: View {
                 }
 
                 Task {
-                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    await store.refreshIfStale(api: api)
                 }
             }
             .fullScreenCover(item: $selectedStory) { route in
@@ -320,6 +358,7 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     MyStoryHomeCard(myStory: feed.myStory) {
                         if feed.myStory.hasActiveStory {
+                            store.warmStoryOpen(storyId: "my-story", in: feed, api: api)
                             selectedStory = StoryRoute(id: "my-story", source: .ownStory)
                         }
                     }
@@ -330,6 +369,7 @@ struct HomeView: View {
                                 api.prefetchStoryStacks(ids: [story.id], limit: 1)
                             }
                             .onTapGesture {
+                                store.warmStoryOpen(storyId: story.id, in: feed, api: api)
                                 selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                             }
                     }
@@ -373,7 +413,11 @@ struct HomeView: View {
     }
 
     private func openDiscoverTile(_ tile: DiscoverTile) {
-        selectedStory = StoryRoute(id: tile.activeStoryId ?? tile.id, source: .discover)
+        let storyId = tile.activeStoryId ?? tile.id
+        if let feed = store.feed {
+            store.warmStoryOpen(storyId: storyId, in: feed, api: api)
+        }
+        selectedStory = StoryRoute(id: storyId, source: .discover)
     }
 
     private func followDiscoverCreator(_ creator: DiscoverCreator) async -> Bool {

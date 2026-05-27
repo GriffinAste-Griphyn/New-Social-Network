@@ -37,6 +37,13 @@ struct BasicOkResponse: Codable {
     let ok: Bool
 }
 
+struct MobilePerformanceEventUpload: Codable {
+    let name: String
+    let durationMs: Int?
+    let metadata: [String: String]
+    let clientCreatedAt: String
+}
+
 enum NotificationPreferenceType: String, Codable, CaseIterable, Identifiable {
     case creatorStories = "creator_stories"
     case replies

@@ -359,11 +359,27 @@ struct StoryStackViewer: View {
                         .scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } placeholder: {
-                    ProgressView().tint(.white)
+                    storyImagePlaceholder(item)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func storyImagePlaceholder(_ item: StoryStackItem) -> some View {
+        if let thumbnailUrl = item.thumbnailUrl {
+            CachedAsyncImage(url: thumbnailUrl) { image in
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } placeholder: {
+                Color.black
+            }
+        } else {
+            ProgressView().tint(.white)
+        }
     }
 
     private func storyChrome(stack: StoryStack, item: StoryStackItem) -> some View {

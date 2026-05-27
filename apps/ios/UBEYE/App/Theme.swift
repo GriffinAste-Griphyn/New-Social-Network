@@ -215,14 +215,183 @@ struct TopAvatarSpacer: View {
 
 enum MediaPerformance {
     private static let logger = Logger(subsystem: "com.griffinaste.ubeye", category: "media")
+    private static let uploadableEventNames: Set<String> = [
+        "api_request",
+        "api_server_timing",
+        "feed_disk_cache_clear",
+        "feed_disk_cache_hit",
+        "feed_disk_cache_miss",
+        "feed_disk_cache_restore",
+        "feed_disk_cache_write",
+        "feed_disk_restore",
+        "feed_load",
+        "feed_media_preheat",
+        "feed_refresh_failed",
+        "media_cache_summary",
+        "media_file_cache_failed",
+        "media_file_cache_hit",
+        "media_file_cache_skip",
+        "media_file_cache_write",
+        "story_open",
+        "story_open_warm",
+        "story_stack_cache_clear",
+        "story_stack_cache_hit",
+        "story_stack_cache_miss",
+        "story_stack_disk_cache_hit",
+        "story_stack_disk_cache_miss",
+        "story_stack_disk_cache_write",
+        "story_stack_disk_restore",
+        "story_stack_display_cache_hit",
+        "story_stack_fetch_join",
+        "story_stack_network",
+        "story_stack_prefetch_end",
+        "story_stack_prefetch_start",
+        "video_disk_cache_hit",
+        "video_first_frame",
+        "video_item_ready",
+        "video_stalled",
+    ]
+
+    static func configureUpload(
+        _ send: @escaping ([MobilePerformanceEventUpload]) async throws -> Void
+    ) {
+        Task { @MainActor in
+            MobilePerformanceReporter.shared.configure(send: send)
+        }
+    }
 
     static func mark(_ event: String) {
         logger.info("\(event, privacy: .public)")
+        enqueue(event, durationMs: nil)
     }
 
     static func measure(_ event: String, since start: Date) {
         let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
         logger.info("\(event, privacy: .public) \(elapsedMs)ms")
+        enqueue(event, durationMs: elapsedMs)
+    }
+
+    private static func enqueue(_ event: String, durationMs: Int?) {
+        guard let parsed = parse(event), uploadableEventNames.contains(parsed.name) else {
+            return
+        }
+
+        Task { @MainActor in
+            MobilePerformanceReporter.shared.record(
+                name: parsed.name,
+                durationMs: durationMs,
+                metadata: parsed.metadata
+            )
+        }
+    }
+
+    private static func parse(_ event: String) -> (name: String, metadata: [String: String])? {
+        let parts = event.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let rawName = parts.first else {
+            return nil
+        }
+
+        let name = String(rawName)
+        let metadataText = parts.count > 1 ? String(parts[1]) : ""
+        var metadata: [String: String] = [:]
+
+        for token in metadataText.split(separator: " ") {
+            let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pair.count == 2 else {
+                continue
+            }
+
+            let key = String(pair[0]).prefix(40)
+            let value = String(pair[1]).prefix(500)
+            metadata[String(key)] = String(value)
+
+            if metadata.count >= 20 {
+                break
+            }
+        }
+
+        return (name, metadata)
+    }
+}
+
+@MainActor
+final class MobilePerformanceReporter {
+    static let shared = MobilePerformanceReporter()
+
+    private var send: (([MobilePerformanceEventUpload]) async throws -> Void)?
+    private var buffer: [MobilePerformanceEventUpload] = []
+    private var flushTask: Task<Void, Never>?
+    private var isFlushing = false
+    private let batchSize = 25
+    private let maxBufferSize = 200
+    private let flushDelay: Duration = .seconds(20)
+    private let dateFormatter = ISO8601DateFormatter()
+
+    private init() {
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    }
+
+    func configure(send: @escaping ([MobilePerformanceEventUpload]) async throws -> Void) {
+        self.send = send
+        scheduleFlush(immediate: true)
+    }
+
+    func record(name: String, durationMs: Int?, metadata: [String: String]) {
+        buffer.append(
+            MobilePerformanceEventUpload(
+                name: name,
+                durationMs: durationMs,
+                metadata: metadata,
+                clientCreatedAt: dateFormatter.string(from: Date())
+            )
+        )
+
+        if buffer.count > maxBufferSize {
+            buffer.removeFirst(buffer.count - maxBufferSize)
+        }
+
+        scheduleFlush(immediate: buffer.count >= batchSize)
+    }
+
+    private func scheduleFlush(immediate: Bool) {
+        guard send != nil else {
+            return
+        }
+
+        flushTask?.cancel()
+        flushTask = Task { @MainActor [weak self] in
+            if !immediate {
+                try? await Task.sleep(for: self?.flushDelay ?? .seconds(20))
+            }
+            await self?.flush()
+        }
+    }
+
+    private func flush() async {
+        guard !isFlushing, let send, !buffer.isEmpty else {
+            return
+        }
+
+        isFlushing = true
+        defer {
+            isFlushing = false
+        }
+
+        let batch = Array(buffer.prefix(batchSize))
+        buffer.removeFirst(batch.count)
+
+        do {
+            try await send(batch)
+            if !buffer.isEmpty {
+                scheduleFlush(immediate: buffer.count >= batchSize)
+            }
+        } catch {
+            buffer.insert(contentsOf: batch, at: 0)
+            if buffer.count > maxBufferSize {
+                buffer.removeLast(buffer.count - maxBufferSize)
+            }
+            scheduleFlush(immediate: false)
+        }
     }
 }
 
@@ -302,15 +471,15 @@ final class NetworkQualityMonitor {
     private(set) var isCellular = false
 
     var imagePreheatLimit: Int {
-        isConstrained || isCellular ? 10 : 24
+        isConstrained || isCellular ? 12 : 32
     }
 
     var stackPreheatLimit: Int {
-        isConstrained || isCellular ? 3 : 6
+        isConstrained || isCellular ? 4 : 10
     }
 
     var videoPreheatLimit: Int {
-        isConstrained || isCellular ? 1 : 2
+        isConstrained || isCellular ? 1 : 3
     }
 
     private init() {
@@ -780,12 +949,19 @@ enum MediaPreheater {
         }
 
         let nearbyItems = Array(stack.items[lowerBound...upperBound])
-        let imageUrls = nearbyItems.map { item in
-            item.thumbnailUrl ?? (item.assetKind == .image ? item.mediaUrl : nil)
+        let imageUrls = nearbyItems.flatMap { item -> [URL] in
+            var urls: [URL] = []
+            if let thumbnailUrl = item.thumbnailUrl {
+                urls.append(thumbnailUrl)
+            }
+            if item.assetKind == .image {
+                urls.append(item.mediaUrl)
+            }
+            return urls
         }
         MediaImageCache.shared.preheat(
-            imageUrls.compactMap { $0 },
-            limit: min(8, NetworkQualityMonitor.shared.imagePreheatLimit)
+            imageUrls,
+            limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
         let videoUrls = [stack.items[safe: index], stack.items[safe: index + 1]]

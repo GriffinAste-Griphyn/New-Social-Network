@@ -72,6 +72,13 @@ final class APIClient: ObservableObject {
         baseURLString = Self.usableBaseURL(from: storedBaseURL)
         decoder = JSONDecoder()
         encoder = JSONEncoder()
+        MediaPerformance.configureUpload { [weak self] events in
+            guard let self else {
+                return
+            }
+
+            try await self.uploadPerformanceEvents(events)
+        }
     }
 
     var baseURL: URL? {
@@ -174,6 +181,27 @@ final class APIClient: ObservableObject {
         storyStackCache[storyId] = diskCached
         MediaPreheater.preheat(stack: diskCached.story)
         return diskCached
+    }
+
+    func warmStoryOpening(storyId: String, adjacentIds: [String] = []) {
+        var seen = Set<String>()
+        let ids = ([storyId] + adjacentIds)
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+
+        guard !ids.isEmpty else {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            let restoredCount = await self.restoreCachedStoryStacks(ids: ids, limit: 4)
+            MediaPerformance.mark("story_open_warm id=\(storyId) restored=\(restoredCount) candidates=\(ids.count)")
+            self.prefetchStoryStacks(ids: ids, refresh: false, limit: 4)
+        }
     }
 
     func prefetchStoryStacks(ids: [String], refresh: Bool = false, limit: Int = 6) {
@@ -434,6 +462,24 @@ final class APIClient: ObservableObject {
         let _: StoryImpressionResponse = try await post(
             "/api/mobile/stories/\(storyId)/impressions",
             body: Payload(viewedMs: viewedMs, completed: completed)
+        )
+    }
+
+    func uploadPerformanceEvents(_ events: [MobilePerformanceEventUpload]) async throws {
+        struct Payload: Encodable {
+            let events: [MobilePerformanceEventUpload]
+        }
+
+        guard !events.isEmpty else {
+            return
+        }
+        guard authToken != nil else {
+            throw APIClientError.missingAuth
+        }
+
+        let _: BasicOkResponse = try await post(
+            "/api/mobile/performance-events",
+            body: Payload(events: events)
         )
     }
 
@@ -952,9 +998,17 @@ final class APIClient: ObservableObject {
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let startedAt = Date()
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APIClientError.invalidResponse
+        }
+        let requestPath = request.url?.path ?? "unknown"
+        if requestPath != "/api/mobile/performance-events" {
+            MediaPerformance.measure("api_request path=\(requestPath) status=\(http.statusCode)", since: startedAt)
+            if let serverTiming = http.value(forHTTPHeaderField: "Server-Timing"), !serverTiming.isEmpty {
+                MediaPerformance.mark("api_server_timing path=\(requestPath) \(serverTiming)")
+            }
         }
 
         if !(200..<300).contains(http.statusCode) {
