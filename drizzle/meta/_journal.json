@@ -218,6 +218,13 @@
       "when": 1779822400000,
       "tag": "0030_user_notification_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1779823600000,
+      "tag": "0031_mobile_performance_events",
+      "breakpoints": true
     }
   ]
 }

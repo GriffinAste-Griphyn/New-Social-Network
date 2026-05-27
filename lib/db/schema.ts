@@ -64,6 +64,45 @@ export const userNotificationPreferenceType = pgEnum(
   "user_notification_preference_type",
   ["creator_stories", "replies", "follows"],
 )
+export const mobilePerformanceEventName = pgEnum(
+  "mobile_performance_event_name",
+  [
+    "api_request",
+    "api_server_timing",
+    "feed_disk_cache_clear",
+    "feed_disk_cache_hit",
+    "feed_disk_cache_miss",
+    "feed_disk_cache_restore",
+    "feed_disk_cache_write",
+    "feed_disk_restore",
+    "feed_load",
+    "feed_media_preheat",
+    "feed_refresh_failed",
+    "media_cache_summary",
+    "media_file_cache_failed",
+    "media_file_cache_hit",
+    "media_file_cache_skip",
+    "media_file_cache_write",
+    "story_open",
+    "story_open_warm",
+    "story_stack_cache_clear",
+    "story_stack_cache_hit",
+    "story_stack_cache_miss",
+    "story_stack_disk_cache_hit",
+    "story_stack_disk_cache_miss",
+    "story_stack_disk_cache_write",
+    "story_stack_disk_restore",
+    "story_stack_display_cache_hit",
+    "story_stack_fetch_join",
+    "story_stack_network",
+    "story_stack_prefetch_end",
+    "story_stack_prefetch_start",
+    "video_disk_cache_hit",
+    "video_first_frame",
+    "video_item_ready",
+    "video_stalled",
+  ],
+)
 export const safetyReportTargetKind = pgEnum("safety_report_target_kind", [
   "story",
   "user",
@@ -794,6 +833,33 @@ export const storyInteractions = pgTable(
     index("story_interactions_kind_idx").on(table.kind, table.createdAt),
     index("story_interactions_moderation_idx").on(
       table.moderationStatus,
+      table.createdAt,
+    ),
+  ],
+)
+
+export const mobilePerformanceEvents = pgTable(
+  "mobile_performance_events",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    name: mobilePerformanceEventName("name").notNull(),
+    durationMs: integer("duration_ms"),
+    metadata: jsonb("metadata").notNull().default({}),
+    clientCreatedAt: timestamp("client_created_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("mobile_performance_events_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    index("mobile_performance_events_name_created_idx").on(
+      table.name,
       table.createdAt,
     ),
   ],
