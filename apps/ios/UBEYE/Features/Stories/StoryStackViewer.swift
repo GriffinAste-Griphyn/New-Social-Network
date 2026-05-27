@@ -1497,6 +1497,7 @@ struct AutoPlayVideoPlayer: View {
     @State private var isReadyForPlayback = false
     @State private var stallObserver: NSObjectProtocol?
     @State private var playTask: Task<Void, Never>?
+    @State private var revealTask: Task<Void, Never>?
     @State private var playbackStartedAt: Date?
 
     init(url: URL, thumbnailUrl: URL? = nil) {
@@ -1507,15 +1508,7 @@ struct AutoPlayVideoPlayer: View {
     var body: some View {
         ZStack {
             AspectFitVideoPlayer(player: player) {
-                guard !isReadyForPlayback else {
-                    return
-                }
-
-                isReadyForPlayback = true
-                MediaPerformance.measure(
-                    "video_first_frame url=\(url.lastPathComponent)",
-                    since: playbackStartedAt ?? Date()
-                )
+                revealVideo(reason: "layer_ready", since: playbackStartedAt ?? Date())
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -1540,6 +1533,8 @@ struct AutoPlayVideoPlayer: View {
         .onDisappear {
             playTask?.cancel()
             playTask = nil
+            revealTask?.cancel()
+            revealTask = nil
             if let stallObserver {
                 NotificationCenter.default.removeObserver(stallObserver)
                 self.stallObserver = nil
@@ -1553,6 +1548,8 @@ struct AutoPlayVideoPlayer: View {
 
     private func play(_ url: URL) {
         playTask?.cancel()
+        revealTask?.cancel()
+        revealTask = nil
         isReadyForPlayback = false
         playTask = Task { @MainActor in
             let startedAt = Date()
@@ -1592,20 +1589,51 @@ struct AutoPlayVideoPlayer: View {
     }
 
     private func observeReadiness(player: AVPlayer, url: URL, startedAt: Date) {
-        Task { @MainActor in
-            for _ in 0..<80 {
+        revealTask?.cancel()
+        revealTask = Task { @MainActor in
+            var didLogItemReady = false
+
+            for attempt in 0..<100 {
                 guard self.player === player else {
                     return
                 }
 
                 if player.currentItem?.status == .readyToPlay {
-                    MediaPerformance.measure("video_item_ready url=\(url.lastPathComponent)", since: startedAt)
+                    if !didLogItemReady {
+                        didLogItemReady = true
+                        MediaPerformance.measure("video_item_ready url=\(url.lastPathComponent)", since: startedAt)
+                    }
+
+                    let hasVideoSize = player.currentItem?.presentationSize != .zero
+                    let hasPlaybackStarted =
+                        player.timeControlStatus == .playing ||
+                        player.currentTime().seconds > 0.05
+
+                    if hasVideoSize || hasPlaybackStarted || attempt > 6 {
+                        revealVideo(reason: "item_ready", since: startedAt)
+                        return
+                    }
+                } else if player.timeControlStatus == .playing,
+                          player.currentTime().seconds > 0.05 {
+                    revealVideo(reason: "playback_started", since: startedAt)
                     return
                 }
 
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }
+    }
+
+    private func revealVideo(reason: String, since startedAt: Date) {
+        guard !isReadyForPlayback else {
+            return
+        }
+
+        isReadyForPlayback = true
+        MediaPerformance.measure(
+            "video_first_frame reason=\(reason) url=\(url.lastPathComponent)",
+            since: startedAt
+        )
     }
 
     private func observeStalls(player: AVPlayer, url: URL) {
