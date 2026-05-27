@@ -211,7 +211,9 @@ final class APIClient: ObservableObject {
                     self.storyStackFetches[id] = nil
                 }
 
-                return try await self.fetchStoryStackFromNetwork(storyId: id)
+                let response = try await self.fetchStoryStackFromNetwork(storyId: id)
+                MediaPreheater.preheat(stack: response.story)
+                return response
             }
         }
     }
@@ -294,6 +296,30 @@ final class APIClient: ObservableObject {
                 apnsDeviceToken: token,
                 apnsEnvironment: environment,
                 platform: "ios"
+            )
+        )
+    }
+
+    func notificationPreferences() async throws -> NotificationPreferencesResponse {
+        try await get("/api/mobile/notification-preferences")
+    }
+
+    func updateNotificationPreferences(_ preferences: [NotificationPreference]) async throws -> NotificationPreferencesResponse {
+        struct PreferenceUpdate: Encodable {
+            let type: NotificationPreferenceType
+            let enabled: Bool
+        }
+
+        struct Body: Encodable {
+            let preferences: [PreferenceUpdate]
+        }
+
+        return try await post(
+            "/api/mobile/notification-preferences",
+            body: Body(
+                preferences: preferences.map { preference in
+                    PreferenceUpdate(type: preference.type, enabled: preference.enabled)
+                }
             )
         )
     }
@@ -570,27 +596,68 @@ final class APIClient: ObservableObject {
         }
 
         let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-        let videoData = try Data(contentsOf: fileURL)
-        appendFile(
+        let bodyFileURL = try makeMultipartFile(
             fieldName: "file",
             fileName: fileURL.lastPathComponent.isEmpty ? "story-video.mp4" : fileURL.lastPathComponent,
             mimeType: videoMimeType(for: fileURL),
-            data: videoData,
-            boundary: boundary,
-            to: &body
+            fileURL: fileURL,
+            closingBoundary: true,
+            boundary: boundary
         )
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        defer {
+            try? FileManager.default.removeItem(at: bodyFileURL)
+        }
 
         var request = URLRequest(url: upload.uploadUrl)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
 
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await session.upload(for: request, fromFile: bodyFileURL)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             throw APIClientError.server("Video upload failed.", (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
+    }
+
+    private func makeMultipartFile(
+        fieldName: String,
+        fileName: String,
+        mimeType: String,
+        fileURL: URL,
+        closingBoundary: Bool,
+        boundary: String
+    ) throws -> URL {
+        let bodyFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ubeye-multipart-\(UUID().uuidString).body")
+        _ = FileManager.default.createFile(atPath: bodyFileURL.path, contents: nil)
+
+        let output = try FileHandle(forWritingTo: bodyFileURL)
+        defer {
+            try? output.close()
+        }
+
+        try output.write(contentsOf: "--\(boundary)\r\n".data(using: .utf8)!)
+        try output.write(contentsOf: "Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        try output.write(contentsOf: "Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? input.close()
+        }
+
+        while true {
+            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            try output.write(contentsOf: chunk)
+        }
+
+        try output.write(contentsOf: "\r\n".data(using: .utf8)!)
+        if closingBoundary {
+            try output.write(contentsOf: "--\(boundary)--\r\n".data(using: .utf8)!)
+        }
+
+        return bodyFileURL
     }
 
     func completeOriginalQualityVideoStory(
@@ -752,8 +819,21 @@ final class APIClient: ObservableObject {
     }
 
     private func fileSHA256Hex(_ fileURL: URL) throws -> String {
-        let data = try Data(contentsOf: fileURL)
-        return dataSHA256Hex(data)
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? input.close()
+        }
+
+        var hasher = SHA256()
+        while true {
+            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            hasher.update(data: chunk)
+        }
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private func dataSHA256Hex(_ data: Data) -> String {

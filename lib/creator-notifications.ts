@@ -15,6 +15,7 @@ import {
   isBlockedBetween,
 } from "@/lib/social-safety"
 import { env } from "@/lib/env"
+import { getUsersEnabledForNotificationType } from "@/lib/user-notification-preferences"
 
 const expoPushEndpoint = "https://exp.host/--/api/v2/push/send"
 const expoPushTokenPattern = /^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/
@@ -351,7 +352,16 @@ export async function notifyCreatorStoryPosted(input: {
     (subscriberId) => !blockedPeerIds.has(subscriberId),
   )
 
-  if (eligibleSubscriberIds.length === 0) {
+  const storyNotificationEnabledUserIds =
+    await getUsersEnabledForNotificationType({
+      userIds: eligibleSubscriberIds,
+      type: "creator_stories",
+    })
+  const notificationEnabledSubscriberIds = eligibleSubscriberIds.filter(
+    (subscriberId) => storyNotificationEnabledUserIds.has(subscriberId),
+  )
+
+  if (notificationEnabledSubscriberIds.length === 0) {
     return
   }
 
@@ -365,7 +375,7 @@ export async function notifyCreatorStoryPosted(input: {
     .from(mobilePushTokens)
     .where(
       and(
-        inArray(mobilePushTokens.userId, eligibleSubscriberIds),
+        inArray(mobilePushTokens.userId, notificationEnabledSubscriberIds),
         eq(mobilePushTokens.enabled, true),
       ),
     )

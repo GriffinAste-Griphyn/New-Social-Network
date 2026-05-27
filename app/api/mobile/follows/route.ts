@@ -5,6 +5,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, users } from "@/lib/db/schema"
+import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
 import {
   followUser,
   listFollowingProfiles,
@@ -117,6 +118,7 @@ export async function POST(request: Request) {
       followerId: session.id,
       followeeId,
     })
+    await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
 
     return NextResponse.json({ ok: true })
   } catch (error) {
@@ -170,6 +172,7 @@ export async function DELETE(request: Request) {
     followerId: session.id,
     followeeId,
   })
+  await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
 
   return NextResponse.json({ ok: true })
 }

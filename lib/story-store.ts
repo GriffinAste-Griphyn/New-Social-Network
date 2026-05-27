@@ -34,6 +34,11 @@ import {
   storyMentions,
   users,
 } from "@/lib/db/schema"
+import {
+  invalidateMobileFeedSnapshotsForCreator,
+  readFreshMobileFeedSnapshot,
+  writeMobileFeedSnapshot,
+} from "@/lib/feed-snapshot-store"
 import { listFollowingProfiles } from "@/lib/follow-store"
 import { formatStoryPostedAt } from "@/lib/story-time"
 import {
@@ -239,6 +244,7 @@ export type MobileCreatorProfile = {
 
 type FeedDataOptions = {
   refreshProcessing?: boolean
+  useSnapshot?: boolean
 }
 
 type CreateStoryInput = {
@@ -964,6 +970,29 @@ export async function getFeedData(
   viewerId: string,
   options: FeedDataOptions = {},
 ): Promise<FeedData> {
+  if (options.useSnapshot !== false && !options.refreshProcessing) {
+    const snapshot = await readFreshMobileFeedSnapshot(viewerId).catch(
+      () => null,
+    )
+
+    if (snapshot) {
+      return snapshot
+    }
+  }
+
+  const feed = await buildLiveFeedData(viewerId, options)
+
+  if (options.useSnapshot !== false && !options.refreshProcessing) {
+    await writeMobileFeedSnapshot(viewerId, feed).catch(() => undefined)
+  }
+
+  return feed
+}
+
+async function buildLiveFeedData(
+  viewerId: string,
+  options: FeedDataOptions = {},
+): Promise<FeedData> {
   if (options.refreshProcessing) {
     await refreshProcessingCloudflareStories({ limit: 12 })
   }
@@ -1427,6 +1456,10 @@ export async function createStory(input: CreateStoryInput) {
     }).catch(() => undefined)
   }
 
+  await invalidateMobileFeedSnapshotsForCreator(input.session.id).catch(
+    () => undefined,
+  )
+
   return storyId
 }
 
@@ -1548,6 +1581,10 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
   if (isApproved) {
     await processStoryCreatorEarnings(input.storyId)
   }
+
+  await invalidateMobileFeedSnapshotsForCreator(input.ownerId).catch(
+    () => undefined,
+  )
 }
 
 export async function removeStoryForOwner(storyId: string, ownerId: string) {
@@ -1573,6 +1610,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
       status: "removed",
     })
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
+
+  await invalidateMobileFeedSnapshotsForCreator(ownerId).catch(() => undefined)
 
   return story.mediaUrl
 }

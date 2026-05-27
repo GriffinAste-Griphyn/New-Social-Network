@@ -188,6 +188,25 @@ export function verifyStoryMediaAccessToken(pathname: string, token: string | nu
   )
 }
 
+export function getStoryMediaAccessTokenMaxAgeSeconds(
+  pathname: string,
+  token: string | null,
+) {
+  if (!verifyStoryMediaAccessToken(pathname, token)) {
+    return 0
+  }
+
+  const expiresAtMs = Number(token?.split(".")[0])
+
+  if (!Number.isFinite(expiresAtMs)) {
+    return 0
+  }
+
+  const secondsRemaining = Math.floor((expiresAtMs - Date.now()) / 1000)
+
+  return Math.max(0, Math.min(secondsRemaining, 30 * 60))
+}
+
 export function publicStoryMediaUrl(
   value: string | null,
   request?: Request,

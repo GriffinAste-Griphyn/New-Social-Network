@@ -37,6 +37,59 @@ struct BasicOkResponse: Codable {
     let ok: Bool
 }
 
+enum NotificationPreferenceType: String, Codable, CaseIterable, Identifiable {
+    case creatorStories = "creator_stories"
+    case replies
+    case follows
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .creatorStories:
+            "Story posts"
+        case .replies:
+            "Replies"
+        case .follows:
+            "New followers"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .creatorStories:
+            "When creators you follow post a story"
+        case .replies:
+            "When someone replies to your stories"
+        case .follows:
+            "When someone follows your profile"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .creatorStories:
+            "play.rectangle.on.rectangle"
+        case .replies:
+            "bubble.left.and.bubble.right"
+        case .follows:
+            "person.crop.circle.badge.plus"
+        }
+    }
+}
+
+struct NotificationPreference: Codable, Identifiable, Equatable {
+    let type: NotificationPreferenceType
+    var enabled: Bool
+
+    var id: NotificationPreferenceType { type }
+}
+
+struct NotificationPreferencesResponse: Codable {
+    let ok: Bool
+    let preferences: [NotificationPreference]
+}
+
 struct SessionPreview: Codable {
     let displayName: String
     let handle: String

@@ -92,6 +92,7 @@ describe("APNs creator notifications", () => {
   it("sends native APNs notifications for APNs tokens", async () => {
     mockSelectResults([
       [{ subscriberId: "subscriber_1" }],
+      [],
       [
         {
           expoPushToken: `apns:${"a".repeat(64)}`,
@@ -135,5 +136,25 @@ describe("APNs creator notifications", () => {
       creatorId: "creator_1",
       storyId: "story_1",
     })
+  })
+
+  it("skips subscribers who disabled creator story notifications", async () => {
+    mockSelectResults([
+      [{ subscriberId: "subscriber_1" }],
+      [{ userId: "subscriber_1" }],
+    ])
+
+    const { notifyCreatorStoryPosted } = await import(
+      "@/lib/creator-notifications"
+    )
+
+    await notifyCreatorStoryPosted({
+      creatorId: "creator_1",
+      creatorName: "Creator",
+      storyId: "story_1",
+      caption: "New story",
+    })
+
+    expect(requestCalls).toHaveLength(0)
   })
 })

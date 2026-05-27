@@ -4,6 +4,7 @@ import { processStoryCreatorEarnings } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
 import { mediaAssets, stories, users } from "@/lib/db/schema"
+import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import {
   createCloudflareStreamThumbnailMediaUrl,
   getCloudflareStreamVideoDetails,
@@ -171,6 +172,9 @@ export async function refreshProcessingCloudflareStories(input: {
         storyId: story.id,
         caption: story.caption,
       }).catch(() => undefined)
+      await invalidateMobileFeedSnapshotsForCreator(story.creatorId).catch(
+        () => undefined,
+      )
     }),
   )
 }
@@ -332,6 +336,9 @@ export async function syncCloudflareStreamStoryStatus(input: {
       storyId: story.id,
       caption: story.caption,
     }).catch(() => undefined)
+    await invalidateMobileFeedSnapshotsForCreator(story.creatorId).catch(
+      () => undefined,
+    )
   }
 
   return { status: "live" as const, storyId: story.id }

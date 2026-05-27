@@ -204,6 +204,20 @@
       "when": 1779820000000,
       "tag": "0028_story_mentions_story_id_index",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1779821200000,
+      "tag": "0029_mobile_feed_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1779822400000,
+      "tag": "0030_user_notification_preferences",
+      "breakpoints": true
     }
   ]
 }

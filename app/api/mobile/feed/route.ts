@@ -107,6 +107,7 @@ async function feedResponse(
   request: Request,
   options: { allowNotModified: boolean },
 ) {
+  const startedAt = performance.now()
   const user = await getCompleteMobileSession(request)
 
   if (!user) {
@@ -142,7 +143,7 @@ async function feedResponse(
     latestMyStoryItem?.id,
   )
 
-  return jsonResponse(
+  const response = jsonResponse(
     {
       ok: true,
       session: {
@@ -189,6 +190,12 @@ async function feedResponse(
     request,
     options,
   )
+  response.headers.set(
+    "Server-Timing",
+    `mobile-feed;dur=${Math.max(performance.now() - startedAt, 0).toFixed(1)}`,
+  )
+
+  return response
 }
 
 export async function GET(request: Request) {

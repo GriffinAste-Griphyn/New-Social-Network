@@ -204,9 +204,7 @@ struct ProfileView: View {
             Link(destination: supportURL) {
                 accountRow(icon: "envelope", title: "Contact support", subtitle: "griffin@ubeye.ai")
             }
-            Button {
-                Task { await push.requestAuthorizationAndRegister(api: api) }
-            } label: {
+            NavigationLink(destination: NotificationSettingsView()) {
                 accountRow(icon: "bell.badge", title: notificationTitle, subtitle: notificationSubtitle)
             }
             Button {
@@ -228,15 +226,15 @@ struct ProfileView: View {
     }
 
     private var notificationTitle: String {
-        push.isRegistered ? "Notifications enabled" : "Enable notifications"
+        "Notifications"
     }
 
     private var notificationSubtitle: String {
         if push.isRegistered {
-            return "Story and reply alerts are on"
+            return "Choose story, reply, and follower alerts"
         }
 
-        return push.lastError ?? "Story and reply alerts"
+        return push.lastError ?? "Enable and choose alert types"
     }
 
     private func accountRow(icon: String, title: String, subtitle: String, tint: Color = .ubeyeInk) -> some View {
@@ -317,6 +315,211 @@ private enum ProfileSheet: Identifiable {
         switch self {
         case .adjustAvatar:
             "adjustAvatar"
+        }
+    }
+}
+
+private struct NotificationSettingsView: View {
+    @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var push: PushNotificationStore
+    @State private var preferences = NotificationSettingsView.defaultPreferences()
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var error: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                permissionCard
+
+                if let error {
+                    InlineNotice(message: error, isError: true)
+                }
+
+                preferenceList
+            }
+            .padding(16)
+            .padding(.bottom, 24)
+        }
+        .scrollIndicators(.hidden)
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+        .ubeyeScreen()
+        .task {
+            await loadPreferences()
+        }
+        .refreshable {
+            await loadPreferences()
+        }
+    }
+
+    private var permissionCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: push.isRegistered ? "bell.badge.fill" : "bell")
+                    .font(.system(size: 18, weight: .bold))
+                    .frame(width: 42, height: 42)
+                    .foregroundStyle(Color.ubeyeInk)
+                    .background(Color.ubeyeSubtle, in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(push.isRegistered ? "Device alerts enabled" : "Device alerts off")
+                        .font(.system(size: 17, weight: .bold))
+                    Text(push.isRegistered ? "UBEYE can send alerts to this phone" : "Turn on alerts before receiving selected types")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.ubeyeMuted)
+                }
+
+                Spacer()
+            }
+
+            if !push.isRegistered {
+                Button {
+                    Task { await push.requestAuthorizationAndRegister(api: api) }
+                } label: {
+                    Label("Enable notifications", systemImage: "bell.badge")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .foregroundStyle(.white)
+                        .background(Color.ubeyeNavy, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .ubeyeCard()
+    }
+
+    private var preferenceList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Alert Types")
+                    .font(.system(size: 18, weight: .bold))
+                Spacer()
+                if isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+
+            Divider().padding(.horizontal, 16)
+
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+            } else {
+                ForEach(preferences) { preference in
+                    notificationPreferenceRow(preference)
+                    if preference.id != preferences.last?.id {
+                        Divider().padding(.leading, 70)
+                    }
+                }
+            }
+        }
+        .ubeyeCard()
+    }
+
+    private func notificationPreferenceRow(_ preference: NotificationPreference) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: preference.type.icon)
+                .font(.system(size: 17, weight: .bold))
+                .frame(width: 40, height: 40)
+                .foregroundStyle(Color.ubeyeInk)
+                .background(Color.ubeyeSubtle, in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preference.type.title)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.ubeyeInk)
+                Text(preference.type.subtitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.ubeyeMuted)
+            }
+
+            Spacer()
+
+            Toggle(
+                preference.type.title,
+                isOn: Binding(
+                    get: { preference.enabled },
+                    set: { isEnabled in
+                        updatePreference(preference.type, enabled: isEnabled)
+                    }
+                )
+            )
+            .labelsHidden()
+            .disabled(isSaving)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func loadPreferences() async {
+        isLoading = true
+        error = nil
+
+        do {
+            let response = try await api.notificationPreferences()
+            preferences = Self.normalized(response.preferences)
+        } catch {
+            self.error = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func updatePreference(_ type: NotificationPreferenceType, enabled: Bool) {
+        guard let index = preferences.firstIndex(where: { $0.type == type }) else {
+            return
+        }
+
+        let previousPreferences = preferences
+        preferences[index].enabled = enabled
+
+        Task {
+            await savePreferences(previousPreferences: previousPreferences)
+        }
+    }
+
+    private func savePreferences(previousPreferences: [NotificationPreference]) async {
+        isSaving = true
+        error = nil
+
+        do {
+            let response = try await api.updateNotificationPreferences(preferences)
+            preferences = Self.normalized(response.preferences)
+        } catch {
+            preferences = previousPreferences
+            self.error = error.localizedDescription
+        }
+
+        isSaving = false
+    }
+
+    private static func defaultPreferences() -> [NotificationPreference] {
+        NotificationPreferenceType.allCases.map { type in
+            NotificationPreference(type: type, enabled: true)
+        }
+    }
+
+    private static func normalized(_ storedPreferences: [NotificationPreference]) -> [NotificationPreference] {
+        var values = Dictionary(
+            uniqueKeysWithValues: defaultPreferences().map { preference in
+                (preference.type, preference.enabled)
+            }
+        )
+
+        storedPreferences.forEach { preference in
+            values[preference.type] = preference.enabled
+        }
+
+        return NotificationPreferenceType.allCases.map { type in
+            NotificationPreference(type: type, enabled: values[type] ?? true)
         }
     }
 }

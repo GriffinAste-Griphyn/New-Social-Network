@@ -3,6 +3,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -59,6 +60,10 @@ export const notificationType = pgEnum("notification_type", [
   "follow",
   "reply",
 ])
+export const userNotificationPreferenceType = pgEnum(
+  "user_notification_preference_type",
+  ["creator_stories", "replies", "follows"],
+)
 export const safetyReportTargetKind = pgEnum("safety_report_target_kind", [
   "story",
   "user",
@@ -448,6 +453,28 @@ export const follows = pgTable(
   ],
 )
 
+export const mobileFeedSnapshots = pgTable(
+  "mobile_feed_snapshots",
+  {
+    viewerId: text("viewer_id")
+      .primaryKey()
+      .references(() => users.id),
+    payload: jsonb("payload").notNull(),
+    sourceFingerprint: text("source_fingerprint").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    index("mobile_feed_snapshots_expires_idx").on(table.expiresAt),
+    index("mobile_feed_snapshots_updated_idx").on(table.updatedAt),
+  ],
+)
+
 export const notifications = pgTable(
   "notifications",
   {
@@ -478,6 +505,33 @@ export const notifications = pgTable(
       table.createdAt,
     ),
     index("notifications_actor_idx").on(table.actorUserId, table.createdAt),
+  ],
+)
+
+export const userNotificationPreferences = pgTable(
+  "user_notification_preferences",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    type: userNotificationPreferenceType("type").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "user_notification_preferences_pkey",
+      columns: [table.userId, table.type],
+    }),
+    index("user_notification_preferences_user_idx").on(
+      table.userId,
+      table.updatedAt,
+    ),
   ],
 )
 

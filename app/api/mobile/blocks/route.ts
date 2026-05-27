@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
       blockedId: parsed.data.userId,
       reason: parsed.data.reason,
     })
+    await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
 
     return NextResponse.json({ ok: true })
   } catch (error) {
@@ -104,6 +106,7 @@ export async function DELETE(request: Request) {
     blockerId: session.id,
     blockedId: parsed.data.userId,
   })
+  await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
 
   return NextResponse.json({ ok: true })
 }

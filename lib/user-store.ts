@@ -39,6 +39,7 @@ import {
   storyMentions,
   users,
   userBlocks,
+  userNotificationPreferences,
 } from "@/lib/db/schema"
 import { sendPasswordResetEmail } from "@/lib/email"
 import { env } from "@/lib/env"
@@ -590,6 +591,9 @@ export async function deleteUserAccount(
         eq(creatorNotificationPreferences.creatorId, userId),
       ),
     )
+    await tx
+      .delete(userNotificationPreferences)
+      .where(eq(userNotificationPreferences.userId, userId))
 
     await tx
       .update(safetyReports)

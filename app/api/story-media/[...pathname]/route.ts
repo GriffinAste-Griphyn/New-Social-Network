@@ -13,6 +13,7 @@ import { stories, storyInteractions } from "@/lib/db/schema"
 import {
   createCloudflareStreamPlaybackUrl,
   createCloudflareStreamThumbnailUrl,
+  getStoryMediaAccessTokenMaxAgeSeconds,
   parseCloudflareStreamMediaPathname,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-storage"
@@ -137,9 +138,13 @@ function rangeNotSatisfiable(size: number) {
 
 function getStoryMediaCacheControl(request: Request, mediaPathname: string) {
   const token = new URL(request.url).searchParams.get("token")
+  const signedMaxAgeSeconds = getStoryMediaAccessTokenMaxAgeSeconds(
+    mediaPathname,
+    token,
+  )
 
-  if (verifyStoryMediaAccessToken(mediaPathname, token)) {
-    return "private, max-age=1800, stale-while-revalidate=1800"
+  if (signedMaxAgeSeconds > 0) {
+    return `public, max-age=${signedMaxAgeSeconds}, stale-while-revalidate=60`
   }
 
   return "private, no-store"

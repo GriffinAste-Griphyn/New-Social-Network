@@ -20,8 +20,7 @@ final class FeedStore: ObservableObject {
             MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
             MediaPreheater.preheat(feed: cached)
             let storyIds = storyStackPrefetchIds(from: cached)
-            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: storyIds)
-            MediaPerformance.mark("media_cache_summary feed=disk restored_story_stacks=\(restoredStoryCount)")
+            restoreInitialStoryStacks(ids: storyIds, api: api, refresh: false)
         }
 
         let networkStartedAt = Date()
@@ -30,6 +29,11 @@ final class FeedStore: ObservableObject {
             feed = response
             MediaPerformance.measure("feed_load", since: networkStartedAt)
             MediaPreheater.preheat(feed: response)
+            restoreInitialStoryStacks(
+                ids: storyStackPrefetchIds(from: response),
+                api: api,
+                refresh: true
+            )
             scheduleStoryStackPrefetch(
                 ids: storyStackPrefetchIds(from: response),
                 api: api,
@@ -58,6 +62,19 @@ final class FeedStore: ObservableObject {
         ids.append(contentsOf: feed.discoverTiles.prefix(4).map { $0.activeStoryId ?? $0.id })
 
         return ids
+    }
+
+    private func restoreInitialStoryStacks(ids: [String], api: APIClient, refresh: Bool) {
+        let initialIds = Array(ids.prefix(2))
+        guard !initialIds.isEmpty else {
+            return
+        }
+
+        Task { @MainActor [api] in
+            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: initialIds, limit: 2)
+            MediaPerformance.mark("media_cache_summary feed=visible restored_story_stacks=\(restoredStoryCount)")
+            api.prefetchStoryStacks(ids: initialIds, refresh: refresh, limit: 2)
+        }
     }
 
     private func scheduleStoryStackPrefetch(ids: [String], api: APIClient, refresh: Bool) {

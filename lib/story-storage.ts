@@ -22,6 +22,7 @@ import {
 } from "@/lib/story-media/access"
 export {
   createStoryMediaAccessToken,
+  getStoryMediaAccessTokenMaxAgeSeconds,
   publicStoryMediaUrl,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-media/access"
