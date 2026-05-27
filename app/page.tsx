@@ -119,7 +119,7 @@ function SiteHeader() {
           <Button asChild variant="ghost" className="hidden h-9 rounded-[8px] px-3 text-sm text-white/70 hover:bg-white/8 hover:text-white sm:inline-flex">
             <Link href={advertiserSignInHref}>Advertiser sign in</Link>
           </Button>
-          <Button asChild className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-[#e01616] hover:text-white">
+          <Button asChild variant="ghost" className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-[#e01616] hover:text-white dark:hover:bg-[#e01616]">
             <Link href={mobileAppHref}>Get the app</Link>
           </Button>
         </div>
