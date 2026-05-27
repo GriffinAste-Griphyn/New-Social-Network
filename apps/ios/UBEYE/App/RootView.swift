@@ -101,6 +101,8 @@ struct MainTabView: View {
             return
         }
 
+        NotificationCenter.default.post(name: .storyUploadDidRegister, object: response)
+
         if response.asset.assetKind == .video && response.processingStatus != "ready" {
             storyUploadNotice.showProcessing()
             Task {

@@ -71,6 +71,54 @@ final class FeedStore: ObservableObject {
         api.warmStoryOpening(storyId: storyId, adjacentIds: adjacentIds)
     }
 
+    func registerUploadedStory(_ response: StoryUploadResponse) {
+        guard let current = feed else {
+            return
+        }
+
+        let thumbnailUrl =
+            response.asset.thumbnailUrl ??
+            (response.asset.assetKind == .image ? response.asset.mediaUrl : current.myStory.latestThumbnailUrl)
+        let pendingStory = StoryCard(
+            id: response.storyId,
+            creator: current.myStory.owner.name,
+            handle: current.myStory.owner.handle,
+            assetKind: response.asset.assetKind,
+            mediaUrl: response.asset.mediaUrl,
+            thumbnailUrl: thumbnailUrl,
+            title: response.asset.assetKind == .video && response.processingStatus != "ready"
+                ? "Video processing"
+                : "Story",
+            textOverlays: [],
+            durationSeconds: response.asset.assetKind == .video ? 10 : nil,
+            lastUploadedAt: nil,
+            progressPercent: nil,
+            timelineSegmentCount: nil
+        )
+        let myStoryItems = (current.myStory.items.filter { $0.id != response.storyId } + [pendingStory])
+        let myStory = MyStorySummary(
+            owner: current.myStory.owner,
+            hasActiveStory: true,
+            liveCount: max(current.myStory.liveCount, myStoryItems.count),
+            latestThumbnailUrl: thumbnailUrl,
+            latestAssetKind: response.asset.assetKind,
+            latestTextOverlays: [],
+            expiresSoonLabel: current.myStory.expiresSoonLabel,
+            items: myStoryItems
+        )
+
+        feed = MobileFeedResponse(
+            ok: current.ok,
+            session: current.session,
+            followingProfiles: current.followingProfiles,
+            followingStories: current.followingStories,
+            followingTimelineStories: current.followingTimelineStories,
+            discoverTiles: current.discoverTiles,
+            suggestedAccounts: current.suggestedAccounts,
+            myStory: myStory
+        )
+    }
+
     private var shouldRefreshAfterForeground: Bool {
         guard let lastNetworkLoadAt else {
             return true
@@ -217,6 +265,18 @@ struct HomeView: View {
                 Task {
                     api.invalidateStoryStacks()
                     await store.load(api: api, useDiskCache: false)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidRegister)) { notification in
+                guard let response = notification.object as? StoryUploadResponse else {
+                    return
+                }
+
+                store.registerUploadedStory(response)
+                if response.processingStatus == "ready" {
+                    Task {
+                        await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
