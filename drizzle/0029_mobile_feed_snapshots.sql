@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS "mobile_feed_snapshots" (
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
   "expires_at" timestamp with time zone NOT NULL
 );
-
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "mobile_feed_snapshots_expires_idx"
   ON "mobile_feed_snapshots" ("expires_at");
-
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "mobile_feed_snapshots_updated_idx"
   ON "mobile_feed_snapshots" ("updated_at");
