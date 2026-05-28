@@ -45,6 +45,7 @@ final class CameraController: NSObject, ObservableObject {
         guard isConfigured, !session.isRunning else {
             return
         }
+        AppAudioSession.configureForVideoRecording()
         Task.detached { [session] in
             session.startRunning()
         }
@@ -62,6 +63,7 @@ final class CameraController: NSObject, ObservableObject {
     func capturePhoto() {
         let settings = AVCapturePhotoSettings()
         settings.flashMode = .auto
+        settings.photoQualityPrioritization = .quality
         let delegate = PhotoCaptureDelegate { [weak self] result in
             Task { @MainActor in
                 switch result {
@@ -82,19 +84,32 @@ final class CameraController: NSObject, ObservableObject {
             return
         }
 
+        guard microphoneAuthorizationStatus == .authorized, audioInput != nil else {
+            error = "Microphone access is required to record video stories with audio."
+            return
+        }
+
+        guard AppAudioSession.configureForVideoRecording() else {
+            error = "Could not prepare the microphone for recording."
+            return
+        }
+        configureMovieAudioConnection()
+
         capturedPhoto = nil
         capturedVideoURL = nil
-        AppAudioSession.configureForVideoRecording()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mov")
         let delegate = MovieCaptureDelegate { [weak self] result in
             Task { @MainActor in
                 self?.isRecording = false
                 switch result {
                 case .success(let url):
-                    MediaDiagnostics.logCapturedVideo(url: url)
-                    self?.capturedVideoURL = url
+                    if MediaDiagnostics.capturedVideoHasAudio(url: url) {
+                        self?.capturedVideoURL = url
+                    } else {
+                        self?.error = "Could not capture audio. Check microphone access and try recording again."
+                    }
                 case .failure(let error):
-                    self?.error = error.localizedDescription
+                    self?.error = Self.recordingErrorMessage(for: error)
                 }
                 self?.movieDelegate = nil
             }
@@ -146,9 +161,9 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         session.beginConfiguration()
-        session.sessionPreset = .high
+        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
         session.usesApplicationAudioSession = true
-        session.automaticallyConfiguresApplicationAudioSession = true
+        session.automaticallyConfiguresApplicationAudioSession = false
 
         defer {
             session.commitConfiguration()
@@ -174,8 +189,42 @@ final class CameraController: NSObject, ObservableObject {
         }
         session.addOutput(output)
         session.addOutput(movieOutput)
+        output.maxPhotoQualityPrioritization = .quality
+        configureMovieVideoOutputSettings()
+        configureMovieAudioConnection()
         updateOutputOrientation()
         isConfigured = true
+    }
+
+    private func configureMovieVideoOutputSettings() {
+        guard let videoConnection = movieOutput.connection(with: .video) else {
+            MediaPerformance.mark("capture_video_connection_missing")
+            return
+        }
+
+        let codec: AVVideoCodecType = movieOutput.availableVideoCodecTypes.contains(.hevc) ? .hevc : .h264
+        movieOutput.setOutputSettings(
+            [
+                AVVideoCodecKey: codec,
+                AVVideoCompressionPropertiesKey: [
+                    AVVideoAverageBitRateKey: 8_000_000,
+                    AVVideoExpectedSourceFrameRateKey: 30,
+                    AVVideoMaxKeyFrameIntervalKey: 30,
+                ],
+            ],
+            for: videoConnection
+        )
+        MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=8000000 fps=30")
+    }
+
+    private func configureMovieAudioConnection() {
+        guard let audioConnection = movieOutput.connection(with: .audio) else {
+            MediaPerformance.mark("capture_audio_connection_missing")
+            return
+        }
+
+        audioConnection.isEnabled = true
+        MediaPerformance.mark("capture_audio_connection_enabled")
     }
 
     private func updateOutputOrientation() {
@@ -186,7 +235,23 @@ final class CameraController: NSObject, ObservableObject {
             if connection.isVideoMirroringSupported {
                 connection.isVideoMirrored = cameraPosition == .front
             }
+            if connection.isVideoStabilizationSupported {
+                connection.preferredVideoStabilizationMode = .cinematic
+            }
         }
+    }
+
+    private static func recordingErrorMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        MediaPerformance.mark(
+            "capture_recording_failed domain=\(nsError.domain) code=\(nsError.code)"
+        )
+
+        if nsError.domain == AVFoundationErrorDomain {
+            return "Could not record video. Check camera and microphone access, then try again."
+        }
+
+        return error.localizedDescription
     }
 }
 

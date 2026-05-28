@@ -82,6 +82,164 @@ private struct StoryImageFormat {
     }
 }
 
+private struct PreparedStoryVideo {
+    let url: URL
+    let durationMs: Int?
+    let byteSize: Int64
+    let shouldRemoveAfterUpload: Bool
+}
+
+private enum StoryVideoUploadNormalizer {
+    static func prepare(url: URL, maxDurationSeconds: Int) async throws -> PreparedStoryVideo {
+        let normalizedURL = try await normalizedVideoURL(for: url)
+        let uploadURL = normalizedURL ?? url
+        let durationMs = await videoDurationMs(for: uploadURL)
+        let byteSize = try videoFileSize(for: uploadURL)
+
+        if byteSize > 150 * 1024 * 1024 {
+            if let normalizedURL {
+                try? FileManager.default.removeItem(at: normalizedURL)
+            }
+            throw APIClientError.server("Story videos are capped at 150 MB.", 0)
+        }
+
+        if let durationMs, durationMs > maxDurationSeconds * 1_000 {
+            if let normalizedURL {
+                try? FileManager.default.removeItem(at: normalizedURL)
+            }
+            throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
+        }
+
+        return PreparedStoryVideo(
+            url: uploadURL,
+            durationMs: durationMs,
+            byteSize: byteSize,
+            shouldRemoveAfterUpload: normalizedURL != nil
+        )
+    }
+
+    private static func normalizedVideoURL(for url: URL) async throws -> URL? {
+        let asset = AVURLAsset(url: url)
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
+        let preset = await compatibleExportPreset(for: asset)
+
+        guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+            return nil
+        }
+
+        export.outputURL = outputURL
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+
+        if let duration = await alignedPlayableDuration(for: asset) {
+            export.timeRange = CMTimeRange(start: .zero, duration: duration)
+        }
+
+        await exportVideo(export)
+
+        if export.status == .completed {
+            MediaPerformance.mark("video_upload_normalized preset=\(preset)")
+            return outputURL
+        }
+
+        try? FileManager.default.removeItem(at: outputURL)
+        let nsError = export.error as NSError?
+        MediaPerformance.mark(
+            "video_upload_normalize_failed status=\(export.status.rawValue) code=\(nsError?.code ?? 0)"
+        )
+        return nil
+    }
+
+    private static func compatibleExportPreset(for asset: AVAsset) async -> String {
+        let preferred = AVAssetExportPreset1920x1080
+        let fallback = AVAssetExportPresetHighestQuality
+
+        if await AVAssetExportSession.compatibility(
+            ofExportPreset: preferred,
+            with: asset,
+            outputFileType: .mp4
+        ) {
+            return preferred
+        }
+
+        return fallback
+    }
+
+    private static func alignedPlayableDuration(for asset: AVURLAsset) async -> CMTime? {
+        let duration: CMTime?
+        let tracks: [AVAssetTrack]
+        let trackDurations: [CMTime]
+
+        if #available(iOS 16.0, *) {
+            duration = try? await asset.load(.duration)
+            tracks = (try? await asset.load(.tracks)) ?? []
+            var loadedDurations: [CMTime] = []
+            for track in tracks {
+                if let timeRange = try? await track.load(.timeRange) {
+                    loadedDurations.append(timeRange.duration)
+                }
+            }
+            trackDurations = loadedDurations
+        } else {
+            duration = asset.duration
+            tracks = asset.tracks
+            trackDurations = tracks.map(\.timeRange.duration)
+        }
+
+        let finiteDurations = ([duration].compactMap { $0 } + trackDurations)
+            .filter { time in
+                let seconds = CMTimeGetSeconds(time)
+                return time.isValid && seconds.isFinite && seconds > 0.2
+            }
+
+        guard let shortest = finiteDurations.min(by: { CMTimeCompare($0, $1) < 0 }) else {
+            return nil
+        }
+
+        return shortest
+    }
+
+    private static func exportVideo(_ export: AVAssetExportSession) async {
+        await withCheckedContinuation { continuation in
+            export.exportAsynchronously {
+                continuation.resume()
+            }
+        }
+    }
+
+    private static func videoFileSize(for url: URL) throws -> Int64 {
+        guard let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber,
+              size.int64Value > 0 else {
+            throw APIClientError.invalidResponse
+        }
+
+        return size.int64Value
+    }
+
+    private static func videoDurationMs(for url: URL) async -> Int? {
+        let asset = AVURLAsset(url: url)
+        let duration: CMTime?
+
+        if #available(iOS 16.0, *) {
+            duration = try? await asset.load(.duration)
+        } else {
+            duration = asset.duration
+        }
+
+        guard let duration else {
+            return nil
+        }
+
+        let seconds = CMTimeGetSeconds(duration)
+        guard seconds.isFinite, seconds > 0 else {
+            return nil
+        }
+
+        return max(1, Int((seconds * 1_000).rounded()))
+    }
+}
+
 private enum ComposerOverlayInputMode: Identifiable {
     case text
     case link
@@ -96,7 +254,6 @@ private enum ComposerOverlayInputMode: Identifiable {
 
 @MainActor
 final class StoryComposerStore: ObservableObject {
-    private let maxVideoUploadBytes: Int64 = 150 * 1024 * 1024
     private let maxVideoDurationSeconds = 120
 
     @Published var caption = ""
@@ -175,21 +332,25 @@ final class StoryComposerStore: ObservableObject {
 
     private func uploadVideoStory(url: URL, api: APIClient) async throws -> StoryUploadResponse {
         uploadStatus = "Preparing video"
-        let durationMs = await videoDurationMs(for: url)
-        let byteSize = try videoFileSize(for: url)
-        let thumbnailData = await videoThumbnailData(for: url, durationMs: durationMs)
-
-        if byteSize > maxVideoUploadBytes {
-            throw APIClientError.server("Story videos are capped at 150 MB.", 0)
+        let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
+            url: url,
+            maxDurationSeconds: maxVideoDurationSeconds
+        )
+        defer {
+            if preparedVideo.shouldRemoveAfterUpload {
+                try? FileManager.default.removeItem(at: preparedVideo.url)
+            }
         }
 
-        if let durationMs, durationMs > maxVideoDurationSeconds * 1_000 {
-            throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
-        }
+        uploadStatus = "Preparing thumbnail"
+        let thumbnailData = await videoThumbnailData(
+            for: preparedVideo.url,
+            durationMs: preparedVideo.durationMs
+        )
 
         let upload = try await api.prepareVideoUpload(
-            fileName: url.lastPathComponent.isEmpty ? "story-video.mov" : url.lastPathComponent,
-            byteSize: byteSize,
+            fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
+            byteSize: preparedVideo.byteSize,
             maxDurationSeconds: maxVideoDurationSeconds
         )
         uploadStatus = "Uploading video"
@@ -198,13 +359,13 @@ final class StoryComposerStore: ObservableObject {
             upload: upload,
             api: api
         )
-        try await api.uploadVideoFile(fileURL: url, upload: upload)
+        try await api.uploadVideoFile(fileURL: preparedVideo.url, upload: upload)
         let completedThumbnailData = await uploadedThumbnailData
         uploadStatus = "Finishing story"
 
         return try await api.completeVideoStory(
             upload: upload,
-            fileURL: url,
+            fileURL: preparedVideo.url,
             caption: caption,
             brandTags: brandTags,
             textOverlay: textOverlay,
@@ -217,7 +378,7 @@ final class StoryComposerStore: ObservableObject {
             quoteReplyId: quotedReply?.id ?? "",
             quoteReplyPositionX: quoteReplyPositionX,
             quoteReplyPositionY: quoteReplyPositionY,
-            durationMs: durationMs,
+            durationMs: preparedVideo.durationMs,
             thumbnailData: completedThumbnailData
         )
     }

@@ -396,39 +396,52 @@ final class MobilePerformanceReporter {
 }
 
 enum AppAudioSession {
-    static func configureForVideoRecording() {
+    @discardableResult
+    static func configureForVideoRecording() -> Bool {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker])
+            try session.setCategory(
+                .playAndRecord,
+                mode: .videoRecording,
+                options: [.defaultToSpeaker, .allowBluetoothHFP]
+            )
             try session.setPreferredSampleRate(48_000)
+            if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                try? session.setPreferredInput(builtInMic)
+            }
             try session.setActive(true)
             MediaPerformance.mark("audio_session_video_recording")
+            return true
         } catch {
             MediaPerformance.mark("audio_session_video_recording_failed")
+            return false
         }
     }
 
-    static func configureForVideoPlayback() {
+    @discardableResult
+    static func configureForVideoPlayback() -> Bool {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .moviePlayback)
             try session.setPreferredSampleRate(48_000)
             try session.setActive(true)
             MediaPerformance.mark("audio_session_video_playback")
+            return true
         } catch {
             MediaPerformance.mark("audio_session_video_playback_failed")
+            return false
         }
     }
 }
 
 enum MediaDiagnostics {
-    static func logCapturedVideo(url: URL) {
+    static func capturedVideoHasAudio(url: URL) -> Bool {
         let asset = AVURLAsset(url: url)
         let audioTrack = asset.tracks(withMediaType: .audio).first
 
         guard let audioTrack else {
             MediaPerformance.mark("capture_audio_missing")
-            return
+            return false
         }
 
         let dataRate = Int(audioTrack.estimatedDataRate)
@@ -447,6 +460,7 @@ enum MediaDiagnostics {
         MediaPerformance.mark(
             "capture_audio codec=\(codec) sample_rate=\(sampleRate) channels=\(channels) bitrate=\(dataRate)"
         )
+        return true
     }
 
     private static func fourCharacterCode(_ value: FourCharCode) -> String {
