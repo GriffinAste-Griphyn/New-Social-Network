@@ -1593,6 +1593,7 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     .select({
       id: stories.id,
       mediaUrl: stories.mediaUrl,
+      thumbnailUrl: stories.thumbnailUrl,
     })
     .from(stories)
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
@@ -1613,5 +1614,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
 
   await invalidateMobileFeedSnapshotsForCreator(ownerId).catch(() => undefined)
 
-  return story.mediaUrl
+  return {
+    mediaUrl: story.mediaUrl,
+    thumbnailUrl: story.thumbnailUrl,
+  }
 }

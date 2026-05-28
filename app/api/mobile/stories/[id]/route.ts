@@ -166,9 +166,16 @@ export async function DELETE(
   const { id } = await context.params
 
   try {
-    const mediaUrl = await removeStoryForOwner(id, session.id)
+    const removedStory = await removeStoryForOwner(id, session.id)
+    const mediaUrls = Array.from(
+      new Set(
+        [removedStory.mediaUrl, removedStory.thumbnailUrl].filter(
+          (value): value is string => Boolean(value),
+        ),
+      ),
+    )
 
-    await removeStoryAsset(mediaUrl)
+    await Promise.allSettled(mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)))
 
     return NextResponse.json({ ok: true })
   } catch (error) {
