@@ -21,6 +21,21 @@ import {
 
 export const runtime = "nodejs"
 
+async function removeStoryMediaAssets(input: {
+  mediaUrl: string
+  thumbnailUrl: string | null
+}) {
+  const mediaUrls = Array.from(
+    new Set(
+      [input.mediaUrl, input.thumbnailUrl].filter(
+        (value): value is string => Boolean(value),
+      ),
+    ),
+  )
+
+  await Promise.allSettled(mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)))
+}
+
 function redirectToMyStory(request: Request, searchParams?: Record<string, string>) {
   const url = new URL("/stories/me", request.url)
 
@@ -83,9 +98,9 @@ export async function POST(
     const action = formData.get("action")
 
     if (action === "delete") {
-      const mediaUrl = await removeStoryForOwner(id, session.id)
+      const removedStory = await removeStoryForOwner(id, session.id)
 
-      await removeStoryAsset(mediaUrl)
+      await removeStoryMediaAssets(removedStory)
       revalidatePath("/feed")
       revalidatePath("/stories/me")
 
@@ -161,9 +176,9 @@ export async function DELETE(
   }
 
   try {
-    const mediaUrl = await removeStoryForOwner(id, session.id)
+    const removedStory = await removeStoryForOwner(id, session.id)
 
-    await removeStoryAsset(mediaUrl)
+    await removeStoryMediaAssets(removedStory)
     revalidatePath("/feed")
     revalidatePath("/stories/me")
 
