@@ -78,7 +78,7 @@ final class FeedStore: ObservableObject {
 
         let thumbnailUrl =
             response.asset.thumbnailUrl ??
-            (response.asset.assetKind == .image ? response.asset.mediaUrl : current.myStory.latestThumbnailUrl)
+            (response.asset.assetKind == .image ? response.asset.mediaUrl : nil)
         let pendingStory = StoryCard(
             id: response.storyId,
             creator: current.myStory.owner.name,
@@ -194,8 +194,8 @@ final class FeedStore: ObservableObject {
                 owner: current.myStory.owner,
                 hasActiveStory: !myStoryItems.isEmpty,
                 liveCount: myStoryItems.count,
-                latestThumbnailUrl: latestMyStoryItem.map {
-                    $0.assetKind == .image ? $0.mediaUrl : ($0.thumbnailUrl ?? $0.mediaUrl)
+                latestThumbnailUrl: latestMyStoryItem.flatMap {
+                    $0.assetKind == .image ? $0.mediaUrl : $0.thumbnailUrl
                 },
                 latestAssetKind: latestMyStoryItem?.assetKind,
                 latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],

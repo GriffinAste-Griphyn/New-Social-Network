@@ -279,11 +279,13 @@ final class StoryComposerStore: ObservableObject {
             generator.maximumSize = CGSize(width: 720, height: 1280)
 
             let durationSeconds = durationMs.map { max(Double($0) / 1_000, 0.1) } ?? 1
-            let targetSeconds = min(max(durationSeconds * 0.2, 0.12), max(durationSeconds - 0.05, 0))
+            let targetSeconds = max(durationSeconds - 0.12, 0)
             let targetTime = CMTime(seconds: targetSeconds, preferredTimescale: 600)
+            let midpointTime = CMTime(seconds: max(durationSeconds * 0.5, 0), preferredTimescale: 600)
             let fallbackTime = CMTime(seconds: 0, preferredTimescale: 600)
 
             let image = (try? generator.copyCGImage(at: targetTime, actualTime: nil))
+                ?? (try? generator.copyCGImage(at: midpointTime, actualTime: nil))
                 ?? (try? generator.copyCGImage(at: fallbackTime, actualTime: nil))
 
             guard let image else {
