@@ -89,6 +89,24 @@ private struct PreparedStoryVideo {
     let shouldRemoveAfterUpload: Bool
 }
 
+private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generator: AVAssetImageGenerator?
+
+    func set(_ generator: AVAssetImageGenerator) {
+        lock.lock()
+        self.generator = generator
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        let generator = self.generator
+        lock.unlock()
+        generator?.cancelAllCGImageGeneration()
+    }
+}
+
 private enum StoryVideoUploadNormalizer {
     static func prepare(url: URL, maxDurationSeconds: Int) async throws -> PreparedStoryVideo {
         let normalizedURL = try await normalizedVideoURL(for: url)
@@ -125,6 +143,11 @@ private enum StoryVideoUploadNormalizer {
         let preset = await compatibleExportPreset(for: asset)
 
         guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+            return nil
+        }
+
+        guard export.supportedFileTypes.contains(.mp4) else {
+            MediaPerformance.mark("video_upload_normalize_skipped unsupported_mp4")
             return nil
         }
 
@@ -342,11 +365,18 @@ final class StoryComposerStore: ObservableObject {
             }
         }
 
+        let thumbnailData = try await requiredVideoThumbnailData(
+            for: preparedVideo.url,
+            durationMs: preparedVideo.durationMs
+        )
+
         let upload = try await api.prepareVideoUpload(
             fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
             byteSize: preparedVideo.byteSize,
             maxDurationSeconds: maxVideoDurationSeconds
         )
+        uploadStatus = "Uploading thumbnail"
+        try await api.uploadVideoThumbnail(data: thumbnailData, upload: upload)
         uploadStatus = "Uploading video"
         try await api.uploadVideoFile(fileURL: preparedVideo.url, upload: upload)
         uploadStatus = "Finishing story"
@@ -367,7 +397,7 @@ final class StoryComposerStore: ObservableObject {
             quoteReplyPositionX: quoteReplyPositionX,
             quoteReplyPositionY: quoteReplyPositionY,
             durationMs: preparedVideo.durationMs,
-            thumbnailData: nil
+            thumbnailData: thumbnailData
         )
     }
 
@@ -420,29 +450,129 @@ final class StoryComposerStore: ObservableObject {
         return max(1, Int((seconds * 1_000).rounded()))
     }
 
-    private func videoThumbnailData(for url: URL, durationMs: Int?) async -> Data? {
-        await Task.detached(priority: .userInitiated) {
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 720, height: 1280)
+    private func requiredVideoThumbnailData(for url: URL, durationMs: Int?) async throws -> Data {
+        do {
+            return try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await self.generateVideoThumbnailData(for: url, durationMs: durationMs)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                    throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
+                }
 
-            let durationSeconds = durationMs.map { max(Double($0) / 1_000, 0.1) } ?? 1
-            let targetSeconds = max(durationSeconds - 0.12, 0)
-            let targetTime = CMTime(seconds: targetSeconds, preferredTimescale: 600)
-            let midpointTime = CMTime(seconds: max(durationSeconds * 0.5, 0), preferredTimescale: 600)
-            let fallbackTime = CMTime(seconds: 0, preferredTimescale: 600)
+                guard let data = try await group.next() else {
+                    throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
+                }
 
-            let image = (try? generator.copyCGImage(at: targetTime, actualTime: nil))
-                ?? (try? generator.copyCGImage(at: midpointTime, actualTime: nil))
-                ?? (try? generator.copyCGImage(at: fallbackTime, actualTime: nil))
+                group.cancelAll()
+                return data
+            }
+        } catch {
+            MediaPerformance.mark("video_thumbnail_generation_failed")
+            throw error
+        }
+    }
 
-            guard let image else {
+    private func generateVideoThumbnailData(for url: URL, durationMs: Int?) async throws -> Data {
+        let image = try await generateVideoThumbnailImage(for: url, durationMs: durationMs)
+        guard let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.82),
+              !data.isEmpty else {
+            throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
+        }
+
+        return data
+    }
+
+    private func generateVideoThumbnailImage(for url: URL, durationMs: Int?) async throws -> CGImage {
+        let generationBox = StoryVideoThumbnailGenerationBox()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let asset = AVURLAsset(url: url)
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 720, height: 1280)
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.2, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
+                generationBox.set(generator)
+
+                let lock = NSLock()
+                var didResume = false
+                var remaining = 0
+                var lastError: Error?
+                let times = videoThumbnailCandidateTimes(durationMs: durationMs)
+                remaining = times.count
+
+                func finish(_ result: Result<CGImage, Error>) {
+                    lock.lock()
+                    guard !didResume else {
+                        lock.unlock()
+                        return
+                    }
+                    didResume = true
+                    lock.unlock()
+                    generator.cancelAllCGImageGeneration()
+                    continuation.resume(with: result)
+                }
+
+                func recordFailure(_ error: Error?) {
+                    lock.lock()
+                    guard !didResume else {
+                        lock.unlock()
+                        return
+                    }
+                    remaining -= 1
+                    if let error {
+                        lastError = error
+                    }
+                    let shouldFinish = remaining <= 0
+                    lock.unlock()
+
+                    if shouldFinish {
+                        finish(.failure(lastError ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)))
+                    }
+                }
+
+                generator.generateCGImagesAsynchronously(forTimes: times.map { NSValue(time: $0) }) { _, image, _, result, error in
+                    switch result {
+                    case .succeeded:
+                        if let image {
+                            finish(.success(image))
+                        } else {
+                            recordFailure(nil)
+                        }
+                    case .failed:
+                        recordFailure(error)
+                    case .cancelled:
+                        recordFailure(error ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0))
+                    @unknown default:
+                        recordFailure(error)
+                    }
+                }
+            }
+        } onCancel: {
+            generationBox.cancel()
+        }
+    }
+
+    private func videoThumbnailCandidateTimes(durationMs: Int?) -> [CMTime] {
+        let durationSeconds = durationMs.map { max(Double($0) / 1_000, 0.1) } ?? 1
+        let candidateSeconds = [
+            min(0.25, max(durationSeconds - 0.05, 0)),
+            max(durationSeconds * 0.5, 0),
+            0,
+        ]
+        var seen = Set<Int>()
+
+        return candidateSeconds.compactMap { seconds in
+            let milliseconds = Int((seconds * 1_000).rounded())
+            guard !seen.contains(milliseconds) else {
                 return nil
             }
-
-            return UIImage(cgImage: image).jpegData(compressionQuality: 0.82)
-        }.value
+            seen.insert(milliseconds)
+            return CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
+        }
     }
 
     var normalizedLinkUrl: String {

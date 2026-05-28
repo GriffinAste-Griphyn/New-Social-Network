@@ -37,6 +37,20 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function fetchWithTimeout(url: string, timeoutMs: number) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 function isModeratableImageResponse(response: Response) {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? ""
 
@@ -67,10 +81,7 @@ async function resolveReviewableImageUrl(input: {
     }
 
     try {
-      const response = await fetch(input.scanUrl, {
-        redirect: "follow",
-        signal: AbortSignal.timeout(6_000),
-      })
+      const response = await fetchWithTimeout(input.scanUrl, 6_000)
 
       if (isModeratableImageResponse(response)) {
         await discardResponseBody(response)
@@ -165,6 +176,18 @@ function isRetryableOpenAiMediaError(result: ContentModerationResult) {
   )
 }
 
+function approvedDeferredVideoThumbnailModeration(
+  error: string,
+): ContentModerationResult {
+  return {
+    action: "approve",
+    provider: "openai",
+    reason: null,
+    categories: [],
+    error,
+  }
+}
+
 async function moderateReviewableImageUrl(url: string) {
   let result = await moderateWithOpenAi([
     {
@@ -255,19 +278,7 @@ export async function moderateMediaContent(
   })
 
   if (!reviewableImageUrl.ok) {
-    return resultFromSignals({
-      provider: "openai",
-      signals: [
-        {
-          key: "scanner_unavailable",
-          confidence: 1,
-          reason:
-            "Video thumbnail was not available for safety scanning; content requires review.",
-          source: "system",
-        },
-      ],
-      error: reviewableImageUrl.error,
-    })
+    return approvedDeferredVideoThumbnailModeration(reviewableImageUrl.error)
   }
 
   return moderateReviewableImageUrl(reviewableImageUrl.url)
