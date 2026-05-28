@@ -1603,8 +1603,6 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     throw new Error("Story not found.")
   }
 
-  await reverseUnpaidStoryEarnings(story.id)
-
   await db
     .update(stories)
     .set({
@@ -1612,7 +1610,10 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     })
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
 
-  await invalidateMobileFeedSnapshotsForCreator(ownerId).catch(() => undefined)
+  await Promise.allSettled([
+    reverseUnpaidStoryEarnings(story.id),
+    invalidateMobileFeedSnapshotsForCreator(ownerId),
+  ])
 
   return {
     mediaUrl: story.mediaUrl,
