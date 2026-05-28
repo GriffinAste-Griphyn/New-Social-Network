@@ -342,25 +342,13 @@ final class StoryComposerStore: ObservableObject {
             }
         }
 
-        uploadStatus = "Preparing thumbnail"
-        let thumbnailData = await videoThumbnailData(
-            for: preparedVideo.url,
-            durationMs: preparedVideo.durationMs
-        )
-
         let upload = try await api.prepareVideoUpload(
             fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
             byteSize: preparedVideo.byteSize,
             maxDurationSeconds: maxVideoDurationSeconds
         )
         uploadStatus = "Uploading video"
-        async let uploadedThumbnailData = uploadVideoThumbnailIfPossible(
-            thumbnailData,
-            upload: upload,
-            api: api
-        )
         try await api.uploadVideoFile(fileURL: preparedVideo.url, upload: upload)
-        let completedThumbnailData = await uploadedThumbnailData
         uploadStatus = "Finishing story"
 
         return try await api.completeVideoStory(
@@ -379,7 +367,7 @@ final class StoryComposerStore: ObservableObject {
             quoteReplyPositionX: quoteReplyPositionX,
             quoteReplyPositionY: quoteReplyPositionY,
             durationMs: preparedVideo.durationMs,
-            thumbnailData: completedThumbnailData
+            thumbnailData: nil
         )
     }
 
