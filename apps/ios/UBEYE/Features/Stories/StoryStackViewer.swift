@@ -245,6 +245,7 @@ struct StoryStackViewer: View {
     @State private var storyStartedAt = Date()
     @State private var storyProgress = 0.0
     @State private var timedStoryId: String?
+    @State private var videoReadyItemId: String?
     @State private var didFinishCurrentItem = false
     @State private var deleteConfirmationItem: StoryStackItem?
     @State private var isDeleteConfirmationPresented = false
@@ -255,6 +256,7 @@ struct StoryStackViewer: View {
     @FocusState private var isReplyFieldFocused: Bool
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
+    private let maxVideoStoryDurationSeconds: TimeInterval = 120
     private let storyTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
@@ -370,7 +372,17 @@ struct StoryStackViewer: View {
             Color.black
 
             if item.assetKind == .video {
-                AutoPlayVideoPlayer(url: item.mediaUrl, thumbnailUrl: item.thumbnailUrl)
+                AutoPlayVideoPlayer(
+                    url: item.mediaUrl,
+                    thumbnailUrl: item.thumbnailUrl,
+                    showsThumbnailWhileLoading: false,
+                    onReadyForPlayback: {
+                        guard timedStoryId == item.id else {
+                            return
+                        }
+                        videoReadyItemId = item.id
+                    }
+                )
             } else {
                 CachedAsyncImage(url: item.mediaUrl) { image in
                     image
@@ -929,6 +941,7 @@ struct StoryStackViewer: View {
 
     private func resetStoryTimer(for item: StoryStackItem) {
         timedStoryId = item.id
+        videoReadyItemId = item.assetKind == .video ? nil : item.id
         storyStartedAt = Date()
         storyProgress = 0
         didFinishCurrentItem = false
@@ -964,7 +977,7 @@ struct StoryStackViewer: View {
 
     private func displayDuration(for item: StoryStackItem) -> TimeInterval {
         if item.assetKind == .video, let durationSeconds = item.durationSeconds {
-            return max(0.5, min(defaultStoryDurationSeconds, durationSeconds))
+            return max(1, min(maxVideoStoryDurationSeconds, durationSeconds))
         }
 
         return defaultStoryDurationSeconds
@@ -974,7 +987,16 @@ struct StoryStackViewer: View {
         isReplyFieldFocused ||
             repliesSheetItem != nil ||
             store.isSendingReply ||
-            !store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            isWaitingForCurrentVideo
+    }
+
+    private var isWaitingForCurrentVideo: Bool {
+        guard let item = store.stack?.items[safe: index], item.assetKind == .video else {
+            return false
+        }
+
+        return videoReadyItemId != item.id
     }
 
     private func scheduleConfirmationDismiss(for confirmation: String?) {
@@ -1529,16 +1551,26 @@ private struct StoryViewerActionIcon: View {
 struct AutoPlayVideoPlayer: View {
     let url: URL
     let thumbnailUrl: URL?
+    let showsThumbnailWhileLoading: Bool
+    let onReadyForPlayback: () -> Void
     @State private var player: AVPlayer?
     @State private var isReadyForPlayback = false
     @State private var stallObserver: NSObjectProtocol?
+    @State private var playbackFailureObserver: NSObjectProtocol?
     @State private var playTask: Task<Void, Never>?
     @State private var revealTask: Task<Void, Never>?
     @State private var playbackStartedAt: Date?
 
-    init(url: URL, thumbnailUrl: URL? = nil) {
+    init(
+        url: URL,
+        thumbnailUrl: URL? = nil,
+        showsThumbnailWhileLoading: Bool = true,
+        onReadyForPlayback: @escaping () -> Void = {}
+    ) {
         self.url = url
         self.thumbnailUrl = thumbnailUrl
+        self.showsThumbnailWhileLoading = showsThumbnailWhileLoading
+        self.onReadyForPlayback = onReadyForPlayback
     }
 
     var body: some View {
@@ -1548,7 +1580,7 @@ struct AutoPlayVideoPlayer: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if !isReadyForPlayback, let thumbnailUrl {
+            if showsThumbnailWhileLoading, !isReadyForPlayback, let thumbnailUrl {
                 CachedAsyncImage(url: thumbnailUrl) { image in
                     image
                         .resizable()
@@ -1574,6 +1606,10 @@ struct AutoPlayVideoPlayer: View {
             if let stallObserver {
                 NotificationCenter.default.removeObserver(stallObserver)
                 self.stallObserver = nil
+            }
+            if let playbackFailureObserver {
+                NotificationCenter.default.removeObserver(playbackFailureObserver)
+                self.playbackFailureObserver = nil
             }
             player?.pause()
             player = nil
@@ -1619,6 +1655,7 @@ struct AutoPlayVideoPlayer: View {
             player = next
             observeReadiness(player: next, url: url, startedAt: startedAt)
             observeStalls(player: next, url: url)
+            observeFailures(player: next, url: url)
             AppAudioSession.configureForVideoPlayback()
             next.play()
         }
@@ -1653,6 +1690,9 @@ struct AutoPlayVideoPlayer: View {
                           player.currentTime().seconds > 0.05 {
                     revealVideo(reason: "playback_started", since: startedAt)
                     return
+                } else if player.currentItem?.status == .failed {
+                    logPlaybackFailure(player: player, url: url, reason: "item_failed")
+                    return
                 }
 
                 try? await Task.sleep(for: .milliseconds(50))
@@ -1666,6 +1706,7 @@ struct AutoPlayVideoPlayer: View {
         }
 
         isReadyForPlayback = true
+        onReadyForPlayback()
         MediaPerformance.measure(
             "video_first_frame reason=\(reason) url=\(url.lastPathComponent)",
             since: startedAt
@@ -1684,6 +1725,36 @@ struct AutoPlayVideoPlayer: View {
         ) { _ in
             MediaPerformance.mark("video_stalled url=\(url.lastPathComponent)")
         }
+    }
+
+    private func observeFailures(player: AVPlayer, url: URL) {
+        if let playbackFailureObserver {
+            NotificationCenter.default.removeObserver(playbackFailureObserver)
+        }
+
+        playbackFailureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            logPlaybackFailure(player: player, url: url, reason: "failed_to_end", error: error)
+        }
+    }
+
+    private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
+        let nsError = (error ?? player.currentItem?.error) as NSError?
+        var event = "video_stalled reason=\(reason) url=\(url.lastPathComponent)"
+
+        if let nsError {
+            event += " domain=\(nsError.domain) code=\(nsError.code)"
+        }
+
+        if let statusCode = player.currentItem?.errorLog()?.events.last?.errorStatusCode, statusCode > 0 {
+            event += " status=\(statusCode)"
+        }
+
+        MediaPerformance.mark(event)
     }
 }
 

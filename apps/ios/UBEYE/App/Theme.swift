@@ -842,6 +842,8 @@ final class WarmVideoPlayerPool {
         if let player = players.removeValue(forKey: url) {
             order.removeAll { $0 == url }
             player.pause()
+            player.isMuted = false
+            player.volume = 1
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             return player
         }
@@ -856,6 +858,8 @@ final class WarmVideoPlayerPool {
         item.preferredForwardBufferDuration = isStreaming ? 6 : 3
 
         let player = AVPlayer(playerItem: item)
+        player.isMuted = false
+        player.volume = 1
         player.automaticallyWaitsToMinimizeStalling = isStreaming
         return player
     }
