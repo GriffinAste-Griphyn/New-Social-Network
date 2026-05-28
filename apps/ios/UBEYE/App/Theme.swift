@@ -877,6 +877,11 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     let url: URL?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
+    private let retryDelays: [Duration] = [
+        .milliseconds(450),
+        .seconds(1),
+        .seconds(2)
+    ]
     @State private var loadedImage: UIImage?
     @State private var loadedImageURL: URL?
 
@@ -919,9 +924,26 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         loadedImage = nil
         loadedImageURL = nil
 
-        if let image = await MediaImageCache.shared.loadImage(for: url) {
-            loadedImage = image
-            loadedImageURL = url
+        for attempt in 0...retryDelays.count {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if let image = await MediaImageCache.shared.loadImage(for: url) {
+                guard self.url == url else {
+                    return
+                }
+
+                loadedImage = image
+                loadedImageURL = url
+                return
+            }
+
+            guard attempt < retryDelays.count else {
+                return
+            }
+
+            try? await Task.sleep(for: retryDelays[attempt])
         }
     }
 }

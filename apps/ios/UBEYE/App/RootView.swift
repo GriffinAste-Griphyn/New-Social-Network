@@ -101,7 +101,7 @@ struct MainTabView: View {
             return
         }
 
-        NotificationCenter.default.post(name: .storyUploadDidRegister, object: response)
+        notifyStoryUploadDidRegister(response)
 
         if response.asset.assetKind == .video && response.processingStatus != "ready" {
             storyUploadNotice.showProcessing()
@@ -120,6 +120,13 @@ struct MainTabView: View {
             api.invalidateStoryStacks(ids: ["my-story", response.storyId])
             storyUploadNotice.showPosted()
             NotificationCenter.default.post(name: .storyUploadDidComplete, object: nil)
+        }
+    }
+
+    private func notifyStoryUploadDidRegister(_ response: StoryUploadResponse) {
+        Task { @MainActor in
+            await Task.yield()
+            NotificationCenter.default.post(name: .storyUploadDidRegister, object: response)
         }
     }
 }
