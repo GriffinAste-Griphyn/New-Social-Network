@@ -246,6 +246,8 @@ struct StoryStackViewer: View {
     @State private var storyProgress = 0.0
     @State private var timedStoryId: String?
     @State private var didFinishCurrentItem = false
+    @State private var deleteConfirmationItem: StoryStackItem?
+    @State private var isDeleteConfirmationPresented = false
     @State private var reportingItem: StoryStackItem?
     @State private var repliesSheetItem: StoryStackItem?
     @State private var confirmationDismissTask: Task<Void, Never>?
@@ -293,6 +295,7 @@ struct StoryStackViewer: View {
                     storyChrome(stack: stack, item: item)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .allowsHitTesting(true)
+                        .zIndex(1)
 
                     if let repliesSheetItem {
                         Color.black.opacity(0.001)
@@ -342,6 +345,22 @@ struct StoryStackViewer: View {
                     await store.report(item: item, reason: reason, details: details, api: api)
                 }
             )
+        }
+        .confirmationDialog(
+            "Delete this story?",
+            isPresented: $isDeleteConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete story", role: .destructive) {
+                if let item = deleteConfirmationItem {
+                    Task { await deleteStory(item) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                deleteConfirmationItem = nil
+            }
+        } message: {
+            Text("This removes the story from your profile and followers' feeds.")
         }
     }
 
@@ -402,6 +421,14 @@ struct StoryStackViewer: View {
 
             if let confirmation = store.reportConfirmation {
                 replyConfirmationToast(confirmation)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.horizontal, UBEYEMetrics.screenInset)
+                    .padding(.bottom, replyConfirmationBottomInset(for: stack))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if let error = store.error, !error.isEmpty {
+                replyConfirmationToast(error)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, UBEYEMetrics.screenInset)
                     .padding(.bottom, replyConfirmationBottomInset(for: stack))
@@ -603,12 +630,10 @@ struct StoryStackViewer: View {
             StoryViewerActions(
                 isOwnStack: isOwnStack(stack),
                 actionSize: storyActionSize,
+                isPerformingAction: store.isPerformingAction,
                 deleteStory: {
-                    Task {
-                        if await store.delete(item: item, api: api) {
-                            dismiss()
-                        }
-                    }
+                    deleteConfirmationItem = item
+                    isDeleteConfirmationPresented = true
                 },
                 reportStory: {
                     reportingItem = item
@@ -632,6 +657,12 @@ struct StoryStackViewer: View {
             .fixedSize()
         }
         .frame(maxWidth: .infinity, minHeight: storyAvatarSize, alignment: .leading)
+    }
+
+    private func deleteStory(_ item: StoryStackItem) async {
+        if await store.delete(item: item, api: api) {
+            dismiss()
+        }
     }
 
     private func discoverFollowButton() -> some View {
@@ -1437,6 +1468,7 @@ private struct ReportStoryReasonView: View {
 private struct StoryViewerActions: View {
     let isOwnStack: Bool
     let actionSize: CGFloat
+    let isPerformingAction: Bool
     let deleteStory: () -> Void
     let reportStory: () -> Void
     let blockCreator: () -> Void
@@ -1446,12 +1478,16 @@ private struct StoryViewerActions: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            Menu {
-                if isOwnStack {
-                    Button(role: .destructive, action: deleteStory) {
-                        Label("Delete story", systemImage: "trash")
-                    }
-                } else {
+            if isOwnStack {
+                Button(action: deleteStory) {
+                    StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
+                }
+                .buttonStyle(.plain)
+                .disabled(isPerformingAction)
+                .opacity(isPerformingAction ? 0.55 : 1)
+                .accessibilityLabel("Delete story")
+            } else {
+                Menu {
                     if canUnfollowCreator {
                         Button(role: .destructive, action: unfollowCreator) {
                             Label("Unfollow creator", systemImage: "person.badge.minus")
@@ -1463,9 +1499,9 @@ private struct StoryViewerActions: View {
                     Button(role: .destructive, action: blockCreator) {
                         Label("Block creator", systemImage: "hand.raised")
                     }
+                } label: {
+                    StoryViewerActionIcon(systemImage: "ellipsis", size: actionSize, fontSize: 19)
                 }
-            } label: {
-                StoryViewerActionIcon(systemImage: "ellipsis", size: actionSize, fontSize: 19)
             }
 
             Button(action: close) {
