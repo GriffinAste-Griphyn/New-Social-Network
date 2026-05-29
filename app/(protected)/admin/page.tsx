@@ -473,7 +473,7 @@ function SafetyReportRow({ report }: { report: AdminSafetyReport }) {
           <input type="hidden" name="status" value="actioned" />
           <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#fecdd3] bg-[#fff1f2] px-4 text-sm font-medium text-[#be123c]">
             <Trash2 className="size-4" />
-            Action
+            Remove + Suspend
           </button>
         </form>
       </div>

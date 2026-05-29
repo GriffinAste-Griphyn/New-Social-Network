@@ -39,6 +39,7 @@ const sections = [
   {
     title: "Community Safety",
     body: [
+      "UBEYE has no tolerance for objectionable content or abusive users. Do not post or promote abusive, hateful, harassing, exploitative, sexually explicit, violent, illegal, infringing, or otherwise objectionable content.",
       "UBEYE may provide tools to report content, report users, block users, or restrict interactions.",
       "We may remove content, limit distribution, restrict accounts, preserve records, or take other action when needed for safety, legal compliance, moderation, service integrity, or fraud prevention.",
       "You may not use UBEYE to scrape data, spam users, manipulate engagement, evade restrictions, interfere with systems, or abuse payout or advertiser features.",

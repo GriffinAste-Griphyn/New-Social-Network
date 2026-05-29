@@ -65,6 +65,7 @@ type AuthResult =
   | { ok: false; reason: "email_unverified"; message: string; user: AuthUser }
   | { ok: false; reason: "locked"; message: string }
   | { ok: false; reason: "rate_limited"; message: string }
+  | { ok: false; reason: "suspended"; message: string }
   | { ok: false; message: string }
 
 type GenericAuthResult = { ok: true; message: string } | { ok: false; message: string }
@@ -257,6 +258,14 @@ export async function authenticateUser(input: LoginInput): Promise<AuthResult> {
     return {
       ok: false,
       message: "Invalid email or password.",
+    }
+  }
+
+  if (user.creatorStatus === "suspended") {
+    return {
+      ok: false,
+      reason: "suspended",
+      message: "This account has been suspended for violating UBEYE rules.",
     }
   }
 

@@ -158,6 +158,10 @@ async function getSessionFromToken(token: string, kind: "web" | "mobile") {
     return null
   }
 
+  if (record.creatorStatus === "suspended") {
+    return null
+  }
+
   if (
     Date.now() - record.lastSeenAt.getTime() >
     sessionLastSeenWriteIntervalMs

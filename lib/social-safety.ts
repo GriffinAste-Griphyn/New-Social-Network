@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { and, desc, eq, or, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 
+import { revokeAllUserSessions } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import {
   creatorNotificationPreferences,
@@ -571,6 +572,7 @@ export async function reviewSafetyReport(input: {
     .where(eq(safetyReports.id, input.reportId))
     .returning({
       targetKind: safetyReports.targetKind,
+      targetUserId: safetyReports.targetUserId,
       targetStoryId: safetyReports.targetStoryId,
       targetInteractionId: safetyReports.targetInteractionId,
     })
@@ -598,7 +600,54 @@ export async function reviewSafetyReport(input: {
         })
         .where(eq(storyInteractions.id, report.targetInteractionId))
     }
+
+    if (report?.targetUserId) {
+      await suspendReportedUser({
+        userId: report.targetUserId,
+        reviewerId: input.reviewerId,
+      })
+    }
   }
+}
+
+async function suspendReportedUser(input: {
+  userId: string
+  reviewerId: string
+}) {
+  const now = new Date()
+  const reason = "Account suspended after an actioned safety report."
+  const db = getDb()
+
+  await Promise.all([
+    db
+      .update(users)
+      .set({
+        creatorStatus: "suspended",
+        isCreatorMode: false,
+        updatedAt: now,
+      })
+      .where(eq(users.id, input.userId)),
+    db
+      .update(stories)
+      .set({
+        status: "removed",
+        moderationStatus: "rejected",
+        moderationReason: reason,
+        reviewedAt: now,
+        reviewedByUserId: input.reviewerId,
+      })
+      .where(eq(stories.creatorId, input.userId)),
+    db
+      .update(storyInteractions)
+      .set({
+        moderationStatus: "rejected",
+        moderationReason: reason,
+        reviewedAt: now,
+        reviewedByUserId: input.reviewerId,
+      })
+      .where(eq(storyInteractions.actorId, input.userId)),
+    revokeAllUserSessions(input.userId),
+  ])
 }
 
 export async function countPendingSafetyReports() {
