@@ -14,6 +14,7 @@ import {
   userBlocks,
   users,
 } from "@/lib/db/schema"
+import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 
 export const safetyReportReasons = [
   "spam",
@@ -361,6 +362,10 @@ export async function reportStory(input: {
       reviewedByUserId: null,
     })
     .where(eq(stories.id, story.id))
+
+  await invalidateMobileFeedSnapshotsForCreator(story.creatorId).catch(
+    () => undefined,
+  )
 
   return reportId
 }
