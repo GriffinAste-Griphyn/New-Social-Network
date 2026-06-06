@@ -8,6 +8,7 @@ final class FeedStore: ObservableObject {
     @Published var error: String?
     private var storyStackPrefetchTask: Task<Void, Never>?
     private var lastNetworkLoadAt: Date?
+    private var uploadedStoryOverrides: [StoryUploadResponse] = []
     private let foregroundRefreshCooldown: TimeInterval = 45
 
     func load(api: APIClient, showsLoading: Bool = true, useDiskCache: Bool = true) async {
@@ -19,9 +20,12 @@ final class FeedStore: ObservableObject {
 
         if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
             feed = cached
+            applyUploadedStoryOverridesIfNeeded()
             MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
-            MediaPreheater.preheat(feed: cached)
-            let storyIds = storyStackPrefetchIds(from: cached)
+            if let feed {
+                MediaPreheater.preheat(feed: feed)
+            }
+            let storyIds = storyStackPrefetchIds(from: feed ?? cached)
             restoreInitialStoryStacks(ids: storyIds, api: api, refresh: false)
         }
 
@@ -30,15 +34,18 @@ final class FeedStore: ObservableObject {
             let response = try await api.mobileFeed()
             lastNetworkLoadAt = Date()
             feed = response
+            applyUploadedStoryOverridesIfNeeded()
             MediaPerformance.measure("feed_load", since: networkStartedAt)
-            MediaPreheater.preheat(feed: response)
+            if let feed {
+                MediaPreheater.preheat(feed: feed)
+            }
             restoreInitialStoryStacks(
-                ids: storyStackPrefetchIds(from: response),
+                ids: storyStackPrefetchIds(from: feed ?? response),
                 api: api,
                 refresh: true
             )
             scheduleStoryStackPrefetch(
-                ids: storyStackPrefetchIds(from: response),
+                ids: storyStackPrefetchIds(from: feed ?? response),
                 api: api,
                 refresh: true
             )
@@ -72,13 +79,37 @@ final class FeedStore: ObservableObject {
     }
 
     func registerUploadedStory(_ response: StoryUploadResponse) {
+        saveUploadedStoryOverride(response)
         guard let current = feed else {
             return
         }
 
+        feed = feedWithUploadedStory(response, in: current)
+    }
+
+    private func saveUploadedStoryOverride(_ response: StoryUploadResponse) {
+        uploadedStoryOverrides.removeAll { $0.storyId == response.storyId }
+        uploadedStoryOverrides.append(response)
+    }
+
+    private func applyUploadedStoryOverridesIfNeeded() {
+        guard let current = feed, !uploadedStoryOverrides.isEmpty else {
+            return
+        }
+
+        feed = uploadedStoryOverrides.reduce(current) { partialFeed, response in
+            feedWithUploadedStory(response, in: partialFeed)
+        }
+    }
+
+    private func feedWithUploadedStory(_ response: StoryUploadResponse, in current: MobileFeedResponse) -> MobileFeedResponse {
         let thumbnailUrl =
             response.asset.thumbnailUrl ??
             (response.asset.assetKind == .image ? response.asset.mediaUrl : nil)
+        if let thumbnailUrl {
+            MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
+        }
+
         let pendingStory = StoryCard(
             id: response.storyId,
             creator: current.myStory.owner.name,
@@ -107,7 +138,7 @@ final class FeedStore: ObservableObject {
             items: myStoryItems
         )
 
-        feed = MobileFeedResponse(
+        return MobileFeedResponse(
             ok: current.ok,
             session: current.session,
             followingProfiles: current.followingProfiles,
@@ -177,6 +208,8 @@ final class FeedStore: ObservableObject {
     }
 
     func removeDeletedStory(_ storyId: String) {
+        uploadedStoryOverrides.removeAll { $0.storyId == storyId }
+
         guard let current = feed else {
             return
         }
@@ -221,6 +254,7 @@ struct HomeView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
     @Environment(\.scenePhase) private var scenePhase
+    var uploadedStoryRegistrations: [StoryUploadResponse] = []
     var onSearchTap: () -> Void = {}
     var onDiscoverTap: () -> Void = {}
     @StateObject private var store = FeedStore()
@@ -260,6 +294,9 @@ struct HomeView: View {
             .ubeyeScreen()
             .task {
                 await store.load(api: api)
+            }
+            .task(id: uploadedStoryRegistrationKey) {
+                applyUploadedStoryRegistrations()
             }
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
                 Task {
@@ -318,6 +355,16 @@ struct HomeView: View {
                     }
                 )
             }
+        }
+    }
+
+    private var uploadedStoryRegistrationKey: String {
+        uploadedStoryRegistrations.map(\.storyId).joined(separator: ",")
+    }
+
+    private func applyUploadedStoryRegistrations() {
+        for response in uploadedStoryRegistrations {
+            store.registerUploadedStory(response)
         }
     }
 

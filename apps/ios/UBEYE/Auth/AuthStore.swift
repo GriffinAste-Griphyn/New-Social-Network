@@ -34,6 +34,15 @@ final class AuthStore: ObservableObject {
         }
 
         applySession(stored, api: api)
+
+        do {
+            _ = try await api.mobileFeed()
+        } catch {
+            if (error as? APIClientError)?.statusCode == 401 ||
+                (error as? APIClientError)?.statusCode == 403 {
+                signOut(api: api)
+            }
+        }
     }
 
     func login(email: String, password: String, api: APIClient) async {

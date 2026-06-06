@@ -8,6 +8,7 @@ struct AuthView: View {
     @State private var verificationCode = ""
     @State private var displayName = ""
     @State private var handle = ""
+    @State private var hasAcceptedTerms = false
 
     var body: some View {
         NavigationStack {
@@ -57,6 +58,7 @@ struct AuthView: View {
             }
             .scrollIndicators(.hidden)
             .ubeyeScreen()
+            #if DEBUG
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
@@ -68,6 +70,7 @@ struct AuthView: View {
                     }
                 }
             }
+            #endif
         }
     }
 
@@ -109,25 +112,30 @@ struct AuthView: View {
         VStack(spacing: 14) {
             switch auth.stage {
             case .landing:
-                PrimaryButton(title: "Sign up") {
-                    auth.stage = .signup
-                }
-                Button {
-                    auth.stage = .login
-                } label: {
-                        Text("Log in")
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .foregroundStyle(Color.ubeyeInk)
-                        .background(Color.white)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.ubeyeBorder, lineWidth: 1))
+                VStack(spacing: 10) {
+                    PrimaryButton(title: "Sign up") {
+                        hasAcceptedTerms = false
+                        auth.stage = .signup
+                    }
+                    Button {
+                        hasAcceptedTerms = false
+                        auth.stage = .login
+                    } label: {
+                            Text("Log in")
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .foregroundStyle(Color.ubeyeInk)
+                            .background(Color.white)
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.ubeyeBorder, lineWidth: 1))
+                    }
                 }
             case .login:
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
-                PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting) {
+                legalAgreementView(mode: .compact)
+                PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting, isDisabled: !hasAcceptedTerms) {
                     verificationCode = ""
                     Task { await auth.login(email: email, password: password, api: api) }
                 }
@@ -139,7 +147,8 @@ struct AuthView: View {
             case .signup:
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
-                PrimaryButton(title: "Create account", isLoading: auth.isSubmitting) {
+                legalAgreementView(mode: .full)
+                PrimaryButton(title: "Create account", isLoading: auth.isSubmitting, isDisabled: !hasAcceptedTerms) {
                     verificationCode = ""
                     Task { await auth.signup(email: email, password: password, api: api) }
                 }
@@ -173,6 +182,74 @@ struct AuthView: View {
         }
         .padding(auth.stage == .landing ? 18 : 16)
         .ubeyeCard()
+    }
+
+    private enum LegalAgreementMode {
+        case compact
+        case full
+    }
+
+    private func legalAgreementView(mode: LegalAgreementMode) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 9) {
+                Button {
+                    hasAcceptedTerms.toggle()
+                } label: {
+                    Image(systemName: hasAcceptedTerms ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(hasAcceptedTerms ? Color.ubeyeRed : Color.ubeyeMuted)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasAcceptedTerms ? "Terms accepted" : "Accept terms")
+
+                Button {
+                    hasAcceptedTerms.toggle()
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(mode == .full ? "Terms / EULA" : "I accept UBEYE's Terms / EULA")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.ubeyeInk)
+
+                        Text(legalAgreementCopy(for: mode))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.ubeyeMuted)
+                            .lineSpacing(1)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasAcceptedTerms ? "Terms accepted" : "Accept terms")
+            }
+
+            HStack(spacing: 12) {
+                Link("Terms", destination: URL(string: "https://www.ubeye.ai/terms")!)
+                Link("Community Guidelines", destination: URL(string: "https://www.ubeye.ai/community-guidelines")!)
+            }
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(Color.ubeyeRed)
+            .padding(.leading, 33)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .background(
+            hasAcceptedTerms ? Color.ubeyeRed.opacity(0.045) : Color.white,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(hasAcceptedTerms ? Color.ubeyeRed.opacity(0.28) : Color.ubeyeBorder.opacity(0.9), lineWidth: 1)
+        )
+    }
+
+    private func legalAgreementCopy(for mode: LegalAgreementMode) -> String {
+        switch mode {
+        case .compact:
+            "No tolerance for objectionable content or abusive users."
+        case .full:
+            "I agree to UBEYE's Terms and Community Guidelines. No tolerance for objectionable content or abusive users."
+        }
     }
 }
 

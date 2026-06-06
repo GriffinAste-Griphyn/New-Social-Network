@@ -38,12 +38,14 @@ struct MainTabView: View {
     @State private var discoverSearchFocusRequest = 0
     @State private var isShowingProfile = false
     @State private var pendingQuotedReply: QuotedStoryReply?
+    @State private var recentUploadedStoryRegistrations: [StoryUploadResponse] = []
 
     var body: some View {
         ZStack {
             switch selectedTab {
             case .home:
                 HomeView(
+                    uploadedStoryRegistrations: recentUploadedStoryRegistrations,
                     onSearchTap: {
                         discoverSearchFocusRequest += 1
                         selectedTab = .discover
@@ -91,6 +93,7 @@ struct MainTabView: View {
 
     private func handleStoryUpload(_ response: StoryUploadResponse) {
         pendingQuotedReply = nil
+        rememberStoryUpload(response)
         selectedTab = .home
         if let thumbnailUrl = response.asset.thumbnailUrl {
             MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
@@ -127,6 +130,16 @@ struct MainTabView: View {
         Task { @MainActor in
             await Task.yield()
             NotificationCenter.default.post(name: .storyUploadDidRegister, object: response)
+        }
+    }
+
+    private func rememberStoryUpload(_ response: StoryUploadResponse) {
+        recentUploadedStoryRegistrations.removeAll { $0.storyId == response.storyId }
+        recentUploadedStoryRegistrations.append(response)
+        if recentUploadedStoryRegistrations.count > 8 {
+            recentUploadedStoryRegistrations.removeFirst(
+                recentUploadedStoryRegistrations.count - 8
+            )
         }
     }
 }

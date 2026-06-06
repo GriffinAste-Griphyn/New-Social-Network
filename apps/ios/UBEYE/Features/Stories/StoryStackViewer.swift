@@ -208,6 +208,8 @@ final class StoryStackStore: ObservableObject {
                 reason: reason.rawValue,
                 details: details
             )
+            api.invalidateStoryStacks(ids: [item.id, stack?.id].compactMap { $0 })
+            api.invalidateMobileFeedCache()
             reportConfirmation = "Story reported"
             return true
         } catch {
@@ -376,13 +378,21 @@ struct StoryStackViewer: View {
                     url: item.mediaUrl,
                     thumbnailUrl: item.thumbnailUrl,
                     showsThumbnailWhileLoading: false,
+                    isPaused: shouldPauseVideoPlayback,
                     onReadyForPlayback: {
                         guard timedStoryId == item.id else {
                             return
                         }
                         videoReadyItemId = item.id
+                    },
+                    onProgress: { progress in
+                        updateVideoStoryProgress(progress, item: item)
+                    },
+                    onFinished: {
+                        finishVideoStory(item)
                     }
                 )
+                .id(item.id)
             } else {
                 CachedAsyncImage(url: item.mediaUrl) { image in
                     image
@@ -648,7 +658,7 @@ struct StoryStackViewer: View {
                     isDeleteConfirmationPresented = true
                 },
                 reportStory: {
-                    reportingItem = item
+                    presentReportScreen(for: item)
                 },
                 blockCreator: {
                     Task {
@@ -953,6 +963,11 @@ struct StoryStackViewer: View {
         }
 
         startStoryTimerIfNeeded(for: item)
+
+        if item.assetKind == .video {
+            return
+        }
+
         let duration = displayDuration(for: item)
 
         if shouldPauseStoryProgress {
@@ -966,7 +981,33 @@ struct StoryStackViewer: View {
             return
         }
 
+        finishCurrentItem(item)
+    }
+
+    private func updateVideoStoryProgress(_ progress: Double, item: StoryStackItem) {
+        guard timedStoryId == item.id, !didFinishCurrentItem else {
+            return
+        }
+
+        storyProgress = min(max(progress, 0), 1)
+    }
+
+    private func finishVideoStory(_ item: StoryStackItem) {
+        guard timedStoryId == item.id, !shouldPauseVideoPlayback else {
+            return
+        }
+
+        finishCurrentItem(item)
+    }
+
+    private func finishCurrentItem(_ item: StoryStackItem) {
+        guard let stack = store.stack, !didFinishCurrentItem else {
+            return
+        }
+
         didFinishCurrentItem = true
+        storyProgress = 1
+
         if index < stack.items.count - 1 {
             move(1, item: item)
         } else {
@@ -983,12 +1024,23 @@ struct StoryStackViewer: View {
         return defaultStoryDurationSeconds
     }
 
+    private func presentReportScreen(for item: StoryStackItem) {
+        reportingItem = nil
+        DispatchQueue.main.async {
+            reportingItem = item
+        }
+    }
+
     private var shouldPauseStoryProgress: Bool {
+        shouldPauseVideoPlayback ||
+            isWaitingForCurrentVideo
+    }
+
+    private var shouldPauseVideoPlayback: Bool {
         isReplyFieldFocused ||
             repliesSheetItem != nil ||
             store.isSendingReply ||
-            !store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            isWaitingForCurrentVideo
+            !store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var isWaitingForCurrentVideo: Bool {
@@ -1285,20 +1337,45 @@ enum StoryReportReason: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var iconName: String {
+        switch self {
+        case .spam:
+            return "exclamationmark.bubble"
+        case .harassment:
+            return "person.crop.circle.badge.exclamationmark"
+        case .hate:
+            return "hand.raised"
+        case .sexualContent:
+            return "eye.slash"
+        case .violence:
+            return "exclamationmark.triangle"
+        case .selfHarm:
+            return "heart.text.square"
+        case .illegalGoods:
+            return "shippingbox"
+        case .impersonation:
+            return "person.crop.circle.badge.questionmark"
+        case .intellectualProperty:
+            return "doc.badge.gearshape"
+        case .other:
+            return "ellipsis.circle"
+        }
+    }
+
     var title: String {
         switch self {
         case .spam:
-            return "Spam, scam, or misleading"
+            return "Spam, scam, or fraud"
         case .harassment:
             return "Harassment or bullying"
         case .hate:
-            return "Hate speech or symbols"
+            return "Hate speech or hateful symbols"
         case .sexualContent:
             return "Nudity or sexual content"
         case .violence:
-            return "Violence or dangerous acts"
+            return "Violence or dangerous behavior"
         case .selfHarm:
-            return "Self-harm or suicide"
+            return "Self-harm, suicide, or eating disorder"
         case .illegalGoods:
             return "Illegal or regulated goods"
         case .impersonation:
@@ -1313,27 +1390,51 @@ enum StoryReportReason: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .spam:
-            return "Fake engagement, scams, or deceptive content."
+            return "Fake giveaways, phishing, scams, bot activity, or deceptive engagement."
         case .harassment:
-            return "Threats, targeted abuse, or unwanted attacks."
+            return "Threats, intimidation, targeted insults, bullying, or unwanted attacks."
         case .hate:
-            return "Attacks based on identity or protected traits."
+            return "Attacks, slurs, or dehumanizing content based on protected traits."
         case .sexualContent:
-            return "Explicit nudity, solicitation, or sexual content."
+            return "Explicit nudity, sexual solicitation, exploitation, or unwanted sexual content."
         case .violence:
-            return "Graphic violence, threats, or dangerous behavior."
+            return "Graphic injury, credible threats, weapons, dangerous acts, or praise of violence."
         case .selfHarm:
-            return "Content encouraging self-harm or suicide."
+            return "Content encouraging, instructing, or glorifying self-injury or suicide."
         case .illegalGoods:
-            return "Drugs, weapons, or other restricted products."
+            return "Drugs, weapons, counterfeit items, regulated sales, or other restricted products."
         case .impersonation:
-            return "Pretending to be another person or brand."
+            return "Pretending to be someone else, a brand, a public figure, or a business."
         case .intellectualProperty:
-            return "Copyright, trademark, or stolen content."
+            return "Copyright, trademark, stolen media, or content used without permission."
         case .other:
-            return "Another safety issue."
+            return "Something else that violates UBEYE's Community Guidelines."
         }
     }
+}
+
+private struct StoryReportReasonSection: Identifiable {
+    let id: String
+    let title: String
+    let reasons: [StoryReportReason]
+
+    static let all: [StoryReportReasonSection] = [
+        StoryReportReasonSection(
+            id: "safety",
+            title: "Safety",
+            reasons: [.harassment, .hate, .violence, .selfHarm]
+        ),
+        StoryReportReasonSection(
+            id: "content",
+            title: "Content",
+            reasons: [.sexualContent, .illegalGoods, .spam]
+        ),
+        StoryReportReasonSection(
+            id: "identity",
+            title: "Identity and rights",
+            reasons: [.impersonation, .intellectualProperty, .other]
+        ),
+    ]
 }
 
 private struct ReportStoryReasonView: View {
@@ -1349,59 +1450,27 @@ private struct ReportStoryReasonView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        header
 
-                    VStack(spacing: 10) {
-                        ForEach(StoryReportReason.allCases) { reason in
-                            reasonRow(reason)
+                        ForEach(StoryReportReasonSection.all) { section in
+                            reasonSection(section)
+                        }
+
+                        detailsSection
+
+                        if let error {
+                            InlineNotice(message: error, isError: true)
                         }
                     }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Additional details")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(Color.ubeyeInk)
-                        TextEditor(text: $details)
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(minHeight: 92)
-                            .padding(10)
-                            .scrollContentBackground(.hidden)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(Color.ubeyeBorder, lineWidth: 1)
-                            )
-                    }
-
-                    if let error {
-                        InlineNotice(message: error, isError: true)
-                    }
-
-                    Button {
-                        Task { await submitReport() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if isSubmitting {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .tint(.white)
-                            }
-                            Text(isSubmitting ? "Submitting" : "Submit report")
-                        }
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .foregroundStyle(.white)
-                        .background(selectedReason == nil ? Color.ubeyeMuted.opacity(0.45) : Color.ubeyeRed, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(selectedReason == nil || isSubmitting)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 22)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 32)
+
+                submitBar
             }
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
@@ -1421,51 +1490,144 @@ private struct ReportStoryReasonView: View {
                         .background(Color.ubeyeSubtle, in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close report story")
 
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text("Report story")
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.system(size: 31, weight: .bold))
                     .foregroundStyle(Color.ubeyeInk)
-                Text("Choose why this story from \(creatorName) should be reviewed.")
-                    .font(.system(size: 14, weight: .semibold))
+
+                Text("Why are you reporting this story from \(creatorName)?")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.ubeyeInk)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("Choose the closest reason. Reports are reviewed against UBEYE's Community Guidelines.")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.ubeyeMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
+    private func reasonSection(_ section: StoryReportReasonSection) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(section.title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.ubeyeMuted)
+                .textCase(.uppercase)
+
+            VStack(spacing: 8) {
+                ForEach(section.reasons) { reason in
+                    reasonRow(reason)
+                }
+            }
+        }
+    }
+
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Add details")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.ubeyeInk)
+
+            TextEditor(text: $details)
+                .font(.system(size: 15, weight: .medium))
+                .frame(minHeight: 96)
+                .padding(10)
+                .scrollContentBackground(.hidden)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.ubeyeBorder, lineWidth: 1)
+                )
+                .accessibilityLabel("Additional report details")
+
+            Text("Optional, but helpful for review.")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.ubeyeMuted)
+        }
+    }
+
+    private var submitBar: some View {
+        VStack(spacing: 10) {
+            Divider()
+
+            VStack(spacing: 9) {
+                Button {
+                    Task { await submitReport() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isSubmitting {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(.white)
+                        }
+                        Text(isSubmitting ? "Submitting report" : "Submit report")
+                    }
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .foregroundStyle(.white)
+                    .background(selectedReason == nil ? Color.ubeyeMuted.opacity(0.45) : Color.ubeyeRed, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedReason == nil || isSubmitting)
+
+                Text(selectedReason == nil ? "Select a reason to continue." : "UBEYE reviews reports and may remove content or restrict accounts.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        }
+        .background(Color.ubeyeBackground)
+    }
+
     private func reasonRow(_ reason: StoryReportReason) -> some View {
         Button {
             selectedReason = reason
         } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: reason.iconName)
+                    .font(.system(size: 17, weight: .bold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(selectedReason == reason ? .white : Color.ubeyeRed)
+                    .background(
+                        selectedReason == reason ? Color.ubeyeRed : Color.ubeyeRed.opacity(0.09),
+                        in: Circle()
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
                     Text(reason.title)
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Color.ubeyeInk)
                     Text(reason.subtitle)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.ubeyeMuted)
-                        .lineLimit(2)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                Spacer(minLength: 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Image(systemName: selectedReason == reason ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(selectedReason == reason ? Color.ubeyeRed : Color.ubeyeMuted.opacity(0.55))
             }
             .padding(12)
-            .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(selectedReason == reason ? Color.ubeyeRed.opacity(0.055) : .white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(selectedReason == reason ? Color.ubeyeRed.opacity(0.45) : Color.ubeyeBorder, lineWidth: 1)
+                    .stroke(selectedReason == reason ? Color.ubeyeRed.opacity(0.5) : Color.ubeyeBorder, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(reason.title)
     }
 
     private func submitReport() async {
@@ -1498,6 +1660,8 @@ private struct StoryViewerActions: View {
     let unfollowCreator: () -> Void
     let close: () -> Void
 
+    @State private var isActionDialogPresented = false
+
     var body: some View {
         HStack(spacing: 16) {
             if isOwnStack {
@@ -1509,20 +1673,35 @@ private struct StoryViewerActions: View {
                 .opacity(isPerformingAction ? 0.55 : 1)
                 .accessibilityLabel("Delete story")
             } else {
-                Menu {
-                    if canUnfollowCreator {
-                        Button(role: .destructive, action: unfollowCreator) {
-                            Label("Unfollow creator", systemImage: "person.badge.minus")
-                        }
-                    }
-                    Button(action: reportStory) {
-                        Label("Report story", systemImage: "flag")
-                    }
-                    Button(role: .destructive, action: blockCreator) {
-                        Label("Block creator", systemImage: "hand.raised")
-                    }
+                Button {
+                    isActionDialogPresented = true
                 } label: {
                     StoryViewerActionIcon(systemImage: "ellipsis", size: actionSize, fontSize: 19)
+                }
+                .buttonStyle(.plain)
+                .disabled(isPerformingAction)
+                .opacity(isPerformingAction ? 0.55 : 1)
+                .accessibilityLabel("Story options")
+                .confirmationDialog(
+                    "Story options",
+                    isPresented: $isActionDialogPresented,
+                    titleVisibility: .visible
+                ) {
+                    Button("Report story") {
+                        reportStory()
+                    }
+
+                    if canUnfollowCreator {
+                        Button("Unfollow creator", role: .destructive) {
+                            unfollowCreator()
+                        }
+                    }
+
+                    Button("Block creator", role: .destructive) {
+                        blockCreator()
+                    }
+
+                    Button("Cancel", role: .cancel) {}
                 }
             }
 
@@ -1552,35 +1731,38 @@ struct AutoPlayVideoPlayer: View {
     let url: URL
     let thumbnailUrl: URL?
     let showsThumbnailWhileLoading: Bool
+    let isPaused: Bool
     let onReadyForPlayback: () -> Void
-    @State private var player: AVPlayer?
-    @State private var isReadyForPlayback = false
-    @State private var stallObserver: NSObjectProtocol?
-    @State private var playbackFailureObserver: NSObjectProtocol?
-    @State private var playTask: Task<Void, Never>?
-    @State private var revealTask: Task<Void, Never>?
-    @State private var playbackStartedAt: Date?
+    let onProgress: (Double) -> Void
+    let onFinished: () -> Void
+    @StateObject private var playback = AutoPlayVideoPlaybackController()
 
     init(
         url: URL,
         thumbnailUrl: URL? = nil,
         showsThumbnailWhileLoading: Bool = true,
-        onReadyForPlayback: @escaping () -> Void = {}
+        isPaused: Bool = false,
+        onReadyForPlayback: @escaping () -> Void = {},
+        onProgress: @escaping (Double) -> Void = { _ in },
+        onFinished: @escaping () -> Void = {}
     ) {
         self.url = url
         self.thumbnailUrl = thumbnailUrl
         self.showsThumbnailWhileLoading = showsThumbnailWhileLoading
+        self.isPaused = isPaused
         self.onReadyForPlayback = onReadyForPlayback
+        self.onProgress = onProgress
+        self.onFinished = onFinished
     }
 
     var body: some View {
         ZStack {
-            AspectFitVideoPlayer(player: player) {
-                revealVideo(reason: "layer_ready", since: playbackStartedAt ?? Date())
+            AspectFitVideoPlayer(player: playback.player) {
+                playback.revealVideo(reason: "layer_ready")
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if showsThumbnailWhileLoading, !isReadyForPlayback, let thumbnailUrl {
+            if showsThumbnailWhileLoading, !playback.isReadyForPlayback, let thumbnailUrl {
                 CachedAsyncImage(url: thumbnailUrl) { image in
                     image
                         .resizable()
@@ -1593,36 +1775,76 @@ struct AutoPlayVideoPlayer: View {
         }
         .background(Color.black)
         .onAppear {
-            play(url)
+            playback.play(
+                url: url,
+                isPaused: isPaused,
+                onReadyForPlayback: onReadyForPlayback,
+                onProgress: onProgress,
+                onFinished: onFinished
+            )
         }
         .onChange(of: url) { _, nextURL in
-            play(nextURL)
+            playback.play(
+                url: nextURL,
+                isPaused: isPaused,
+                onReadyForPlayback: onReadyForPlayback,
+                onProgress: onProgress,
+                onFinished: onFinished
+            )
+        }
+        .onChange(of: isPaused) { _, nextValue in
+            playback.setPaused(nextValue)
         }
         .onDisappear {
-            playTask?.cancel()
-            playTask = nil
-            revealTask?.cancel()
-            revealTask = nil
-            if let stallObserver {
-                NotificationCenter.default.removeObserver(stallObserver)
-                self.stallObserver = nil
-            }
-            if let playbackFailureObserver {
-                NotificationCenter.default.removeObserver(playbackFailureObserver)
-                self.playbackFailureObserver = nil
-            }
-            player?.pause()
-            player = nil
-            isReadyForPlayback = false
-            playbackStartedAt = nil
+            playback.stop(reason: "disappear")
         }
     }
+}
 
-    private func play(_ url: URL) {
+@MainActor
+private final class AutoPlayVideoPlaybackController: ObservableObject {
+    @Published private(set) var player: AVPlayer?
+    @Published private(set) var isReadyForPlayback = false
+
+    private var activeURL: URL?
+    private var isPaused = false
+    private var didFinishPlayback = false
+    private var stallObserver: NSObjectProtocol?
+    private var playbackFailureObserver: NSObjectProtocol?
+    private var playbackEndObserver: NSObjectProtocol?
+    private var timeObserver: Any?
+    private weak var timeObserverPlayer: AVPlayer?
+    private var playTask: Task<Void, Never>?
+    private var revealTask: Task<Void, Never>?
+    private var playbackStartedAt: Date?
+    private var onReadyForPlayback: () -> Void = {}
+    private var onProgress: (Double) -> Void = { _ in }
+    private var onFinished: () -> Void = {}
+
+    func play(
+        url: URL,
+        isPaused: Bool,
+        onReadyForPlayback: @escaping () -> Void,
+        onProgress: @escaping (Double) -> Void,
+        onFinished: @escaping () -> Void
+    ) {
+        self.onReadyForPlayback = onReadyForPlayback
+        self.onProgress = onProgress
+        self.onFinished = onFinished
+        self.isPaused = isPaused
+
+        if activeURL == url, player != nil {
+            setPaused(isPaused)
+            return
+        }
+
+        cleanupCurrentPlayer(reason: activeURL == nil ? nil : "replace")
+        activeURL = url
         playTask?.cancel()
         revealTask?.cancel()
         revealTask = nil
         isReadyForPlayback = false
+        didFinishPlayback = false
         playTask = Task { @MainActor in
             let startedAt = Date()
             playbackStartedAt = startedAt
@@ -1656,9 +1878,33 @@ struct AutoPlayVideoPlayer: View {
             observeReadiness(player: next, url: url, startedAt: startedAt)
             observeStalls(player: next, url: url)
             observeFailures(player: next, url: url)
+            observeCompletion(player: next, url: url)
+            observeProgress(player: next)
             AppAudioSession.configureForVideoPlayback()
-            next.play()
+            if isPaused {
+                next.pause()
+            } else {
+                next.play()
+            }
         }
+    }
+
+    func setPaused(_ isPaused: Bool) {
+        self.isPaused = isPaused
+        guard let player else {
+            return
+        }
+
+        if isPaused {
+            player.pause()
+        } else if !didFinishPlayback {
+            player.play()
+        }
+    }
+
+    func stop(reason: String) {
+        cleanupCurrentPlayer(reason: reason)
+        activeURL = nil
     }
 
     private func observeReadiness(player: AVPlayer, url: URL, startedAt: Date) {
@@ -1683,12 +1929,12 @@ struct AutoPlayVideoPlayer: View {
                         player.currentTime().seconds > 0.05
 
                     if hasVideoSize || hasPlaybackStarted || attempt > 6 {
-                        revealVideo(reason: "item_ready", since: startedAt)
+                        revealVideo(reason: "item_ready")
                         return
                     }
                 } else if player.timeControlStatus == .playing,
                           player.currentTime().seconds > 0.05 {
-                    revealVideo(reason: "playback_started", since: startedAt)
+                    revealVideo(reason: "playback_started")
                     return
                 } else if player.currentItem?.status == .failed {
                     logPlaybackFailure(player: player, url: url, reason: "item_failed")
@@ -1700,15 +1946,16 @@ struct AutoPlayVideoPlayer: View {
         }
     }
 
-    private func revealVideo(reason: String, since startedAt: Date) {
+    func revealVideo(reason: String) {
         guard !isReadyForPlayback else {
             return
         }
 
+        let startedAt = playbackStartedAt ?? Date()
         isReadyForPlayback = true
         onReadyForPlayback()
         MediaPerformance.measure(
-            "video_first_frame reason=\(reason) url=\(url.lastPathComponent)",
+            "video_first_frame reason=\(reason) url=\(activeURL?.lastPathComponent ?? "unknown")",
             since: startedAt
         )
     }
@@ -1722,8 +1969,14 @@ struct AutoPlayVideoPlayer: View {
             forName: .AVPlayerItemPlaybackStalled,
             object: player.currentItem,
             queue: .main
-        ) { _ in
-            MediaPerformance.mark("video_stalled url=\(url.lastPathComponent)")
+        ) { [weak self, weak player] _ in
+            Task { @MainActor in
+                guard let self, self.player === player else {
+                    return
+                }
+
+                MediaPerformance.mark("video_stalled url=\(url.lastPathComponent)")
+            }
         }
     }
 
@@ -1736,10 +1989,75 @@ struct AutoPlayVideoPlayer: View {
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: player.currentItem,
             queue: .main
-        ) { notification in
-            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-            logPlaybackFailure(player: player, url: url, reason: "failed_to_end", error: error)
+        ) { [weak self, weak player] notification in
+            Task { @MainActor in
+                guard let self, self.player === player, let player else {
+                    return
+                }
+
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                self.logPlaybackFailure(player: player, url: url, reason: "failed_to_end", error: error)
+            }
         }
+    }
+
+    private func observeCompletion(player: AVPlayer, url: URL) {
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+        }
+
+        playbackEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self, weak player] _ in
+            Task { @MainActor in
+                guard let self, self.player === player else {
+                    return
+                }
+
+                self.finishPlayback(url: url)
+            }
+        }
+    }
+
+    private func observeProgress(player: AVPlayer) {
+        removeTimeObserver()
+
+        let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
+        timeObserverPlayer = player
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
+            Task { @MainActor in
+                guard let self, self.player === player, let player else {
+                    return
+                }
+
+                self.publishProgress(currentTime: time, player: player)
+            }
+        }
+    }
+
+    private func publishProgress(currentTime: CMTime, player: AVPlayer) {
+        guard !didFinishPlayback,
+              let durationSeconds = finiteSeconds(player.currentItem?.duration),
+              durationSeconds > 0 else {
+            return
+        }
+
+        let currentSeconds = max(0, currentTime.seconds)
+        onProgress(min(max(currentSeconds / durationSeconds, 0), 1))
+    }
+
+    private func finishPlayback(url: URL) {
+        guard !didFinishPlayback else {
+            return
+        }
+
+        didFinishPlayback = true
+        isReadyForPlayback = true
+        onProgress(1)
+        MediaPerformance.mark("video_ended url=\(url.lastPathComponent)")
+        onFinished()
     }
 
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
@@ -1755,6 +2073,59 @@ struct AutoPlayVideoPlayer: View {
         }
 
         MediaPerformance.mark(event)
+    }
+
+    private func cleanupCurrentPlayer(reason: String?) {
+        playTask?.cancel()
+        playTask = nil
+        revealTask?.cancel()
+        revealTask = nil
+
+        if let stallObserver {
+            NotificationCenter.default.removeObserver(stallObserver)
+            self.stallObserver = nil
+        }
+        if let playbackFailureObserver {
+            NotificationCenter.default.removeObserver(playbackFailureObserver)
+            self.playbackFailureObserver = nil
+        }
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+            self.playbackEndObserver = nil
+        }
+
+        removeTimeObserver()
+
+        if let reason, let activeURL {
+            MediaPerformance.mark("video_dismissed reason=\(reason) url=\(activeURL.lastPathComponent)")
+        }
+
+        player?.pause()
+        player = nil
+        isReadyForPlayback = false
+        didFinishPlayback = false
+        playbackStartedAt = nil
+    }
+
+    private func removeTimeObserver() {
+        if let timeObserver, let timeObserverPlayer {
+            timeObserverPlayer.removeTimeObserver(timeObserver)
+        }
+        timeObserver = nil
+        timeObserverPlayer = nil
+    }
+
+    private func finiteSeconds(_ time: CMTime?) -> Double? {
+        guard let time, time.isNumeric else {
+            return nil
+        }
+
+        let seconds = time.seconds
+        guard seconds.isFinite, seconds > 0 else {
+            return nil
+        }
+
+        return seconds
     }
 }
 

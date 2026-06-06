@@ -381,7 +381,7 @@ final class StoryComposerStore: ObservableObject {
         try await api.uploadVideoFile(fileURL: preparedVideo.url, upload: upload)
         uploadStatus = "Finishing story"
 
-        return try await api.completeVideoStory(
+        let response = try await api.completeVideoStory(
             upload: upload,
             fileURL: preparedVideo.url,
             caption: caption,
@@ -399,6 +399,14 @@ final class StoryComposerStore: ObservableObject {
             durationMs: preparedVideo.durationMs,
             thumbnailData: thumbnailData
         )
+
+        await MediaFileDiskCache.shared.storeLocalFile(
+            sourceURL: preparedVideo.url,
+            for: response.asset.mediaUrl,
+            kind: .video
+        )
+        WarmVideoPlayerPool.shared.prepare(urls: [response.asset.mediaUrl], limit: 1)
+        return response
     }
 
     private func uploadVideoThumbnailIfPossible(

@@ -86,6 +86,7 @@ struct EmptyStateView: View {
 struct PrimaryButton: View {
     let title: String
     var isLoading = false
+    var isDisabled = false
     let action: () -> Void
 
     var body: some View {
@@ -100,11 +101,11 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 50)
-            .background(Color.ubeyeNavy)
+            .background(isDisabled ? Color.ubeyeMuted.opacity(0.45) : Color.ubeyeNavy)
             .clipShape(Capsule())
             .foregroundStyle(.white)
         }
-        .disabled(isLoading)
+        .disabled(isLoading || isDisabled)
     }
 }
 
@@ -247,6 +248,8 @@ enum MediaPerformance {
         "story_stack_prefetch_end",
         "story_stack_prefetch_start",
         "video_disk_cache_hit",
+        "video_dismissed",
+        "video_ended",
         "video_first_frame",
         "video_item_ready",
         "video_stalled",
@@ -531,15 +534,15 @@ actor MediaFileDiskCache {
     }
 
     func cachedFileURL(for url: URL) -> URL? {
-        let fileURL = fileURL(for: url)
+        let fileURLs = candidateFileURLs(for: url)
 
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            return nil
+        for fileURL in fileURLs where fileManager.fileExists(atPath: fileURL.path) {
+            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+            MediaPerformance.mark("media_file_cache_hit url=\(url.lastPathComponent)")
+            return fileURL
         }
 
-        try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
-        MediaPerformance.mark("media_file_cache_hit url=\(url.lastPathComponent)")
-        return fileURL
+        return nil
     }
 
     func playbackURL(for url: URL) -> URL {
@@ -552,6 +555,36 @@ actor MediaFileDiskCache {
 
     func removeAll() {
         try? fileManager.removeItem(at: rootURL)
+    }
+
+    @discardableResult
+    func storeLocalFile(sourceURL: URL, for url: URL, kind: MediaFileKind) async -> URL? {
+        guard canStoreLocalFile(for: url, kind: kind) else {
+            MediaPerformance.mark("media_file_cache_skip kind=\(kind.rawValue) url=\(url.lastPathComponent)")
+            return nil
+        }
+
+        let startedAt = Date()
+        let finalURL = fileURL(
+            for: url,
+            contentType: contentType(forLocalFile: sourceURL, kind: kind)
+        )
+
+        do {
+            try fileManager.createDirectory(
+                at: finalURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? fileManager.removeItem(at: finalURL)
+            try fileManager.copyItem(at: sourceURL, to: finalURL)
+            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: finalURL.path)
+            pruneIfNeeded()
+            MediaPerformance.measure("media_file_cache_write kind=\(kind.rawValue) url=\(url.lastPathComponent)", since: startedAt)
+            return finalURL
+        } catch {
+            MediaPerformance.mark("media_file_cache_failed kind=\(kind.rawValue) url=\(url.lastPathComponent)")
+            return nil
+        }
     }
 
     @discardableResult
@@ -612,13 +645,62 @@ actor MediaFileDiskCache {
         }
     }
 
+    private func canStoreLocalFile(for url: URL, kind: MediaFileKind) -> Bool {
+        if isHTTPStreamingPlaylist(url) {
+            return false
+        }
+
+        let pathExtension = url.pathExtension.lowercased()
+        return pathExtension.isEmpty || shouldPersist(url: url, kind: kind)
+    }
+
+    private func contentType(forLocalFile sourceURL: URL, kind: MediaFileKind) -> String? {
+        switch sourceURL.pathExtension.lowercased() {
+        case "jpg", "jpeg":
+            return "image/jpeg"
+        case "png":
+            return "image/png"
+        case "webp":
+            return "image/webp"
+        case "mp4", "m4v":
+            return "video/mp4"
+        case "mov":
+            return "video/quicktime"
+        default:
+            switch kind {
+            case .image:
+                return nil
+            case .video:
+                return "video/mp4"
+            }
+        }
+    }
+
     private func fileURL(for url: URL, contentType: String? = nil) -> URL {
-        let stableURL = stableCacheURL(for: url)
-        let digest = SHA256.hash(data: Data(stableURL.absoluteString.utf8))
-        let key = digest.map { String(format: "%02x", $0) }.joined()
+        let key = cacheKey(for: url)
         let fileExtension = fileExtension(for: url, contentType: contentType)
 
         return rootURL.appendingPathComponent("\(key).\(fileExtension)", isDirectory: false)
+    }
+
+    private func candidateFileURLs(for url: URL) -> [URL] {
+        let defaultURL = fileURL(for: url)
+        guard url.pathExtension.isEmpty else {
+            return [defaultURL]
+        }
+
+        let key = cacheKey(for: url)
+        let fallbackExtensions = ["mp4", "mov", "m4v", "jpg", "jpeg", "png", "webp", "heic", "media"]
+        var seen = Set<URL>()
+        return ([defaultURL] + fallbackExtensions.map {
+            rootURL.appendingPathComponent("\(key).\($0)", isDirectory: false)
+        }).filter { seen.insert($0).inserted }
+    }
+
+    private func cacheKey(for url: URL) -> String {
+        let stableURL = stableCacheURL(for: url)
+        let digest = SHA256.hash(data: Data(stableURL.absoluteString.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private func stableCacheURL(for url: URL) -> URL {

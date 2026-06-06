@@ -20,6 +20,15 @@ enum APIClientError: LocalizedError {
             return "Sign in before continuing."
         }
     }
+
+    var statusCode: Int? {
+        switch self {
+        case .server(_, let statusCode):
+            return statusCode
+        default:
+            return nil
+        }
+    }
 }
 
 private struct BlobUploadErrorEnvelope: Decodable {
@@ -68,8 +77,13 @@ final class APIClient: ObservableObject {
     init(session: URLSession = .shared) {
         MediaPreheater.configureURLCache()
         self.session = session
+        #if DEBUG
         let storedBaseURL = UserDefaults.standard.string(forKey: Self.baseURLKey)
         baseURLString = Self.usableBaseURL(from: storedBaseURL)
+        #else
+        UserDefaults.standard.removeObject(forKey: Self.baseURLKey)
+        baseURLString = Self.productionBaseURL
+        #endif
         decoder = JSONDecoder()
         encoder = JSONEncoder()
         MediaPerformance.configureUpload { [weak self] events in
@@ -82,7 +96,11 @@ final class APIClient: ObservableObject {
     }
 
     var baseURL: URL? {
+        #if DEBUG
         URL(string: baseURLString.trimmingCharacters(in: .whitespacesAndNewlines))
+        #else
+        URL(string: Self.productionBaseURL)
+        #endif
     }
 
     func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
