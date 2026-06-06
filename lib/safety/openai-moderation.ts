@@ -1,4 +1,5 @@
 import {
+  approvedModerationResult,
   resultFromSignals,
   type ContentModerationResult,
   type ModerationCategorySignal,
@@ -58,6 +59,44 @@ function isPlainHarassment(category: string) {
 
 function getOpenAiApiKey() {
   return process.env.OPENAI_API_KEY?.trim() || null
+}
+
+function approvedScannerUnavailableResult(error: string): ContentModerationResult {
+  return {
+    ...approvedModerationResult,
+    provider: "openai",
+    error,
+  }
+}
+
+function openAiErrorMessage(status: number, body: string) {
+  return body
+    ? `OpenAI moderation failed with ${status}: ${body.slice(0, 300)}`
+    : `OpenAI moderation failed with ${status}.`
+}
+
+function isTransientOpenAiStatus(status: number, body: string) {
+  if (status >= 500) {
+    return true
+  }
+
+  if (status !== 429) {
+    return false
+  }
+
+  return !/insufficient[_\s-]?quota|billing|credits?|spend limit/i.test(body)
+}
+
+function isTransientFetchFailure(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    /fetch failed|network|timeout|temporarily unavailable/i.test(error.message)
+  )
 }
 
 function openAiSignalReason(category: string, inputTypes: string[]) {
@@ -132,12 +171,13 @@ export async function moderateWithOpenAi(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "")
+      const message = openAiErrorMessage(response.status, body)
 
-      throw new Error(
-        body
-          ? `OpenAI moderation failed with ${response.status}: ${body.slice(0, 300)}`
-          : `OpenAI moderation failed with ${response.status}.`,
-      )
+      if (isTransientOpenAiStatus(response.status, body)) {
+        return approvedScannerUnavailableResult(message)
+      }
+
+      throw new Error(message)
     }
 
     const payload = (await response.json()) as OpenAIModerationResponse
@@ -151,6 +191,10 @@ export async function moderateWithOpenAi(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "OpenAI moderation failed."
+
+    if (isTransientFetchFailure(error)) {
+      return approvedScannerUnavailableResult(message)
+    }
 
     return resultFromSignals({
       provider: "openai",

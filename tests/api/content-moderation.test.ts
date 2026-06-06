@@ -291,6 +291,44 @@ describe("content moderation", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it("does not hold image stories solely because OpenAI is rate limited", async () => {
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json(
+        {
+          error: {
+            message: "Too Many Requests",
+            type: "invalid_request_error",
+            param: null,
+            code: null,
+          },
+        },
+        { status: 429 },
+      ),
+    )
+
+    const result = await moderateUserContent({
+      textParts: [],
+      media: {
+        assetKind: "image",
+        contentType: "image/jpeg",
+        byteSize: 12_000,
+        mediaUrl: "https://www.ubeye.ai/api/story-media/story.jpg?token=test",
+      },
+    })
+
+    expect(result.action).toBe("approve")
+    expect(result.categories).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "scanner_unavailable",
+        }),
+      ]),
+    )
+    expect(result.error).toContain("OpenAI moderation failed with 429")
+  })
+
   it("hides provider details from user-facing moderation reasons", () => {
     expect(
       userFacingModerationReason({
