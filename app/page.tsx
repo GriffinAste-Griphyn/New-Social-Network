@@ -219,7 +219,7 @@ export default function HomePage() {
           <div className="mx-auto max-w-[1180px] px-4 py-18 md:py-24">
             <div className="grid gap-12 lg:grid-cols-[19rem_minmax(0,1fr)] lg:gap-16">
               <div>
-                <p className="text-xs font-medium uppercase text-[#ff5a48]">The thesis</p>
+                <p className="text-xs font-medium uppercase text-[#e01616]">The thesis</p>
               </div>
               <div>
                 <h2 className="max-w-4xl text-4xl font-[340] leading-tight text-white md:text-6xl md:leading-[1.08]">
@@ -283,7 +283,7 @@ export default function HomePage() {
         <section className="border-b border-white/10 bg-[#050505] text-white">
           <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-18 md:py-24 lg:grid-cols-[minmax(0,1fr)_25rem] lg:items-end">
             <div>
-              <p className="text-xs font-medium uppercase text-[#ff5a48]">Participation</p>
+              <p className="text-xs font-medium uppercase text-[#e01616]">Participation</p>
               <h2 className="mt-5 max-w-4xl text-5xl font-[340] leading-[1.03] md:text-7xl">
                 The feed is no longer just entertainment. It is economic signal.
               </h2>
