@@ -250,6 +250,11 @@ enum MediaPerformance {
         "video_disk_cache_hit",
         "video_dismissed",
         "video_ended",
+        "video_retry",
+        "video_upload_failed",
+        "video_upload_phase",
+        "video_upload_retry",
+        "video_upload_succeeded",
         "video_first_frame",
         "video_item_ready",
         "video_stalled",
@@ -360,6 +365,9 @@ final class MobilePerformanceReporter {
         guard send != nil else {
             return
         }
+        guard !isFlushing else {
+            return
+        }
 
         flushTask?.cancel()
         flushTask = Task { @MainActor [weak self] in
@@ -389,7 +397,9 @@ final class MobilePerformanceReporter {
                 scheduleFlush(immediate: buffer.count >= batchSize)
             }
         } catch {
-            buffer.insert(contentsOf: batch, at: 0)
+            if !Task.isCancelled {
+                buffer.insert(contentsOf: batch, at: 0)
+            }
             if buffer.count > maxBufferSize {
                 buffer.removeLast(buffer.count - maxBufferSize)
             }
@@ -912,8 +922,7 @@ final class WarmVideoPlayerPool {
                     return
                 }
 
-                let player = makePlayer(url: playbackURL)
-                players[url] = player
+                players[url] = makePlayer(url: playbackURL)
                 order.append(url)
                 prune()
             }
@@ -938,6 +947,10 @@ final class WarmVideoPlayerPool {
         let isStreaming = isHTTPStreamingPlaylist(url)
 
         item.preferredForwardBufferDuration = isStreaming ? 6 : 3
+        if isStreaming {
+            item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
+            item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
+        }
 
         let player = AVPlayer(playerItem: item)
         player.isMuted = false

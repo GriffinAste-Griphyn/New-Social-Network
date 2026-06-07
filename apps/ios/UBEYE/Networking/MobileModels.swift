@@ -447,6 +447,7 @@ struct StoryUploadResponse: Codable {
     let processingStatus: String?
     let moderationStatus: String?
     let moderationReason: String?
+    let textOverlays: [StoryTextOverlay]?
 }
 
 struct VideoUploadResponse: Codable {
@@ -498,4 +499,22 @@ struct StoryStatusResponse: Codable {
 
 struct APIErrorEnvelope: Decodable {
     let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case error
+    }
+
+    private struct NestedError: Decodable {
+        let message: String?
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let message = try? container.decode(String.self, forKey: .error) {
+            error = message
+            return
+        }
+
+        error = try? container.decode(NestedError.self, forKey: .error).message
+    }
 }

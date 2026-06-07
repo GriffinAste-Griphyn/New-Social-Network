@@ -111,7 +111,11 @@ describe("mobile notification preferences API", () => {
     expect(response.status).toBe(200)
     expect(await responseJson(response)).toMatchObject({
       ok: true,
-      preferences: [{ type: "creator_stories", enabled: false }],
+      preferences: [
+        { type: "creator_stories", enabled: false },
+        { type: "replies", enabled: true },
+        { type: "follows", enabled: true },
+      ],
     })
     expect(setUserNotificationPreferences).toHaveBeenCalledWith({
       userId: session.id,

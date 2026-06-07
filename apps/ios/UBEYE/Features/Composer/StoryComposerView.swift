@@ -89,6 +89,116 @@ private struct PreparedStoryVideo {
     let shouldRemoveAfterUpload: Bool
 }
 
+private struct StoryThumbnailOverlaySpec {
+    let label: String
+    let positionX: Double
+    let positionY: Double
+    let isLink: Bool
+    var isQuoteReply = false
+    var actorName: String?
+    var actorHandle: String?
+}
+
+private enum StoryVideoUploadPhase: String, CaseIterable {
+    case normalize
+    case thumbnailGenerate
+    case prepareUpload
+    case thumbnailUpload
+    case videoUpload
+    case completeStory
+    case processing
+
+    var statusLabel: String {
+        switch self {
+        case .normalize:
+            "Preparing video"
+        case .thumbnailGenerate:
+            "Preparing poster"
+        case .prepareUpload:
+            "Preparing upload"
+        case .thumbnailUpload:
+            "Uploading poster"
+        case .videoUpload:
+            "Uploading video"
+        case .completeStory:
+            "Finishing story"
+        case .processing:
+            "Upload complete"
+        }
+    }
+}
+
+private struct StoryVideoUploadAttempt {
+    let id = UUID().uuidString.lowercased()
+    let startedAt = Date()
+    var phaseStartedAt = Date()
+    var phase: StoryVideoUploadPhase = .normalize
+    var uploadUid: String?
+    var byteSize: Int64?
+    var durationMs: Int?
+    var retries = 0
+    var lastError: String?
+
+    mutating func begin(_ nextPhase: StoryVideoUploadPhase) {
+        phase = nextPhase
+        phaseStartedAt = Date()
+        MediaPerformance.mark("video_upload_phase attempt=\(id) phase=\(nextPhase.rawValue)")
+    }
+
+    mutating func attach(upload: VideoUploadResponse) {
+        uploadUid = upload.uid
+    }
+
+    mutating func attach(video: PreparedStoryVideo) {
+        byteSize = video.byteSize
+        durationMs = video.durationMs
+    }
+
+    mutating func recordRetry(_ reason: String) {
+        retries += 1
+        MediaPerformance.mark(
+            "video_upload_retry attempt=\(id) phase=\(phase.rawValue) retries=\(retries) reason=\(Self.sanitize(reason))"
+        )
+    }
+
+    mutating func recordSuccess(processingStatus: String?) {
+        MediaPerformance.measure("video_upload_succeeded attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") retries=\(retries)", since: startedAt)
+    }
+
+    mutating func recordFailure(_ error: Error) {
+        let message = error.localizedDescription
+        lastError = message
+        MediaPerformance.measure(
+            "video_upload_failed attempt=\(id) phase=\(phase.rawValue) retries=\(retries) reason=\(Self.sanitize(message))",
+            since: startedAt
+        )
+    }
+
+    var report: String {
+        [
+            "attempt=\(id)",
+            "phase=\(phase.rawValue)",
+            uploadUid.map { "uid=\($0)" },
+            byteSize.map { "bytes=\($0)" },
+            durationMs.map { "durationMs=\($0)" },
+            "retries=\(retries)",
+            lastError.map { "error=\(Self.sanitize($0))" },
+        ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    private static func sanitize(_ value: String) -> String {
+        let allowed = value.map { character -> Character in
+            character.isLetter || character.isNumber || "-_./:".contains(character)
+                ? character
+                : "_"
+        }
+
+        return String(allowed).prefix(160).description
+    }
+}
+
 private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
     private let lock = NSLock()
     private var generator: AVAssetImageGenerator?
@@ -108,13 +218,32 @@ private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
 }
 
 private enum StoryVideoUploadNormalizer {
+    private static let maxUploadBytes: Int64 = 150 * 1024 * 1024
+
     static func prepare(url: URL, maxDurationSeconds: Int) async throws -> PreparedStoryVideo {
+        let originalDurationMs = await videoDurationMs(for: url)
+        let originalByteSize = try videoFileSize(for: url)
+
+        if let originalDurationMs, originalDurationMs > maxDurationSeconds * 1_000 {
+            throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
+        }
+
+        if originalByteSize <= maxUploadBytes, isSupportedOriginalUpload(url) {
+            MediaPerformance.mark("video_upload_original_preserved bytes=\(originalByteSize)")
+            return PreparedStoryVideo(
+                url: url,
+                durationMs: originalDurationMs,
+                byteSize: originalByteSize,
+                shouldRemoveAfterUpload: false
+            )
+        }
+
         let normalizedURL = try await normalizedVideoURL(for: url)
         let uploadURL = normalizedURL ?? url
         let durationMs = await videoDurationMs(for: uploadURL)
         let byteSize = try videoFileSize(for: uploadURL)
 
-        if byteSize > 150 * 1024 * 1024 {
+        if byteSize > maxUploadBytes {
             if let normalizedURL {
                 try? FileManager.default.removeItem(at: normalizedURL)
             }
@@ -138,55 +267,85 @@ private enum StoryVideoUploadNormalizer {
 
     private static func normalizedVideoURL(for url: URL) async throws -> URL? {
         let asset = AVURLAsset(url: url)
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
-        let preset = await compatibleExportPreset(for: asset)
+        let presets = await compatibleExportPresets(for: asset)
 
-        guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
-            return nil
+        for preset in presets {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
+
+            guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+                continue
+            }
+
+            guard export.supportedFileTypes.contains(.mp4) else {
+                MediaPerformance.mark("video_upload_normalize_skipped preset=\(preset) unsupported_mp4")
+                continue
+            }
+
+            export.outputURL = outputURL
+            export.outputFileType = .mp4
+            export.shouldOptimizeForNetworkUse = true
+
+            if let duration = await alignedPlayableDuration(for: asset) {
+                export.timeRange = CMTimeRange(start: .zero, duration: duration)
+            }
+
+            await exportVideo(export)
+
+            if export.status == .completed {
+                let byteSize = (try? videoFileSize(for: outputURL)) ?? 0
+
+                if byteSize <= maxUploadBytes {
+                    MediaPerformance.mark("video_upload_normalized preset=\(preset) bytes=\(byteSize)")
+                    return outputURL
+                }
+
+                try? FileManager.default.removeItem(at: outputURL)
+                MediaPerformance.mark("video_upload_normalized_too_large preset=\(preset) bytes=\(byteSize)")
+                continue
+            }
+
+            try? FileManager.default.removeItem(at: outputURL)
+            let nsError = export.error as NSError?
+            MediaPerformance.mark(
+                "video_upload_normalize_failed preset=\(preset) status=\(export.status.rawValue) code=\(nsError?.code ?? 0)"
+            )
         }
 
-        guard export.supportedFileTypes.contains(.mp4) else {
-            MediaPerformance.mark("video_upload_normalize_skipped unsupported_mp4")
-            return nil
-        }
-
-        export.outputURL = outputURL
-        export.outputFileType = .mp4
-        export.shouldOptimizeForNetworkUse = true
-
-        if let duration = await alignedPlayableDuration(for: asset) {
-            export.timeRange = CMTimeRange(start: .zero, duration: duration)
-        }
-
-        await exportVideo(export)
-
-        if export.status == .completed {
-            MediaPerformance.mark("video_upload_normalized preset=\(preset)")
-            return outputURL
-        }
-
-        try? FileManager.default.removeItem(at: outputURL)
-        let nsError = export.error as NSError?
-        MediaPerformance.mark(
-            "video_upload_normalize_failed status=\(export.status.rawValue) code=\(nsError?.code ?? 0)"
-        )
         return nil
     }
 
-    private static func compatibleExportPreset(for asset: AVAsset) async -> String {
-        let preferred = AVAssetExportPreset1920x1080
-        let fallback = AVAssetExportPresetHighestQuality
+    private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
+        let candidates = [
+            AVAssetExportPresetHighestQuality,
+            AVAssetExportPreset1920x1080
+        ]
+        var presets: [String] = []
 
-        if await AVAssetExportSession.compatibility(
-            ofExportPreset: preferred,
-            with: asset,
-            outputFileType: .mp4
-        ) {
-            return preferred
+        for candidate in candidates {
+            guard !presets.contains(candidate) else {
+                continue
+            }
+
+            if await AVAssetExportSession.compatibility(
+                ofExportPreset: candidate,
+                with: asset,
+                outputFileType: .mp4
+            ) {
+                presets.append(candidate)
+            }
         }
 
-        return fallback
+        return presets
+    }
+
+    private static func isSupportedOriginalUpload(_ url: URL) -> Bool {
+        switch url.pathExtension.lowercased() {
+        case "mov", "mp4", "m4v":
+            return true
+        default:
+            return false
+        }
     }
 
     private static func alignedPlayableDuration(for asset: AVURLAsset) async -> CMTime? {
@@ -294,7 +453,51 @@ final class StoryComposerStore: ObservableObject {
     @Published var selectedMedia: PickedStoryMedia?
     @Published var uploadStatus: String?
     @Published var error: String?
+    @Published var lastUploadReport: String?
     @Published var isUploading = false
+
+    private var thumbnailOverlaySpecs: [StoryThumbnailOverlaySpec] {
+        var overlays: [StoryThumbnailOverlaySpec] = []
+        let trimmedText = textOverlay.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            overlays.append(
+                StoryThumbnailOverlaySpec(
+                    label: trimmedText,
+                    positionX: textOverlayPositionX,
+                    positionY: textOverlayPositionY,
+                    isLink: false
+                )
+            )
+        }
+
+        if let quotedReply {
+            overlays.append(
+                StoryThumbnailOverlaySpec(
+                    label: quotedReply.message,
+                    positionX: quoteReplyPositionX,
+                    positionY: quoteReplyPositionY,
+                    isLink: false,
+                    isQuoteReply: true,
+                    actorName: quotedReply.actorName,
+                    actorHandle: quotedReply.actorHandle
+                )
+            )
+        }
+
+        let trimmedLinkLabel = linkLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLinkLabel.isEmpty, !normalizedLinkUrl.isEmpty {
+            overlays.append(
+                StoryThumbnailOverlaySpec(
+                    label: trimmedLinkLabel,
+                    positionX: linkOverlayPositionX,
+                    positionY: linkOverlayPositionY,
+                    isLink: true
+                )
+            )
+        }
+
+        return overlays
+    }
 
     func upload(api: APIClient) async -> StoryUploadResponse? {
         guard let selectedMedia else {
@@ -304,6 +507,7 @@ final class StoryComposerStore: ObservableObject {
 
         isUploading = true
         error = nil
+        lastUploadReport = nil
         normalizeLinkDraft()
         uploadStatus = "Preparing upload"
         var uploadResponse: StoryUploadResponse?
@@ -347,6 +551,9 @@ final class StoryComposerStore: ObservableObject {
             self.selectedMedia = nil
         } catch {
             self.error = error.localizedDescription
+            if let lastUploadReport {
+                MediaPerformance.mark("video_upload_failed report=\(lastUploadReport)")
+            }
         }
 
         isUploading = false
@@ -354,59 +561,95 @@ final class StoryComposerStore: ObservableObject {
     }
 
     private func uploadVideoStory(url: URL, api: APIClient) async throws -> StoryUploadResponse {
-        uploadStatus = "Preparing video"
-        let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
-            url: url,
-            maxDurationSeconds: maxVideoDurationSeconds
-        )
-        defer {
-            if preparedVideo.shouldRemoveAfterUpload {
-                try? FileManager.default.removeItem(at: preparedVideo.url)
+        var attempt = StoryVideoUploadAttempt()
+
+        do {
+            attempt.begin(.normalize)
+            uploadStatus = attempt.phase.statusLabel
+            let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
+                url: url,
+                maxDurationSeconds: maxVideoDurationSeconds
+            )
+            attempt.attach(video: preparedVideo)
+            lastUploadReport = attempt.report
+            defer {
+                if preparedVideo.shouldRemoveAfterUpload {
+                    try? FileManager.default.removeItem(at: preparedVideo.url)
+                }
             }
+
+            attempt.begin(.thumbnailGenerate)
+            uploadStatus = attempt.phase.statusLabel
+            let thumbnailData = await optionalVideoThumbnailData(
+                for: preparedVideo.url,
+                durationMs: preparedVideo.durationMs,
+                overlays: thumbnailOverlaySpecs
+            )
+
+            attempt.begin(.prepareUpload)
+            uploadStatus = attempt.phase.statusLabel
+            let upload = try await api.prepareVideoUpload(
+                fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
+                byteSize: preparedVideo.byteSize,
+                maxDurationSeconds: maxVideoDurationSeconds
+            )
+            attempt.attach(upload: upload)
+            lastUploadReport = attempt.report
+
+            attempt.begin(.thumbnailUpload)
+            uploadStatus = attempt.phase.statusLabel
+            let uploadedThumbnailData = await uploadVideoThumbnailIfPossible(
+                thumbnailData,
+                upload: upload,
+                api: api
+            )
+            attempt.begin(.videoUpload)
+            uploadStatus = attempt.phase.statusLabel
+            try await api.uploadVideoFile(
+                fileURL: preparedVideo.url,
+                upload: upload,
+                onRetry: { reason in
+                    attempt.recordRetry(reason)
+                    self.lastUploadReport = attempt.report
+                }
+            )
+
+            attempt.begin(.completeStory)
+            uploadStatus = attempt.phase.statusLabel
+            let response = try await api.completeVideoStory(
+                upload: upload,
+                fileURL: preparedVideo.url,
+                caption: caption,
+                brandTags: brandTags,
+                textOverlay: textOverlay,
+                textOverlayPositionX: textOverlayPositionX,
+                textOverlayPositionY: textOverlayPositionY,
+                linkLabel: linkLabel,
+                linkUrl: normalizedLinkUrl,
+                linkOverlayPositionX: linkOverlayPositionX,
+                linkOverlayPositionY: linkOverlayPositionY,
+                quoteReplyId: quotedReply?.id ?? "",
+                quoteReplyPositionX: quoteReplyPositionX,
+                quoteReplyPositionY: quoteReplyPositionY,
+                durationMs: preparedVideo.durationMs,
+                thumbnailData: uploadedThumbnailData
+            )
+
+            attempt.begin(.processing)
+            attempt.recordSuccess(processingStatus: response.processingStatus)
+            lastUploadReport = attempt.report
+            await MediaFileDiskCache.shared.storeLocalFile(
+                sourceURL: preparedVideo.url,
+                for: response.asset.mediaUrl,
+                kind: .video
+            )
+            WarmVideoPlayerPool.shared.prepare(urls: [response.asset.mediaUrl], limit: 1)
+            return response
+        } catch {
+            attempt.recordFailure(error)
+            lastUploadReport = attempt.report
+            throw error
         }
-
-        let thumbnailData = try await requiredVideoThumbnailData(
-            for: preparedVideo.url,
-            durationMs: preparedVideo.durationMs
-        )
-
-        let upload = try await api.prepareVideoUpload(
-            fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
-            byteSize: preparedVideo.byteSize,
-            maxDurationSeconds: maxVideoDurationSeconds
-        )
-        uploadStatus = "Uploading thumbnail"
-        try await api.uploadVideoThumbnail(data: thumbnailData, upload: upload)
-        uploadStatus = "Uploading video"
-        try await api.uploadVideoFile(fileURL: preparedVideo.url, upload: upload)
-        uploadStatus = "Finishing story"
-
-        let response = try await api.completeVideoStory(
-            upload: upload,
-            fileURL: preparedVideo.url,
-            caption: caption,
-            brandTags: brandTags,
-            textOverlay: textOverlay,
-            textOverlayPositionX: textOverlayPositionX,
-            textOverlayPositionY: textOverlayPositionY,
-            linkLabel: linkLabel,
-            linkUrl: normalizedLinkUrl,
-            linkOverlayPositionX: linkOverlayPositionX,
-            linkOverlayPositionY: linkOverlayPositionY,
-            quoteReplyId: quotedReply?.id ?? "",
-            quoteReplyPositionX: quoteReplyPositionX,
-            quoteReplyPositionY: quoteReplyPositionY,
-            durationMs: preparedVideo.durationMs,
-            thumbnailData: thumbnailData
-        )
-
-        await MediaFileDiskCache.shared.storeLocalFile(
-            sourceURL: preparedVideo.url,
-            for: response.asset.mediaUrl,
-            kind: .video
-        )
-        WarmVideoPlayerPool.shared.prepare(urls: [response.asset.mediaUrl], limit: 1)
-        return response
     }
 
     private func uploadVideoThumbnailIfPossible(
@@ -458,11 +701,19 @@ final class StoryComposerStore: ObservableObject {
         return max(1, Int((seconds * 1_000).rounded()))
     }
 
-    private func requiredVideoThumbnailData(for url: URL, durationMs: Int?) async throws -> Data {
+    private func optionalVideoThumbnailData(
+        for url: URL,
+        durationMs: Int?,
+        overlays: [StoryThumbnailOverlaySpec]
+    ) async -> Data? {
         do {
             return try await withThrowingTaskGroup(of: Data.self) { group in
                 group.addTask {
-                    try await self.generateVideoThumbnailData(for: url, durationMs: durationMs)
+                    try await self.generateVideoThumbnailData(
+                        for: url,
+                        durationMs: durationMs,
+                        overlays: overlays
+                    )
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -478,13 +729,22 @@ final class StoryComposerStore: ObservableObject {
             }
         } catch {
             MediaPerformance.mark("video_thumbnail_generation_failed")
-            throw error
+            return nil
         }
     }
 
-    private func generateVideoThumbnailData(for url: URL, durationMs: Int?) async throws -> Data {
+    private func generateVideoThumbnailData(
+        for url: URL,
+        durationMs: Int?,
+        overlays: [StoryThumbnailOverlaySpec]
+    ) async throws -> Data {
         let image = try await generateVideoThumbnailImage(for: url, durationMs: durationMs)
-        guard let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.82),
+        let thumbnail = compositedThumbnailImage(
+            baseImage: UIImage(cgImage: image),
+            overlays: overlays
+        )
+
+        guard let data = thumbnail.jpegData(compressionQuality: 0.82),
               !data.isEmpty else {
             throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
         }
@@ -562,6 +822,216 @@ final class StoryComposerStore: ObservableObject {
         } onCancel: {
             generationBox.cancel()
         }
+    }
+
+    private func compositedThumbnailImage(
+        baseImage: UIImage,
+        overlays: [StoryThumbnailOverlaySpec]
+    ) -> UIImage {
+        let visibleOverlays = overlays.filter {
+            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        guard !visibleOverlays.isEmpty else {
+            return baseImage
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let size = baseImage.size
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+
+        return renderer.image { context in
+            baseImage.draw(in: CGRect(origin: .zero, size: size))
+
+            for overlay in visibleOverlays.prefix(2) {
+                drawThumbnailOverlay(overlay, in: size, context: context.cgContext)
+            }
+        }
+    }
+
+    private func drawThumbnailOverlay(
+        _ overlay: StoryThumbnailOverlaySpec,
+        in canvasSize: CGSize,
+        context: CGContext
+    ) {
+        let scale = max(canvasSize.width / 390, 1)
+        if overlay.isQuoteReply {
+            drawThumbnailQuoteReplyOverlay(overlay, in: canvasSize, scale: scale, context: context)
+            return
+        }
+
+        let fontSize = min(max(18 * scale, 24), 42)
+        let horizontalPadding = 14 * scale
+        let verticalPadding = 8 * scale
+        let maxTextWidth = max(canvasSize.width - 72 * scale, 120)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraphStyle,
+        ]
+        let label = overlay.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = overlay.isLink ? "\(label)" : label
+        let textRect = (text as NSString).boundingRect(
+            with: CGSize(width: maxTextWidth, height: canvasSize.height),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
+        )
+        let chipSize = CGSize(
+            width: min(max(textRect.width + horizontalPadding * 2, 70 * scale), canvasSize.width - 32 * scale),
+            height: textRect.height + verticalPadding * 2
+        )
+        let rawCenter = CGPoint(
+            x: canvasSize.width * CGFloat(min(max(overlay.positionX, 0), 100) / 100),
+            y: canvasSize.height * CGFloat(min(max(overlay.positionY, 0), 100) / 100)
+        )
+        let center = CGPoint(
+            x: min(max(rawCenter.x, chipSize.width / 2 + 8 * scale), canvasSize.width - chipSize.width / 2 - 8 * scale),
+            y: min(max(rawCenter.y, chipSize.height / 2 + 8 * scale), canvasSize.height - chipSize.height / 2 - 8 * scale)
+        )
+        let chipRect = CGRect(
+            x: center.x - chipSize.width / 2,
+            y: center.y - chipSize.height / 2,
+            width: chipSize.width,
+            height: chipSize.height
+        )
+
+        context.saveGState()
+        UIColor.black.withAlphaComponent(0.46).setFill()
+        UIBezierPath(roundedRect: chipRect, cornerRadius: chipRect.height / 2).fill()
+        context.restoreGState()
+
+        let labelRect = CGRect(
+            x: chipRect.minX + horizontalPadding,
+            y: chipRect.minY + verticalPadding,
+            width: chipRect.width - horizontalPadding * 2,
+            height: chipRect.height - verticalPadding * 2
+        )
+        (text as NSString).draw(with: labelRect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes, context: nil)
+    }
+
+    private func drawThumbnailQuoteReplyOverlay(
+        _ overlay: StoryThumbnailOverlaySpec,
+        in canvasSize: CGSize,
+        scale: CGFloat,
+        context: CGContext
+    ) {
+        let name = (overlay.actorName ?? "Reply").trimmingCharacters(in: .whitespacesAndNewlines)
+        let handle = overlay.actorHandle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = overlay.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cardWidth = min(max(canvasSize.width * 0.72, 240 * scale), canvasSize.width - 32 * scale)
+        let horizontalPadding = 12 * scale
+        let verticalPadding = 10 * scale
+        let avatarSize = 24 * scale
+        let titleFont = min(max(12 * scale, 16), 28)
+        let handleFont = min(max(10 * scale, 13), 22)
+        let messageFont = min(max(15 * scale, 20), 34)
+        let textWidth = cardWidth - horizontalPadding * 2
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        paragraphStyle.lineBreakMode = .byTruncatingTail
+        let nameAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: titleFont, weight: .bold),
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraphStyle,
+        ]
+        let handleAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: handleFont, weight: .semibold),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.72),
+            .paragraphStyle: paragraphStyle,
+        ]
+        let messageAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: messageFont, weight: .bold),
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraphStyle,
+        ]
+        let messageRect = (message as NSString).boundingRect(
+            with: CGSize(width: textWidth, height: messageFont * 2.5),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: messageAttributes,
+            context: nil
+        )
+        let headerHeight = max(avatarSize, titleFont + (handle?.isEmpty == false ? handleFont : 0) + 2 * scale)
+        let cardHeight = verticalPadding * 2 + headerHeight + 8 * scale + messageRect.height
+        let rawCenter = CGPoint(
+            x: canvasSize.width * CGFloat(min(max(overlay.positionX, 0), 100) / 100),
+            y: canvasSize.height * CGFloat(min(max(overlay.positionY, 0), 100) / 100)
+        )
+        let center = CGPoint(
+            x: min(max(rawCenter.x, cardWidth / 2 + 8 * scale), canvasSize.width - cardWidth / 2 - 8 * scale),
+            y: min(max(rawCenter.y, cardHeight / 2 + 8 * scale), canvasSize.height - cardHeight / 2 - 8 * scale)
+        )
+        let cardRect = CGRect(
+            x: center.x - cardWidth / 2,
+            y: center.y - cardHeight / 2,
+            width: cardWidth,
+            height: cardHeight
+        )
+
+        context.saveGState()
+        UIColor.black.withAlphaComponent(0.68).setFill()
+        UIBezierPath(roundedRect: cardRect, cornerRadius: 8 * scale).fill()
+        UIColor.white.withAlphaComponent(0.18).setStroke()
+        UIBezierPath(roundedRect: cardRect, cornerRadius: 8 * scale).stroke()
+        UIColor(red: 224 / 255, green: 22 / 255, blue: 22 / 255, alpha: 1).setFill()
+        UIBezierPath(ovalIn: CGRect(
+            x: cardRect.minX + horizontalPadding,
+            y: cardRect.minY + verticalPadding,
+            width: avatarSize,
+            height: avatarSize
+        )).fill()
+        context.restoreGState()
+
+        let initial = name.first.map { String($0).uppercased() } ?? "R"
+        let initialAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: max(avatarSize * 0.48, 10), weight: .black),
+            .foregroundColor: UIColor.white,
+        ]
+        let avatarRect = CGRect(
+            x: cardRect.minX + horizontalPadding,
+            y: cardRect.minY + verticalPadding,
+            width: avatarSize,
+            height: avatarSize
+        )
+        let initialSize = (initial as NSString).size(withAttributes: initialAttributes)
+        (initial as NSString).draw(
+            at: CGPoint(x: avatarRect.midX - initialSize.width / 2, y: avatarRect.midY - initialSize.height / 2),
+            withAttributes: initialAttributes
+        )
+
+        let titleX = avatarRect.maxX + 7 * scale
+        let titleWidth = cardRect.maxX - horizontalPadding - titleX
+        (name as NSString).draw(
+            with: CGRect(x: titleX, y: cardRect.minY + verticalPadding - 1 * scale, width: titleWidth, height: titleFont + 3 * scale),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: nameAttributes,
+            context: nil
+        )
+        if let handle, !handle.isEmpty {
+            ("@\(handle)" as NSString).draw(
+                with: CGRect(x: titleX, y: cardRect.minY + verticalPadding + titleFont + 1 * scale, width: titleWidth, height: handleFont + 3 * scale),
+                options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                attributes: handleAttributes,
+                context: nil
+            )
+        }
+
+        (message as NSString).draw(
+            with: CGRect(
+                x: cardRect.minX + horizontalPadding,
+                y: cardRect.minY + verticalPadding + headerHeight + 8 * scale,
+                width: textWidth,
+                height: messageRect.height
+            ),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: messageAttributes,
+            context: nil
+        )
     }
 
     private func videoThumbnailCandidateTimes(durationMs: Int?) -> [CMTime] {
@@ -735,7 +1205,11 @@ struct StoryComposerView: View {
                 }
 
                 HStack {
-                    PhotosPicker(selection: $photoPickerItem, matching: .any(of: [.images, .videos])) {
+                    PhotosPicker(
+                        selection: $photoPickerItem,
+                        matching: .any(of: [.images, .videos]),
+                        preferredItemEncoding: .current
+                    ) {
                         LibraryPickerThumbnail(image: latestLibraryThumbnail)
                     }
 
@@ -855,7 +1329,10 @@ struct StoryComposerView: View {
                         keyboardType: .default,
                         autocapitalization: .sentences,
                         autocorrectionDisabled: false,
-                        onSubmit: finishOverlayInput
+                        onSubmit: finishOverlayInput,
+                        onTapToEdit: {
+                            openOverlayInput(.text)
+                        }
                     ) { x, y in
                         store.textOverlayPositionX = x
                         store.textOverlayPositionY = y
@@ -876,7 +1353,10 @@ struct StoryComposerView: View {
                         keyboardType: .URL,
                         autocapitalization: .never,
                         autocorrectionDisabled: true,
-                        onSubmit: finishOverlayInput
+                        onSubmit: finishOverlayInput,
+                        onTapToEdit: {
+                            openOverlayInput(.link)
+                        }
                     ) { x, y in
                         store.linkOverlayPositionX = x
                         store.linkOverlayPositionY = y
@@ -939,7 +1419,11 @@ struct StoryComposerView: View {
                 )
 
             HStack(spacing: 18) {
-                PhotosPicker(selection: $photoPickerItem, matching: .any(of: [.images, .videos])) {
+                PhotosPicker(
+                    selection: $photoPickerItem,
+                    matching: .any(of: [.images, .videos]),
+                    preferredItemEncoding: .current
+                ) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.title2)
                         .frame(width: 54, height: 54)
@@ -1179,6 +1663,8 @@ struct StoryComposerView: View {
 
 private struct EditableStoryOverlayChip: View {
     @Binding var text: String
+    @State private var measuredChipSize: CGSize = .zero
+    @State private var dragStartCenter: CGPoint?
     let placeholder: String
     let systemImage: String?
     let positionX: Double
@@ -1191,10 +1677,22 @@ private struct EditableStoryOverlayChip: View {
     let autocapitalization: TextInputAutocapitalization
     let autocorrectionDisabled: Bool
     let onSubmit: () -> Void
+    let onTapToEdit: () -> Void
     let onPositionChanged: (Double, Double) -> Void
 
     var body: some View {
         chip
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            measuredChipSize = proxy.size
+                        }
+                        .onChange(of: proxy.size) { _, nextSize in
+                            measuredChipSize = nextSize
+                        }
+                }
+            }
             .position(
                 x: size.width * CGFloat(positionX / 100),
                 y: size.height * CGFloat(positionY / 100)
@@ -1206,25 +1704,64 @@ private struct EditableStoryOverlayChip: View {
                             return
                         }
 
-                        let nextX = clampedPercent(value.location.x, dimension: size.width)
-                        let nextY = clampedPercent(value.location.y, dimension: size.height)
-                        onPositionChanged(nextX, nextY)
+                        guard abs(value.translation.width) > 3 || abs(value.translation.height) > 3 else {
+                            return
+                        }
+
+                        if dragStartCenter == nil {
+                            dragStartCenter = CGPoint(
+                                x: size.width * CGFloat(positionX / 100),
+                                y: size.height * CGFloat(positionY / 100)
+                            )
+                        }
+
+                        let startCenter = dragStartCenter ?? CGPoint(
+                            x: size.width * CGFloat(positionX / 100),
+                            y: size.height * CGFloat(positionY / 100)
+                        )
+                        let nextCenter = clampedCenter(
+                            CGPoint(
+                                x: startCenter.x + value.translation.width,
+                                y: startCenter.y + value.translation.height
+                            )
+                        )
+                        onPositionChanged(
+                            percent(nextCenter.x, dimension: size.width),
+                            percent(nextCenter.y, dimension: size.height)
+                        )
+                    }
+                    .onEnded { value in
+                        defer {
+                            dragStartCenter = nil
+                        }
+
+                        guard !isEditing else {
+                            return
+                        }
+
+                        if abs(value.translation.width) <= 6, abs(value.translation.height) <= 6 {
+                            onTapToEdit()
+                        }
                     }
             )
     }
 
     private var chip: some View {
-        HStack(spacing: 7) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .bold))
-            }
+        let maxChipWidth = max(size.width - 32, 70)
 
+        return HStack(alignment: .bottom, spacing: 7) {
             if isEditing {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(height: 30)
+                }
+
                 TextField(
                     "",
-                    text: $text,
-                    prompt: Text(placeholder).foregroundStyle(.white.opacity(0.62))
+                    text: sanitizedTextBinding,
+                    prompt: Text(placeholder).foregroundStyle(.white.opacity(0.62)),
+                    axis: .vertical
                 )
                 .focused(isFocused)
                 .keyboardType(keyboardType)
@@ -1234,26 +1771,76 @@ private struct EditableStoryOverlayChip: View {
                 .onSubmit(onSubmit)
                 .font(.system(size: 18, weight: .bold))
                 .multilineTextAlignment(.center)
-                .frame(minWidth: 70, maxWidth: 210)
+                .lineLimit(1...4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 70, maxWidth: maxChipWidth)
             } else {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .bold))
+                }
+
                 Text(displayText ?? text)
                     .font(.system(size: 18, weight: .bold))
-                    .lineLimit(2)
+                    .lineLimit(4)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: maxChipWidth)
             }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        .frame(maxWidth: maxChipWidth)
         .background(.black.opacity(0.46), in: Capsule())
     }
 
-    private func clampedPercent(_ value: CGFloat, dimension: CGFloat) -> Double {
+    private var sanitizedTextBinding: Binding<String> {
+        Binding(
+            get: {
+                text
+            },
+            set: { nextValue in
+                if nextValue.contains(where: \.isNewline) {
+                    text = nextValue
+                        .split(whereSeparator: \.isNewline)
+                        .joined(separator: " ")
+                    DispatchQueue.main.async {
+                        onSubmit()
+                    }
+                } else {
+                    text = nextValue
+                }
+            }
+        )
+    }
+
+    private func clampedCenter(_ center: CGPoint) -> CGPoint {
+        let horizontalInset = clampedInset(measuredChipSize.width, dimension: size.width)
+        let verticalInset = clampedInset(measuredChipSize.height, dimension: size.height)
+
+        return CGPoint(
+            x: min(max(center.x, horizontalInset), size.width - horizontalInset),
+            y: min(max(center.y, verticalInset), size.height - verticalInset)
+        )
+    }
+
+    private func clampedInset(_ measuredLength: CGFloat, dimension: CGFloat) -> CGFloat {
+        guard dimension > 0 else {
+            return 0
+        }
+
+        let fallbackLength = min(dimension - 32, 70)
+        let length = measuredLength > 0 ? measuredLength : fallbackLength
+        return min(max((length / 2) + 8, 8), dimension / 2)
+    }
+
+    private func percent(_ value: CGFloat, dimension: CGFloat) -> Double {
         guard dimension > 0 else {
             return 50
         }
 
-        return min(max(Double(value / dimension) * 100, 8), 92)
+        return Double(value / dimension) * 100
     }
 }
 

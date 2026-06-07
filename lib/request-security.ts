@@ -28,7 +28,7 @@ export const mutationRateLimits = {
   advertiserWriteUser: { limit: 40, windowMs: 15 * rateLimitWindows.minute },
   stripeWriteUser: { limit: 10, windowMs: 15 * rateLimitWindows.minute },
   pushTokenUser: { limit: 20, windowMs: rateLimitWindows.hour },
-  mobileTelemetryUser: { limit: 300, windowMs: 15 * rateLimitWindows.minute },
+  mobileTelemetryUser: { limit: 2_000, windowMs: 15 * rateLimitWindows.minute },
 } as const satisfies Record<string, RateLimitOptions>
 
 type RateLimitCheck = {

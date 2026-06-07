@@ -3,7 +3,11 @@ import { after, NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { createStory, setStoryThumbnail } from "@/lib/story-store"
+import {
+  createStory,
+  getStoryTextOverlaysForOwner,
+  setStoryThumbnail,
+} from "@/lib/story-store"
 import {
   createOriginalQualityVideoThumbnail,
   createOriginalQualityVideoStoryAsset,
@@ -185,11 +189,12 @@ export async function POST(request: Request) {
       height: parsed.data.height ?? null,
     })
     const formData = payloadToFormData(parsed.data)
+    const storyElements = parseStoryElements(formData)
     const storyId = await createStory({
       session,
       caption: parseStoryCaption(formData.get("caption")),
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: parseStoryElements(formData),
+      elements: storyElements,
       storedAsset,
     })
     const thumbnailPathname = parsed.data.pathname
@@ -213,6 +218,7 @@ export async function POST(request: Request) {
     const completedAsset = storedAsset
     uploadedPathname = undefined
     storedAsset = undefined
+    const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
 
     return NextResponse.json({
       ok: true,
@@ -227,6 +233,7 @@ export async function POST(request: Request) {
         }),
       },
       processingStatus: completedAsset.processingStatus,
+      textOverlays,
     })
   } catch (error) {
     if (storedAsset) {

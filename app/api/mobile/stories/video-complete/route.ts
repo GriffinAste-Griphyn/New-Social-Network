@@ -3,7 +3,11 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
-import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
+import {
+  createStory,
+  getStoryTextOverlaysForOwner,
+  getStoryUploadStatusForOwner,
+} from "@/lib/story-store"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -65,6 +69,22 @@ const completeVideoSchema = z.object({
   quoteReplyPositionY: z.string().optional(),
 })
 
+function logVideoCompleteEvent(
+  event: string,
+  metadata: Record<string, string | number | boolean | null | undefined>,
+) {
+  console.info(
+    "mobile_video_complete",
+    JSON.stringify({
+      event,
+      at: new Date().toISOString(),
+      ...Object.fromEntries(
+        Object.entries(metadata).filter(([, value]) => value !== undefined),
+      ),
+    }),
+  )
+}
+
 function payloadToFormData(payload: z.infer<typeof completeVideoSchema>) {
   const formData = new FormData()
 
@@ -122,11 +142,23 @@ export async function POST(request: Request) {
     )
 
     if (!parsed.success) {
+      logVideoCompleteEvent("complete_invalid_payload", {
+        userId: session.id,
+        ip: requestIpSubject(request),
+      })
       return NextResponse.json(
         { error: "Could not finish the video upload." },
         { status: 400 },
       )
     }
+
+    logVideoCompleteEvent("complete_started", {
+      userId: session.id,
+      uid: parsed.data.uid,
+      byteSize: parsed.data.byteSize,
+      durationMs: parsed.data.durationMs ?? null,
+      hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
+    })
 
     const cloudflareDetails = await getCloudflareStreamVideoDetails(
       parsed.data.uid,
@@ -193,16 +225,28 @@ export async function POST(request: Request) {
       request,
       { signed: true },
     )
+    const storyElements = parseStoryElements(formData)
     const storyId = await createStory({
       session,
       caption: parseStoryCaption(formData.get("caption")),
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: parseStoryElements(formData),
+      elements: storyElements,
       storedAsset,
       moderationMediaUrl,
       moderationThumbnailUrl,
     })
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
+    const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
+
+    logVideoCompleteEvent("complete_succeeded", {
+      userId: session.id,
+      uid: parsed.data.uid,
+      storyId,
+      cloudflareState: cloudflareDetails?.state ?? null,
+      readyToStream: cloudflareDetails?.readyToStream ?? null,
+      processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
+      moderationStatus: storyStatus?.moderationStatus ?? null,
+    })
 
     return NextResponse.json({
       ok: true,
@@ -222,8 +266,16 @@ export async function POST(request: Request) {
         moderationStatus: storyStatus?.moderationStatus,
         moderationReason: storyStatus?.moderationReason,
       }),
+      textOverlays,
     })
   } catch (error) {
+    logVideoCompleteEvent("complete_failed", {
+      uid: storedAsset?.storageKey ?? null,
+      reason:
+        error instanceof StoryUploadError || error instanceof Error
+          ? error.message
+          : "unknown",
+    })
     if (storedAsset) {
       await removeStoryAsset(storedAsset.mediaUrl)
     }

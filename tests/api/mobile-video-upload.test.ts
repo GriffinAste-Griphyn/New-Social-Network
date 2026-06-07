@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
-import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
+import {
+  createStory,
+  getStoryTextOverlaysForOwner,
+  getStoryUploadStatusForOwner,
+} from "@/lib/story-store"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -33,6 +37,7 @@ vi.mock("@/lib/request-security", async () => {
 
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
+  getStoryTextOverlaysForOwner: vi.fn(),
   getStoryUploadStatusForOwner: vi.fn(),
 }))
 
@@ -96,6 +101,7 @@ describe("mobile Cloudflare video upload API", () => {
       moderationReason: null,
       isLive: false,
     })
+    vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([])
     vi.mocked(createCloudflareStreamClientThumbnailPathname).mockImplementation(
       (userId, uid) =>
         `stories/mobile-cloudflare-thumbnails/${userId}/${uid}-thumb.jpg`,
@@ -186,6 +192,20 @@ describe("mobile Cloudflare video upload API", () => {
 
   it("stores an uploaded client thumbnail when completing a Cloudflare video story", async () => {
     const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([
+      {
+        id: "overlay_1",
+        label: "This is a test",
+        kind: "text",
+        href: null,
+        sourceInteractionId: null,
+        sourceActorName: null,
+        sourceActorHandle: null,
+        sourceActorAvatarUrl: null,
+        positionX: 51.25,
+        positionY: 62.5,
+      },
+    ])
     const response = await POST(
       new Request("https://app.example.com/api/mobile/stories/video-complete", {
         method: "POST",
@@ -205,6 +225,9 @@ describe("mobile Cloudflare video upload API", () => {
           thumbnailChecksum:
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           caption: "Cloudflare test",
+          textOverlays: "This is a test",
+          textOverlayPositionX: "51.25",
+          textOverlayPositionY: "62.50",
         }),
       }),
     )
@@ -219,6 +242,14 @@ describe("mobile Cloudflare video upload API", () => {
     })
     expect(createStory).toHaveBeenCalledWith(
       expect.objectContaining({
+        elements: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "text",
+            label: "This is a test",
+            positionX: "51.25",
+            positionY: "62.50",
+          }),
+        ]),
         storedAsset: expect.objectContaining({
           thumbnailUrl:
             "/api/story-media/stories/mobile-cloudflare-thumbnails/creator_123/11111111111111111111111111111111-thumb.jpg",
@@ -231,6 +262,50 @@ describe("mobile Cloudflare video upload API", () => {
         thumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-cloudflare-thumbnails/creator_123/11111111111111111111111111111111-thumb.jpg",
       },
+      processingStatus: "processing",
+      textOverlays: [
+        expect.objectContaining({
+          label: "This is a test",
+          kind: "text",
+          positionX: 51.25,
+          positionY: 62.5,
+        }),
+      ],
+    })
+  })
+
+  it("completes a Cloudflare video story without a client thumbnail", async () => {
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.30",
+        },
+        body: JSON.stringify({
+          uid: "11111111111111111111111111111111",
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+          durationMs: 7_200,
+          caption: "Cloudflare test",
+        }),
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(createCloudflareStreamClientThumbnailUrl).not.toHaveBeenCalled()
+    expect(createStory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storedAsset: expect.objectContaining({
+          thumbnailUrl:
+            "/api/story-media/cloudflare-stream/11111111111111111111111111111111/thumbnails/thumbnail.jpg",
+        }),
+      }),
+    )
+    expect(payload).toMatchObject({
+      ok: true,
       processingStatus: "processing",
     })
   })

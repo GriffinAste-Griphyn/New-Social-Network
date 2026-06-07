@@ -225,6 +225,20 @@
       "when": 1779823600000,
       "tag": "0031_mobile_performance_events",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780772400000,
+      "tag": "0032_video_upload_diagnostics",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780776000000,
+      "tag": "0033_video_playback_diagnostics",
+      "breakpoints": true
     }
   ]
 }

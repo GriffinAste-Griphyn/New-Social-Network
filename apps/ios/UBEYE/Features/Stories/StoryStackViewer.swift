@@ -42,7 +42,7 @@ final class StoryStackStore: ObservableObject {
         isLoading = stack == nil
         error = nil
         do {
-            let response = try await api.storyStack(storyId: storyId)
+            let response = try await api.storyStack(storyId: storyId, refresh: true)
             MediaPreheater.preheat(stack: response.story)
             applyLoadedStack(response.story)
         } catch {
@@ -377,7 +377,7 @@ struct StoryStackViewer: View {
                 AutoPlayVideoPlayer(
                     url: item.mediaUrl,
                     thumbnailUrl: item.thumbnailUrl,
-                    showsThumbnailWhileLoading: false,
+                    showsThumbnailWhileLoading: true,
                     isPaused: shouldPauseVideoPlayback,
                     onReadyForPlayback: {
                         guard timedStoryId == item.id else {
@@ -486,7 +486,7 @@ struct StoryStackViewer: View {
         if !overlays.isEmpty {
             GeometryReader { proxy in
                 ForEach(overlays) { overlay in
-                    storyOverlayChip(overlay)
+                    storyOverlayChip(overlay, maxWidth: max(proxy.size.width - 32, 120))
                         .position(
                             x: overlayPosition(overlay.positionX, dimension: proxy.size.width),
                             y: overlayPosition(overlay.positionY, dimension: proxy.size.height)
@@ -504,18 +504,18 @@ struct StoryStackViewer: View {
     }
 
     @ViewBuilder
-    private func storyOverlayChip(_ overlay: StoryTextOverlay) -> some View {
+    private func storyOverlayChip(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
         if overlay.kind == "quote_reply" {
             storyQuoteReplyOverlay(overlay)
         } else if overlay.kind == "link", let href = overlay.href {
             Link(destination: href) {
-                storyOverlayChipContent(overlay)
+                storyOverlayChipContent(overlay, maxWidth: maxWidth)
             }
             .buttonStyle(.plain)
             .contentShape(Capsule())
             .zIndex(2)
         } else {
-            storyOverlayChipContent(overlay)
+            storyOverlayChipContent(overlay, maxWidth: maxWidth)
         }
     }
 
@@ -561,7 +561,7 @@ struct StoryStackViewer: View {
         .shadow(color: .black.opacity(0.3), radius: 14, y: 7)
     }
 
-    private func storyOverlayChipContent(_ overlay: StoryTextOverlay) -> some View {
+    private func storyOverlayChipContent(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
         HStack(spacing: 8) {
             if overlay.kind == "link" {
                 Image(systemName: "link")
@@ -571,11 +571,14 @@ struct StoryStackViewer: View {
             Text(overlay.label)
                 .font(.title3.bold())
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: maxWidth)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .frame(maxWidth: maxWidth)
         .background(.black.opacity(0.42), in: Capsule())
     }
 
@@ -985,7 +988,9 @@ struct StoryStackViewer: View {
     }
 
     private func updateVideoStoryProgress(_ progress: Double, item: StoryStackItem) {
-        guard timedStoryId == item.id, !didFinishCurrentItem else {
+        guard timedStoryId == item.id,
+              videoReadyItemId == item.id,
+              !didFinishCurrentItem else {
             return
         }
 
@@ -1820,6 +1825,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var onReadyForPlayback: () -> Void = {}
     private var onProgress: (Double) -> Void = { _ in }
     private var onFinished: () -> Void = {}
+    private var playbackRetryCount = 0
+    private let maxPlaybackRetries = 2
 
     func play(
         url: URL,
@@ -1840,11 +1847,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         cleanupCurrentPlayer(reason: activeURL == nil ? nil : "replace")
         activeURL = url
+        playbackRetryCount = 0
+        isReadyForPlayback = false
+        didFinishPlayback = false
+        startPlayback(url: url, useWarmPlayer: true)
+    }
+
+    private func startPlayback(url: URL, useWarmPlayer: Bool) {
         playTask?.cancel()
         revealTask?.cancel()
         revealTask = nil
-        isReadyForPlayback = false
-        didFinishPlayback = false
         playTask = Task { @MainActor in
             let startedAt = Date()
             playbackStartedAt = startedAt
@@ -1873,7 +1885,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             }
 
             player?.pause()
-            let next = WarmVideoPlayerPool.shared.takePlayer(for: url, playbackURL: playbackURL)
+            let next = useWarmPlayer
+                ? WarmVideoPlayerPool.shared.takePlayer(for: url, playbackURL: playbackURL)
+                : makeFreshPlayer(playbackURL: playbackURL)
+            configureStreamingHints(for: next.currentItem, playbackURL: playbackURL)
             player = next
             observeReadiness(player: next, url: url, startedAt: startedAt)
             observeStalls(player: next, url: url)
@@ -1887,6 +1902,24 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 next.play()
             }
         }
+    }
+
+    private func makeFreshPlayer(playbackURL: URL) -> AVPlayer {
+        let item = AVPlayerItem(url: playbackURL)
+        item.preferredForwardBufferDuration = playbackURL.pathExtension.lowercased() == "m3u8" ? 6 : 3
+        let player = AVPlayer(playerItem: item)
+        player.actionAtItemEnd = .pause
+        player.automaticallyWaitsToMinimizeStalling = true
+        return player
+    }
+
+    private func configureStreamingHints(for item: AVPlayerItem?, playbackURL: URL) {
+        guard let item, playbackURL.pathExtension.lowercased() == "m3u8" else {
+            return
+        }
+
+        item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
+        item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
     }
 
     func setPaused(_ isPaused: Bool) {
@@ -1922,27 +1955,24 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                         didLogItemReady = true
                         MediaPerformance.measure("video_item_ready url=\(url.lastPathComponent)", since: startedAt)
                     }
-
-                    let hasVideoSize = player.currentItem?.presentationSize != .zero
-                    let hasPlaybackStarted =
-                        player.timeControlStatus == .playing ||
-                        player.currentTime().seconds > 0.05
-
-                    if hasVideoSize || hasPlaybackStarted || attempt > 6 {
-                        revealVideo(reason: "item_ready")
-                        return
-                    }
-                } else if player.timeControlStatus == .playing,
-                          player.currentTime().seconds > 0.05 {
-                    revealVideo(reason: "playback_started")
-                    return
                 } else if player.currentItem?.status == .failed {
-                    logPlaybackFailure(player: player, url: url, reason: "item_failed")
+                    handlePlaybackFailure(player: player, url: url, reason: "item_failed")
+                    return
+                }
+
+                if attempt == 40, !isPaused {
+                    retryPlaybackIfPossible(player: player, url: url, reason: "startup_timeout")
                     return
                 }
 
                 try? await Task.sleep(for: .milliseconds(50))
             }
+
+            guard self.player === player, !isReadyForPlayback else {
+                return
+            }
+
+            retryPlaybackIfPossible(player: player, url: url, reason: "readiness_timeout")
         }
     }
 
@@ -1971,11 +2001,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             queue: .main
         ) { [weak self, weak player] _ in
             Task { @MainActor in
-                guard let self, self.player === player else {
+                guard let self, let player, self.player === player else {
                     return
                 }
 
                 MediaPerformance.mark("video_stalled url=\(url.lastPathComponent)")
+                self.retryPlaybackIfPossible(player: player, url: url, reason: "stalled_before_ready")
             }
         }
     }
@@ -1996,7 +2027,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 }
 
                 let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                self.logPlaybackFailure(player: player, url: url, reason: "failed_to_end", error: error)
+                self.handlePlaybackFailure(player: player, url: url, reason: "failed_to_end", error: error)
             }
         }
     }
@@ -2058,6 +2089,29 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         onProgress(1)
         MediaPerformance.mark("video_ended url=\(url.lastPathComponent)")
         onFinished()
+    }
+
+    private func handlePlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
+        logPlaybackFailure(player: player, url: url, reason: reason, error: error)
+        retryPlaybackIfPossible(player: player, url: url, reason: reason)
+    }
+
+    private func retryPlaybackIfPossible(player: AVPlayer, url: URL, reason: String) {
+        guard self.player === player,
+              !isReadyForPlayback,
+              !didFinishPlayback,
+              activeURL == url,
+              playbackRetryCount < maxPlaybackRetries else {
+            return
+        }
+
+        playbackRetryCount += 1
+        MediaPerformance.mark("video_retry reason=\(reason) attempt=\(playbackRetryCount) url=\(url.lastPathComponent)")
+        cleanupCurrentPlayer(reason: nil)
+        activeURL = url
+        isReadyForPlayback = false
+        didFinishPlayback = false
+        startPlayback(url: url, useWarmPlayer: false)
     }
 
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {

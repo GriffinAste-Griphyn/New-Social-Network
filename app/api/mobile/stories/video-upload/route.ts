@@ -43,6 +43,22 @@ const videoUploadSchema = z.object({
     .optional(),
 })
 
+function logVideoUploadEvent(
+  event: string,
+  metadata: Record<string, string | number | boolean | null | undefined>,
+) {
+  console.info(
+    "mobile_video_upload",
+    JSON.stringify({
+      event,
+      at: new Date().toISOString(),
+      ...Object.fromEntries(
+        Object.entries(metadata).filter(([, value]) => value !== undefined),
+      ),
+    }),
+  )
+}
+
 async function createThumbnailUploadFields(input: {
   userId: string
   uid: string
@@ -109,6 +125,10 @@ export async function POST(request: Request) {
   const parsed = videoUploadSchema.safeParse(await request.json().catch(() => null))
 
   if (!parsed.success) {
+    logVideoUploadEvent("prepare_invalid_payload", {
+      userId: session.id,
+      ip: requestIpSubject(request),
+    })
     return NextResponse.json(
       { error: "Could not prepare the video upload." },
       { status: 400 },
@@ -116,6 +136,13 @@ export async function POST(request: Request) {
   }
 
   try {
+    logVideoUploadEvent("prepare_started", {
+      userId: session.id,
+      fileName: parsed.data.fileName,
+      byteSize: parsed.data.byteSize ?? null,
+      maxDurationSeconds: parsed.data.maxDurationSeconds,
+      protocol: parsed.data.byteSize ? "tus" : "form",
+    })
     const upload = parsed.data.byteSize
       ? await createCloudflareStreamTusUpload({
           fileName: parsed.data.fileName,
@@ -139,6 +166,13 @@ export async function POST(request: Request) {
       return {}
     })
 
+    logVideoUploadEvent("prepare_succeeded", {
+      userId: session.id,
+      uid: upload.uid,
+      protocol: upload.uploadProtocol,
+      thumbnailUpload: Boolean("thumbnailUploadUrl" in thumbnailUploadFields),
+    })
+
     return NextResponse.json({
       ok: true,
       uid: upload.uid,
@@ -147,6 +181,15 @@ export async function POST(request: Request) {
       ...thumbnailUploadFields,
     })
   } catch (error) {
+    logVideoUploadEvent("prepare_failed", {
+      userId: session.id,
+      fileName: parsed.data.fileName,
+      byteSize: parsed.data.byteSize ?? null,
+      reason:
+        error instanceof StoryUploadError || error instanceof Error
+          ? error.message
+          : "unknown",
+    })
     return NextResponse.json(
       {
         error:

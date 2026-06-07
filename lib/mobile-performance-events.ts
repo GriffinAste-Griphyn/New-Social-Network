@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { and, eq, inArray } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { mobilePerformanceEvents } from "@/lib/db/schema"
@@ -35,6 +36,13 @@ export const mobilePerformanceEventNames = [
   "story_stack_prefetch_end",
   "story_stack_prefetch_start",
   "video_disk_cache_hit",
+  "video_dismissed",
+  "video_ended",
+  "video_retry",
+  "video_upload_failed",
+  "video_upload_phase",
+  "video_upload_retry",
+  "video_upload_succeeded",
   "video_first_frame",
   "video_item_ready",
   "video_stalled",
@@ -50,6 +58,34 @@ type MobilePerformanceEventInput = {
   clientCreatedAt?: Date | null
 }
 
+function stableMetadataKey(
+  metadata: Record<string, string | number | boolean | null> | unknown,
+) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return "{}"
+  }
+
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(metadata).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  )
+}
+
+function eventKey(event: {
+  name: string
+  metadata?: Record<string, string | number | boolean | null> | unknown
+  clientCreatedAt?: Date | null
+}) {
+  return [
+    event.name,
+    event.clientCreatedAt?.toISOString() ?? "",
+    stableMetadataKey(event.metadata),
+  ].join("|")
+}
+
 export async function recordMobilePerformanceEvents(input: {
   userId: string
   events: MobilePerformanceEventInput[]
@@ -58,8 +94,56 @@ export async function recordMobilePerformanceEvents(input: {
     return { accepted: 0 }
   }
 
-  await getDb().insert(mobilePerformanceEvents).values(
-    input.events.map((event) => ({
+  const uniqueEvents: MobilePerformanceEventInput[] = []
+  const seenIncoming = new Set<string>()
+  for (const event of input.events) {
+    const key = eventKey(event)
+    if (seenIncoming.has(key)) {
+      continue
+    }
+
+    seenIncoming.add(key)
+    uniqueEvents.push(event)
+  }
+
+  const clientCreatedAts = Array.from(
+    new Set(
+      uniqueEvents
+        .map((event) => event.clientCreatedAt?.toISOString())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).map((value) => new Date(value))
+
+  const db = getDb()
+  const existingKeys = new Set<string>()
+  if (clientCreatedAts.length > 0) {
+    const existing = await db
+      .select({
+        name: mobilePerformanceEvents.name,
+        metadata: mobilePerformanceEvents.metadata,
+        clientCreatedAt: mobilePerformanceEvents.clientCreatedAt,
+      })
+      .from(mobilePerformanceEvents)
+      .where(
+        and(
+          eq(mobilePerformanceEvents.userId, input.userId),
+          inArray(mobilePerformanceEvents.clientCreatedAt, clientCreatedAts),
+        ),
+      )
+
+    for (const event of existing) {
+      existingKeys.add(eventKey(event))
+    }
+  }
+
+  const newEvents = uniqueEvents.filter((event) => !existingKeys.has(eventKey(event)))
+
+  if (newEvents.length === 0) {
+    return { accepted: 0 }
+  }
+
+  await db.insert(mobilePerformanceEvents).values(
+    newEvents.map((event) => ({
       id: randomUUID(),
       userId: input.userId,
       name: event.name,
@@ -69,5 +153,5 @@ export async function recordMobilePerformanceEvents(input: {
     })),
   )
 
-  return { accepted: input.events.length }
+  return { accepted: newEvents.length }
 }

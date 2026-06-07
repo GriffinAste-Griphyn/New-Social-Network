@@ -207,14 +207,14 @@ final class CameraController: NSObject, ObservableObject {
             [
                 AVVideoCodecKey: codec,
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: 8_000_000,
+                    AVVideoAverageBitRateKey: 12_000_000,
                     AVVideoExpectedSourceFrameRateKey: 30,
                     AVVideoMaxKeyFrameIntervalKey: 30,
                 ],
             ],
             for: videoConnection
         )
-        MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=8000000 fps=30")
+        MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=12000000 fps=30")
     }
 
     private func configureMovieAudioConnection() {

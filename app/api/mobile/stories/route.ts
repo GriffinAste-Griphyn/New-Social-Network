@@ -2,7 +2,11 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
-import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
+import {
+  createStory,
+  getStoryTextOverlaysForOwner,
+  getStoryUploadStatusForOwner,
+} from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
   removeStoryAsset,
@@ -71,16 +75,18 @@ export async function POST(request: Request) {
       { signed: true },
     )
 
+    const storyElements = parseStoryElements(formData)
     const storyId = await createStory({
       session,
       caption: parseStoryCaption(formData.get("caption")),
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: parseStoryElements(formData),
+      elements: storyElements,
       storedAsset,
       moderationMediaUrl,
       moderationThumbnailUrl,
     })
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
+    const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
 
     return NextResponse.json({
       ok: true,
@@ -100,6 +106,7 @@ export async function POST(request: Request) {
           signed: true,
         }),
       },
+      textOverlays,
     })
   } catch (error) {
     if (storedAsset) {

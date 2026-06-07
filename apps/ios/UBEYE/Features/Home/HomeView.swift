@@ -120,7 +120,7 @@ final class FeedStore: ObservableObject {
             title: response.asset.assetKind == .video && response.processingStatus != "ready"
                 ? "Video processing"
                 : "Story",
-            textOverlays: [],
+            textOverlays: response.textOverlays ?? [],
             durationSeconds: response.asset.assetKind == .video ? 10 : nil,
             lastUploadedAt: nil,
             progressPercent: nil,
@@ -133,7 +133,7 @@ final class FeedStore: ObservableObject {
             liveCount: max(current.myStory.liveCount, myStoryItems.count),
             latestThumbnailUrl: thumbnailUrl,
             latestAssetKind: response.asset.assetKind,
-            latestTextOverlays: [],
+            latestTextOverlays: response.textOverlays ?? [],
             expiresSoonLabel: current.myStory.expiresSoonLabel,
             items: myStoryItems
         )
@@ -597,8 +597,8 @@ struct MyStoryHomeCard: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                if let overlay = thumbnailOverlay {
-                    MyStoryThumbnailOverlay(overlay: overlay)
+                if let overlays = myStory.latestTextOverlays, !overlays.isEmpty {
+                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 9, horizontalPadding: 6, verticalPadding: 3)
                         .frame(width: 132, height: 192)
                 }
 
@@ -628,11 +628,6 @@ struct MyStoryHomeCard: View {
         .buttonStyle(.plain)
     }
 
-    private var thumbnailOverlay: StoryTextOverlay? {
-        myStory.latestTextOverlays?.first {
-            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-    }
 }
 
 private struct MyStoryCardSkeleton: View {
@@ -663,35 +658,6 @@ private struct MyStoryCardSkeleton: View {
     }
 }
 
-private struct MyStoryThumbnailOverlay: View {
-    let overlay: StoryTextOverlay
-
-    var body: some View {
-        GeometryReader { proxy in
-            HStack(spacing: 3) {
-                if overlay.kind == "link" {
-                    Image(systemName: "link")
-                        .font(.system(size: 7, weight: .bold))
-                }
-
-                Text(overlay.label)
-                    .font(.system(size: 9, weight: .bold))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.black.opacity(0.46), in: Capsule())
-            .position(
-                x: proxy.size.width * CGFloat(min(max(overlay.positionX, 8), 92) / 100),
-                y: proxy.size.height * CGFloat(min(max(overlay.positionY, 8), 82) / 100)
-            )
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 struct StoryThumb: View {
     let story: StoryCard
 
@@ -711,6 +677,11 @@ struct StoryThumb: View {
                 endPoint: .bottom
             )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            if let overlays = story.textOverlays, !overlays.isEmpty {
+                StoryThumbnailOverlayView(overlays: overlays, fontSize: 9, horizontalPadding: 6, verticalPadding: 3)
+                    .frame(width: 132, height: 192)
+            }
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(story.creator)

@@ -895,6 +895,33 @@ async function getStoryElements(storyIds: string[]) {
     .orderBy(asc(storyElements.createdAt))
 }
 
+export async function getStoryTextOverlaysForOwner(
+  storyId: string,
+  ownerId: string,
+) {
+  const db = getDb()
+  const elements = await db
+    .select({
+      id: storyElements.id,
+      storyId: storyElements.storyId,
+      kind: storyElements.kind,
+      label: storyElements.label,
+      href: storyElements.href,
+      sourceInteractionId: storyElements.sourceInteractionId,
+      sourceActorName: storyElements.sourceActorName,
+      sourceActorHandle: storyElements.sourceActorHandle,
+      sourceActorAvatarUrl: storyElements.sourceActorAvatarUrl,
+      positionX: storyElements.positionX,
+      positionY: storyElements.positionY,
+    })
+    .from(storyElements)
+    .innerJoin(stories, eq(stories.id, storyElements.storyId))
+    .where(and(eq(storyElements.storyId, storyId), eq(stories.creatorId, ownerId)))
+    .orderBy(asc(storyElements.createdAt))
+
+  return textOverlaysFromElements(elements)
+}
+
 function groupMentions(mentions: StoryMentionRecord[]) {
   const mentionsByStory = new Map<string, StoryMentionRecord[]>()
 

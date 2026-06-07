@@ -60,6 +60,42 @@ export type StoryElementInput = {
   positionY?: string
 }
 
+function numericPositionPercent(value: string | undefined, fallback: number) {
+  if (typeof value !== "string") {
+    return fallback
+  }
+
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+
+  return Math.min(Math.max(parsed, 0), 100)
+}
+
+export function storyTextOverlaysFromElementInputs(elements: StoryElementInput[]) {
+  return elements
+    .filter(
+      (element) =>
+        element.kind === "text" ||
+        element.kind === "link" ||
+        element.kind === "quote_reply",
+    )
+    .map((element, index) => ({
+      id: `upload-overlay-${index}`,
+      label: element.label,
+      kind: element.kind,
+      href: element.href ?? null,
+      sourceInteractionId: element.sourceInteractionId ?? null,
+      sourceActorName: element.sourceActorName ?? null,
+      sourceActorHandle: element.sourceActorHandle ?? null,
+      sourceActorAvatarUrl: element.sourceActorAvatarUrl ?? null,
+      positionX: numericPositionPercent(element.positionX, 50),
+      positionY: numericPositionPercent(element.positionY, 74),
+    }))
+}
+
 function parseDelimitedElements(
   value: FormDataEntryValue | null,
   kind: "text" | "sticker",
@@ -107,6 +143,10 @@ export function parseStoryElements(formData: FormData): StoryElementInput[] {
     positionX: parsePositionPercent(formData.get("quoteReplyPositionX"), 50),
     positionY: parsePositionPercent(formData.get("quoteReplyPositionY"), 58),
   }
+  const linkPosition = {
+    positionX: parsePositionPercent(formData.get("linkOverlayPositionX"), 50),
+    positionY: parsePositionPercent(formData.get("linkOverlayPositionY"), 78),
+  }
   const elements: StoryElementInput[] = [
     ...parseDelimitedElements(formData.get("textOverlays"), "text", textPosition),
     ...parseDelimitedElements(formData.get("stickers"), "sticker"),
@@ -124,6 +164,7 @@ export function parseStoryElements(formData: FormData): StoryElementInput[] {
       kind: "link",
       label: storyElementLabelSchema.parse(linkLabel),
       href: storyLinkUrlSchema.parse(linkUrl.trim()),
+      ...linkPosition,
     })
   }
 

@@ -22,11 +22,18 @@ final class AuthStore: ObservableObject {
 
     private let keychainService = "com.griffinaste.ubeye.ios"
     private let accountKey = "mobile-account-v1"
+    private var didAttemptSessionRestore = false
     #if DEBUG
     private let debugAccountFallbackKey = "ubeye.ios.debug.mobileAccount"
     #endif
 
     func restoreSession(api: APIClient) async {
+        guard !didAttemptSessionRestore else {
+            isRestoringSession = false
+            return
+        }
+
+        didAttemptSessionRestore = true
         defer { isRestoringSession = false }
 
         guard let stored = loadStoredAccount() else {
@@ -40,7 +47,7 @@ final class AuthStore: ObservableObject {
         } catch {
             if (error as? APIClientError)?.statusCode == 401 ||
                 (error as? APIClientError)?.statusCode == 403 {
-                signOut(api: api)
+                self.error = "Your saved session could not be verified. Try again or sign in manually."
             }
         }
     }

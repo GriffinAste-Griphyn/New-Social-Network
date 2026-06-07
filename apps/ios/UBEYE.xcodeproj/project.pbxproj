@@ -21,6 +21,7 @@
 		8B749B6B28A94F2B4B6F344F /* RepliesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */; };
 		8EEF12AD65B7A84BDFA8DB66 /* CreatorScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21255BE86F573D35C67EFC00 /* CreatorScreens.swift */; };
 		A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */; };
+		A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */; };
 		A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
@@ -54,6 +55,7 @@
 		B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingView.swift; sourceTree = "<group>"; };
 		B6E7EDD6CA1B0244C2B467FE /* UBEYE.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UBEYE.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
+		C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryThumbnailOverlayView.swift; sourceTree = "<group>"; };
 		C2BD6709CE19C8AAD11B13A0 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		CEFA619704F081F3123B00D7 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 		D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
@@ -145,6 +147,7 @@
 			isa = PBXGroup;
 			children = (
 				7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */,
+				C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */,
 			);
 			path = Stories;
 			sourceTree = "<group>";
@@ -268,6 +271,7 @@
 				AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */,
 				A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */,
 				EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */,
+				A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */,
 				FF53BF35C46EF6494703843E /* Theme.swift in Sources */,
 				A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */,
 			);
@@ -283,7 +287,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 155;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -367,7 +371,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 155;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

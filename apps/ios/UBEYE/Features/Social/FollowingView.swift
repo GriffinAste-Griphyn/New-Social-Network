@@ -147,8 +147,8 @@ private struct FollowingStoryFeedCard: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                if let overlay = story.primaryTextOverlay {
-                    FollowingStoryOverlayChip(overlay: overlay)
+                if let overlays = story.textOverlays, !overlays.isEmpty {
+                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 11, horizontalPadding: 8, verticalPadding: 5)
                 }
 
                 HStack(alignment: .bottom, spacing: 10) {
@@ -221,42 +221,7 @@ private struct FollowingStoryCardSkeleton: View {
     }
 }
 
-private struct FollowingStoryOverlayChip: View {
-    let overlay: StoryTextOverlay
-
-    var body: some View {
-        GeometryReader { proxy in
-            HStack(spacing: 4) {
-                if overlay.kind == "link" {
-                    Image(systemName: "link")
-                        .font(.system(size: 8, weight: .bold))
-                }
-
-                Text(overlay.label)
-                    .font(.system(size: 11, weight: .bold))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.black.opacity(0.42), in: Capsule())
-            .position(
-                x: proxy.size.width * CGFloat(min(max(overlay.positionX, 10), 90) / 100),
-                y: proxy.size.height * CGFloat(min(max(overlay.positionY, 10), 84) / 100)
-            )
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 private extension StoryCard {
-    var primaryTextOverlay: StoryTextOverlay? {
-        textOverlays?.first {
-            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-    }
-
     var relativePostedLabel: String? {
         guard let lastUploadedAt else {
             return nil

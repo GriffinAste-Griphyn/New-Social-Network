@@ -49,6 +49,13 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "story_stack_prefetch_end",
     "story_stack_prefetch_start",
     "video_disk_cache_hit",
+    "video_dismissed",
+    "video_ended",
+    "video_retry",
+    "video_upload_failed",
+    "video_upload_phase",
+    "video_upload_retry",
+    "video_upload_succeeded",
     "video_first_frame",
     "video_item_ready",
     "video_stalled",
@@ -124,6 +131,76 @@ describe("mobile performance events API", () => {
           },
           clientCreatedAt: new Date("2026-05-27T15:15:00.000Z"),
         },
+      ],
+    })
+  })
+
+  it("accepts upload diagnostic events", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          {
+            name: "video_upload_failed",
+            durationMs: 2400,
+            metadata: {
+              attempt: "attempt_123",
+              phase: "videoUpload",
+              retries: "2",
+              reason: "network",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({
+          name: "video_upload_failed",
+          durationMs: 2400,
+          metadata: {
+            attempt: "attempt_123",
+            phase: "videoUpload",
+            retries: "2",
+            reason: "network",
+          },
+        }),
+      ],
+    })
+  })
+
+  it("accepts playback recovery diagnostic events", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          {
+            name: "video_retry",
+            metadata: {
+              reason: "startup_timeout",
+              attempt: "1",
+              url: "video.m3u8",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({
+          name: "video_retry",
+          metadata: {
+            reason: "startup_timeout",
+            attempt: "1",
+            url: "video.m3u8",
+          },
+        }),
       ],
     })
   })

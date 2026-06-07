@@ -61,7 +61,7 @@ final class APIClient: ObservableObject {
 
     private static let baseURLKey = "ubeye.ios.apiBaseUrl"
     private static let deviceIdKey = "ubeye.ios.deviceId"
-    private static let productionBaseURL = "https://www.ubeye.ai"
+    private static let productionBaseURL = "https://new-social-network-nine.vercel.app"
     private static let vercelBlobApiVersion = "12"
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -166,13 +166,13 @@ final class APIClient: ObservableObject {
         MediaPerformance.mark("feed_disk_cache_clear")
     }
 
-    func storyStack(storyId: String) async throws -> StoryStackResponse {
-        if let cached = storyStackCache[storyId] {
+    func storyStack(storyId: String, refresh: Bool = false) async throws -> StoryStackResponse {
+        if !refresh, let cached = storyStackCache[storyId] {
             MediaPerformance.mark("story_stack_cache_hit id=\(storyId)")
             return cached
         }
 
-        if let diskCached = await cachedStoryStack(storyId: storyId) {
+        if !refresh, let diskCached = await cachedStoryStack(storyId: storyId) {
             storyStackCache[storyId] = diskCached
             return diskCached
         }
@@ -641,17 +641,13 @@ final class APIClient: ObservableObject {
         }
     }
 
-    func uploadVideoFile(fileURL: URL, upload: VideoUploadResponse) async throws {
+    func uploadVideoFile(
+        fileURL: URL,
+        upload: VideoUploadResponse,
+        onRetry: ((String) -> Void)? = nil
+    ) async throws {
         if upload.uploadProtocol == "tus" {
-            var request = URLRequest(url: upload.uploadUrl)
-            request.httpMethod = "PATCH"
-            request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-            request.setValue("0", forHTTPHeaderField: "Upload-Offset")
-            request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-            let (_, response) = try await session.upload(for: request, fromFile: fileURL)
-            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-                throw APIClientError.server("Video upload failed.", (response as? HTTPURLResponse)?.statusCode ?? 0)
-            }
+            try await uploadTusVideoFile(fileURL: fileURL, uploadURL: upload.uploadUrl, onRetry: onRetry)
             return
         }
 
@@ -672,10 +668,130 @@ final class APIClient: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        let (_, response) = try await session.upload(for: request, fromFile: bodyFileURL)
+        let (data, response) = try await session.upload(for: request, fromFile: bodyFileURL)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            throw APIClientError.server("Video upload failed.", (response as? HTTPURLResponse)?.statusCode ?? 0)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let detail = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw APIClientError.server(
+                detail?.isEmpty == false ? "Video upload failed: \(detail!)" : "Video upload failed.",
+                statusCode
+            )
         }
+    }
+
+    private func uploadTusVideoFile(
+        fileURL: URL,
+        uploadURL: URL,
+        onRetry: ((String) -> Void)?
+    ) async throws {
+        let totalBytes = try videoFileSize(fileURL)
+        var offset: Int64 = 0
+        var lastError: Error?
+        let maxAttempts = 4
+
+        for attempt in 1...maxAttempts {
+            let uploadFileURL: URL
+            var temporarySliceURL: URL?
+
+            if attempt > 1 {
+                offset = try await tusUploadOffset(uploadURL: uploadURL)
+                if offset >= totalBytes {
+                    return
+                }
+                onRetry?("offset_\(offset)")
+            }
+
+            if offset > 0 {
+                let sliceURL = try makeFileSlice(fileURL: fileURL, offset: offset)
+                temporarySliceURL = sliceURL
+                uploadFileURL = sliceURL
+            } else {
+                uploadFileURL = fileURL
+            }
+
+            do {
+                var request = URLRequest(url: uploadURL)
+                request.httpMethod = "PATCH"
+                request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+                request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
+                request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+
+                let (data, response) = try await session.upload(for: request, fromFile: uploadFileURL)
+                if let temporarySliceURL {
+                    try? FileManager.default.removeItem(at: temporarySliceURL)
+                }
+
+                guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                    throw uploadError(data: data, response: response)
+                }
+
+                return
+            } catch {
+                if let temporarySliceURL {
+                    try? FileManager.default.removeItem(at: temporarySliceURL)
+                }
+                lastError = error
+                guard attempt < maxAttempts else {
+                    break
+                }
+                onRetry?("attempt_\(attempt)")
+                try await Task.sleep(for: .milliseconds(600 * attempt))
+            }
+        }
+
+        throw lastError ?? APIClientError.server("Video upload failed.", 0)
+    }
+
+    private func tusUploadOffset(uploadURL: URL) async throws -> Int64 {
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "HEAD"
+        request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            throw APIClientError.server("Could not resume video upload.", (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        return Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "0") ?? 0
+    }
+
+    private func makeFileSlice(fileURL: URL, offset: Int64) throws -> URL {
+        let sliceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ubeye-tus-slice-\(UUID().uuidString).body")
+        _ = FileManager.default.createFile(atPath: sliceURL.path, contents: nil)
+
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? input.close()
+        }
+        try input.seek(toOffset: UInt64(offset))
+
+        let output = try FileHandle(forWritingTo: sliceURL)
+        defer {
+            try? output.close()
+        }
+
+        while true {
+            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            try output.write(contentsOf: chunk)
+        }
+
+        return sliceURL
+    }
+
+    private func uploadError(data: Data, response: URLResponse) -> APIClientError {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let detail = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return APIClientError.server(
+            detail?.isEmpty == false ? "Video upload failed: \(detail!)" : "Video upload failed.",
+            statusCode
+        )
     }
 
     private func makeMultipartFile(
