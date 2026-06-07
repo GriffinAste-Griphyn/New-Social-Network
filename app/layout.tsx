@@ -10,8 +10,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "UBEYE",
-  description:
-    "A social network and wealth redistribution experiment that rewards everyday users for the attention they create with stories, funded by ad dollars.",
+  description: "a social experiment in wealth redistribution",
 };
 
 export default function RootLayout({

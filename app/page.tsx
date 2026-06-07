@@ -18,9 +18,8 @@ const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 
 export const metadata: Metadata = {
-  title: "UBEYE | Get rewarded for attention",
-  description:
-    "UBEYE is a wealth redistribution experiment that rewards everyday users for posting stories, watching stories, and creating attention funded by ad dollars.",
+  title: "UBEYE | a social experiment in wealth redistribution",
+  description: "a social experiment in wealth redistribution",
 }
 
 const navLinks = [
