@@ -2,12 +2,14 @@ import Link from "next/link"
 import type { Metadata } from "next"
 import {
   ArrowRight,
-  BadgeDollarSign,
+  BrainCircuit,
   Check,
+  CircleDollarSign,
   Eye,
   Megaphone,
   Play,
-  ShieldCheck,
+  Radar,
+  ScanEye,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -23,34 +25,26 @@ export const metadata: Metadata = {
 }
 
 const navLinks = [
-  { label: "Rewards", href: "#model" },
-  { label: "How it works", href: "#value-loop" },
+  { label: "Thesis", href: "#thesis" },
+  { label: "Value loop", href: "#value-loop" },
   { label: "Advertisers", href: "/advertise" },
 ]
 
-const ledgerEvents = [
-  { label: "Maya posts a story", value: "A normal moment from her day" },
-  { label: "People watch stories", value: "Attention builds across the feed" },
-  { label: "Advertisers fund attention", value: "Ad dollars support the network" },
-  { label: "Users can be rewarded", value: "Value moves back to the people who participate" },
-]
-
-const heroSignals = [
-  { label: "Stories", value: "483" },
-  { label: "Watched", value: "61h" },
-  { label: "Rewards", value: "$22" },
-]
-
-const modelRows = [
+const marketSignals = [
   {
-    label: "Traditional platforms",
-    title: "You post. You watch. The platform sells the attention.",
-    copy: "The stories, reactions, time, and taste people share every day become the product traditional platforms monetize.",
+    icon: BrainCircuit,
+    label: "AGI changes the market",
+    copy: "As intelligence becomes abundant, human attention and consciousness become more scarce, more measurable, and more valuable.",
   },
   {
-    label: "UBEYE",
-    title: "You post. You watch. The rewards can come back to users.",
-    copy: "UBEYE is built so ad dollars can help reward the everyday people creating and spending attention in the feed.",
+    icon: ScanEye,
+    label: "Platforms monetize the scarce thing",
+    copy: "People post, watch, react, remember, desire, and decide. Traditional networks sell those signals while users receive little of the upside.",
+  },
+  {
+    icon: CircleDollarSign,
+    label: "UBEYE routes value back",
+    copy: "UBEYE is built to test whether ad dollars can move back to the people creating and spending attention in the feed.",
   },
 ]
 
@@ -58,34 +52,34 @@ const valueLoop = [
   {
     icon: Play,
     label: "Post",
-    title: "Post everyday stories",
-    copy: "Share the normal moments you already share: campus, work, food, fashion, products, places, taste, and real life.",
+    title: "People post real stories",
+    copy: "Everyday moments, places, products, taste, work, culture, campus, nightlife, and the normal texture of a life.",
   },
   {
     icon: Eye,
     label: "Watch",
-    title: "Watch what other people post",
-    copy: "Viewing stories is part of the value. Attention, replies, saves, follows, and replays help show what people care about.",
+    title: "People spend attention",
+    copy: "Views, completion, replies, saves, follows, and replays show what people actually care about.",
   },
   {
     icon: Megaphone,
     label: "Fund",
-    title: "Ad dollars fund the system",
-    copy: "Advertisers fund attention in the network instead of only buying interruptive placements that users never share in.",
+    title: "Advertisers fund attention",
+    copy: "Brands buy into social attention that users helped create instead of extracting value from the feed alone.",
   },
   {
-    icon: BadgeDollarSign,
-    label: "Route",
-    title: "Users can be rewarded",
-    copy: "When activity qualifies, value can move back to users who helped create the attention, including people posting and watching stories.",
+    icon: CircleDollarSign,
+    label: "Return",
+    title: "Rewards can flow back",
+    copy: "When activity qualifies, value can return to participants instead of stopping at the platform.",
   },
 ]
 
 const principles = [
   "You do not need to be famous to participate.",
-  "Posting stories and watching stories both help create value.",
+  "Posting stories and watching stories both create economic signal.",
   "Rewards are funded from ad dollars, not a limited creator fund.",
-  "The goal is to redistribute more of the value created by everyday attention.",
+  "The experiment is simple: redistribute more of the value created by attention.",
 ]
 
 const footerLinks = [
@@ -96,13 +90,16 @@ const footerLinks = [
 
 function SiteHeader() {
   return (
-    <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-[#060606]/78 text-white backdrop-blur-xl">
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-[#050505]/80 text-white backdrop-blur-xl">
       <div className="relative mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between gap-4 px-4">
         <Link href="/" className="text-xl font-medium" aria-label="UBEYE home">
           UBEYE
         </Link>
 
-        <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 text-sm text-white/62 md:flex" aria-label="Primary">
+        <nav
+          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 text-sm text-white/62 md:flex"
+          aria-label="Primary"
+        >
           {navLinks.map((link) => (
             <Link
               key={link.label}
@@ -115,10 +112,18 @@ function SiteHeader() {
         </nav>
 
         <div className="flex items-center gap-2">
-          <Button asChild variant="ghost" className="hidden h-9 rounded-[8px] px-3 text-sm text-white/70 hover:bg-white/8 hover:text-white sm:inline-flex">
+          <Button
+            asChild
+            variant="ghost"
+            className="hidden h-9 rounded-[8px] px-3 text-sm text-white/70 hover:bg-white/8 hover:text-white sm:inline-flex"
+          >
             <Link href={advertiserSignInHref}>Advertiser sign in</Link>
           </Button>
-          <Button asChild variant="ghost" className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-[#e01616] hover:text-white dark:hover:bg-[#e01616]">
+          <Button
+            asChild
+            variant="ghost"
+            className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-[#e01616] hover:text-white dark:hover:bg-[#e01616]"
+          >
             <Link href={mobileAppHref}>Get the app</Link>
           </Button>
         </div>
@@ -127,51 +132,9 @@ function SiteHeader() {
   )
 }
 
-function AttentionLedger() {
-  return (
-    <div className="border border-white/12 bg-black/54 p-4 text-white shadow-[0_24px_80px_-56px_rgba(0,0,0,0.9)] backdrop-blur-md md:p-5">
-      <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <p className="text-xs uppercase text-white/42">How it works</p>
-          <p className="mt-1 text-sm font-normal text-white">Everyday attention creates value</p>
-        </div>
-        <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-medium text-white">
-          <span className="size-1.5 rounded-full bg-white" />
-          Active
-        </span>
-      </div>
-
-      <div className="grid grid-cols-3 divide-x divide-white/10 border-b border-white/10">
-        {heroSignals.map((signal) => (
-          <div key={signal.label} className="px-3 py-4 first:pl-0 last:pr-0">
-            <p className="text-[0.7rem] uppercase text-white/38">{signal.label}</p>
-            <p className="mt-1 text-2xl font-normal text-white">{signal.value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="divide-y divide-white/10">
-        {ledgerEvents.map((event, index) => (
-          <div key={event.label} className="grid grid-cols-[1.35rem_1fr] gap-3 py-4">
-            <div className="pt-1">
-              <span className="flex size-5 items-center justify-center rounded-full border border-[#e01616]/50 bg-[#e01616]/16 text-[0.65rem] font-medium text-[#ffb4a6]">
-                {index + 1}
-              </span>
-            </div>
-            <div>
-              <p className="text-xs uppercase text-white/38">{event.label}</p>
-              <p className="mt-1 text-sm text-white/82">{event.value}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function SiteFooter() {
   return (
-    <footer className="border-t border-white/10 bg-[#060606] text-white">
+    <footer className="border-t border-white/10 bg-[#050505] text-white">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-5 px-4 py-8 text-sm text-white/54 sm:flex-row sm:items-center sm:justify-between">
         <Link href="/" className="w-fit text-xl font-medium text-white" aria-label="UBEYE home">
           UBEYE
@@ -190,13 +153,13 @@ function SiteFooter() {
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-[#060606] text-white">
+    <div className="min-h-screen bg-[#050505] text-white">
       <SiteHeader />
 
       <main className="overflow-hidden">
-        <section className="relative min-h-[100svh] border-b border-white/10 pt-16 md:min-h-[88vh]">
+        <section className="relative border-b border-white/10 pt-16">
           <div
-            className="absolute inset-0 bg-cover bg-center opacity-58 motion-reduce:block"
+            className="absolute inset-0 bg-cover bg-center opacity-54 motion-reduce:block"
             style={{ backgroundImage: `url(${heroPoster})` }}
           />
           <video
@@ -206,64 +169,70 @@ export default function HomePage() {
             playsInline
             preload="auto"
             poster={heroPoster}
-            className="absolute inset-0 hidden h-full w-full object-cover opacity-56 motion-safe:block [filter:contrast(1.05)_saturate(0.82)]"
+            className="absolute inset-0 hidden h-full w-full object-cover opacity-50 motion-safe:block [filter:contrast(1.05)_saturate(0.78)]"
           >
             <source src={heroVideo} type="video/mp4" />
           </video>
-          <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(6,6,6,0.96),rgba(6,6,6,0.72)_52%,rgba(6,6,6,0.38))]" />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,6,6,0.2),rgba(6,6,6,0.44)_54%,rgba(6,6,6,1)_100%)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,5,5,0.98),rgba(5,5,5,0.78)_55%,rgba(5,5,5,0.42))]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(5,5,5,0.18),rgba(5,5,5,0.48)_62%,rgba(5,5,5,1)_100%)]" />
 
-          <div className="relative mx-auto grid max-w-[1180px] gap-10 px-4 md:min-h-[calc(88vh-4rem)] md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
-            <div className="flex min-h-[calc(100svh-4rem)] max-w-4xl flex-col pb-8 pt-17 md:block md:min-h-0 md:py-0">
-              <div>
-                <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-medium uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
-                  A social experiment in wealth redistribution
-                </p>
-                <h1 className="mt-10 max-w-[12ch] text-[3.65rem] font-[350] leading-[0.96] text-white sm:text-[4.8rem] md:mt-7 md:text-[5.5rem] lg:text-[6.2rem]">
-                  Organic content monetized
-                </h1>
-                <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
-                  UBEYE is a social experiment in wealth redistribution. Post
-                  everyday stories, watch other people&apos;s stories, and earn from
-                  the ad dollars your attention helps create.
-                </p>
-              </div>
+          <div className="relative mx-auto flex min-h-[86svh] max-w-[1180px] items-center px-4 py-10 md:min-h-[82vh] md:py-12">
+            <div className="max-w-4xl">
+              <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-medium uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
+                A social experiment in wealth redistribution
+              </p>
+              <h1 className="mt-8 text-6xl font-[340] leading-[0.95] text-white sm:text-7xl md:text-8xl lg:text-9xl">
+                UBEYE
+              </h1>
+              <p className="mt-7 max-w-3xl text-2xl font-[340] leading-tight text-white md:text-4xl md:leading-tight">
+                In the pursuit of AGI, human attention and consciousness will become the new gold.
+              </p>
+              <p className="mt-6 max-w-2xl text-base leading-8 text-white/66 md:text-lg">
+                UBEYE turns that thesis into a social product: people post stories,
+                people spend attention, advertisers fund the signal, and users can
+                share in the value they helped create.
+              </p>
 
-              <div className="mt-auto flex flex-col gap-3 pt-10 sm:flex-row md:mt-7 md:pt-0">
-                <Button asChild className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-medium text-white hover:bg-[#c91414] sm:justify-center">
+              <div className="mt-9 flex flex-col gap-3 sm:flex-row">
+                <Button
+                  asChild
+                  className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-medium text-white hover:bg-[#c91414] sm:justify-center"
+                >
                   <Link href={mobileAppHref}>
                     Get the app
                     <ArrowRight className="size-4" />
                   </Link>
                 </Button>
-                <Button asChild variant="outline" className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-medium text-white hover:bg-white/10 sm:justify-center">
+                <Button
+                  asChild
+                  variant="outline"
+                  className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-medium text-white hover:bg-white/10 sm:justify-center"
+                >
                   <Link href="/advertise">Advertise on UBEYE</Link>
                 </Button>
               </div>
             </div>
-
-            <div className="pb-10 md:pb-0">
-              <AttentionLedger />
-            </div>
           </div>
         </section>
 
-        <section id="model" className="border-b border-white/10 bg-[#060606]">
-          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
-            <div className="grid gap-12 lg:grid-cols-[18rem_minmax(0,1fr)] lg:gap-16">
+        <section id="thesis" className="border-b border-white/10 bg-[#050505]">
+          <div className="mx-auto max-w-[1180px] px-4 py-18 md:py-24">
+            <div className="grid gap-12 lg:grid-cols-[19rem_minmax(0,1fr)] lg:gap-16">
               <div>
-                <p className="text-xs font-medium uppercase text-[#e01616]">The model</p>
+                <p className="text-xs font-medium uppercase text-[#ff5a48]">The thesis</p>
               </div>
               <div>
-                <h2 className="max-w-4xl text-4xl font-[350] leading-tight text-white md:text-6xl md:leading-[1.08]">
-                  UBEYE changes who benefits when people pay attention.
+                <h2 className="max-w-4xl text-4xl font-[340] leading-tight text-white md:text-6xl md:leading-[1.08]">
+                  If attention is the asset, the people creating it should participate in the upside.
                 </h2>
-                <div className="mt-12 grid gap-4 md:grid-cols-2">
-                  {modelRows.map((row) => (
-                    <article key={row.label} className="border border-white/10 bg-white/[0.03] p-5">
-                      <p className="text-xs font-medium uppercase text-white/82">{row.label}</p>
-                      <h3 className="mt-5 text-2xl font-normal leading-tight text-white">{row.title}</h3>
-                      <p className="mt-5 text-sm leading-7 text-white/56 md:text-base">{row.copy}</p>
+                <div className="mt-12 grid gap-3 md:grid-cols-3">
+                  {marketSignals.map((signal) => (
+                    <article key={signal.label} className="border border-white/10 bg-white/[0.035] p-5">
+                      <div className="flex size-10 items-center justify-center rounded-[8px] bg-white text-black">
+                        <signal.icon className="size-5" />
+                      </div>
+                      <h3 className="mt-6 text-xl font-normal leading-tight text-white">{signal.label}</h3>
+                      <p className="mt-4 text-sm leading-7 text-white/56">{signal.copy}</p>
                     </article>
                   ))}
                 </div>
@@ -272,24 +241,27 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section id="value-loop" className="border-b border-white/10 bg-[#f7f3ea] text-black">
-          <div className="mx-auto max-w-[1180px] px-4 py-20 md:py-28">
-            <div className="grid gap-12 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)] lg:gap-20">
-              <div className="max-w-[29rem]">
+        <section id="value-loop" className="border-b border-black/10 bg-[#f4f0e6] text-black">
+          <div className="mx-auto max-w-[1180px] px-4 py-18 md:py-24">
+            <div className="grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-20">
+              <div className="max-w-[30rem]">
                 <p className="text-xs font-medium uppercase text-[#e01616]">The value loop</p>
-                <h2 className="mt-5 text-4xl font-[350] leading-tight md:text-6xl md:leading-[1.08]">
-                  Post stories. Watch stories. Share in the value.
+                <h2 className="mt-5 text-4xl font-[340] leading-tight md:text-6xl md:leading-[1.08]">
+                  Post. Watch. Create value. Share value.
                 </h2>
-                <p className="mt-7 text-base leading-8 text-black/62 md:text-lg">
-                  UBEYE is designed around one simple loop: users post stories,
-                  users watch stories, advertisers fund the attention, and
-                  rewards can flow back to the people participating.
+                <p className="mt-7 text-base leading-8 text-black/64 md:text-lg">
+                  UBEYE is not a creator fund. It is an experiment in whether the
+                  value of attention can be measured, funded by advertisers, and
+                  routed back to everyday participants.
                 </p>
               </div>
 
               <div className="grid gap-3">
                 {valueLoop.map((step, index) => (
-                  <article key={step.label} className="grid gap-5 border border-black/10 bg-white p-5 sm:grid-cols-[3.25rem_1fr_auto] sm:items-start">
+                  <article
+                    key={step.label}
+                    className="grid gap-5 border border-black/10 bg-white p-5 sm:grid-cols-[3.25rem_1fr_auto] sm:items-start"
+                  >
                     <div className="flex size-11 items-center justify-center rounded-[8px] bg-black text-white">
                       <step.icon className="size-5" />
                     </div>
@@ -308,17 +280,17 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="border-b border-white/10 bg-[#060606] text-white">
-          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 md:py-28 lg:grid-cols-[minmax(0,1fr)_25rem] lg:items-end">
+        <section className="border-b border-white/10 bg-[#050505] text-white">
+          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-18 md:py-24 lg:grid-cols-[minmax(0,1fr)_25rem] lg:items-end">
             <div>
-              <p className="text-xs font-medium uppercase text-[#e01616]">Participation</p>
-              <h2 className="mt-5 max-w-4xl text-5xl font-[350] leading-[1.03] md:text-7xl">
-                Rewards are not only for influencers.
+              <p className="text-xs font-medium uppercase text-[#ff5a48]">Participation</p>
+              <h2 className="mt-5 max-w-4xl text-5xl font-[340] leading-[1.03] md:text-7xl">
+                The feed is no longer just entertainment. It is economic signal.
               </h2>
               <p className="mt-8 max-w-2xl text-base leading-8 text-white/58 md:text-lg">
-                UBEYE is for everyday users. Posting, watching, replying,
-                following, and saving all help create the attention that ad
-                dollars can reward.
+                UBEYE is for everyday users, not only influencers. Posting,
+                watching, replying, following, and saving all help create the
+                attention that ad dollars can reward.
               </p>
             </div>
 
@@ -335,21 +307,21 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="bg-[#f7f3ea] text-black">
+        <section className="bg-[#f4f0e6] text-black">
           <div className="mx-auto max-w-[1180px] px-4 py-16 md:py-24">
             <div className="grid overflow-hidden border border-black/10 bg-white md:grid-cols-[1.05fr_0.95fr]">
               <div className="p-6 sm:p-8 lg:p-10">
                 <p className="inline-flex items-center gap-2 text-sm font-medium text-[#e01616]">
-                  <ShieldCheck className="size-4" />
+                  <Radar className="size-4" />
                   Advertiser-funded
                 </p>
-                <h2 className="mt-6 max-w-[12ch] text-4xl font-[350] leading-[1.08] sm:text-6xl">
-                  Fund the attention users create.
+                <h2 className="mt-6 max-w-[13ch] text-4xl font-[340] leading-[1.08] sm:text-6xl">
+                  Buy attention without pretending users did not create it.
                 </h2>
                 <p className="mt-7 max-w-xl text-base leading-8 text-black/58 md:text-lg">
                   Brands can put ad dollars behind the stories people post and
-                  watch. That funding can become rewards for the everyday users
-                  creating the attention.
+                  watch. UBEYE uses that funding to test a more participatory
+                  model for social advertising.
                 </p>
                 <Button asChild className="mt-8 h-11 rounded-[8px] bg-black px-5 text-sm text-white hover:bg-black/84">
                   <Link href="/advertise">
@@ -360,18 +332,20 @@ export default function HomePage() {
               </div>
               <div className="grid content-between gap-8 border-t border-black/10 bg-black p-6 text-white sm:p-8 md:border-l md:border-t-0 lg:p-10">
                 <div className="flex size-12 items-center justify-center rounded-[8px] bg-[#e01616] text-white">
-                  <BadgeDollarSign className="size-6" />
+                  <CircleDollarSign className="size-6" />
                 </div>
                 <div>
-                  <p className="text-6xl font-[350] sm:text-7xl">75%</p>
+                  <p className="text-6xl font-[340] sm:text-7xl">75%</p>
                   <p className="mt-3 max-w-sm text-sm leading-6 text-white/56">
-                    Target share of eligible ad-funded value routed back to
-                    users as the experiment scales.
+                    Target share of eligible ad-funded value routed back to users
+                    as the experiment scales.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 divide-x divide-white/10 border-y border-white/10 text-sm">
                   {["Post", "Watch", "Earn"].map((item) => (
-                    <p key={item} className="py-3 text-center text-white/58">{item}</p>
+                    <p key={item} className="py-3 text-center text-white/58">
+                      {item}
+                    </p>
                   ))}
                 </div>
               </div>
