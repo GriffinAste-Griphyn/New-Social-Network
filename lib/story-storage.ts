@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
-import { del, head, put } from "@vercel/blob"
+import { del, get, head, put } from "@vercel/blob"
 import sharp from "sharp"
 
 import {
@@ -431,6 +431,79 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     width: input.width ?? null,
     height: input.height ?? null,
     durationMs: input.durationMs ?? null,
+    processingStatus: "ready",
+  }
+}
+
+export function isAllowedDirectStoryImageContentType(contentType: string) {
+  return ["image/jpeg", "image/png", "image/webp"].includes(
+    contentType.toLowerCase(),
+  )
+}
+
+export function directStoryImagePathname(userId: string, fileName: string) {
+  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_")
+  const extension = path.extname(fileName).toLowerCase()
+  const resolvedExtension = [".jpg", ".jpeg", ".png", ".webp"].includes(extension)
+    ? extension
+    : ".jpg"
+
+  return `stories/web-direct/${safeUserId}/${randomUUID()}${resolvedExtension}`
+}
+
+export async function createDirectBlobStoryImageAsset(input: {
+  pathname: string
+  ownerUserId: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width?: number | null
+  height?: number | null
+}): Promise<StoredStoryAsset> {
+  const expectedPrefix = `stories/web-direct/${input.ownerUserId.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "_",
+  )}/`
+
+  if (
+    input.pathname.includes("..") ||
+    !input.pathname.startsWith(expectedPrefix) ||
+    !isAllowedDirectStoryImageContentType(input.contentType) ||
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize <= 0 ||
+    input.byteSize > maxStoryUploadBytes ||
+    !/^[a-f0-9]{64}$/i.test(input.checksum)
+  ) {
+    throw new StoryUploadError("Could not verify the uploaded story image.")
+  }
+
+  const blobMetadata = await head(input.pathname).catch(() => null)
+
+  if (
+    !blobMetadata ||
+    blobMetadata.size !== input.byteSize ||
+    blobMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
+  ) {
+    throw new StoryUploadError("Could not verify the uploaded story image.")
+  }
+
+  const mediaUrl = buildStoryMediaRoute(input.pathname)
+  const thumbnailUrl =
+    (await createDirectStoryImageThumbnail(input.pathname).catch(() => null)) ??
+    mediaUrl
+
+  return {
+    assetKind: "image",
+    mediaUrl,
+    thumbnailUrl,
+    storageProvider: "vercel-blob",
+    storageKey: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum.toLowerCase(),
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: null,
     processingStatus: "ready",
   }
 }
@@ -927,6 +1000,56 @@ function getStoryStorageProvider() {
   return localStoryStorageProvider
 }
 
+function buildDirectStoryImageThumbnailPathname(pathname: string) {
+  const extension = path.extname(pathname)
+
+  return extension
+    ? `${pathname.slice(0, -extension.length)}-thumb.jpg`
+    : `${pathname}-thumb.jpg`
+}
+
+async function createDirectStoryImageThumbnail(pathname: string) {
+  const source = await get(pathname, { access: "private", useCache: false })
+
+  if (!source?.stream || source.statusCode !== 200) {
+    return null
+  }
+
+  const sourceBytes = Buffer.from(
+    await new Response(source.stream).arrayBuffer(),
+  )
+  const thumbnailBytes = await sharp(sourceBytes)
+    .rotate()
+    .resize({
+      width: 720,
+      height: 1280,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .jpeg({
+      quality: 84,
+      progressive: true,
+    })
+    .toBuffer()
+  const thumbnail = await put(buildDirectStoryImageThumbnailPathname(pathname), thumbnailBytes, {
+    access: "private",
+    contentType: "image/jpeg",
+    addRandomSuffix: false,
+  })
+
+  return buildStoryMediaRoute(thumbnail.pathname)
+}
+
+async function removeDirectStoryImageThumbnail(mediaUrl: string) {
+  const pathname = getPrivateVercelBlobPathname(mediaUrl)
+
+  if (!pathname?.startsWith("stories/web-direct/")) {
+    return
+  }
+
+  await del(buildDirectStoryImageThumbnailPathname(pathname)).catch(() => undefined)
+}
+
 function hasPrefix(buffer: Buffer, bytes: number[]) {
   return bytes.every((byte, index) => buffer[index] === byte)
 }
@@ -1414,5 +1537,6 @@ export async function removeStoryAsset(mediaUrl: string) {
     await removeCloudflareStreamVideo(mediaUrl)
   }
 
+  await removeDirectStoryImageThumbnail(mediaUrl)
   await getStoryStorageProvider().remove(mediaUrl)
 }

@@ -5,6 +5,7 @@ import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   createStory,
   getFeedData,
+  getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
 } from "@/lib/story-store"
 import {
@@ -33,6 +34,7 @@ vi.mock("@/lib/request-security", async () => {
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
   getFeedData: vi.fn(),
+  getStoryTextOverlaysForOwner: vi.fn(),
   getStoryUploadStatusForOwner: vi.fn(),
 }))
 
@@ -134,6 +136,7 @@ describe("story upload and mobile feed API", () => {
       moderationReason: null,
       isLive: true,
     })
+    vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([])
     vi.mocked(publicStoryMediaUrl).mockImplementation((value) =>
       value ? `https://cdn.example.com${value}` : null,
     )
