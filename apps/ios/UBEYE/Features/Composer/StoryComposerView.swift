@@ -643,7 +643,6 @@ final class StoryComposerStore: ObservableObject {
                 for: response.asset.mediaUrl,
                 kind: .video
             )
-            WarmVideoPlayerPool.shared.prepare(urls: [response.asset.mediaUrl], limit: 1)
             return response
         } catch {
             attempt.recordFailure(error)
