@@ -7,7 +7,22 @@ import UniformTypeIdentifiers
 
 enum PickedStoryMedia {
     case image(StoryImageUpload)
-    case video(URL)
+    case video(StoryVideoUpload)
+}
+
+struct StoryVideoUpload {
+    enum Source {
+        case cameraFront
+        case cameraBack
+        case library
+
+        var requiresUploadNormalization: Bool {
+            self == .cameraFront
+        }
+    }
+
+    let url: URL
+    let source: Source
 }
 
 struct StoryImageUpload: Equatable {
@@ -220,7 +235,11 @@ private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
 private enum StoryVideoUploadNormalizer {
     private static let maxUploadBytes: Int64 = 150 * 1024 * 1024
 
-    static func prepare(url: URL, maxDurationSeconds: Int) async throws -> PreparedStoryVideo {
+    static func prepare(
+        url: URL,
+        maxDurationSeconds: Int,
+        forceNormalization: Bool = false
+    ) async throws -> PreparedStoryVideo {
         let originalDurationMs = await videoDurationMs(for: url)
         let originalByteSize = try videoFileSize(for: url)
 
@@ -228,7 +247,7 @@ private enum StoryVideoUploadNormalizer {
             throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
         }
 
-        if originalByteSize <= maxUploadBytes, isSupportedOriginalUpload(url) {
+        if !forceNormalization, originalByteSize <= maxUploadBytes, isSupportedOriginalUpload(url) {
             MediaPerformance.mark("video_upload_original_preserved bytes=\(originalByteSize)")
             return PreparedStoryVideo(
                 url: url,
@@ -239,6 +258,9 @@ private enum StoryVideoUploadNormalizer {
         }
 
         let normalizedURL = try await normalizedVideoURL(for: url)
+        guard !forceNormalization || normalizedURL != nil else {
+            throw APIClientError.server("Could not prepare front camera video. Try recording again.", 0)
+        }
         let uploadURL = normalizedURL ?? url
         let durationMs = await videoDurationMs(for: uploadURL)
         let byteSize = try videoFileSize(for: uploadURL)
@@ -531,8 +553,8 @@ final class StoryComposerStore: ObservableObject {
                     quoteReplyPositionX: quoteReplyPositionX,
                     quoteReplyPositionY: quoteReplyPositionY
                 )
-            case .video(let url):
-                uploadResponse = try await uploadVideoStory(url: url, api: api)
+            case .video(let video):
+                uploadResponse = try await uploadVideoStory(video: video, api: api)
             }
 
             uploadStatus = uploadResponse?.processingStatus == "ready" ? "Story posted" : "Upload complete"
@@ -560,15 +582,16 @@ final class StoryComposerStore: ObservableObject {
         return uploadResponse
     }
 
-    private func uploadVideoStory(url: URL, api: APIClient) async throws -> StoryUploadResponse {
+    private func uploadVideoStory(video: StoryVideoUpload, api: APIClient) async throws -> StoryUploadResponse {
         var attempt = StoryVideoUploadAttempt()
 
         do {
             attempt.begin(.normalize)
             uploadStatus = attempt.phase.statusLabel
             let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
-                url: url,
-                maxDurationSeconds: maxVideoDurationSeconds
+                url: video.url,
+                maxDurationSeconds: maxVideoDurationSeconds,
+                forceNormalization: video.source.requiresUploadNormalization
             )
             attempt.attach(video: preparedVideo)
             lastUploadReport = attempt.report
@@ -1276,7 +1299,8 @@ struct StoryComposerView: View {
         }
         .onChange(of: camera.capturedVideoURL) { _, url in
             if let url {
-                store.selectedMedia = .video(url)
+                let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
+                store.selectedMedia = .video(StoryVideoUpload(url: url, source: source))
                 recordingElapsed = 0
             }
         }
@@ -1484,8 +1508,8 @@ struct StoryComposerView: View {
             Image(uiImage: upload.image)
                 .resizable()
                 .scaledToFill()
-        case .video(let url):
-            StoryVideoPreview(url: url)
+        case .video(let video):
+            StoryVideoPreview(url: video.url)
         case nil:
             if let photo = camera.capturedPhoto {
                 Image(uiImage: photo.image)
@@ -1497,7 +1521,8 @@ struct StoryComposerView: View {
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(url: videoURL)
                     .onAppear {
-                        store.selectedMedia = .video(videoURL)
+                        let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
+                        store.selectedMedia = .video(StoryVideoUpload(url: videoURL, source: source))
                     }
             } else if camera.authorizationStatus == .authorized {
                 CameraPreview(session: camera.session)
@@ -1536,7 +1561,7 @@ struct StoryComposerView: View {
 
         if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
             if let pickedVideo = try? await item.loadTransferable(type: PickedVideo.self) {
-                store.selectedMedia = .video(pickedVideo.url)
+                store.selectedMedia = .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
             }
             return
         }
