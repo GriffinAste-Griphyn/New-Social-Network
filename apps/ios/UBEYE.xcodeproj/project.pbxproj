@@ -12,10 +12,12 @@
 		1711D1E6D918705F3AD50112 /* AuthStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C41C9A89DCD2F208021A68A /* AuthStore.swift */; };
 		1AD6BCC4CD515B5BC44FF4ED /* PushNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */; };
 		209C07B0805239729E7550C9 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */; };
+		2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */; };
 		2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */; };
 		41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12112239A2105E9146475DBB /* FollowingManagementView.swift */; };
 		456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */; };
 		51ADBD536257CD6560F637EC /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA619704F081F3123B00D7 /* ProfileView.swift */; };
+		6F563896438BCE9026DB09EF /* StoryVideoGeometryNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */; };
 		7B321A79564A1C8F36C29E1B /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BD6709CE19C8AAD11B13A0 /* APIClient.swift */; };
 		8A0D4CD3CD2308FB686543F5 /* MobileModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28486780B71D96C7D6EE5C30 /* MobileModels.swift */; };
 		8B749B6B28A94F2B4B6F344F /* RepliesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */; };
@@ -32,6 +34,16 @@
 		FF53BF35C46EF6494703843E /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E023E109362F9ED0305266 /* Theme.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BDE38C46BF806CDE35763E09 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0B0AF6B50DCCDECEA7A75FAB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BE4F9C772EE1C26FEFA1D472;
+			remoteInfo = UBEYE;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignFixtures.swift; sourceTree = "<group>"; };
 		02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryComposerView.swift; sourceTree = "<group>"; };
@@ -45,12 +57,15 @@
 		28486780B71D96C7D6EE5C30 /* MobileModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModels.swift; sourceTree = "<group>"; };
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3B406ECDBADF19D651536B10 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		40C1081F0804D1398CE2B1AE /* UBEYETests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UBEYETests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CEB3E2F66807A7319AD96A0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		6C41C9A89DCD2F208021A68A /* AuthStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthStore.swift; sourceTree = "<group>"; };
+		710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizer.swift; sourceTree = "<group>"; };
 		73BDBCA8966387ED9F236329 /* UBEYE.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = UBEYE.entitlements; sourceTree = "<group>"; };
 		7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryStackViewer.swift; sourceTree = "<group>"; };
 		8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepliesView.swift; sourceTree = "<group>"; };
 		9B74604130A946A9568F391B /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
+		A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizerTests.swift; sourceTree = "<group>"; };
 		AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingView.swift; sourceTree = "<group>"; };
 		B6E7EDD6CA1B0244C2B467FE /* UBEYE.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UBEYE.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -66,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				12AA9C2B6D7B3AAC39635C3C /* UBEYE */,
+				84F6358C01848CD49999082A /* UBEYETests */,
 				F1875BFAD8E9B81C33A966F9 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -75,6 +91,7 @@
 			children = (
 				9B74604130A946A9568F391B /* CameraController.swift */,
 				02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */,
+				710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */,
 			);
 			path = Composer;
 			sourceTree = "<group>";
@@ -143,6 +160,14 @@
 			path = Home;
 			sourceTree = "<group>";
 		};
+		84F6358C01848CD49999082A /* UBEYETests */ = {
+			isa = PBXGroup;
+			children = (
+				A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */,
+			);
+			path = UBEYETests;
+			sourceTree = "<group>";
+		};
 		B162A719C6CF9C6CCD068F8F /* Stories */ = {
 			isa = PBXGroup;
 			children = (
@@ -178,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				B6E7EDD6CA1B0244C2B467FE /* UBEYE.app */,
+				40C1081F0804D1398CE2B1AE /* UBEYETests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -185,6 +211,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		93CDE485D20B054E6BDCD7C5 /* UBEYETests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3B9639133C08C3463C0AAA28 /* Build configuration list for PBXNativeTarget "UBEYETests" */;
+			buildPhases = (
+				A331376AB928807B0174DBD6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7E7B98918FC5610C5898830D /* PBXTargetDependency */,
+			);
+			name = UBEYETests;
+			packageProductDependencies = (
+			);
+			productName = UBEYETests;
+			productReference = 40C1081F0804D1398CE2B1AE /* UBEYETests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		BE4F9C772EE1C26FEFA1D472 /* UBEYE */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 51242174966A8C2FA49C5619 /* Build configuration list for PBXNativeTarget "UBEYE" */;
@@ -212,6 +256,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					93CDE485D20B054E6BDCD7C5 = {
+						DevelopmentTeam = 6BXL9AWXBG;
+					};
 					BE4F9C772EE1C26FEFA1D472 = {
 						DevelopmentTeam = 6BXL9AWXBG;
 					};
@@ -232,6 +279,7 @@
 			projectRoot = "";
 			targets = (
 				BE4F9C772EE1C26FEFA1D472 /* UBEYE */,
+				93CDE485D20B054E6BDCD7C5 /* UBEYETests */,
 			);
 		};
 /* End PBXProject section */
@@ -272,12 +320,29 @@
 				A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */,
 				EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */,
 				A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */,
+				2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */,
 				FF53BF35C46EF6494703843E /* Theme.swift in Sources */,
 				A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A331376AB928807B0174DBD6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6F563896438BCE9026DB09EF /* StoryVideoGeometryNormalizerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7E7B98918FC5610C5898830D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BE4F9C772EE1C26FEFA1D472 /* UBEYE */;
+			targetProxy = BDE38C46BF806CDE35763E09 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		2FA74ED9C792DCB0BA51E35A /* Debug */ = {
@@ -364,6 +429,23 @@
 			};
 			name = Release;
 		};
+		8E5751F530A3C6A20212DC70 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.griffinaste.ubeye.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UBEYE.app/UBEYE";
+			};
+			name = Debug;
+		};
 		AC99F85B0AE8502E21D430DF /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -385,6 +467,23 @@
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		CC9E28EEC18E712C5E974B3F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.griffinaste.ubeye.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UBEYE.app/UBEYE";
 			};
 			name = Release;
 		};
@@ -463,6 +562,15 @@
 			buildConfigurations = (
 				FD3707A3FBD2773979D20A14 /* Debug */,
 				3063B1F555022A0AC93513EE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3B9639133C08C3463C0AAA28 /* Build configuration list for PBXNativeTarget "UBEYETests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8E5751F530A3C6A20212DC70 /* Debug */,
+				CC9E28EEC18E712C5E974B3F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
