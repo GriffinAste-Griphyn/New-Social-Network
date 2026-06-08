@@ -20,6 +20,9 @@ final class CameraController: NSObject, ObservableObject {
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
     private var isConfigured = false
+    private var configuredMaxPhotoDimensions: CMVideoDimensions?
+    private let preferredVideoBitrate = 18_000_000
+    private let preferredVideoFrameRate = 30
 
     func requestAccessAndConfigure() async {
         if authorizationStatus == .notDetermined {
@@ -61,9 +64,12 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func capturePhoto() {
-        let settings = AVCapturePhotoSettings()
+        let settings = makePhotoSettings()
         settings.flashMode = .auto
         settings.photoQualityPrioritization = .quality
+        if let configuredMaxPhotoDimensions {
+            settings.maxPhotoDimensions = configuredMaxPhotoDimensions
+        }
         let delegate = PhotoCaptureDelegate { [weak self] result in
             Task { @MainActor in
                 switch result {
@@ -133,7 +139,7 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         let nextPosition: AVCaptureDevice.Position = cameraPosition == .back ? .front : .back
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: nextPosition),
+        guard let camera = preferredCamera(for: nextPosition),
               let nextInput = try? AVCaptureDeviceInput(device: camera) else {
             error = "Could not switch cameras."
             return
@@ -148,6 +154,7 @@ final class CameraController: NSObject, ObservableObject {
             session.addInput(nextInput)
             videoInput = nextInput
             cameraPosition = nextPosition
+            configurePhotoOutput(for: camera)
             updateOutputOrientation()
         } else if let videoInput, session.canAddInput(videoInput) {
             session.addInput(videoInput)
@@ -169,7 +176,7 @@ final class CameraController: NSObject, ObservableObject {
             session.commitConfiguration()
         }
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition),
+        guard let camera = preferredCamera(for: cameraPosition),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input),
               session.canAddOutput(output),
@@ -189,6 +196,7 @@ final class CameraController: NSObject, ObservableObject {
         }
         session.addOutput(output)
         session.addOutput(movieOutput)
+        configurePhotoOutput(for: input.device)
         output.maxPhotoQualityPrioritization = .quality
         configureMovieVideoOutputSettings()
         configureMovieAudioConnection()
@@ -207,14 +215,64 @@ final class CameraController: NSObject, ObservableObject {
             [
                 AVVideoCodecKey: codec,
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: 12_000_000,
-                    AVVideoExpectedSourceFrameRateKey: 30,
-                    AVVideoMaxKeyFrameIntervalKey: 30,
+                    AVVideoAverageBitRateKey: preferredVideoBitrate,
+                    AVVideoExpectedSourceFrameRateKey: preferredVideoFrameRate,
+                    AVVideoMaxKeyFrameIntervalKey: preferredVideoFrameRate,
                 ],
             ],
             for: videoConnection
         )
-        MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=12000000 fps=30")
+        MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=\(preferredVideoBitrate) fps=\(preferredVideoFrameRate)")
+    }
+
+    private func makePhotoSettings() -> AVCapturePhotoSettings {
+        if output.availablePhotoCodecTypes.contains(.jpeg) {
+            return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        }
+
+        return AVCapturePhotoSettings()
+    }
+
+    private func configurePhotoOutput(for device: AVCaptureDevice) {
+        if let maxDimensions = largestPhotoDimensions(
+            in: device.activeFormat.supportedMaxPhotoDimensions
+        ) {
+            output.maxPhotoDimensions = maxDimensions
+            configuredMaxPhotoDimensions = maxDimensions
+        } else {
+            configuredMaxPhotoDimensions = nil
+        }
+    }
+
+    private func largestPhotoDimensions(
+        in dimensions: [CMVideoDimensions]
+    ) -> CMVideoDimensions? {
+        dimensions.max { left, right in
+            Int(left.width) * Int(left.height) < Int(right.width) * Int(right.height)
+        }
+    }
+
+    private func preferredCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        let deviceTypes: [AVCaptureDevice.DeviceType] = position == .back
+            ? [
+                .builtInTripleCamera,
+                .builtInDualWideCamera,
+                .builtInDualCamera,
+                .builtInWideAngleCamera,
+            ]
+            : [
+                .builtInTrueDepthCamera,
+                .builtInWideAngleCamera,
+            ]
+
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: deviceTypes,
+            mediaType: .video,
+            position: position
+        )
+
+        return discoverySession.devices.first ??
+            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
     }
 
     private func configureMovieAudioConnection() {
