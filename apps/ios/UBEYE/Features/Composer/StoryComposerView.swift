@@ -743,8 +743,14 @@ final class StoryComposerStore: ObservableObject {
             overlays: overlays
         )
 
-        guard let data = thumbnail.jpegData(compressionQuality: 0.82),
-              !data.isEmpty else {
+        let maxThumbnailBytes = 2 * 1024 * 1024
+        let preferredData = thumbnail.jpegData(compressionQuality: 0.9)
+        let fallbackData = thumbnail.jpegData(compressionQuality: 0.82)
+        let data = [preferredData, fallbackData]
+            .compactMap { $0 }
+            .first { !$0.isEmpty && $0.count <= maxThumbnailBytes }
+
+        guard let data else {
             throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
         }
 
@@ -759,7 +765,7 @@ final class StoryComposerStore: ObservableObject {
                 let asset = AVURLAsset(url: url)
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: 720, height: 1280)
+                generator.maximumSize = CGSize(width: 1080, height: 1920)
                 generator.requestedTimeToleranceBefore = CMTime(seconds: 0.2, preferredTimescale: 600)
                 generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
                 generationBox.set(generator)
