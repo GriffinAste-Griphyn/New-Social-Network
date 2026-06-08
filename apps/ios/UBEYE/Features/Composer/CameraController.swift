@@ -290,28 +290,16 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     private func updateOutputOrientation() {
-        if let photoConnection = output.connection(with: .video) {
-            configureVideoConnection(photoConnection, mirrorsFrontCamera: true)
-        }
-
-        if let movieConnection = movieOutput.connection(with: .video) {
-            configureVideoConnection(movieConnection, mirrorsFrontCamera: false)
-        }
-    }
-
-    private func configureVideoConnection(
-        _ connection: AVCaptureConnection,
-        mirrorsFrontCamera: Bool
-    ) {
-        if connection.isVideoRotationAngleSupported(90) {
-            connection.videoRotationAngle = 90
-        }
-        if connection.isVideoMirroringSupported {
-            connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = mirrorsFrontCamera && cameraPosition == .front
-        }
-        if connection.isVideoStabilizationSupported {
-            connection.preferredVideoStabilizationMode = .cinematic
+        for connection in [output.connection(with: .video), movieOutput.connection(with: .video)].compactMap({ $0 }) {
+            if connection.isVideoRotationAngleSupported(90) {
+                connection.videoRotationAngle = 90
+            }
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = cameraPosition == .front
+            }
+            if connection.isVideoStabilizationSupported {
+                connection.preferredVideoStabilizationMode = .cinematic
+            }
         }
     }
 
@@ -376,19 +364,16 @@ private final class MovieCaptureDelegate: NSObject, AVCaptureFileOutputRecording
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    let cameraPosition: AVCaptureDevice.Position
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        view.updateMirroring(for: cameraPosition)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.videoPreviewLayer.session = session
-        uiView.updateMirroring(for: cameraPosition)
     }
 }
 
@@ -399,15 +384,5 @@ final class PreviewView: UIView {
 
     var videoPreviewLayer: AVCaptureVideoPreviewLayer {
         layer as! AVCaptureVideoPreviewLayer
-    }
-
-    func updateMirroring(for cameraPosition: AVCaptureDevice.Position) {
-        guard let connection = videoPreviewLayer.connection,
-              connection.isVideoMirroringSupported else {
-            return
-        }
-
-        connection.automaticallyAdjustsVideoMirroring = false
-        connection.isVideoMirrored = cameraPosition == .front
     }
 }
