@@ -14,7 +14,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 
-const mobileAppHref = "/app"
+const mobileAppHref = "https://apps.apple.com/us/app/ubeye/id6768760562"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
 const heroPoster = "/ubeye/hero-manhattan-poster-v2.jpg"
 const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 }
 
 const navLinks = [
-  { label: "Thesis", href: "#thesis" },
+  { label: "Idea", href: "#idea" },
   { label: "Value loop", href: "#value-loop" },
   { label: "Advertisers", href: "/advertise" },
 ]
@@ -124,7 +124,7 @@ function SiteHeader() {
             variant="ghost"
             className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-[#e01616] hover:text-white dark:hover:bg-[#e01616]"
           >
-            <Link href={mobileAppHref}>Get the app</Link>
+            <a href={mobileAppHref}>Get the app</a>
           </Button>
         </div>
       </div>
@@ -188,7 +188,7 @@ export default function HomePage() {
                 In the pursuit of AGI, human attention and consciousness will become the new gold.
               </p>
               <p className="mt-6 max-w-2xl text-base leading-8 text-white/66 md:text-lg">
-                UBEYE turns that thesis into a social product: people post stories,
+                UBEYE turns that idea into a social product: people post stories,
                 people spend attention, advertisers fund the signal, and users can
                 share in the value they helped create.
               </p>
@@ -198,10 +198,10 @@ export default function HomePage() {
                   asChild
                   className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-medium text-white hover:bg-[#c91414] sm:justify-center"
                 >
-                  <Link href={mobileAppHref}>
+                  <a href={mobileAppHref}>
                     Get the app
                     <ArrowRight className="size-4" />
-                  </Link>
+                  </a>
                 </Button>
                 <Button
                   asChild
@@ -215,11 +215,11 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section id="thesis" className="border-b border-white/10 bg-[#050505]">
+        <section id="idea" className="border-b border-white/10 bg-[#050505]">
           <div className="mx-auto max-w-[1180px] px-4 py-18 md:py-24">
             <div className="grid gap-12 lg:grid-cols-[19rem_minmax(0,1fr)] lg:gap-16">
               <div>
-                <p className="text-xs font-medium uppercase text-[#e01616]">The thesis</p>
+                <p className="text-xs font-medium uppercase text-[#e01616]">The idea</p>
               </div>
               <div>
                 <h2 className="max-w-4xl text-4xl font-[340] leading-tight text-white md:text-6xl md:leading-[1.08]">

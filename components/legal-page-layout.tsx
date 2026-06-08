@@ -23,6 +23,8 @@ const legalLinks = [
   { label: "Guidelines", href: "/community-guidelines" },
 ]
 
+const mobileAppHref = "https://apps.apple.com/us/app/ubeye/id6768760562"
+
 function LegalHeader() {
   return (
     <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-[#060606]/78 text-white backdrop-blur-xl">
@@ -44,7 +46,7 @@ function LegalHeader() {
         </nav>
 
         <Button asChild className="h-9 rounded-[8px] bg-white px-4 text-sm text-black hover:bg-white/88">
-          <Link href="/app">Get the app</Link>
+          <a href={mobileAppHref}>Get the app</a>
         </Button>
       </div>
     </header>
