@@ -257,7 +257,10 @@ private enum StoryVideoUploadNormalizer {
             )
         }
 
-        let normalizedURL = try await normalizedVideoURL(for: url)
+        let normalizedURL = try await normalizedVideoURL(
+            for: url,
+            mirrorHorizontally: forceNormalization
+        )
         guard !forceNormalization || normalizedURL != nil else {
             throw APIClientError.server("Could not prepare front camera video. Try recording again.", 0)
         }
@@ -287,7 +290,10 @@ private enum StoryVideoUploadNormalizer {
         )
     }
 
-    private static func normalizedVideoURL(for url: URL) async throws -> URL? {
+    private static func normalizedVideoURL(
+        for url: URL,
+        mirrorHorizontally: Bool
+    ) async throws -> URL? {
         let asset = AVURLAsset(url: url)
         let presets = await compatibleExportPresets(for: asset)
 
@@ -295,7 +301,12 @@ private enum StoryVideoUploadNormalizer {
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
 
-            guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+            guard let export = try await exportSession(
+                asset: asset,
+                preset: preset,
+                outputURL: outputURL,
+                mirrorHorizontally: mirrorHorizontally
+            ) else {
                 continue
             }
 
@@ -304,21 +315,14 @@ private enum StoryVideoUploadNormalizer {
                 continue
             }
 
-            export.outputURL = outputURL
-            export.outputFileType = .mp4
-            export.shouldOptimizeForNetworkUse = true
-
-            if let duration = await alignedPlayableDuration(for: asset) {
-                export.timeRange = CMTimeRange(start: .zero, duration: duration)
-            }
-
             await exportVideo(export)
 
             if export.status == .completed {
                 let byteSize = (try? videoFileSize(for: outputURL)) ?? 0
 
                 if byteSize <= maxUploadBytes {
-                    MediaPerformance.mark("video_upload_normalized preset=\(preset) bytes=\(byteSize)")
+                    let mode = mirrorHorizontally ? "mirrored" : "standard"
+                    MediaPerformance.mark("video_upload_normalized mode=\(mode) preset=\(preset) bytes=\(byteSize)")
                     return outputURL
                 }
 
@@ -335,6 +339,133 @@ private enum StoryVideoUploadNormalizer {
         }
 
         return nil
+    }
+
+    private static func exportSession(
+        asset: AVURLAsset,
+        preset: String,
+        outputURL: URL,
+        mirrorHorizontally: Bool
+    ) async throws -> AVAssetExportSession? {
+        let exportAsset: AVAsset
+        let videoComposition: AVMutableVideoComposition?
+
+        if mirrorHorizontally {
+            let mirrored = try await mirroredComposition(for: asset)
+            exportAsset = mirrored.asset
+            videoComposition = mirrored.videoComposition
+        } else {
+            exportAsset = asset
+            videoComposition = nil
+        }
+
+        guard let export = AVAssetExportSession(asset: exportAsset, presetName: preset) else {
+            return nil
+        }
+
+        export.outputURL = outputURL
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+        export.videoComposition = videoComposition
+
+        if let duration = await alignedPlayableDuration(for: asset) {
+            export.timeRange = CMTimeRange(start: .zero, duration: duration)
+        }
+
+        return export
+    }
+
+    private static func mirroredComposition(
+        for asset: AVURLAsset
+    ) async throws -> (asset: AVMutableComposition, videoComposition: AVMutableVideoComposition) {
+        let sourceVideoTrack = try await firstVideoTrack(in: asset)
+        let sourceTimeRange = try await sourceVideoTrack.load(.timeRange)
+        let duration = await alignedPlayableDuration(for: asset) ?? sourceTimeRange.duration
+        let timeRange = CMTimeRange(start: .zero, duration: duration)
+        let composition = AVMutableComposition()
+
+        guard let compositionVideoTrack = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw APIClientError.server("Could not prepare front camera video. Try recording again.", 0)
+        }
+
+        try compositionVideoTrack.insertTimeRange(timeRange, of: sourceVideoTrack, at: .zero)
+
+        for audioTrack in await audioTracks(in: asset) {
+            guard let compositionAudioTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                continue
+            }
+            try? compositionAudioTrack.insertTimeRange(timeRange, of: audioTrack, at: .zero)
+        }
+
+        let naturalSize = try await loadNaturalSize(for: sourceVideoTrack)
+        let preferredTransform = try await loadPreferredTransform(for: sourceVideoTrack)
+        let presentation = mirroredPresentationTransform(
+            naturalSize: naturalSize,
+            preferredTransform: preferredTransform
+        )
+
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = timeRange
+
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+        layerInstruction.setTransform(presentation.transform, at: .zero)
+        instruction.layerInstructions = [layerInstruction]
+
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.instructions = [instruction]
+        videoComposition.renderSize = presentation.renderSize
+        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+
+        return (composition, videoComposition)
+    }
+
+    private static func firstVideoTrack(in asset: AVURLAsset) async throws -> AVAssetTrack {
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+
+        guard let track = tracks.first else {
+            throw APIClientError.server("Could not prepare front camera video. Try recording again.", 0)
+        }
+
+        return track
+    }
+
+    private static func audioTracks(in asset: AVURLAsset) async -> [AVAssetTrack] {
+        (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+    }
+
+    private static func loadNaturalSize(for track: AVAssetTrack) async throws -> CGSize {
+        try await track.load(.naturalSize)
+    }
+
+    private static func loadPreferredTransform(for track: AVAssetTrack) async throws -> CGAffineTransform {
+        try await track.load(.preferredTransform)
+    }
+
+    private static func mirroredPresentationTransform(
+        naturalSize: CGSize,
+        preferredTransform: CGAffineTransform
+    ) -> (renderSize: CGSize, transform: CGAffineTransform) {
+        let sourceRect = CGRect(origin: .zero, size: naturalSize)
+        let transformedRect = sourceRect.applying(preferredTransform)
+        let renderSize = CGSize(
+            width: abs(transformedRect.width),
+            height: abs(transformedRect.height)
+        )
+        let normalizedTransform = preferredTransform.translatedBy(
+            x: -transformedRect.minX,
+            y: -transformedRect.minY
+        )
+        let mirroredTransform = normalizedTransform
+            .translatedBy(x: renderSize.width, y: 0)
+            .scaledBy(x: -1, y: 1)
+
+        return (renderSize, mirroredTransform)
     }
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
@@ -1510,7 +1641,10 @@ struct StoryComposerView: View {
                 .resizable()
                 .scaledToFill()
         case .video(let video):
-            StoryVideoPreview(url: video.url)
+            StoryVideoPreview(
+                url: video.url,
+                mirrorsHorizontally: video.source == .cameraFront
+            )
         case nil:
             if let photo = camera.capturedPhoto {
                 Image(uiImage: photo.image)
@@ -1520,13 +1654,16 @@ struct StoryComposerView: View {
                         store.selectedMedia = .image(photo)
                     }
             } else if let videoURL = camera.capturedVideoURL {
-                StoryVideoPreview(url: videoURL)
+                StoryVideoPreview(
+                    url: videoURL,
+                    mirrorsHorizontally: camera.capturedVideoCameraPosition == .front
+                )
                     .onAppear {
                         let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
                         store.selectedMedia = .video(StoryVideoUpload(url: videoURL, source: source))
                     }
             } else if camera.authorizationStatus == .authorized {
-                CameraPreview(session: camera.session)
+                CameraPreview(session: camera.session, cameraPosition: camera.cameraPosition)
             } else {
                 EmptyStateView(title: "Camera unavailable", message: "Enable camera access or choose media from your library.", systemImage: "camera")
             }
@@ -2093,15 +2230,16 @@ private struct StoryShutterButton: View {
 
 struct StoryVideoPreview: UIViewRepresentable {
     let url: URL
+    var mirrorsHorizontally = false
 
     func makeUIView(context: Context) -> StoryVideoPreviewView {
         let view = StoryVideoPreviewView()
-        view.configure(url: url)
+        view.configure(url: url, mirrorsHorizontally: mirrorsHorizontally)
         return view
     }
 
     func updateUIView(_ uiView: StoryVideoPreviewView, context: Context) {
-        uiView.configure(url: url)
+        uiView.configure(url: url, mirrorsHorizontally: mirrorsHorizontally)
     }
 }
 
@@ -2151,6 +2289,7 @@ final class StoryVideoPreviewView: UIView {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var currentURL: URL?
+    private var isMirrored = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2168,7 +2307,9 @@ final class StoryVideoPreviewView: UIView {
         playerLayer.frame = bounds
     }
 
-    func configure(url: URL) {
+    func configure(url: URL, mirrorsHorizontally: Bool) {
+        updateMirroring(mirrorsHorizontally)
+
         guard currentURL != url else {
             player?.play()
             return
@@ -2185,6 +2326,17 @@ final class StoryVideoPreviewView: UIView {
         player = queuePlayer
         playerLayer.player = queuePlayer
         queuePlayer.play()
+    }
+
+    private func updateMirroring(_ mirrorsHorizontally: Bool) {
+        guard isMirrored != mirrorsHorizontally else {
+            return
+        }
+
+        isMirrored = mirrorsHorizontally
+        playerLayer.setAffineTransform(
+            mirrorsHorizontally ? CGAffineTransform(scaleX: -1, y: 1) : .identity
+        )
     }
 
     deinit {
