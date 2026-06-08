@@ -445,6 +445,10 @@ struct StoryUploadResponse: Codable {
     let storyId: String
     let asset: Asset
     let processingStatus: String?
+    let providerStatus: String?
+    let providerError: String?
+    let lastCheckedAt: String?
+    let readyAt: String?
     let moderationStatus: String?
     let moderationReason: String?
     let textOverlays: [StoryTextOverlay]?
