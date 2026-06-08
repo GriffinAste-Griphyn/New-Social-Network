@@ -329,11 +329,10 @@ struct StoryStackViewer: View {
                 resetStoryTimer(for: item)
             }
             if let stack = store.stack {
-                let activeItem = stack.items[safe: index]
                 MediaPreheater.preheat(stack: stack, around: index)
                 videoPlaybackPool.prepare(
                     urls: adjacentVideoUrls(in: stack, around: index),
-                    activeURL: activeItem?.assetKind == .video ? activeItem?.mediaUrl : nil
+                    activeURL: nil
                 )
             }
         }
@@ -1966,6 +1965,7 @@ struct AutoPlayVideoPlayer: View {
         .animation(.easeOut(duration: 0.12), value: playback.isReadyForPlayback)
         .background(Color.black)
         .onAppear {
+            playerPool?.prepare(urls: [url] + preloadUrls, activeURL: nil)
             playback.play(
                 url: url,
                 playerPool: playerPool,
@@ -1974,9 +1974,9 @@ struct AutoPlayVideoPlayer: View {
                 onProgress: onProgress,
                 onFinished: onFinished
             )
-            playerPool?.prepare(urls: preloadUrls, activeURL: url)
         }
         .onChange(of: url) { _, nextURL in
+            playerPool?.prepare(urls: [nextURL] + preloadUrls, activeURL: nil)
             playback.play(
                 url: nextURL,
                 playerPool: playerPool,
@@ -1985,10 +1985,9 @@ struct AutoPlayVideoPlayer: View {
                 onProgress: onProgress,
                 onFinished: onFinished
             )
-            playerPool?.prepare(urls: preloadUrls, activeURL: nextURL)
         }
         .onChange(of: preloadUrls) { _, nextUrls in
-            playerPool?.prepare(urls: nextUrls, activeURL: url)
+            playerPool?.prepare(urls: [url] + nextUrls, activeURL: nil)
         }
         .onChange(of: isPaused) { _, nextValue in
             playback.setPaused(nextValue)
@@ -2198,7 +2197,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
-        guard layerReadyForDisplay, hasAdvancedBeyondInitialFrame, isPlayerReadyToReveal else {
+        guard layerReadyForDisplay, isPlayerReadyToReveal else {
             return
         }
 
@@ -2231,21 +2230,6 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             .max() ?? 0
         let currentTime = player?.currentTime().seconds ?? 0
         return loadedDuration - currentTime >= 0.2
-    }
-
-    private var hasAdvancedBeyondInitialFrame: Bool {
-        guard let player else {
-            return false
-        }
-
-        let currentSeconds = player.currentTime().seconds
-        guard currentSeconds.isFinite else {
-            return false
-        }
-
-        let durationSeconds = finiteSeconds(player.currentItem?.duration)
-        let threshold = durationSeconds.map { min(0.08, max($0 * 0.05, 0.02)) } ?? 0.08
-        return currentSeconds >= threshold
     }
 
     private func observeStalls(player: AVPlayer, url: URL) {

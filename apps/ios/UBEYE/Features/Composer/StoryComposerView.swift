@@ -789,8 +789,8 @@ final class StoryComposerStore: ObservableObject {
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 1080, height: 1920)
-                generator.requestedTimeToleranceBefore = CMTime(seconds: 0.2, preferredTimescale: 600)
-                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.04, preferredTimescale: 600)
                 generationBox.set(generator)
 
                 let lock = NSLock()
@@ -1065,7 +1065,8 @@ final class StoryComposerStore: ObservableObject {
     private func videoThumbnailCandidateTimes(durationMs: Int?) -> [CMTime] {
         let durationSeconds = durationMs.map { max(Double($0) / 1_000, 0.1) } ?? 1
         let candidateSeconds = [
-            min(0.25, max(durationSeconds - 0.05, 0)),
+            min(0.08, max(durationSeconds - 0.02, 0)),
+            min(0.16, max(durationSeconds - 0.02, 0)),
             max(durationSeconds * 0.5, 0),
             0,
         ]
