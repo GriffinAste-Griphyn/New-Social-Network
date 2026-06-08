@@ -259,7 +259,7 @@ struct StoryStackViewer: View {
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
     private let maxVideoStoryDurationSeconds: TimeInterval = 120
-    private let storyTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    private let storyTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
     private let ownerStatsHeight: CGFloat = 64
@@ -326,6 +326,9 @@ struct StoryStackViewer: View {
             }
             if let item = store.stack?.items[safe: index] {
                 resetStoryTimer(for: item)
+            }
+            if let stack = store.stack {
+                MediaPreheater.preheat(stack: stack, around: index)
             }
         }
         .onReceive(storyTimer) { now in
@@ -1815,6 +1818,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var activePlaybackURL: URL?
     private var isPaused = false
     private var didFinishPlayback = false
+    private var lastPublishedProgress = 0.0
     private var stallObserver: NSObjectProtocol?
     private var playbackFailureObserver: NSObjectProtocol?
     private var playbackEndObserver: NSObjectProtocol?
@@ -1854,6 +1858,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
+        lastPublishedProgress = 0
         startPlayback(url: url)
     }
 
@@ -2133,7 +2138,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func observeProgress(player: AVPlayer) {
         removeTimeObserver()
 
-        let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
         timeObserverPlayer = player
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
             Task { @MainActor in
@@ -2154,7 +2159,13 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         let currentSeconds = max(0, currentTime.seconds)
-        onProgress(min(max(currentSeconds / durationSeconds, 0), 1))
+        let progress = min(max(currentSeconds / durationSeconds, 0), 1)
+        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.01 else {
+            return
+        }
+
+        lastPublishedProgress = progress
+        onProgress(progress)
     }
 
     private func finishPlayback(url: URL) {
@@ -2164,6 +2175,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         didFinishPlayback = true
         isReadyForPlayback = true
+        lastPublishedProgress = 1
         onProgress(1)
         MediaPerformance.mark("video_ended url=\(url.lastPathComponent)")
         onFinished()
@@ -2190,6 +2202,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
+        lastPublishedProgress = 0
         startPlayback(url: url)
     }
 
@@ -2240,6 +2253,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
+        lastPublishedProgress = 0
         playbackStartedAt = nil
         activePlaybackURL = nil
     }
