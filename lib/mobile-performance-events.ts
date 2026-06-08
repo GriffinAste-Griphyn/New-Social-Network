@@ -39,6 +39,8 @@ export const mobilePerformanceEventNames = [
   "video_dismissed",
   "video_ended",
   "video_retry",
+  "video_recovered",
+  "video_startup",
   "video_upload_failed",
   "video_upload_phase",
   "video_upload_retry",

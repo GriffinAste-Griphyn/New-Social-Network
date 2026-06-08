@@ -261,6 +261,10 @@ export async function POST(request: Request) {
         }),
       },
       processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
+      providerStatus: storyStatus?.providerStatus ?? cloudflareDetails?.state ?? null,
+      providerError: storyStatus?.providerError ?? cloudflareDetails?.errorReason ?? null,
+      lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
+      readyAt: storyStatus?.readyAt ?? null,
       moderationStatus: storyStatus?.moderationStatus,
       moderationReason: userFacingModerationReason({
         moderationStatus: storyStatus?.moderationStatus,

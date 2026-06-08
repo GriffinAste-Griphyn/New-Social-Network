@@ -361,8 +361,13 @@ export async function getStoryUploadStatusForOwner(
         processingStatus: stories.processingStatus,
         moderationStatus: stories.moderationStatus,
         moderationReason: stories.moderationReason,
+        providerStatus: mediaAssets.providerStatus,
+        providerError: mediaAssets.providerError,
+        lastCheckedAt: mediaAssets.lastCheckedAt,
+        readyAt: mediaAssets.readyAt,
       })
       .from(stories)
+      .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
       .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
       .limit(1)
 
@@ -397,6 +402,10 @@ export async function getStoryUploadStatusForOwner(
     processingStatus: story.processingStatus,
     moderationStatus: story.moderationStatus,
     moderationReason: story.moderationReason,
+    providerStatus: story.providerStatus,
+    providerError: story.providerError,
+    lastCheckedAt: story.lastCheckedAt?.toISOString() ?? null,
+    readyAt: story.readyAt?.toISOString() ?? null,
     isLive: story.status === "live" && story.processingStatus === "ready",
   }
 }

@@ -97,6 +97,10 @@ describe("mobile Cloudflare video upload API", () => {
       id: "22222222-2222-4222-8222-222222222222",
       status: "processing",
       processingStatus: "processing",
+      providerStatus: "processing",
+      providerError: null,
+      lastCheckedAt: "2026-06-08T16:00:00.000Z",
+      readyAt: null,
       moderationStatus: "approved",
       moderationReason: null,
       isLive: false,
@@ -263,6 +267,10 @@ describe("mobile Cloudflare video upload API", () => {
           "https://app.example.com/api/story-media/stories/mobile-cloudflare-thumbnails/creator_123/11111111111111111111111111111111-thumb.jpg",
       },
       processingStatus: "processing",
+      providerStatus: "processing",
+      providerError: null,
+      lastCheckedAt: "2026-06-08T16:00:00.000Z",
+      readyAt: null,
       textOverlays: [
         expect.objectContaining({
           label: "This is a test",
@@ -307,6 +315,10 @@ describe("mobile Cloudflare video upload API", () => {
     expect(payload).toMatchObject({
       ok: true,
       processingStatus: "processing",
+      providerStatus: "processing",
+      providerError: null,
+      lastCheckedAt: "2026-06-08T16:00:00.000Z",
+      readyAt: null,
     })
   })
 })

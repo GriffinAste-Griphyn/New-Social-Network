@@ -1822,6 +1822,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private weak var timeObserverPlayer: AVPlayer?
     private var playTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
+    private var stallRecoveryTask: Task<Void, Never>?
     private var playbackStartedAt: Date?
     private var onReadyForPlayback: () -> Void = {}
     private var onProgress: (Double) -> Void = { _ in }
@@ -1873,6 +1874,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             }
             let playbackURL = cachedPlaybackURL ?? url
             activePlaybackURL = playbackURL
+            let delivery = playbackDelivery(for: url)
+            let cacheState = cachedPlaybackURL == nil ? "miss" : "hit"
+            MediaPerformance.mark(
+                "video_startup delivery=\(delivery) cache=\(cacheState) url=\(url.lastPathComponent)"
+            )
 
             if canPersistVideo, cachedPlaybackURL != nil {
                 MediaPerformance.mark("video_disk_cache_hit url=\(url.lastPathComponent)")
@@ -1916,6 +1922,18 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
         item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
+    }
+
+    private func playbackDelivery(for url: URL) -> String {
+        if url.pathExtension.lowercased() == "m3u8" {
+            return "hls"
+        }
+
+        if url.isFileURL {
+            return "file"
+        }
+
+        return "progressive"
     }
 
     func setPaused(_ isPaused: Bool) {
@@ -2028,9 +2046,46 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                     return
                 }
 
-                MediaPerformance.mark("video_stalled url=\(url.lastPathComponent)")
-                self.retryPlaybackIfPossible(player: player, url: url, reason: "stalled_before_ready")
+                let phase = self.isReadyForPlayback ? "playing" : "startup"
+                MediaPerformance.mark("video_stalled phase=\(phase) url=\(url.lastPathComponent)")
+                if self.isReadyForPlayback {
+                    self.monitorStallRecovery(player: player, url: url)
+                } else {
+                    self.retryPlaybackIfPossible(player: player, url: url, reason: "stalled_before_ready")
+                }
             }
+        }
+    }
+
+    private func monitorStallRecovery(player: AVPlayer, url: URL) {
+        stallRecoveryTask?.cancel()
+        stallRecoveryTask = Task { @MainActor in
+            let stalledAt = Date()
+
+            for _ in 0..<100 {
+                guard self.player === player, !Task.isCancelled else {
+                    return
+                }
+
+                if player.currentItem?.isPlaybackLikelyToKeepUp == true {
+                    MediaPerformance.measure(
+                        "video_recovered reason=stall url=\(url.lastPathComponent)",
+                        since: stalledAt
+                    )
+                    if !self.isPaused, !self.didFinishPlayback {
+                        player.play()
+                    }
+                    return
+                }
+
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+
+            guard self.player === player, !Task.isCancelled else {
+                return
+            }
+
+            logPlaybackFailure(player: player, url: url, reason: "stall_recovery_timeout")
         }
     }
 
@@ -2158,6 +2213,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playTask = nil
         revealTask?.cancel()
         revealTask = nil
+        stallRecoveryTask?.cancel()
+        stallRecoveryTask = nil
 
         if let stallObserver {
             NotificationCenter.default.removeObserver(stallObserver)

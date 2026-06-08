@@ -239,6 +239,13 @@
       "when": 1780776000000,
       "tag": "0033_video_playback_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780926000000,
+      "tag": "0034_video_startup_diagnostics",
+      "breakpoints": true
     }
   ]
 }

@@ -52,6 +52,8 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "video_dismissed",
     "video_ended",
     "video_retry",
+    "video_recovered",
+    "video_startup",
     "video_upload_failed",
     "video_upload_phase",
     "video_upload_retry",
@@ -198,6 +200,55 @@ describe("mobile performance events API", () => {
           metadata: {
             reason: "startup_timeout",
             attempt: "1",
+            url: "video.m3u8",
+          },
+        }),
+      ],
+    })
+  })
+
+  it("accepts playback startup and recovery diagnostics", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          {
+            name: "video_startup",
+            metadata: {
+              delivery: "hls",
+              cache: "miss",
+              url: "video.m3u8",
+            },
+          },
+          {
+            name: "video_recovered",
+            durationMs: 350,
+            metadata: {
+              reason: "stall",
+              url: "video.m3u8",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({
+          name: "video_startup",
+          metadata: {
+            delivery: "hls",
+            cache: "miss",
+            url: "video.m3u8",
+          },
+        }),
+        expect.objectContaining({
+          name: "video_recovered",
+          durationMs: 350,
+          metadata: {
+            reason: "stall",
             url: "video.m3u8",
           },
         }),
