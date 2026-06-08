@@ -1812,6 +1812,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     @Published private(set) var isReadyForPlayback = false
 
     private var activeURL: URL?
+    private var activePlaybackURL: URL?
     private var isPaused = false
     private var didFinishPlayback = false
     private var stallObserver: NSObjectProtocol?
@@ -1826,6 +1827,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var onProgress: (Double) -> Void = { _ in }
     private var onFinished: () -> Void = {}
     private var playbackRetryCount = 0
+    private var layerReadyForDisplay = false
     private let maxPlaybackRetries = 2
 
     func play(
@@ -1849,11 +1851,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         activeURL = url
         playbackRetryCount = 0
         isReadyForPlayback = false
+        layerReadyForDisplay = false
         didFinishPlayback = false
-        startPlayback(url: url, useWarmPlayer: true)
+        startPlayback(url: url)
     }
 
-    private func startPlayback(url: URL, useWarmPlayer: Bool) {
+    private func startPlayback(url: URL) {
         playTask?.cancel()
         revealTask?.cancel()
         revealTask = nil
@@ -1869,15 +1872,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 cachedPlaybackURL = nil
             }
             let playbackURL = cachedPlaybackURL ?? url
+            activePlaybackURL = playbackURL
 
-            if canPersistVideo {
-                if cachedPlaybackURL == nil {
-                    Task {
-                        await MediaFileDiskCache.shared.cache(url: url, kind: .video)
-                    }
-                } else {
-                    MediaPerformance.mark("video_disk_cache_hit url=\(url.lastPathComponent)")
-                }
+            if canPersistVideo, cachedPlaybackURL != nil {
+                MediaPerformance.mark("video_disk_cache_hit url=\(url.lastPathComponent)")
             }
 
             guard !Task.isCancelled else {
@@ -1885,9 +1883,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             }
 
             player?.pause()
-            let next = useWarmPlayer
-                ? WarmVideoPlayerPool.shared.takePlayer(for: url, playbackURL: playbackURL)
-                : makeFreshPlayer(playbackURL: playbackURL)
+            let next = makeFreshPlayer(playbackURL: playbackURL)
             configureStreamingHints(for: next.currentItem, playbackURL: playbackURL)
             player = next
             observeReadiness(player: next, url: url, startedAt: startedAt)
@@ -1945,7 +1941,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTask = Task { @MainActor in
             var didLogItemReady = false
 
-            for attempt in 0..<100 {
+            for _ in 0..<300 {
                 guard self.player === player else {
                     return
                 }
@@ -1955,13 +1951,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                         didLogItemReady = true
                         MediaPerformance.measure("video_item_ready url=\(url.lastPathComponent)", since: startedAt)
                     }
+                    attemptRevealVideo(reason: "item_ready")
                 } else if player.currentItem?.status == .failed {
                     handlePlaybackFailure(player: player, url: url, reason: "item_failed")
-                    return
-                }
-
-                if attempt == 40, !isPaused {
-                    retryPlaybackIfPossible(player: player, url: url, reason: "startup_timeout")
                     return
                 }
 
@@ -1977,7 +1969,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     func revealVideo(reason: String) {
+        layerReadyForDisplay = true
+        attemptRevealVideo(reason: reason)
+    }
+
+    private func attemptRevealVideo(reason: String) {
         guard !isReadyForPlayback else {
+            return
+        }
+
+        guard layerReadyForDisplay, isPlayerReadyToReveal else {
             return
         }
 
@@ -1988,6 +1989,28 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             "video_first_frame reason=\(reason) url=\(activeURL?.lastPathComponent ?? "unknown")",
             since: startedAt
         )
+    }
+
+    private var isPlayerReadyToReveal: Bool {
+        guard let item = player?.currentItem, item.status == .readyToPlay else {
+            return false
+        }
+
+        if activePlaybackURL?.isFileURL == true {
+            return true
+        }
+
+        if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
+            return true
+        }
+
+        let loadedDuration = item.loadedTimeRanges
+            .map(\.timeRangeValue)
+            .map { $0.start.seconds + $0.duration.seconds }
+            .filter { $0.isFinite }
+            .max() ?? 0
+        let currentTime = player?.currentTime().seconds ?? 0
+        return loadedDuration - currentTime >= 0.2
     }
 
     private func observeStalls(player: AVPlayer, url: URL) {
@@ -2110,8 +2133,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         cleanupCurrentPlayer(reason: nil)
         activeURL = url
         isReadyForPlayback = false
+        layerReadyForDisplay = false
         didFinishPlayback = false
-        startPlayback(url: url, useWarmPlayer: false)
+        startPlayback(url: url)
     }
 
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
@@ -2157,8 +2181,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         player?.pause()
         player = nil
         isReadyForPlayback = false
+        layerReadyForDisplay = false
         didFinishPlayback = false
         playbackStartedAt = nil
+        activePlaybackURL = nil
     }
 
     private func removeTimeObserver() {

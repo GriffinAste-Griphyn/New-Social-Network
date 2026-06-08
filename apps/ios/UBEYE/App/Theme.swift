@@ -505,10 +505,6 @@ final class NetworkQualityMonitor {
         isConstrained || isCellular ? 4 : 10
     }
 
-    var videoPreheatLimit: Int {
-        isConstrained || isCellular ? 1 : 3
-    }
-
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
@@ -899,75 +895,6 @@ private extension UIImage {
     }
 }
 
-@MainActor
-final class WarmVideoPlayerPool {
-    static let shared = WarmVideoPlayerPool()
-
-    private var players: [URL: AVPlayer] = [:]
-    private var order: [URL] = []
-    private let maxPlayerCount = 4
-
-    private init() {}
-
-    func prepare(urls: [URL], limit: Int = 2) {
-        var seen = Set<URL>()
-        let uniqueUrls = urls
-            .filter { seen.insert($0).inserted }
-            .prefix(limit)
-
-        for url in uniqueUrls where players[url] == nil {
-            Task { @MainActor in
-                let playbackURL = await MediaFileDiskCache.shared.playbackURL(for: url)
-                guard players[url] == nil else {
-                    return
-                }
-
-                players[url] = makePlayer(url: playbackURL)
-                order.append(url)
-                prune()
-            }
-        }
-    }
-
-    func takePlayer(for url: URL, playbackURL: URL) -> AVPlayer {
-        if let player = players.removeValue(forKey: url) {
-            order.removeAll { $0 == url }
-            player.pause()
-            player.isMuted = false
-            player.volume = 1
-            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-            return player
-        }
-
-        return makePlayer(url: playbackURL)
-    }
-
-    private func makePlayer(url: URL) -> AVPlayer {
-        let item = AVPlayerItem(url: url)
-        let isStreaming = isHTTPStreamingPlaylist(url)
-
-        item.preferredForwardBufferDuration = isStreaming ? 6 : 3
-        if isStreaming {
-            item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
-            item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
-        }
-
-        let player = AVPlayer(playerItem: item)
-        player.isMuted = false
-        player.volume = 1
-        player.automaticallyWaitsToMinimizeStalling = isStreaming
-        return player
-    }
-
-    private func prune() {
-        while order.count > maxPlayerCount {
-            let url = order.removeFirst()
-            players[url]?.pause()
-            players.removeValue(forKey: url)
-        }
-    }
-}
-
 struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     let url: URL?
     private let content: (Image) -> Content
@@ -1099,24 +1026,6 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        let videoUrls = [stack.items[safe: index], stack.items[safe: index + 1]]
-            .compactMap { $0 }
-            .filter { $0.assetKind == .video }
-            .map(\.mediaUrl)
-
-        preheatVideoStarts(videoUrls, limit: min(2, NetworkQualityMonitor.shared.videoPreheatLimit))
-    }
-
-    @MainActor
-    private static func preheatVideoStarts(_ urls: [URL], limit: Int) {
-        var seen = Set<URL>()
-        let uniqueUrls = Array(urls.filter { seen.insert($0).inserted }.prefix(limit))
-
-        guard !uniqueUrls.isEmpty else {
-            return
-        }
-
-        WarmVideoPlayerPool.shared.prepare(urls: uniqueUrls, limit: limit)
     }
 }
 
