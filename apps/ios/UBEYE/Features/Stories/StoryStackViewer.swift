@@ -2198,7 +2198,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
-        guard layerReadyForDisplay, isPlayerReadyToReveal else {
+        guard layerReadyForDisplay, hasAdvancedBeyondInitialFrame, isPlayerReadyToReveal else {
             return
         }
 
@@ -2231,6 +2231,21 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             .max() ?? 0
         let currentTime = player?.currentTime().seconds ?? 0
         return loadedDuration - currentTime >= 0.2
+    }
+
+    private var hasAdvancedBeyondInitialFrame: Bool {
+        guard let player else {
+            return false
+        }
+
+        let currentSeconds = player.currentTime().seconds
+        guard currentSeconds.isFinite else {
+            return false
+        }
+
+        let durationSeconds = finiteSeconds(player.currentItem?.duration)
+        let threshold = durationSeconds.map { min(0.08, max($0 * 0.05, 0.02)) } ?? 0.08
+        return currentSeconds >= threshold
     }
 
     private func observeStalls(player: AVPlayer, url: URL) {

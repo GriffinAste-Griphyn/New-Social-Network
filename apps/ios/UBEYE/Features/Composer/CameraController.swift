@@ -9,6 +9,7 @@ final class CameraController: NSObject, ObservableObject {
     @Published var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     @Published var capturedPhoto: StoryImageUpload?
     @Published var capturedVideoURL: URL?
+    @Published var capturedVideoCameraPosition: AVCaptureDevice.Position = .back
     @Published var isRecording = false
     @Published var cameraPosition: AVCaptureDevice.Position = .back
     @Published var error: String?
@@ -19,6 +20,7 @@ final class CameraController: NSObject, ObservableObject {
     private var movieDelegate: MovieCaptureDelegate?
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
+    private var recordingCameraPosition: AVCaptureDevice.Position = .back
     private var isConfigured = false
     private var configuredMaxPhotoDimensions: CMVideoDimensions?
     private let preferredVideoBitrate = 18_000_000
@@ -103,6 +105,7 @@ final class CameraController: NSObject, ObservableObject {
 
         capturedPhoto = nil
         capturedVideoURL = nil
+        recordingCameraPosition = cameraPosition
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mov")
         let delegate = MovieCaptureDelegate { [weak self] result in
             Task { @MainActor in
@@ -110,6 +113,7 @@ final class CameraController: NSObject, ObservableObject {
                 switch result {
                 case .success(let url):
                     if MediaDiagnostics.capturedVideoHasAudio(url: url) {
+                        self?.capturedVideoCameraPosition = self?.recordingCameraPosition ?? .back
                         self?.capturedVideoURL = url
                     } else {
                         self?.error = "Could not capture audio. Check microphone access and try recording again."
