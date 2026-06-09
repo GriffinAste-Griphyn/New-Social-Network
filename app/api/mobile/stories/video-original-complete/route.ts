@@ -3,9 +3,11 @@ import { after, NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
   createStory,
   getStoryTextOverlaysForOwner,
+  getStoryUploadStatusForOwner,
   setStoryThumbnail,
 } from "@/lib/story-store"
 import {
@@ -99,6 +101,22 @@ function originalVideoThumbnailPathname(pathname: string) {
     : `${pathname}-thumb.jpg`
 }
 
+function logOriginalVideoCompleteEvent(
+  event: string,
+  metadata: Record<string, string | number | boolean | null | undefined>,
+) {
+  console.info(
+    "mobile_original_video_complete",
+    JSON.stringify({
+      event,
+      at: new Date().toISOString(),
+      ...Object.fromEntries(
+        Object.entries(metadata).filter(([, value]) => value !== undefined),
+      ),
+    }),
+  )
+}
+
 export async function POST(request: Request) {
   let uploadedPathname: string | undefined
   let storedAsset: StoredStoryAsset | undefined
@@ -134,11 +152,23 @@ export async function POST(request: Request) {
     )
 
     if (!parsed.success) {
+      logOriginalVideoCompleteEvent("complete_invalid_payload", {
+        userId: session.id,
+        ip: requestIpSubject(request),
+      })
       return NextResponse.json(
         { error: "Could not finish the original video upload." },
         { status: 400 },
       )
     }
+
+    logOriginalVideoCompleteEvent("complete_started", {
+      userId: session.id,
+      pathname: parsed.data.pathname,
+      byteSize: parsed.data.byteSize,
+      durationMs: parsed.data.durationMs ?? null,
+      hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
+    })
 
     const expectedPrefix = `stories/mobile-original/${session.id}/`
     const hasThumbnailUpload = Boolean(parsed.data.thumbnailPathname)
@@ -218,7 +248,18 @@ export async function POST(request: Request) {
     const completedAsset = storedAsset
     uploadedPathname = undefined
     storedAsset = undefined
+    const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
     const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
+
+    logOriginalVideoCompleteEvent("complete_succeeded", {
+      userId: session.id,
+      storyId,
+      pathname: completedAsset.storageKey,
+      byteSize: completedAsset.byteSize,
+      processingStatus:
+        storyStatus?.processingStatus ?? completedAsset.processingStatus,
+      moderationStatus: storyStatus?.moderationStatus ?? null,
+    })
 
     return NextResponse.json({
       ok: true,
@@ -232,10 +273,27 @@ export async function POST(request: Request) {
           signed: true,
         }),
       },
-      processingStatus: completedAsset.processingStatus,
+      processingStatus:
+        storyStatus?.processingStatus ?? completedAsset.processingStatus,
+      providerStatus: storyStatus?.providerStatus ?? null,
+      providerError: storyStatus?.providerError ?? null,
+      lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
+      readyAt: storyStatus?.readyAt ?? null,
+      moderationStatus: storyStatus?.moderationStatus,
+      moderationReason: userFacingModerationReason({
+        moderationStatus: storyStatus?.moderationStatus,
+        moderationReason: storyStatus?.moderationReason,
+      }),
       textOverlays,
     })
   } catch (error) {
+    logOriginalVideoCompleteEvent("complete_failed", {
+      pathname: storedAsset?.storageKey ?? uploadedPathname ?? null,
+      reason:
+        error instanceof StoryUploadError || error instanceof Error
+          ? error.message
+          : "unknown",
+    })
     if (storedAsset) {
       await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
     } else if (uploadedPathname) {

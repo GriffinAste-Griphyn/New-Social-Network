@@ -26,6 +26,8 @@
 		A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */; };
 		A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
+		B3755A71164F49F88906B2A0 /* StoryUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3755A72164F49F88906B2A0 /* StoryUploadCoordinator.swift */; };
+		B3755A73164F49F88906B2A0 /* StoryVideoUploadPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3755A74164F49F88906B2A0 /* StoryVideoUploadPipeline.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
 		E7288E47377376D238B7C1CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1427E7CB5130FC83F36A8F19 /* Assets.xcassets */; };
@@ -67,6 +69,8 @@
 		9B74604130A946A9568F391B /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizerTests.swift; sourceTree = "<group>"; };
 		AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		B3755A72164F49F88906B2A0 /* StoryUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryUploadCoordinator.swift; sourceTree = "<group>"; };
+		B3755A74164F49F88906B2A0 /* StoryVideoUploadPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoUploadPipeline.swift; sourceTree = "<group>"; };
 		B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingView.swift; sourceTree = "<group>"; };
 		B6E7EDD6CA1B0244C2B467FE /* UBEYE.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UBEYE.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
@@ -92,6 +96,7 @@
 				9B74604130A946A9568F391B /* CameraController.swift */,
 				02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */,
 				710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */,
+				B3755A74164F49F88906B2A0 /* StoryVideoUploadPipeline.swift */,
 			);
 			path = Composer;
 			sourceTree = "<group>";
@@ -184,6 +189,7 @@
 				024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */,
 				075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */,
 				5CEB3E2F66807A7319AD96A0 /* RootView.swift */,
+				B3755A72164F49F88906B2A0 /* StoryUploadCoordinator.swift */,
 				03E023E109362F9ED0305266 /* Theme.swift */,
 			);
 			path = App;
@@ -320,7 +326,9 @@
 				A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */,
 				EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */,
 				A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */,
+				B3755A71164F49F88906B2A0 /* StoryUploadCoordinator.swift in Sources */,
 				2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */,
+				B3755A73164F49F88906B2A0 /* StoryVideoUploadPipeline.swift in Sources */,
 				FF53BF35C46EF6494703843E /* Theme.swift in Sources */,
 				A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */,
 			);
@@ -352,7 +360,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 176;
+				CURRENT_PROJECT_VERSION = 177;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -453,7 +461,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 176;
+				CURRENT_PROJECT_VERSION = 177;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

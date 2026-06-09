@@ -34,18 +34,18 @@ private struct SessionRestoreView: View {
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
     @StateObject private var storyUploadNotice = StoryUploadNoticeStore()
+    @StateObject private var storyUploadCoordinator = StoryUploadCoordinator()
     @State private var selectedTab: AppTab = .home
     @State private var discoverSearchFocusRequest = 0
     @State private var isShowingProfile = false
     @State private var pendingQuotedReply: QuotedStoryReply?
-    @State private var recentUploadedStoryRegistrations: [StoryUploadResponse] = []
 
     var body: some View {
         ZStack {
             switch selectedTab {
             case .home:
                 HomeView(
-                    uploadedStoryRegistrations: recentUploadedStoryRegistrations,
+                    uploadedStoryRegistrations: storyUploadCoordinator.registrations,
                     onSearchTap: {
                         discoverSearchFocusRequest += 1
                         selectedTab = .discover
@@ -63,7 +63,13 @@ struct MainTabView: View {
                         pendingQuotedReply = nil
                     },
                     onUploadRegistered: { response in
-                        handleStoryUpload(response)
+                        pendingQuotedReply = nil
+                        selectedTab = .home
+                        storyUploadCoordinator.register(
+                            response,
+                            api: api,
+                            notice: storyUploadNotice
+                        )
                     }
                 )
             case .discover:
@@ -88,60 +94,6 @@ struct MainTabView: View {
         }
         .sheet(isPresented: $isShowingProfile) {
             ProfileView()
-        }
-    }
-
-    private func handleStoryUpload(_ response: StoryUploadResponse) {
-        pendingQuotedReply = nil
-        rememberStoryUpload(response)
-        selectedTab = .home
-        api.invalidateMobileFeedCache()
-        if let thumbnailUrl = response.asset.thumbnailUrl {
-            MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
-        }
-
-        if response.moderationStatus != nil && response.moderationStatus != "approved" {
-            storyUploadNotice.showReview(reason: response.moderationReason)
-            return
-        }
-
-        notifyStoryUploadDidRegister(response)
-        api.invalidateStoryStacks(ids: ["my-story", response.storyId])
-        api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
-        NotificationCenter.default.post(name: .storyUploadDidComplete, object: nil)
-
-        if response.asset.assetKind == .video && response.processingStatus != "ready" {
-            storyUploadNotice.showProcessing()
-            Task {
-                let isLive = await api.waitForStoryLive(storyId: response.storyId)
-                guard isLive else {
-                    return
-                }
-                await MainActor.run {
-                    api.invalidateStoryStacks(ids: ["my-story", response.storyId])
-                    storyUploadNotice.showPosted()
-                    NotificationCenter.default.post(name: .storyUploadDidComplete, object: nil)
-                }
-            }
-        } else {
-            storyUploadNotice.showPosted()
-        }
-    }
-
-    private func notifyStoryUploadDidRegister(_ response: StoryUploadResponse) {
-        Task { @MainActor in
-            await Task.yield()
-            NotificationCenter.default.post(name: .storyUploadDidRegister, object: response)
-        }
-    }
-
-    private func rememberStoryUpload(_ response: StoryUploadResponse) {
-        recentUploadedStoryRegistrations.removeAll { $0.storyId == response.storyId }
-        recentUploadedStoryRegistrations.append(response)
-        if recentUploadedStoryRegistrations.count > 8 {
-            recentUploadedStoryRegistrations.removeFirst(
-                recentUploadedStoryRegistrations.count - 8
-            )
         }
     }
 }
