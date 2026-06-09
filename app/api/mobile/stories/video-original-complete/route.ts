@@ -219,6 +219,14 @@ export async function POST(request: Request) {
       height: parsed.data.height ?? null,
     })
     const formData = payloadToFormData(parsed.data)
+    const moderationMediaUrl =
+      publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
+      storedAsset.mediaUrl
+    const moderationThumbnailUrl = publicStoryMediaUrl(
+      storedAsset.thumbnailUrl,
+      request,
+      { signed: true },
+    )
     const storyElements = parseStoryElements(formData)
     const storyId = await createStory({
       session,
@@ -226,6 +234,8 @@ export async function POST(request: Request) {
       explicitBrandTags: parseBrandTags(formData.get("brandTags")),
       elements: storyElements,
       storedAsset,
+      moderationMediaUrl,
+      moderationThumbnailUrl,
     })
     const thumbnailPathname = parsed.data.pathname
 
