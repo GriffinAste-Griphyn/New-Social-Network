@@ -689,58 +689,57 @@ final class APIClient: ObservableObject {
         var offset: Int64 = 0
         var lastError: Error?
         let maxAttempts = 4
+        let maxChunkBytes: Int64 = 50 * 1024 * 1024
 
-        for attempt in 1...maxAttempts {
-            let uploadFileURL: URL
-            var temporarySliceURL: URL?
-
-            if attempt > 1 {
-                offset = try await tusUploadOffset(uploadURL: uploadURL)
-                if offset >= totalBytes {
-                    return
-                }
-                onRetry?("offset_\(offset)")
-            }
-
-            if offset > 0 {
-                let sliceURL = try makeFileSlice(fileURL: fileURL, offset: offset)
-                temporarySliceURL = sliceURL
-                uploadFileURL = sliceURL
-            } else {
-                uploadFileURL = fileURL
-            }
-
-            do {
-                var request = URLRequest(url: uploadURL)
-                request.httpMethod = "PATCH"
-                request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-                request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
-                request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-
-                let (data, response) = try await session.upload(for: request, fromFile: uploadFileURL)
-                if let temporarySliceURL {
-                    try? FileManager.default.removeItem(at: temporarySliceURL)
+        while offset < totalBytes {
+            for attempt in 1...maxAttempts {
+                if attempt > 1 {
+                    offset = try await tusUploadOffset(uploadURL: uploadURL)
+                    if offset >= totalBytes {
+                        return
+                    }
+                    onRetry?("offset_\(offset)")
                 }
 
-                guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-                    throw uploadError(data: data, response: response)
-                }
+                let chunkBytes = min(maxChunkBytes, totalBytes - offset)
+                let uploadFileURL = try makeFileSlice(
+                    fileURL: fileURL,
+                    offset: offset,
+                    length: chunkBytes
+                )
 
-                return
-            } catch {
-                if let temporarySliceURL {
-                    try? FileManager.default.removeItem(at: temporarySliceURL)
-                }
-                lastError = error
-                guard attempt < maxAttempts else {
+                do {
+                    var request = URLRequest(url: uploadURL)
+                    request.httpMethod = "PATCH"
+                    request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+                    request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
+                    request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+
+                    let (data, response) = try await session.upload(for: request, fromFile: uploadFileURL)
+                    try? FileManager.default.removeItem(at: uploadFileURL)
+
+                    guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                        throw uploadError(data: data, response: response)
+                    }
+
+                    let nextOffset = Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "") ??
+                        min(totalBytes, offset + chunkBytes)
+                    guard nextOffset > offset else {
+                        throw APIClientError.server("Video upload did not advance.", http.statusCode)
+                    }
+                    offset = nextOffset
                     break
+                } catch {
+                    try? FileManager.default.removeItem(at: uploadFileURL)
+                    lastError = error
+                    guard attempt < maxAttempts else {
+                        throw lastError ?? APIClientError.server("Video upload failed.", 0)
+                    }
+                    onRetry?("attempt_\(attempt)")
+                    try await Task.sleep(for: .milliseconds(600 * attempt))
                 }
-                onRetry?("attempt_\(attempt)")
-                try await Task.sleep(for: .milliseconds(600 * attempt))
             }
         }
-
-        throw lastError ?? APIClientError.server("Video upload failed.", 0)
     }
 
     private func tusUploadOffset(uploadURL: URL) async throws -> Int64 {
@@ -756,7 +755,7 @@ final class APIClient: ObservableObject {
         return Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "0") ?? 0
     }
 
-    private func makeFileSlice(fileURL: URL, offset: Int64) throws -> URL {
+    private func makeFileSlice(fileURL: URL, offset: Int64, length: Int64) throws -> URL {
         let sliceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ubeye-tus-slice-\(UUID().uuidString).body")
         _ = FileManager.default.createFile(atPath: sliceURL.path, contents: nil)
@@ -772,12 +771,14 @@ final class APIClient: ObservableObject {
             try? output.close()
         }
 
-        while true {
-            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+        var remainingBytes = length
+        while remainingBytes > 0 {
+            let chunk = try input.read(upToCount: Int(min(1024 * 1024, remainingBytes))) ?? Data()
             if chunk.isEmpty {
                 break
             }
             try output.write(contentsOf: chunk)
+            remainingBytes -= Int64(chunk.count)
         }
 
         return sliceURL

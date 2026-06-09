@@ -214,7 +214,7 @@ final class CameraController: NSObject, ObservableObject {
             return
         }
 
-        let codec: AVVideoCodecType = movieOutput.availableVideoCodecTypes.contains(.hevc) ? .hevc : .h264
+        let codec: AVVideoCodecType = movieOutput.availableVideoCodecTypes.contains(.h264) ? .h264 : .hevc
         movieOutput.setOutputSettings(
             [
                 AVVideoCodecKey: codec,

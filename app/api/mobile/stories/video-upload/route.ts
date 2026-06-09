@@ -18,7 +18,7 @@ import {
 
 export const runtime = "nodejs"
 
-const maxMobileStoryVideoUploadBytes = 150 * 1024 * 1024
+const maxMobileStoryVideoUploadBytes = 300 * 1024 * 1024
 const maxMobileStoryVideoDurationSeconds = 120
 
 const videoUploadSchema = z.object({
