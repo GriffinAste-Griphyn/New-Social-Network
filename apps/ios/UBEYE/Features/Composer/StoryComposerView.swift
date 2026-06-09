@@ -137,6 +137,20 @@ private enum ComposerOverlayInputMode: Identifiable {
     }
 }
 
+private enum StoryComposerMode {
+    case capture
+    case ready(PickedStoryMedia)
+
+    var media: PickedStoryMedia? {
+        switch self {
+        case .capture:
+            return nil
+        case .ready(let media):
+            return media
+        }
+    }
+}
+
 @MainActor
 final class StoryComposerStore: ObservableObject {
     private let maxVideoDurationSeconds = 120
@@ -153,7 +167,6 @@ final class StoryComposerStore: ObservableObject {
     @Published var quotedReply: QuotedStoryReply?
     @Published var quoteReplyPositionX: Double = 50
     @Published var quoteReplyPositionY: Double = 58
-    @Published var selectedMedia: PickedStoryMedia?
     @Published var uploadStatus: String?
     @Published var error: String?
     @Published var lastUploadReport: String?
@@ -202,12 +215,7 @@ final class StoryComposerStore: ObservableObject {
         return overlays
     }
 
-    func upload(api: APIClient) async -> StoryUploadResponse? {
-        guard let selectedMedia else {
-            error = "Capture or choose story media first."
-            return nil
-        }
-
+    func upload(media: PickedStoryMedia, api: APIClient) async -> StoryUploadResponse? {
         isUploading = true
         error = nil
         lastUploadReport = nil
@@ -216,7 +224,7 @@ final class StoryComposerStore: ObservableObject {
         var uploadResponse: StoryUploadResponse?
 
         do {
-            switch selectedMedia {
+            switch media {
             case .image(let upload):
                 uploadStatus = "Uploading image"
                 uploadResponse = try await api.uploadImageStory(
@@ -251,7 +259,6 @@ final class StoryComposerStore: ObservableObject {
             linkOverlayPositionX = 50
             linkOverlayPositionY = 78
             clearQuotedReply()
-            self.selectedMedia = nil
         } catch {
             self.error = error.localizedDescription
             if let lastUploadReport {
@@ -894,7 +901,7 @@ struct StoryComposerView: View {
     @State private var recordingStartedAt = Date()
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
-    @State private var readyMedia: PickedStoryMedia?
+    @State private var mode: StoryComposerMode = .capture
     @FocusState private var isOverlayInputFocused: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
@@ -902,6 +909,10 @@ struct StoryComposerView: View {
 
     private let maxVideoSegments = 6
     private let videoSegmentDuration: TimeInterval = 10
+    private let footerSideControlSize: CGFloat = 58
+    private let footerShutterSlotSize: CGFloat = 88
+    private let footerHorizontalInset: CGFloat = 28
+    private let footerBottomInset: CGFloat = UBEYEMetrics.appBottomBarHeight + 40
     private var maxRecordingDuration: TimeInterval { TimeInterval(maxVideoSegments) * videoSegmentDuration }
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -970,7 +981,7 @@ struct StoryComposerView: View {
                         .padding(.vertical, 10)
                         .background(.black.opacity(0.45), in: Capsule())
                         .padding(.bottom, 16)
-                } else if let error = store.error ?? camera.error {
+                } else if let error = store.error ?? (activeMedia == nil ? camera.error : nil) {
                     Text(error)
                         .font(.system(size: 16, weight: .bold))
                         .multilineTextAlignment(.center)
@@ -987,8 +998,8 @@ struct StoryComposerView: View {
                 }
 
                 composerFooter
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 28)
+                    .padding(.horizontal, footerHorizontalInset)
+                    .padding(.bottom, footerBottomInset)
             }
             .foregroundStyle(.white)
         }
@@ -1060,19 +1071,34 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var composerFooter: some View {
-        if activeMedia == nil {
-            captureFooter
-        } else {
-            selectedMediaFooter
+        Group {
+            if activeMedia == nil {
+                captureFooter
+            } else {
+                selectedMediaFooter
+            }
         }
+        .frame(maxWidth: .infinity, minHeight: footerShutterSlotSize)
     }
 
     private var selectedMediaFooter: some View {
         HStack {
+            footerPlaceholder(size: footerSideControlSize)
+
+            Spacer()
+
+            footerPlaceholder(size: footerShutterSlotSize)
+
             Spacer()
 
             uploadStoryButton
         }
+    }
+
+    private func footerPlaceholder(size: CGFloat) -> some View {
+        Color.clear
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 
     private var uploadStoryButton: some View {
@@ -1382,7 +1408,7 @@ struct StoryComposerView: View {
     }
 
     private var activeMedia: PickedStoryMedia? {
-        readyMedia ?? store.selectedMedia
+        mode.media
     }
 
     private func enterReadyMedia(with media: PickedStoryMedia) {
@@ -1390,8 +1416,7 @@ struct StoryComposerView: View {
         store.uploadStatus = nil
         overlayInputMode = nil
         isOverlayInputFocused = false
-        readyMedia = media
-        store.selectedMedia = media
+        mode = .ready(media)
     }
 
     private func uploadSelectedMedia() async {
@@ -1399,19 +1424,21 @@ struct StoryComposerView: View {
             return
         }
 
-        if let readyMedia {
-            store.selectedMedia = readyMedia
+        guard let media = activeMedia else {
+            store.error = "Capture or choose story media first."
+            return
         }
 
-        if let response = await store.upload(api: api) {
-            readyMedia = nil
+        if let response = await store.upload(media: media, api: api) {
+            mode = .capture
+            camera.capturedPhoto = nil
+            camera.capturedVideoURL = nil
             onUploadRegistered(response)
         }
     }
 
     private func resetCapture(clearQuote: Bool = false) {
-        readyMedia = nil
-        store.selectedMedia = nil
+        mode = .capture
         store.error = nil
         store.textOverlay = ""
         store.textOverlayPositionX = 50
