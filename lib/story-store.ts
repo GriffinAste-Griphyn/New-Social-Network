@@ -262,6 +262,14 @@ type CreateStoryInput = {
   moderationThumbnailUrl?: string | null
 }
 
+type StoredAssetStory = {
+  id: string
+  assetKind: "image" | "video"
+  mediaUrl: string
+  thumbnailUrl: string | null
+  processingStatus: string
+}
+
 type UpdateStoryInput = {
   storyId: string
   ownerId: string
@@ -1513,6 +1521,35 @@ export async function createStory(input: CreateStoryInput) {
   )
 
   return storyId
+}
+
+export async function getStoryByStoredAssetForOwner(input: {
+  ownerId: string
+  storageProvider: string
+  storageKey: string
+}): Promise<StoredAssetStory | null> {
+  const db = getDb()
+  const [story] = await db
+    .select({
+      id: stories.id,
+      assetKind: stories.assetKind,
+      mediaUrl: stories.mediaUrl,
+      thumbnailUrl: stories.thumbnailUrl,
+      processingStatus: stories.processingStatus,
+    })
+    .from(stories)
+    .where(
+      and(
+        eq(stories.creatorId, input.ownerId),
+        eq(stories.assetKind, "video"),
+        eq(stories.storageProvider, input.storageProvider),
+        eq(stories.storageKey, input.storageKey),
+      ),
+    )
+    .orderBy(desc(stories.createdAt))
+    .limit(1)
+
+  return story ?? null
 }
 
 export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {

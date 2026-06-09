@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { completeMobileVideoStory } from "@/lib/stories/mobile-video-completion"
+import {
+  completeMobileVideoStory,
+  getExistingMobileVideoStoryCompletion,
+} from "@/lib/stories/mobile-video-completion"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -127,6 +130,25 @@ export async function POST(request: Request) {
       durationMs: parsed.data.durationMs ?? null,
       hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
     })
+
+    const existingCompletion = await getExistingMobileVideoStoryCompletion({
+      request,
+      session,
+      storageProvider: "cloudflare-stream",
+      storageKey: parsed.data.uid,
+    })
+
+    if (existingCompletion) {
+      logVideoCompleteEvent("complete_reused", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        storyId: existingCompletion.storyId,
+        processingStatus: existingCompletion.processingStatus,
+        moderationStatus: existingCompletion.moderationStatus ?? null,
+      })
+
+      return NextResponse.json(existingCompletion)
+    }
 
     const cloudflareDetails = await getCloudflareStreamVideoDetails(
       parsed.data.uid,

@@ -2,6 +2,7 @@ import type { CompleteAuthSession } from "@/lib/auth"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
   createStory,
+  getStoryByStoredAssetForOwner,
   getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
 } from "@/lib/story-store"
@@ -41,6 +42,21 @@ type CompleteMobileVideoStoryInput = {
   onStoryCreated?: (storyId: string) => void | Promise<void>
 }
 
+type MobileVideoStoryResponseInput = {
+  request: Request
+  session: CompleteAuthSession
+  storyId: string
+  asset: {
+    assetKind: "image" | "video"
+    mediaUrl: string
+    thumbnailUrl: string | null
+    processingStatus: string
+  }
+  providerStatusFallback?: string | null
+  providerErrorFallback?: string | null
+  completionState: "created" | "reused"
+}
+
 function mobileVideoFieldsToFormData(fields: MobileVideoStoryCompletionFields) {
   const formData = new FormData()
 
@@ -59,6 +75,71 @@ function mobileVideoFieldsToFormData(fields: MobileVideoStoryCompletionFields) {
   formData.set("quoteReplyPositionY", fields.quoteReplyPositionY ?? "58.00")
 
   return formData
+}
+
+async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
+  const storyStatus = await getStoryUploadStatusForOwner(
+    input.storyId,
+    input.session.id,
+  )
+  const textOverlays = await getStoryTextOverlaysForOwner(
+    input.storyId,
+    input.session.id,
+  )
+
+  return {
+    ok: true,
+    storyId: input.storyId,
+    completionState: input.completionState,
+    asset: {
+      assetKind: input.asset.assetKind,
+      mediaUrl:
+        publicStoryMediaUrl(input.asset.mediaUrl, input.request, {
+          signed: true,
+        }) ?? input.asset.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(input.asset.thumbnailUrl, input.request, {
+        signed: true,
+      }),
+    },
+    processingStatus: storyStatus?.processingStatus ?? input.asset.processingStatus,
+    providerStatus:
+      storyStatus?.providerStatus ?? input.providerStatusFallback ?? null,
+    providerError:
+      storyStatus?.providerError ?? input.providerErrorFallback ?? null,
+    lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
+    readyAt: storyStatus?.readyAt ?? null,
+    moderationStatus: storyStatus?.moderationStatus,
+    moderationReason: userFacingModerationReason({
+      moderationStatus: storyStatus?.moderationStatus,
+      moderationReason: storyStatus?.moderationReason,
+    }),
+    textOverlays,
+  }
+}
+
+export async function getExistingMobileVideoStoryCompletion(input: {
+  request: Request
+  session: CompleteAuthSession
+  storageProvider: string
+  storageKey: string
+}) {
+  const existingStory = await getStoryByStoredAssetForOwner({
+    ownerId: input.session.id,
+    storageProvider: input.storageProvider,
+    storageKey: input.storageKey,
+  })
+
+  if (!existingStory) {
+    return null
+  }
+
+  return mobileVideoStoryResponse({
+    request: input.request,
+    session: input.session,
+    storyId: existingStory.id,
+    asset: existingStory,
+    completionState: "reused",
+  })
 }
 
 export async function completeMobileVideoStory(
@@ -87,43 +168,18 @@ export async function completeMobileVideoStory(
 
   await input.onStoryCreated?.(storyId)
 
-  const storyStatus = await getStoryUploadStatusForOwner(
-    storyId,
-    input.session.id,
-  )
-  const textOverlays = await getStoryTextOverlaysForOwner(
-    storyId,
-    input.session.id,
-  )
-
-  return {
-    ok: true,
+  return mobileVideoStoryResponse({
+    request: input.request,
+    session: input.session,
     storyId,
     asset: {
       assetKind: input.storedAsset.assetKind,
-      mediaUrl:
-        publicStoryMediaUrl(input.storedAsset.mediaUrl, input.request, {
-          signed: true,
-        }) ?? input.storedAsset.mediaUrl,
-      thumbnailUrl: publicStoryMediaUrl(
-        input.storedAsset.thumbnailUrl,
-        input.request,
-        { signed: true },
-      ),
+      mediaUrl: input.storedAsset.mediaUrl,
+      thumbnailUrl: input.storedAsset.thumbnailUrl,
+      processingStatus: input.storedAsset.processingStatus,
     },
-    processingStatus:
-      storyStatus?.processingStatus ?? input.storedAsset.processingStatus,
-    providerStatus:
-      storyStatus?.providerStatus ?? input.providerStatusFallback ?? null,
-    providerError:
-      storyStatus?.providerError ?? input.providerErrorFallback ?? null,
-    lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
-    readyAt: storyStatus?.readyAt ?? null,
-    moderationStatus: storyStatus?.moderationStatus,
-    moderationReason: userFacingModerationReason({
-      moderationStatus: storyStatus?.moderationStatus,
-      moderationReason: storyStatus?.moderationReason,
-    }),
-    textOverlays,
-  }
+    providerStatusFallback: input.providerStatusFallback,
+    providerErrorFallback: input.providerErrorFallback,
+    completionState: "created",
+  })
 }

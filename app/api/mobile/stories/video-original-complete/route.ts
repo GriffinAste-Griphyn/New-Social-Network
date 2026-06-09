@@ -3,7 +3,10 @@ import { after, NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { completeMobileVideoStory } from "@/lib/stories/mobile-video-completion"
+import {
+  completeMobileVideoStory,
+  getExistingMobileVideoStoryCompletion,
+} from "@/lib/stories/mobile-video-completion"
 import { setStoryThumbnail } from "@/lib/story-store"
 import {
   createOriginalQualityVideoThumbnail,
@@ -171,6 +174,25 @@ export async function POST(request: Request) {
         { error: "Could not finish the original video upload." },
         { status: 400 },
       )
+    }
+
+    const existingCompletion = await getExistingMobileVideoStoryCompletion({
+      request,
+      session,
+      storageProvider: "vercel-blob",
+      storageKey: parsed.data.pathname,
+    })
+
+    if (existingCompletion) {
+      logOriginalVideoCompleteEvent("complete_reused", {
+        userId: session.id,
+        pathname: parsed.data.pathname,
+        storyId: existingCompletion.storyId,
+        processingStatus: existingCompletion.processingStatus,
+        moderationStatus: existingCompletion.moderationStatus ?? null,
+      })
+
+      return NextResponse.json(existingCompletion)
     }
 
     uploadedPathname = parsed.data.pathname
