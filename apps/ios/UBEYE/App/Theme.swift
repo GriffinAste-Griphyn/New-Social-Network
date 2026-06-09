@@ -717,7 +717,10 @@ actor MediaFileDiskCache {
         }
 
         components.queryItems = components.queryItems?
-            .filter { $0.name.lowercased() != "token" }
+            .filter {
+                let name = $0.name.lowercased()
+                return name != "token" && name != "v"
+            }
             .sorted { $0.name < $1.name }
 
         return components.url ?? url

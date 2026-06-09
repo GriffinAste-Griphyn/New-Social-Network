@@ -443,6 +443,7 @@ export async function GET(
   const headers = new Headers({
     "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
     ETag: result.blob.etag || blobMetadata.etag,
+    "X-Content-Type-Options": "nosniff",
   })
 
   if (result.statusCode === 304) {
@@ -459,13 +460,25 @@ export async function GET(
   }
 
   if (byteRange) {
-    const contentLength = byteRange.end - byteRange.start + 1
-    const contentRange =
-      result.headers.get("content-range") ??
-      `bytes ${byteRange.start}-${byteRange.end}/${blobMetadata.size}`
+    const upstreamContentRange = result.headers.get("content-range")
+    const upstreamContentLength = result.headers.get("content-length")
 
-    headers.set("Content-Length", contentLength.toString())
-    headers.set("Content-Range", contentRange)
+    if (!upstreamContentRange) {
+      headers.set(
+        "Content-Length",
+        upstreamContentLength ?? blobMetadata.size.toString(),
+      )
+
+      return new Response(result.stream, {
+        headers,
+      })
+    }
+
+    headers.set(
+      "Content-Length",
+      upstreamContentLength ?? (byteRange.end - byteRange.start + 1).toString(),
+    )
+    headers.set("Content-Range", upstreamContentRange)
 
     return new Response(result.stream, {
       status: 206,
