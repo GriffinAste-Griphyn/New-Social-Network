@@ -985,46 +985,9 @@ struct StoryComposerView: View {
                         .padding(.bottom, 24)
                 }
 
-                HStack {
-                    PhotosPicker(
-                        selection: $photoPickerItem,
-                        matching: .any(of: [.images, .videos]),
-                        preferredItemEncoding: .current
-                    ) {
-                        LibraryPickerThumbnail(image: latestLibraryThumbnail)
-                    }
-
-                    Spacer()
-
-                    StoryShutterButton(
-                        isRecording: camera.isRecording,
-                        progress: recordingProgress,
-                        segmentCount: recordingSegmentCount,
-                        maxSegments: maxVideoSegments,
-                        capturePhoto: capturePhoto,
-                        startRecording: startRecording,
-                        stopRecording: stopRecording
-                    )
-
-                    Spacer()
-
-                    Button {
-                        Task {
-                            if let response = await store.upload(api: api) {
-                                onUploadRegistered(response)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
-                            .font(.system(size: 21, weight: .bold))
-                            .frame(width: 58, height: 58)
-                            .background(.black.opacity(0.34), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.isUploading)
-                }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 28)
+                bottomControlBar
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 28)
             }
             .foregroundStyle(.white)
 
@@ -1064,6 +1027,89 @@ struct StoryComposerView: View {
             if !isFocused {
                 finishOverlayInput()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomControlBar: some View {
+        if store.selectedMedia == nil {
+            captureControlBar
+        } else {
+            selectedMediaControlBar
+        }
+    }
+
+    private var captureControlBar: some View {
+        HStack {
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                LibraryPickerThumbnail(image: latestLibraryThumbnail)
+            }
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            StoryShutterButton(
+                isRecording: camera.isRecording,
+                progress: recordingProgress,
+                segmentCount: recordingSegmentCount,
+                maxSegments: maxVideoSegments,
+                capturePhoto: capturePhoto,
+                startRecording: startRecording,
+                stopRecording: stopRecording
+            )
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            Color.clear
+                .frame(width: 58, height: 58)
+        }
+    }
+
+    private var selectedMediaControlBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                resetCapture()
+            } label: {
+                Label("Retake", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(.black.opacity(0.46), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isUploading)
+
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                Label("Change", systemImage: "photo.on.rectangle")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(.black.opacity(0.46), in: Capsule())
+            }
+            .disabled(store.isUploading)
+
+            Button {
+                Task {
+                    await uploadSelectedMedia()
+                }
+            } label: {
+                Label(
+                    store.isUploading ? "Posting" : "Post Story",
+                    systemImage: store.isUploading ? "hourglass" : "paperplane.fill"
+                )
+                    .font(.system(size: 14, weight: .black))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.ubeyeRed, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isUploading)
         }
     }
 
@@ -1322,15 +1368,31 @@ struct StoryComposerView: View {
             return
         }
 
-        if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-            if let pickedVideo = try? await item.loadTransferable(type: PickedVideo.self) {
-                store.selectedMedia = .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
-            }
-            return
+        store.error = nil
+        store.uploadStatus = nil
+        overlayInputMode = nil
+        isOverlayInputFocused = false
+        camera.capturedPhoto = nil
+        camera.capturedVideoURL = nil
+        defer {
+            photoPickerItem = nil
         }
 
-        if let pickedImage = try? await item.loadTransferable(type: PickedImage.self) {
-            store.selectedMedia = .image(pickedImage.upload)
+        do {
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
+               let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
+                store.selectedMedia = .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
+                return
+            }
+
+            if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
+                store.selectedMedia = .image(pickedImage.upload)
+                return
+            }
+
+            store.error = "Could not load that media. Try another photo or video."
+        } catch {
+            store.error = "Could not load that media. Try another photo or video."
         }
     }
 
@@ -1420,6 +1482,16 @@ struct StoryComposerView: View {
         }
 
         camera.stopRecording()
+    }
+
+    private func uploadSelectedMedia() async {
+        guard !store.isUploading else {
+            return
+        }
+
+        if let response = await store.upload(api: api) {
+            onUploadRegistered(response)
+        }
     }
 
     private func resetCapture(clearQuote: Bool = false) {
