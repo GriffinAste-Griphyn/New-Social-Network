@@ -902,6 +902,8 @@ struct StoryComposerView: View {
 
     private let maxVideoSegments = 6
     private let videoSegmentDuration: TimeInterval = 10
+    private let footerSideControlSize: CGFloat = 58
+    private let footerShutterSlotSize: CGFloat = 88
     private var maxRecordingDuration: TimeInterval { TimeInterval(maxVideoSegments) * videoSegmentDuration }
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -1060,19 +1062,34 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var composerFooter: some View {
-        if activeMedia == nil {
-            captureFooter
-        } else {
-            selectedMediaFooter
+        Group {
+            if activeMedia == nil {
+                captureFooter
+            } else {
+                selectedMediaFooter
+            }
         }
+        .frame(maxWidth: .infinity, minHeight: footerShutterSlotSize)
     }
 
     private var selectedMediaFooter: some View {
         HStack {
+            footerPlaceholder(size: footerSideControlSize)
+
+            Spacer()
+
+            footerPlaceholder(size: footerShutterSlotSize)
+
             Spacer()
 
             uploadStoryButton
         }
+    }
+
+    private func footerPlaceholder(size: CGFloat) -> some View {
+        Color.clear
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 
     private var uploadStoryButton: some View {
