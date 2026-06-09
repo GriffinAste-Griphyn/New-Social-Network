@@ -82,7 +82,7 @@ final class CameraController: NSObject, ObservableObject {
 
     func capturePhoto() {
         let settings = makePhotoSettings()
-        settings.flashMode = .auto
+        settings.flashMode = preferredPhotoFlashMode()
         settings.photoQualityPrioritization = .quality
         if let configuredMaxPhotoDimensions {
             settings.maxPhotoDimensions = configuredMaxPhotoDimensions
@@ -260,6 +260,10 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         return AVCapturePhotoSettings()
+    }
+
+    private func preferredPhotoFlashMode() -> AVCaptureDevice.FlashMode {
+        cameraPosition == .front ? .off : .auto
     }
 
     private func configurePhotoOutput(for device: AVCaptureDevice) {

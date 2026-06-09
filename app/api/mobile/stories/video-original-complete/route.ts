@@ -4,16 +4,15 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
-  createStory,
-  getStoryTextOverlaysForOwner,
-  setStoryThumbnail,
-} from "@/lib/story-store"
+  completeMobileVideoStory,
+  getExistingMobileVideoStoryCompletion,
+} from "@/lib/stories/mobile-video-completion"
+import { setStoryThumbnail } from "@/lib/story-store"
 import {
   createOriginalQualityVideoThumbnail,
   createOriginalQualityVideoStoryAsset,
   isAllowedOriginalQualityVideoContentType,
   maxOriginalStoryVideoUploadBytes,
-  publicStoryMediaUrl,
   removeStoryAsset,
   isAllowedOriginalQualityVideoThumbnailContentType,
   maxOriginalStoryVideoThumbnailUploadBytes,
@@ -25,11 +24,6 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
-import {
-  parseBrandTags,
-  parseStoryCaption,
-  parseStoryElements,
-} from "@/lib/story-validators"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
@@ -71,32 +65,28 @@ const completeOriginalVideoSchema = z.object({
   quoteReplyPositionY: z.string().optional(),
 })
 
-function payloadToFormData(payload: z.infer<typeof completeOriginalVideoSchema>) {
-  const formData = new FormData()
-
-  formData.set("caption", payload.caption)
-  formData.set("brandTags", payload.brandTags)
-  formData.set("stickers", payload.stickers)
-  formData.set("textOverlays", payload.textOverlays)
-  formData.set("textOverlayPositionX", payload.textOverlayPositionX ?? "50.00")
-  formData.set("textOverlayPositionY", payload.textOverlayPositionY ?? "74.00")
-  formData.set("linkLabel", payload.linkLabel)
-  formData.set("linkUrl", payload.linkUrl)
-  formData.set("linkOverlayPositionX", payload.linkOverlayPositionX ?? "50.00")
-  formData.set("linkOverlayPositionY", payload.linkOverlayPositionY ?? "78.00")
-  formData.set("quoteReplyId", payload.quoteReplyId)
-  formData.set("quoteReplyPositionX", payload.quoteReplyPositionX ?? "50.00")
-  formData.set("quoteReplyPositionY", payload.quoteReplyPositionY ?? "58.00")
-
-  return formData
-}
-
 function originalVideoThumbnailPathname(pathname: string) {
   const extensionIndex = pathname.lastIndexOf(".")
 
   return extensionIndex >= 0
     ? `${pathname.slice(0, extensionIndex)}-thumb.jpg`
     : `${pathname}-thumb.jpg`
+}
+
+function logOriginalVideoCompleteEvent(
+  event: string,
+  metadata: Record<string, string | number | boolean | null | undefined>,
+) {
+  console.info(
+    "mobile_original_video_complete",
+    JSON.stringify({
+      event,
+      at: new Date().toISOString(),
+      ...Object.fromEntries(
+        Object.entries(metadata).filter(([, value]) => value !== undefined),
+      ),
+    }),
+  )
 }
 
 export async function POST(request: Request) {
@@ -134,11 +124,23 @@ export async function POST(request: Request) {
     )
 
     if (!parsed.success) {
+      logOriginalVideoCompleteEvent("complete_invalid_payload", {
+        userId: session.id,
+        ip: requestIpSubject(request),
+      })
       return NextResponse.json(
         { error: "Could not finish the original video upload." },
         { status: 400 },
       )
     }
+
+    logOriginalVideoCompleteEvent("complete_started", {
+      userId: session.id,
+      pathname: parsed.data.pathname,
+      byteSize: parsed.data.byteSize,
+      durationMs: parsed.data.durationMs ?? null,
+      hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
+    })
 
     const expectedPrefix = `stories/mobile-original/${session.id}/`
     const hasThumbnailUpload = Boolean(parsed.data.thumbnailPathname)
@@ -174,6 +176,25 @@ export async function POST(request: Request) {
       )
     }
 
+    const existingCompletion = await getExistingMobileVideoStoryCompletion({
+      request,
+      session,
+      storageProvider: "vercel-blob",
+      storageKey: parsed.data.pathname,
+    })
+
+    if (existingCompletion) {
+      logOriginalVideoCompleteEvent("complete_reused", {
+        userId: session.id,
+        pathname: parsed.data.pathname,
+        storyId: existingCompletion.storyId,
+        processingStatus: existingCompletion.processingStatus,
+        moderationStatus: existingCompletion.moderationStatus ?? null,
+      })
+
+      return NextResponse.json(existingCompletion)
+    }
+
     uploadedPathname = parsed.data.pathname
     storedAsset = await createOriginalQualityVideoStoryAsset({
       pathname: parsed.data.pathname,
@@ -188,54 +209,55 @@ export async function POST(request: Request) {
       width: parsed.data.width ?? null,
       height: parsed.data.height ?? null,
     })
-    const formData = payloadToFormData(parsed.data)
-    const storyElements = parseStoryElements(formData)
-    const storyId = await createStory({
-      session,
-      caption: parseStoryCaption(formData.get("caption")),
-      explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: storyElements,
-      storedAsset,
-    })
     const thumbnailPathname = parsed.data.pathname
-
-    if (!storedAsset.thumbnailUrl) {
-      after(async () => {
-        try {
-          const thumbnailUrl =
-            await createOriginalQualityVideoThumbnail(thumbnailPathname)
-          await setStoryThumbnail(storyId, thumbnailUrl)
-        } catch (thumbnailError) {
-          console.error("Could not create original story video thumbnail.", {
-            storyId,
-            pathname: thumbnailPathname,
-            error: thumbnailError,
-          })
+    const completion = await completeMobileVideoStory({
+      request,
+      session,
+      fields: parsed.data,
+      storedAsset,
+      onStoryCreated: async (storyId) => {
+        if (storedAsset?.thumbnailUrl) {
+          return
         }
-      })
-    }
+
+        after(async () => {
+          try {
+            const thumbnailUrl =
+              await createOriginalQualityVideoThumbnail(thumbnailPathname)
+            await setStoryThumbnail(storyId, thumbnailUrl)
+          } catch (thumbnailError) {
+            console.error("Could not create original story video thumbnail.", {
+              storyId,
+              pathname: thumbnailPathname,
+              error: thumbnailError,
+            })
+          }
+        })
+      },
+    })
 
     const completedAsset = storedAsset
     uploadedPathname = undefined
     storedAsset = undefined
-    const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
 
-    return NextResponse.json({
-      ok: true,
-      storyId,
-      asset: {
-        assetKind: completedAsset.assetKind,
-        mediaUrl:
-          publicStoryMediaUrl(completedAsset.mediaUrl, request, { signed: true }) ??
-          completedAsset.mediaUrl,
-        thumbnailUrl: publicStoryMediaUrl(completedAsset.thumbnailUrl, request, {
-          signed: true,
-        }),
-      },
-      processingStatus: completedAsset.processingStatus,
-      textOverlays,
+    logOriginalVideoCompleteEvent("complete_succeeded", {
+      userId: session.id,
+      storyId: completion.storyId,
+      pathname: completedAsset.storageKey,
+      byteSize: completedAsset.byteSize,
+      processingStatus: completion.processingStatus,
+      moderationStatus: completion.moderationStatus ?? null,
     })
+
+    return NextResponse.json(completion)
   } catch (error) {
+    logOriginalVideoCompleteEvent("complete_failed", {
+      pathname: storedAsset?.storageKey ?? uploadedPathname ?? null,
+      reason:
+        error instanceof StoryUploadError || error instanceof Error
+          ? error.message
+          : "unknown",
+    })
     if (storedAsset) {
       await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
     } else if (uploadedPathname) {
