@@ -985,46 +985,9 @@ struct StoryComposerView: View {
                         .padding(.bottom, 24)
                 }
 
-                HStack {
-                    PhotosPicker(
-                        selection: $photoPickerItem,
-                        matching: .any(of: [.images, .videos]),
-                        preferredItemEncoding: .current
-                    ) {
-                        LibraryPickerThumbnail(image: latestLibraryThumbnail)
-                    }
-                    .disabled(store.isUploading)
-
-                    Spacer()
-
-                    StoryShutterButton(
-                        isRecording: camera.isRecording,
-                        progress: recordingProgress,
-                        segmentCount: recordingSegmentCount,
-                        maxSegments: maxVideoSegments,
-                        capturePhoto: capturePhoto,
-                        startRecording: startRecording,
-                        stopRecording: stopRecording
-                    )
-                    .disabled(store.isUploading)
-
-                    Spacer()
-
-                    Button {
-                        Task {
-                            await uploadSelectedMedia()
-                        }
-                    } label: {
-                        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
-                            .font(.system(size: 21, weight: .bold))
-                            .frame(width: 58, height: 58)
-                            .background(.black.opacity(0.34), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.isUploading)
-                }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 28)
+                composerFooter
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 28)
             }
             .foregroundStyle(.white)
 
@@ -1065,6 +1028,76 @@ struct StoryComposerView: View {
                 finishOverlayInput()
             }
         }
+    }
+
+    @ViewBuilder
+    private var composerFooter: some View {
+        if store.selectedMedia == nil {
+            captureFooter
+        } else {
+            selectedMediaFooter
+        }
+    }
+
+    private var captureFooter: some View {
+        HStack {
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                LibraryPickerThumbnail(image: latestLibraryThumbnail)
+            }
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            StoryShutterButton(
+                isRecording: camera.isRecording,
+                progress: recordingProgress,
+                segmentCount: recordingSegmentCount,
+                maxSegments: maxVideoSegments,
+                capturePhoto: capturePhoto,
+                startRecording: startRecording,
+                stopRecording: stopRecording
+            )
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            Button {
+                Task {
+                    await uploadSelectedMedia()
+                }
+            } label: {
+                uploadButtonIcon
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isUploading)
+        }
+    }
+
+    private var selectedMediaFooter: some View {
+        HStack {
+            Spacer()
+
+            Button {
+                Task {
+                    await uploadSelectedMedia()
+                }
+            } label: {
+                uploadButtonIcon
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isUploading)
+        }
+    }
+
+    private var uploadButtonIcon: some View {
+        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
+            .font(.system(size: 21, weight: .bold))
+            .frame(width: 58, height: 58)
+            .background(.black.opacity(0.34), in: Circle())
     }
 
     private var composerToolRail: some View {
