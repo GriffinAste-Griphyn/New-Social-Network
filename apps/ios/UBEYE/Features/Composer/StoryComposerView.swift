@@ -1717,7 +1717,11 @@ struct StoryComposerView: View {
                         store.selectedMedia = .video(StoryVideoUpload(url: videoURL, source: source))
                     }
             } else if camera.authorizationStatus == .authorized {
-                CameraPreview(session: camera.session, cameraPosition: camera.cameraPosition)
+                CameraPreview(
+                    session: camera.session,
+                    cameraPosition: camera.cameraPosition,
+                    device: camera.activeVideoDevice
+                )
             } else {
                 EmptyStateView(title: "Camera unavailable", message: "Enable camera access or choose media from your library.", systemImage: "camera")
             }

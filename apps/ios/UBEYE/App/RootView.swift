@@ -106,6 +106,9 @@ struct MainTabView: View {
         }
 
         notifyStoryUploadDidRegister(response)
+        api.invalidateStoryStacks(ids: ["my-story", response.storyId])
+        api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
+        NotificationCenter.default.post(name: .storyUploadDidComplete, object: nil)
 
         if response.asset.assetKind == .video && response.processingStatus != "ready" {
             storyUploadNotice.showProcessing()
@@ -121,9 +124,7 @@ struct MainTabView: View {
                 }
             }
         } else {
-            api.invalidateStoryStacks(ids: ["my-story", response.storyId])
             storyUploadNotice.showPosted()
-            NotificationCenter.default.post(name: .storyUploadDidComplete, object: nil)
         }
     }
 
@@ -159,7 +160,7 @@ final class StoryUploadNoticeStore: ObservableObject {
     var title: String {
         switch state {
         case .processing:
-            "Video is processing"
+            "Added to your story"
         case .posted:
             "Added to your story"
         case .review:
@@ -172,7 +173,7 @@ final class StoryUploadNoticeStore: ObservableObject {
     var message: String {
         switch state {
         case .processing:
-            "It will appear in My Story as soon as it is ready."
+            "Your video is visible in My Story and will play after processing finishes."
         case .posted:
             "Your story is live."
         case .review(let reason):

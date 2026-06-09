@@ -2,15 +2,17 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-private func preferredPortraitVideoRotationAngle(
-    for connection: AVCaptureConnection,
-    cameraPosition _: AVCaptureDevice.Position
-) -> CGFloat? {
-    let preferredAngles: [CGFloat] = [90, 270]
+private func applyVideoRotationAngle(_ angle: CGFloat, to connection: AVCaptureConnection) {
+    let normalizedAngle = angle.truncatingRemainder(dividingBy: 360)
+    let positiveAngle = normalizedAngle < 0 ? normalizedAngle + 360 : normalizedAngle
+    let rightAngle = (round(positiveAngle / 90) * 90).truncatingRemainder(dividingBy: 360)
+    let candidates = [positiveAngle, rightAngle, 0, 90, 180, 270]
 
-    return preferredAngles.first { angle in
-        connection.isVideoRotationAngleSupported(angle)
+    guard let supportedAngle = candidates.first(where: { connection.isVideoRotationAngleSupported($0) }) else {
+        return
     }
+
+    connection.videoRotationAngle = supportedAngle
 }
 
 @MainActor
@@ -23,6 +25,7 @@ final class CameraController: NSObject, ObservableObject {
     @Published var capturedVideoCameraPosition: AVCaptureDevice.Position = .back
     @Published var isRecording = false
     @Published var cameraPosition: AVCaptureDevice.Position = .back
+    @Published var activeVideoDevice: AVCaptureDevice?
     @Published var error: String?
 
     private let output = AVCapturePhotoOutput()
@@ -33,6 +36,7 @@ final class CameraController: NSObject, ObservableObject {
     private var audioInput: AVCaptureDeviceInput?
     private var recordingCameraPosition: AVCaptureDevice.Position = .back
     private var isConfigured = false
+    private var captureRotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var configuredMaxPhotoDimensions: CMVideoDimensions?
     private let preferredVideoBitrate = 18_000_000
     private let preferredVideoFrameRate = 30
@@ -169,6 +173,11 @@ final class CameraController: NSObject, ObservableObject {
             session.addInput(nextInput)
             videoInput = nextInput
             cameraPosition = nextPosition
+            activeVideoDevice = camera
+            captureRotationCoordinator = AVCaptureDevice.RotationCoordinator(
+                device: camera,
+                previewLayer: nil
+            )
             configurePhotoOutput(for: camera)
             updateOutputOrientation()
         } else if let videoInput, session.canAddInput(videoInput) {
@@ -202,6 +211,11 @@ final class CameraController: NSObject, ObservableObject {
 
         session.addInput(input)
         videoInput = input
+        activeVideoDevice = input.device
+        captureRotationCoordinator = AVCaptureDevice.RotationCoordinator(
+            device: input.device,
+            previewLayer: nil
+        )
         if microphoneAuthorizationStatus == .authorized,
            let microphone = AVCaptureDevice.default(for: .audio),
            let microphoneInput = try? AVCaptureDeviceInput(device: microphone),
@@ -314,11 +328,11 @@ final class CameraController: NSObject, ObservableObject {
         _ connection: AVCaptureConnection,
         mirrorsFrontCamera: Bool
     ) {
-        if let rotationAngle = preferredPortraitVideoRotationAngle(
-            for: connection,
-            cameraPosition: cameraPosition
-        ) {
-            connection.videoRotationAngle = rotationAngle
+        if let captureRotationCoordinator {
+            applyVideoRotationAngle(
+                captureRotationCoordinator.videoRotationAngleForHorizonLevelCapture,
+                to: connection
+            )
         }
         if connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false
@@ -391,18 +405,19 @@ private final class MovieCaptureDelegate: NSObject, AVCaptureFileOutputRecording
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let cameraPosition: AVCaptureDevice.Position
+    let device: AVCaptureDevice?
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        view.updatePreviewConnection(for: cameraPosition)
+        view.updatePreviewConnection(for: cameraPosition, device: device)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.videoPreviewLayer.session = session
-        uiView.updatePreviewConnection(for: cameraPosition)
+        uiView.updatePreviewConnection(for: cameraPosition, device: device)
     }
 }
 
@@ -417,23 +432,46 @@ final class PreviewView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        updatePreviewConnection(for: currentCameraPosition)
+        updatePreviewConnection(for: currentCameraPosition, device: currentDevice)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updatePreviewConnection(for: currentCameraPosition, device: currentDevice)
     }
 
     private var currentCameraPosition: AVCaptureDevice.Position = .back
+    private weak var currentDevice: AVCaptureDevice?
+    private var previewRotationCoordinator: AVCaptureDevice.RotationCoordinator?
 
-    func updatePreviewConnection(for cameraPosition: AVCaptureDevice.Position) {
+    func updatePreviewConnection(
+        for cameraPosition: AVCaptureDevice.Position,
+        device: AVCaptureDevice?
+    ) {
         currentCameraPosition = cameraPosition
+        if currentDevice !== device {
+            currentDevice = device
+            previewRotationCoordinator = nil
+        }
 
         guard let connection = videoPreviewLayer.connection else {
             return
         }
 
-        if let rotationAngle = preferredPortraitVideoRotationAngle(
-            for: connection,
-            cameraPosition: cameraPosition
-        ) {
-            connection.videoRotationAngle = rotationAngle
+        if let device {
+            if previewRotationCoordinator == nil {
+                previewRotationCoordinator = AVCaptureDevice.RotationCoordinator(
+                    device: device,
+                    previewLayer: videoPreviewLayer
+                )
+            }
+
+            if let previewRotationCoordinator {
+                applyVideoRotationAngle(
+                    previewRotationCoordinator.videoRotationAngleForHorizonLevelPreview,
+                    to: connection
+                )
+            }
         }
 
         if connection.isVideoMirroringSupported {
