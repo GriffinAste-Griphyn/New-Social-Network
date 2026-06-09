@@ -225,38 +225,50 @@ enum AppTab: String, CaseIterable, Identifiable {
 
 struct AppBottomBar: View {
     @Binding var selectedTab: AppTab
+    private let horizontalInset: CGFloat = 12
+    private let slotHeight: CGFloat = 52
+    private let topInset: CGFloat = 8
+    private let bottomInset: CGFloat = 7
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppTab.allCases) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    ZStack {
-                        if tab == .post {
-                            Circle()
-                                .fill(Color.ubeyeInk)
-                                .frame(width: 46, height: 46)
-                        }
+        GeometryReader { proxy in
+            let tabCount = CGFloat(AppTab.allCases.count)
+            let availableWidth = max(proxy.size.width - horizontalInset * 2, 0)
+            let slotWidth = floor(availableWidth / tabCount)
+            let contentWidth = slotWidth * tabCount
 
-                        Image(systemName: tab.systemImage)
-                            .font(.system(size: iconFontSize(for: tab), weight: .semibold))
-                            .symbolVariant(selectedTab == tab && tab != .post ? .fill : .none)
-                            .foregroundStyle(tab == .post ? .white : tabColor(for: tab))
-                            .frame(width: iconFrameSize(for: tab), height: iconFrameSize(for: tab))
-                            .offset(x: iconOpticalOffset(for: tab))
+            HStack(spacing: 0) {
+                ForEach(AppTab.allCases) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        ZStack {
+                            if tab == .post {
+                                Circle()
+                                    .fill(Color.ubeyeInk)
+                                    .frame(width: 46, height: 46)
+                            }
+
+                            Image(systemName: tab.systemImage)
+                                .font(.system(size: iconFontSize(for: tab), weight: .semibold))
+                                .symbolVariant(selectedTab == tab && tab != .post ? .fill : .none)
+                                .foregroundStyle(tab == .post ? .white : tabColor(for: tab))
+                                .frame(width: iconFrameSize(for: tab), height: iconFrameSize(for: tab))
+                        }
+                        .frame(width: slotWidth, height: slotHeight)
+                        .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(tab.title)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tab.title)
             }
+            .frame(width: contentWidth, height: slotHeight)
+            .frame(maxWidth: .infinity)
+            .padding(.top, topInset)
+            .padding(.bottom, bottomInset)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 7)
+        .frame(height: slotHeight + topInset + bottomInset)
+        .frame(maxWidth: .infinity)
         .background(.white.opacity(0.98))
         .overlay(alignment: .top) {
             Rectangle()
@@ -285,10 +297,6 @@ struct AppBottomBar: View {
         default:
             return 32
         }
-    }
-
-    private func iconOpticalOffset(for tab: AppTab) -> CGFloat {
-        tab == .following ? -1.5 : 0
     }
 
     private func tabColor(for tab: AppTab) -> Color {
