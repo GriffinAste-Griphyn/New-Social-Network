@@ -382,13 +382,13 @@ struct CameraPreview: UIViewRepresentable {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        view.updateMirroring(for: cameraPosition)
+        view.updatePreviewConnection(for: cameraPosition)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.videoPreviewLayer.session = session
-        uiView.updateMirroring(for: cameraPosition)
+        uiView.updatePreviewConnection(for: cameraPosition)
     }
 }
 
@@ -401,13 +401,27 @@ final class PreviewView: UIView {
         layer as! AVCaptureVideoPreviewLayer
     }
 
-    func updateMirroring(for cameraPosition: AVCaptureDevice.Position) {
-        guard let connection = videoPreviewLayer.connection,
-              connection.isVideoMirroringSupported else {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updatePreviewConnection(for: currentCameraPosition)
+    }
+
+    private var currentCameraPosition: AVCaptureDevice.Position = .back
+
+    func updatePreviewConnection(for cameraPosition: AVCaptureDevice.Position) {
+        currentCameraPosition = cameraPosition
+
+        guard let connection = videoPreviewLayer.connection else {
             return
         }
 
-        connection.automaticallyAdjustsVideoMirroring = false
-        connection.isVideoMirrored = cameraPosition == .front
+        if connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
+        }
+
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = cameraPosition == .front
+        }
     }
 }
