@@ -4,6 +4,8 @@ struct StoryComposerFooter<Left: View, Center: View, Right: View>: View {
     let leftSlotSize: CGFloat
     let centerSlotSize: CGFloat
     let rightSlotSize: CGFloat
+    let verticalAlignment: VerticalAlignment
+    let frameAlignment: Alignment
     private let left: () -> Left
     private let center: () -> Center
     private let right: () -> Right
@@ -12,6 +14,8 @@ struct StoryComposerFooter<Left: View, Center: View, Right: View>: View {
         leftSlotSize: CGFloat,
         centerSlotSize: CGFloat,
         rightSlotSize: CGFloat,
+        verticalAlignment: VerticalAlignment = .center,
+        frameAlignment: Alignment = .center,
         @ViewBuilder left: @escaping () -> Left,
         @ViewBuilder center: @escaping () -> Center,
         @ViewBuilder right: @escaping () -> Right
@@ -19,13 +23,15 @@ struct StoryComposerFooter<Left: View, Center: View, Right: View>: View {
         self.leftSlotSize = leftSlotSize
         self.centerSlotSize = centerSlotSize
         self.rightSlotSize = rightSlotSize
+        self.verticalAlignment = verticalAlignment
+        self.frameAlignment = frameAlignment
         self.left = left
         self.center = center
         self.right = right
     }
 
     var body: some View {
-        HStack {
+        HStack(alignment: verticalAlignment) {
             left()
                 .frame(width: leftSlotSize, height: leftSlotSize)
 
@@ -39,7 +45,7 @@ struct StoryComposerFooter<Left: View, Center: View, Right: View>: View {
             right()
                 .frame(width: rightSlotSize, height: rightSlotSize)
         }
-        .frame(maxWidth: .infinity, minHeight: centerSlotSize)
+        .frame(maxWidth: .infinity, minHeight: centerSlotSize, alignment: frameAlignment)
     }
 }
 

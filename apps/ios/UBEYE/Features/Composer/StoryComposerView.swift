@@ -806,6 +806,7 @@ struct StoryComposerView: View {
     private let footerShutterSlotSize: CGFloat = 88
     private let footerHorizontalInset: CGFloat = 28
     private let footerBottomInset: CGFloat = UBEYEMetrics.appBottomBarHeight + 40
+    private let selectedMediaFooterBottomInset: CGFloat = 28
     private var maxRecordingDuration: TimeInterval { TimeInterval(maxVideoSegments) * videoSegmentDuration }
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -894,7 +895,7 @@ struct StoryComposerView: View {
 
                     composerFooter
                         .padding(.horizontal, footerHorizontalInset)
-                        .padding(.bottom, footerBottomInset)
+                        .padding(.bottom, activeMedia == nil ? footerBottomInset : selectedMediaFooterBottomInset)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .foregroundStyle(.white)
@@ -990,7 +991,9 @@ struct StoryComposerView: View {
         StoryComposerFooter(
             leftSlotSize: footerSideControlSize,
             centerSlotSize: footerShutterSlotSize,
-            rightSlotSize: footerSideControlSize
+            rightSlotSize: footerSideControlSize,
+            verticalAlignment: .bottom,
+            frameAlignment: .bottom
         ) {
             StoryComposerFooterPlaceholder(size: footerSideControlSize)
         } center: {
