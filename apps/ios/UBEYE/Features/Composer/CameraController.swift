@@ -303,7 +303,9 @@ final class CameraController: NSObject, ObservableObject {
         _ connection: AVCaptureConnection,
         mirrorsFrontCamera: Bool
     ) {
-        if connection.isVideoRotationAngleSupported(90) {
+        if connection.isVideoRotationAngleSupported(270) {
+            connection.videoRotationAngle = 270
+        } else if connection.isVideoRotationAngleSupported(90) {
             connection.videoRotationAngle = 90
         }
         if connection.isVideoMirroringSupported {
