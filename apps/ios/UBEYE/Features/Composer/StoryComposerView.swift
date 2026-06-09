@@ -3,99 +3,6 @@ import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
-
-enum PickedStoryMedia {
-    case image(StoryImageUpload)
-    case video(StoryVideoUpload)
-}
-
-struct StoryVideoUpload {
-    enum Source {
-        case cameraFront
-        case cameraBack
-        case library
-
-        var mirrorsNormalizedFallback: Bool {
-            self == .cameraFront
-        }
-    }
-
-    let url: URL
-    let source: Source
-}
-
-struct StoryImageUpload: Equatable {
-    let image: UIImage
-    let data: Data
-    let fileName: String
-    let mimeType: String
-
-    init?(data: Data, fallbackFileName: String = "story-photo") {
-        guard let image = UIImage(data: data) else {
-            return nil
-        }
-
-        let format = StoryImageFormat(data: data)
-        self.image = image
-        self.data = data
-        fileName = Self.normalizedFileName(fallbackFileName, fileExtension: format.fileExtension)
-        mimeType = format.mimeType
-    }
-
-    private static func normalizedFileName(_ value: String, fileExtension: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = trimmed.isEmpty ? "story-photo" : trimmed
-
-        if base.lowercased().hasSuffix(".\(fileExtension)") {
-            return base
-        }
-
-        let stem = (base as NSString).deletingPathExtension
-        return "\(stem.isEmpty ? "story-photo" : stem).\(fileExtension)"
-    }
-
-    static func == (lhs: StoryImageUpload, rhs: StoryImageUpload) -> Bool {
-        lhs.data == rhs.data &&
-            lhs.fileName == rhs.fileName &&
-            lhs.mimeType == rhs.mimeType
-    }
-}
-
-private struct StoryImageFormat {
-    let fileExtension: String
-    let mimeType: String
-
-    init(data: Data) {
-        let bytes = [UInt8](data.prefix(16))
-
-        if bytes.starts(with: [0xff, 0xd8, 0xff]) {
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
-        } else if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
-            fileExtension = "png"
-            mimeType = "image/png"
-        } else if data.count >= 12,
-                  String(data: data.prefix(4), encoding: .ascii) == "RIFF",
-                  String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
-            fileExtension = "webp"
-            mimeType = "image/webp"
-        } else if data.count >= 12,
-                  String(data: data.dropFirst(4).prefix(4), encoding: .ascii) == "ftyp" {
-            let brand = String(data: data.dropFirst(8).prefix(4), encoding: .ascii) ?? ""
-            if ["avif", "avis"].contains(brand) {
-                fileExtension = "avif"
-                mimeType = "image/avif"
-            } else {
-                fileExtension = "heic"
-                mimeType = "image/heic"
-            }
-        } else {
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
-        }
-    }
-}
 
 private struct StoryThumbnailOverlaySpec {
     let label: String
@@ -133,20 +40,6 @@ private enum ComposerOverlayInputMode: Identifiable {
         switch self {
         case .text: "text"
         case .link: "link"
-        }
-    }
-}
-
-private enum StoryComposerMode {
-    case capture
-    case ready(PickedStoryMedia)
-
-    var media: PickedStoryMedia? {
-        switch self {
-        case .capture:
-            return nil
-        case .ready(let media):
-            return media
         }
     }
 }
@@ -215,7 +108,7 @@ final class StoryComposerStore: ObservableObject {
         return overlays
     }
 
-    func upload(media: PickedStoryMedia, api: APIClient) async -> StoryUploadResponse? {
+    func upload(media: StoryReadyMedia, api: APIClient) async -> StoryUploadResponse? {
         isUploading = true
         error = nil
         lastUploadReport = nil
@@ -917,91 +810,97 @@ struct StoryComposerView: View {
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            mediaPreview
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .overlay(Color.black.opacity(0.18))
-                .overlay {
-                    composerOverlayLayer
-                }
+                mediaPreview
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .overlay(Color.black.opacity(0.18))
+                    .overlay {
+                        composerOverlayLayer
+                    }
 
-            VStack(spacing: 0) {
-                ZStack(alignment: .top) {
-                    Label("Story", systemImage: "camera.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(.black.opacity(0.34), in: Capsule())
+                VStack(spacing: 0) {
+                    ZStack(alignment: .top) {
+                        Label("Story", systemImage: "camera.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .padding(.horizontal, 14)
+                            .frame(height: 38)
+                            .background(.black.opacity(0.34), in: Capsule())
 
-                    HStack(alignment: .top) {
-                        Button {
-                            resetCapture(clearQuote: true)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 18, weight: .bold))
-                                .frame(width: 42, height: 42)
-                                .background(.black.opacity(0.34), in: Circle())
-                        }
-                        .buttonStyle(.plain)
+                        HStack(alignment: .top) {
+                            Button {
+                                resetCapture(clearQuote: true)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .frame(width: 42, height: 42)
+                                    .background(.black.opacity(0.34), in: Circle())
+                            }
+                            .buttonStyle(.plain)
 
-                        Spacer()
+                            Spacer()
 
-                        VStack(spacing: 8) {
-                            TopAvatarSpacer()
+                            VStack(spacing: 8) {
+                                TopAvatarSpacer()
 
-                            if activeMedia == nil {
-                                Button {
-                                    camera.switchCamera()
-                                } label: {
-                                    Image(systemName: "camera.rotate")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .frame(width: 42, height: 42)
-                                        .background(.black.opacity(0.34), in: Circle())
+                                if activeMedia == nil {
+                                    Button {
+                                        camera.switchCamera()
+                                    } label: {
+                                        Image(systemName: "camera.rotate")
+                                            .font(.system(size: 18, weight: .bold))
+                                            .frame(width: 42, height: 42)
+                                            .background(.black.opacity(0.34), in: Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(camera.isRecording)
+                                } else {
+                                    composerToolRail
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(camera.isRecording)
-                            } else {
-                                composerToolRail
                             }
                         }
                     }
+                    .padding(.horizontal, UBEYEMetrics.screenInset)
+                    .padding(.top, 14)
+                    .frame(maxWidth: .infinity)
+
+                    Spacer()
+
+                    if let uploadStatus = store.uploadStatus {
+                        Text(uploadStatus)
+                            .font(.system(size: 18, weight: .bold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(.bottom, 16)
+                    } else if let error = store.error ?? (activeMedia == nil ? camera.error : nil) {
+                        Text(error)
+                            .font(.system(size: 16, weight: .bold))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, 16)
+                    } else if activeMedia == nil {
+                        Text("Tap for photo, hold for video")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .padding(.bottom, 24)
+                    }
+
+                    composerFooter
+                        .padding(.horizontal, footerHorizontalInset)
+                        .padding(.bottom, footerBottomInset)
                 }
-                .padding(.horizontal, UBEYEMetrics.screenInset)
-                .padding(.top, 14)
-
-                Spacer()
-
-                if let uploadStatus = store.uploadStatus {
-                    Text(uploadStatus)
-                        .font(.system(size: 18, weight: .bold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .padding(.bottom, 16)
-                } else if let error = store.error ?? (activeMedia == nil ? camera.error : nil) {
-                    Text(error)
-                        .font(.system(size: 16, weight: .bold))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
-                        .padding(.horizontal, 22)
-                        .padding(.bottom, 16)
-                } else if activeMedia == nil {
-                    Text("Tap for photo, hold for video")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.65))
-                        .padding(.bottom, 24)
-                }
-
-                composerFooter
-                    .padding(.horizontal, footerHorizontalInset)
-                    .padding(.bottom, footerBottomInset)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .foregroundStyle(.white)
+                .zIndex(1)
             }
-            .foregroundStyle(.white)
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .task {
             store.applyQuotedReply(quotedReply)
@@ -1021,13 +920,17 @@ struct StoryComposerView: View {
         }
         .onChange(of: camera.capturedPhoto) { _, photo in
             if let photo {
-                enterReadyMedia(with: .image(photo))
+                enterReadyMedia(with: StoryMediaIngestor.readyMedia(fromCameraPhoto: photo))
             }
         }
         .onChange(of: camera.capturedVideoURL) { _, url in
             if let url {
-                let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                enterReadyMedia(with: .video(StoryVideoUpload(url: url, source: source)))
+                enterReadyMedia(
+                    with: StoryMediaIngestor.readyMedia(
+                        fromCameraVideoURL: url,
+                        cameraPosition: camera.capturedVideoCameraPosition
+                    )
+                )
                 recordingElapsed = 0
             }
         }
@@ -1042,7 +945,11 @@ struct StoryComposerView: View {
     }
 
     private var captureFooter: some View {
-        HStack {
+        StoryComposerFooter(
+            leftSlotSize: footerSideControlSize,
+            centerSlotSize: footerShutterSlotSize,
+            rightSlotSize: footerSideControlSize
+        ) {
             PhotosPicker(
                 selection: $photoPickerItem,
                 matching: .any(of: [.images, .videos]),
@@ -1051,9 +958,7 @@ struct StoryComposerView: View {
                 LibraryPickerThumbnail(image: latestLibraryThumbnail)
             }
             .disabled(store.isUploading)
-
-            Spacer()
-
+        } center: {
             StoryShutterButton(
                 isRecording: camera.isRecording,
                 progress: recordingProgress,
@@ -1064,10 +969,8 @@ struct StoryComposerView: View {
                 stopRecording: stopRecording
             )
             .disabled(store.isUploading)
-
-            Spacer()
-
-            footerPlaceholder(size: footerSideControlSize)
+        } right: {
+            StoryComposerFooterPlaceholder(size: footerSideControlSize)
         }
     }
 
@@ -1084,23 +987,17 @@ struct StoryComposerView: View {
     }
 
     private var selectedMediaFooter: some View {
-        HStack {
-            footerPlaceholder(size: footerSideControlSize)
-
-            Spacer()
-
-            footerPlaceholder(size: footerShutterSlotSize)
-
-            Spacer()
-
+        StoryComposerFooter(
+            leftSlotSize: footerSideControlSize,
+            centerSlotSize: footerShutterSlotSize,
+            rightSlotSize: footerSideControlSize
+        ) {
+            StoryComposerFooterPlaceholder(size: footerSideControlSize)
+        } center: {
+            StoryComposerFooterPlaceholder(size: footerShutterSlotSize)
+        } right: {
             uploadStoryButton
         }
-    }
-
-    private func footerPlaceholder(size: CGFloat) -> some View {
-        Color.clear
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
     }
 
     private var uploadStoryButton: some View {
@@ -1265,7 +1162,7 @@ struct StoryComposerView: View {
                     .resizable()
                     .scaledToFill()
                     .onAppear {
-                        enterReadyMedia(with: .image(photo))
+                        enterReadyMedia(with: StoryMediaIngestor.readyMedia(fromCameraPhoto: photo))
                     }
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(
@@ -1273,8 +1170,12 @@ struct StoryComposerView: View {
                     mirrorsHorizontally: camera.capturedVideoCameraPosition == .front
                 )
                     .onAppear {
-                        let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                        enterReadyMedia(with: .video(StoryVideoUpload(url: videoURL, source: source)))
+                        enterReadyMedia(
+                            with: StoryMediaIngestor.readyMedia(
+                                fromCameraVideoURL: videoURL,
+                                cameraPosition: camera.capturedVideoCameraPosition
+                            )
+                        )
                     }
             } else if camera.authorizationStatus == .authorized {
                 CameraPreview(
@@ -1304,20 +1205,11 @@ struct StoryComposerView: View {
         }
 
         do {
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
-               let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
-                enterReadyMedia(with: .video(StoryVideoUpload(url: pickedVideo.url, source: .library)))
-                return
-            }
-
-            if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
-                enterReadyMedia(with: .image(pickedImage.upload))
-                return
-            }
-
-            store.error = "Could not load that media. Try another photo or video."
+            let media = try await StoryMediaIngestor.readyMedia(fromLibraryItem: item)
+            enterReadyMedia(with: media)
         } catch {
-            store.error = "Could not load that media. Try another photo or video."
+            store.error = (error as? LocalizedError)?.errorDescription ??
+                "Could not load that media. Try another photo or video."
         }
     }
 
@@ -1409,11 +1301,11 @@ struct StoryComposerView: View {
         camera.stopRecording()
     }
 
-    private var activeMedia: PickedStoryMedia? {
+    private var activeMedia: StoryReadyMedia? {
         mode.media
     }
 
-    private func enterReadyMedia(with media: PickedStoryMedia) {
+    private func enterReadyMedia(with media: StoryReadyMedia) {
         store.error = nil
         store.uploadStatus = nil
         overlayInputMode = nil
@@ -1740,48 +1632,6 @@ private struct QuoteReplyOverlayBubble: View {
                 .stroke(.white.opacity(0.22), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.3), radius: 14, y: 7)
-    }
-}
-
-private struct PickedVideo: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { video in
-            SentTransferredFile(video.url)
-        } importing: { received in
-            let sourceExtension = received.file.pathExtension
-            let fileExtension = sourceExtension.isEmpty ? "mov" : sourceExtension
-            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("picked-\(UUID().uuidString).\(fileExtension)")
-            if FileManager.default.fileExists(atPath: copy.path) {
-                try FileManager.default.removeItem(at: copy)
-            }
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return PickedVideo(url: copy)
-        }
-    }
-}
-
-private struct PickedImage: Transferable {
-    let upload: StoryImageUpload
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .image) { image in
-            let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent("picked-\(UUID().uuidString).\(image.upload.fileName)")
-            try image.upload.data.write(to: copy, options: .atomic)
-            return SentTransferredFile(copy)
-        } importing: { received in
-            let data = try Data(contentsOf: received.file)
-            guard let upload = StoryImageUpload(
-                data: data,
-                fallbackFileName: received.file.lastPathComponent
-            ) else {
-                throw APIClientError.invalidResponse
-            }
-
-            return PickedImage(upload: upload)
-        }
     }
 }
 
