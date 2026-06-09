@@ -1066,6 +1066,8 @@ struct StoryComposerView: View {
             .disabled(store.isUploading)
 
             Spacer()
+
+            footerPlaceholder(size: footerSideControlSize)
         }
     }
 
