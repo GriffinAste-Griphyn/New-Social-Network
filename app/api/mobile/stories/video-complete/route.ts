@@ -2,12 +2,10 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
-  createStory,
-  getStoryTextOverlaysForOwner,
-  getStoryUploadStatusForOwner,
-} from "@/lib/story-store"
+  completeMobileVideoStory,
+  getExistingMobileVideoStoryCompletion,
+} from "@/lib/stories/mobile-video-completion"
 import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
@@ -15,21 +13,16 @@ import {
   getCloudflareStreamVideoDetails,
   isAllowedOriginalQualityVideoThumbnailContentType,
   maxCloudflareStreamClientThumbnailUploadBytes,
-  publicStoryMediaUrl,
   removeStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
   StoryUploadError,
+  type StoredStoryAsset,
 } from "@/lib/story-storage"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
-import {
-  parseBrandTags,
-  parseStoryCaption,
-  parseStoryElements,
-} from "@/lib/story-validators"
 
 export const runtime = "nodejs"
 
@@ -85,30 +78,8 @@ function logVideoCompleteEvent(
   )
 }
 
-function payloadToFormData(payload: z.infer<typeof completeVideoSchema>) {
-  const formData = new FormData()
-
-  formData.set("caption", payload.caption)
-  formData.set("brandTags", payload.brandTags)
-  formData.set("stickers", payload.stickers)
-  formData.set("textOverlays", payload.textOverlays)
-  formData.set("textOverlayPositionX", payload.textOverlayPositionX ?? "50.00")
-  formData.set("textOverlayPositionY", payload.textOverlayPositionY ?? "74.00")
-  formData.set("linkLabel", payload.linkLabel)
-  formData.set("linkUrl", payload.linkUrl)
-  formData.set("linkOverlayPositionX", payload.linkOverlayPositionX ?? "50.00")
-  formData.set("linkOverlayPositionY", payload.linkOverlayPositionY ?? "78.00")
-  formData.set("quoteReplyId", payload.quoteReplyId)
-  formData.set("quoteReplyPositionX", payload.quoteReplyPositionX ?? "50.00")
-  formData.set("quoteReplyPositionY", payload.quoteReplyPositionY ?? "58.00")
-
-  return formData
-}
-
 export async function POST(request: Request) {
-  let storedAsset:
-    | ReturnType<typeof createCloudflareStreamStoredVideoAsset>
-    | undefined
+  let storedAsset: StoredStoryAsset | undefined
   let uploadedThumbnailUrl: string | null = null
 
   try {
@@ -159,6 +130,25 @@ export async function POST(request: Request) {
       durationMs: parsed.data.durationMs ?? null,
       hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
     })
+
+    const existingCompletion = await getExistingMobileVideoStoryCompletion({
+      request,
+      session,
+      storageProvider: "cloudflare-stream",
+      storageKey: parsed.data.uid,
+    })
+
+    if (existingCompletion) {
+      logVideoCompleteEvent("complete_reused", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        storyId: existingCompletion.storyId,
+        processingStatus: existingCompletion.processingStatus,
+        moderationStatus: existingCompletion.moderationStatus ?? null,
+      })
+
+      return NextResponse.json(existingCompletion)
+    }
 
     const cloudflareDetails = await getCloudflareStreamVideoDetails(
       parsed.data.uid,
@@ -216,62 +206,26 @@ export async function POST(request: Request) {
       ? { ...storedAsset, thumbnailUrl: uploadedThumbnailUrl }
       : storedAsset
 
-    const formData = payloadToFormData(parsed.data)
-    const moderationMediaUrl =
-      publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
-      storedAsset.mediaUrl
-    const moderationThumbnailUrl = publicStoryMediaUrl(
-      storedAsset.thumbnailUrl,
+    const completion = await completeMobileVideoStory({
       request,
-      { signed: true },
-    )
-    const storyElements = parseStoryElements(formData)
-    const storyId = await createStory({
       session,
-      caption: parseStoryCaption(formData.get("caption")),
-      explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: storyElements,
+      fields: parsed.data,
       storedAsset,
-      moderationMediaUrl,
-      moderationThumbnailUrl,
+      providerStatusFallback: cloudflareDetails?.state ?? null,
+      providerErrorFallback: cloudflareDetails?.errorReason ?? null,
     })
-    const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
-    const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
 
     logVideoCompleteEvent("complete_succeeded", {
       userId: session.id,
       uid: parsed.data.uid,
-      storyId,
+      storyId: completion.storyId,
       cloudflareState: cloudflareDetails?.state ?? null,
       readyToStream: cloudflareDetails?.readyToStream ?? null,
-      processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
-      moderationStatus: storyStatus?.moderationStatus ?? null,
+      processingStatus: completion.processingStatus,
+      moderationStatus: completion.moderationStatus ?? null,
     })
 
-    return NextResponse.json({
-      ok: true,
-      storyId,
-      asset: {
-        assetKind: storedAsset.assetKind,
-        mediaUrl:
-          publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
-          storedAsset.mediaUrl,
-        thumbnailUrl: publicStoryMediaUrl(storedAsset.thumbnailUrl, request, {
-          signed: true,
-        }),
-      },
-      processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
-      providerStatus: storyStatus?.providerStatus ?? cloudflareDetails?.state ?? null,
-      providerError: storyStatus?.providerError ?? cloudflareDetails?.errorReason ?? null,
-      lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
-      readyAt: storyStatus?.readyAt ?? null,
-      moderationStatus: storyStatus?.moderationStatus,
-      moderationReason: userFacingModerationReason({
-        moderationStatus: storyStatus?.moderationStatus,
-        moderationReason: storyStatus?.moderationReason,
-      }),
-      textOverlays,
-    })
+    return NextResponse.json(completion)
   } catch (error) {
     logVideoCompleteEvent("complete_failed", {
       uid: storedAsset?.storageKey ?? null,
