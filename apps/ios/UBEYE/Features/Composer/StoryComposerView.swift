@@ -894,6 +894,7 @@ struct StoryComposerView: View {
     @State private var recordingStartedAt = Date()
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
+    @State private var readyMedia: PickedStoryMedia?
     @FocusState private var isOverlayInputFocused: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
@@ -940,7 +941,7 @@ struct StoryComposerView: View {
                         VStack(spacing: 8) {
                             TopAvatarSpacer()
 
-                            if store.selectedMedia == nil {
+                            if activeMedia == nil {
                                 Button {
                                     camera.switchCamera()
                                 } label: {
@@ -978,22 +979,18 @@ struct StoryComposerView: View {
                         .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
                         .padding(.horizontal, 22)
                         .padding(.bottom, 16)
-                } else if store.selectedMedia == nil {
+                } else if activeMedia == nil {
                     Text("Tap for photo, hold for video")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white.opacity(0.65))
                         .padding(.bottom, 24)
                 }
 
-                if store.selectedMedia == nil {
-                    captureFooter
-                        .padding(.horizontal, 28)
-                        .padding(.bottom, 28)
-                }
+                composerFooter
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 28)
             }
             .foregroundStyle(.white)
-
-            readyMediaUploadControl
         }
         .task {
             store.applyQuotedReply(quotedReply)
@@ -1013,13 +1010,13 @@ struct StoryComposerView: View {
         }
         .onChange(of: camera.capturedPhoto) { _, photo in
             if let photo {
-                enterReadyMedia(.image(photo))
+                enterReadyMedia(with: .image(photo))
             }
         }
         .onChange(of: camera.capturedVideoURL) { _, url in
             if let url {
                 let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                enterReadyMedia(.video(StoryVideoUpload(url: url, source: source)))
+                enterReadyMedia(with: .video(StoryVideoUpload(url: url, source: source)))
                 recordingElapsed = 0
             }
         }
@@ -1062,13 +1059,19 @@ struct StoryComposerView: View {
     }
 
     @ViewBuilder
-    private var readyMediaUploadControl: some View {
-        if store.selectedMedia != nil {
+    private var composerFooter: some View {
+        if activeMedia == nil {
+            captureFooter
+        } else {
+            selectedMediaFooter
+        }
+    }
+
+    private var selectedMediaFooter: some View {
+        HStack {
+            Spacer()
+
             uploadStoryButton
-                .padding(.trailing, 28)
-                .padding(.bottom, 28)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .foregroundStyle(.white)
         }
     }
 
@@ -1122,7 +1125,7 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var composerOverlayLayer: some View {
-        if store.selectedMedia != nil {
+        if activeMedia != nil {
             GeometryReader { proxy in
                 if overlayInputMode == .text || !store.textOverlay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     EditableStoryOverlayChip(
@@ -1189,7 +1192,7 @@ struct StoryComposerView: View {
     }
 
     private func openOverlayInput(_ mode: ComposerOverlayInputMode) {
-        guard store.selectedMedia != nil else {
+        guard activeMedia != nil else {
             return
         }
 
@@ -1218,7 +1221,7 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var mediaPreview: some View {
-        switch store.selectedMedia {
+        switch activeMedia {
         case .image(let upload):
             Image(uiImage: upload.image)
                 .resizable()
@@ -1234,7 +1237,7 @@ struct StoryComposerView: View {
                     .resizable()
                     .scaledToFill()
                     .onAppear {
-                        enterReadyMedia(.image(photo))
+                        enterReadyMedia(with: .image(photo))
                     }
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(
@@ -1243,7 +1246,7 @@ struct StoryComposerView: View {
                 )
                     .onAppear {
                         let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                        enterReadyMedia(.video(StoryVideoUpload(url: videoURL, source: source)))
+                        enterReadyMedia(with: .video(StoryVideoUpload(url: videoURL, source: source)))
                     }
             } else if camera.authorizationStatus == .authorized {
                 CameraPreview(
@@ -1275,12 +1278,12 @@ struct StoryComposerView: View {
         do {
             if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
                let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
-                enterReadyMedia(.video(StoryVideoUpload(url: pickedVideo.url, source: .library)))
+                enterReadyMedia(with: .video(StoryVideoUpload(url: pickedVideo.url, source: .library)))
                 return
             }
 
             if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
-                enterReadyMedia(.image(pickedImage.upload))
+                enterReadyMedia(with: .image(pickedImage.upload))
                 return
             }
 
@@ -1378,11 +1381,16 @@ struct StoryComposerView: View {
         camera.stopRecording()
     }
 
-    private func enterReadyMedia(_ media: PickedStoryMedia) {
+    private var activeMedia: PickedStoryMedia? {
+        readyMedia ?? store.selectedMedia
+    }
+
+    private func enterReadyMedia(with media: PickedStoryMedia) {
         store.error = nil
         store.uploadStatus = nil
         overlayInputMode = nil
         isOverlayInputFocused = false
+        readyMedia = media
         store.selectedMedia = media
     }
 
@@ -1391,12 +1399,18 @@ struct StoryComposerView: View {
             return
         }
 
+        if let readyMedia {
+            store.selectedMedia = readyMedia
+        }
+
         if let response = await store.upload(api: api) {
+            readyMedia = nil
             onUploadRegistered(response)
         }
     }
 
     private func resetCapture(clearQuote: Bool = false) {
+        readyMedia = nil
         store.selectedMedia = nil
         store.error = nil
         store.textOverlay = ""
