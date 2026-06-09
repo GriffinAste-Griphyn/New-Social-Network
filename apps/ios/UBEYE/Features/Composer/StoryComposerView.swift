@@ -233,7 +233,7 @@ private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
 }
 
 private enum StoryVideoUploadNormalizer {
-    private static let maxUploadBytes: Int64 = 150 * 1024 * 1024
+    private static let maxUploadBytes: Int64 = 300 * 1024 * 1024
 
     static func prepare(
         url: URL,
@@ -247,7 +247,15 @@ private enum StoryVideoUploadNormalizer {
             throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
         }
 
-        if !forceNormalization, originalByteSize <= maxUploadBytes, isSupportedOriginalUpload(url) {
+        let hasPreservableCodec = !forceNormalization && originalByteSize <= maxUploadBytes
+            ? await isSupportedOriginalUpload(url)
+            : false
+        let canPreserveOriginal =
+            !forceNormalization &&
+            originalByteSize <= maxUploadBytes &&
+            hasPreservableCodec
+
+        if canPreserveOriginal {
             MediaPerformance.mark("video_upload_original_preserved bytes=\(originalByteSize)")
             return PreparedStoryVideo(
                 url: url,
@@ -257,11 +265,17 @@ private enum StoryVideoUploadNormalizer {
             )
         }
 
-        let normalizedURL = try await normalizedVideoURL(for: url)
-        guard !forceNormalization || normalizedURL != nil else {
-            throw APIClientError.server("Could not prepare front camera video. Try recording again.", 0)
+        let normalizedURL = try await normalizedVideoURL(
+            for: url,
+            mirrorsHorizontally: forceNormalization
+        )
+        guard normalizedURL != nil else {
+            let message = forceNormalization
+                ? "Could not prepare front camera video. Try recording again."
+                : "Could not prepare this video for upload. Try a different video."
+            throw APIClientError.server(message, 0)
         }
-        let uploadURL = normalizedURL ?? url
+        let uploadURL = normalizedURL!
         let durationMs = await videoDurationMs(for: uploadURL)
         let byteSize = try videoFileSize(for: uploadURL)
 
@@ -269,7 +283,7 @@ private enum StoryVideoUploadNormalizer {
             if let normalizedURL {
                 try? FileManager.default.removeItem(at: normalizedURL)
             }
-            throw APIClientError.server("Story videos are capped at 150 MB.", 0)
+            throw APIClientError.server("Story videos are capped at 300 MB.", 0)
         }
 
         if let durationMs, durationMs > maxDurationSeconds * 1_000 {
@@ -287,15 +301,25 @@ private enum StoryVideoUploadNormalizer {
         )
     }
 
-    private static func normalizedVideoURL(for url: URL) async throws -> URL? {
+    private static func normalizedVideoURL(
+        for url: URL,
+        mirrorsHorizontally: Bool
+    ) async throws -> URL? {
         let asset = AVURLAsset(url: url)
         let presets = await compatibleExportPresets(for: asset)
+        let timeRange = await alignedPlayableTimeRange(for: asset)
 
         for preset in presets {
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
 
-            guard let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+            guard let export = try await exportSession(
+                asset: asset,
+                preset: preset,
+                outputURL: outputURL,
+                timeRange: timeRange,
+                mirrorsHorizontally: mirrorsHorizontally
+            ) else {
                 continue
             }
 
@@ -304,21 +328,14 @@ private enum StoryVideoUploadNormalizer {
                 continue
             }
 
-            export.outputURL = outputURL
-            export.outputFileType = .mp4
-            export.shouldOptimizeForNetworkUse = true
-
-            if let duration = await alignedPlayableDuration(for: asset) {
-                export.timeRange = CMTimeRange(start: .zero, duration: duration)
-            }
-
             await exportVideo(export)
 
             if export.status == .completed {
                 let byteSize = (try? videoFileSize(for: outputURL)) ?? 0
 
                 if byteSize <= maxUploadBytes {
-                    MediaPerformance.mark("video_upload_normalized preset=\(preset) bytes=\(byteSize)")
+                    let mode = mirrorsHorizontally ? "mirrored" : "standard"
+                    MediaPerformance.mark("video_upload_normalized mode=\(mode) preset=\(preset) bytes=\(byteSize)")
                     return outputURL
                 }
 
@@ -337,10 +354,56 @@ private enum StoryVideoUploadNormalizer {
         return nil
     }
 
+    private static func exportSession(
+        asset: AVURLAsset,
+        preset: String,
+        outputURL: URL,
+        timeRange: CMTimeRange?,
+        mirrorsHorizontally: Bool
+    ) async throws -> AVAssetExportSession? {
+        let exportAsset: AVAsset
+        let videoComposition: AVVideoComposition?
+        let exportTimeRange: CMTimeRange?
+
+        if mirrorsHorizontally {
+            guard let timeRange else {
+                return nil
+            }
+
+            let mirrored = try await StoryVideoGeometryNormalizer.mirroredComposition(
+                for: asset,
+                timeRange: timeRange
+            )
+            exportAsset = mirrored.asset
+            videoComposition = mirrored.videoComposition
+            exportTimeRange = CMTimeRange(start: .zero, duration: timeRange.duration)
+        } else {
+            exportAsset = asset
+            videoComposition = nil
+            exportTimeRange = timeRange
+        }
+
+        guard let export = AVAssetExportSession(asset: exportAsset, presetName: preset) else {
+            return nil
+        }
+
+        export.outputURL = outputURL
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+        export.videoComposition = videoComposition
+
+        if let exportTimeRange {
+            export.timeRange = exportTimeRange
+        }
+
+        return export
+    }
+
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
-            AVAssetExportPresetHighestQuality,
-            AVAssetExportPreset1920x1080
+            AVAssetExportPreset1920x1080,
+            AVAssetExportPreset1280x720,
+            AVAssetExportPresetHighestQuality
         ]
         var presets: [String] = []
 
@@ -361,16 +424,68 @@ private enum StoryVideoUploadNormalizer {
         return presets
     }
 
-    private static func isSupportedOriginalUpload(_ url: URL) -> Bool {
+    private static func isSupportedOriginalUpload(_ url: URL) async -> Bool {
         switch url.pathExtension.lowercased() {
-        case "mov", "mp4", "m4v":
-            return true
+        case "mov", "mp4", "m4v": break
         default:
             return false
         }
+
+        let asset = AVURLAsset(url: url)
+        let tracks: [AVAssetTrack]
+
+        if #available(iOS 16.0, *) {
+            tracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+        } else {
+            tracks = asset.tracks(withMediaType: .video)
+        }
+
+        guard let videoTrack = tracks.first else {
+            MediaPerformance.mark("video_upload_original_unsupported reason=no_video_track")
+            return false
+        }
+
+        let formatDescriptions: [CMFormatDescription]
+        if #available(iOS 16.0, *) {
+            formatDescriptions = (try? await videoTrack.load(.formatDescriptions)) ?? []
+        } else {
+            formatDescriptions = videoTrack.formatDescriptions.map {
+                $0 as! CMFormatDescription
+            }
+        }
+
+        let codecTypes = Set(formatDescriptions.map {
+            fourCharacterCodeString(CMFormatDescriptionGetMediaSubType($0))
+        })
+
+        guard !codecTypes.isEmpty else {
+            MediaPerformance.mark("video_upload_original_unsupported reason=no_codec")
+            return false
+        }
+
+        let isH264 = codecTypes.allSatisfy { $0 == "avc1" }
+        if !isH264 {
+            let codecs = codecTypes.sorted().joined(separator: ".")
+            MediaPerformance.mark(
+                "video_upload_original_unsupported reason=codec codecs=\(codecs)"
+            )
+        }
+
+        return isH264
     }
 
-    private static func alignedPlayableDuration(for asset: AVURLAsset) async -> CMTime? {
+    private static func fourCharacterCodeString(_ value: FourCharCode) -> String {
+        let scalars = [
+            UnicodeScalar((value >> 24) & 255),
+            UnicodeScalar((value >> 16) & 255),
+            UnicodeScalar((value >> 8) & 255),
+            UnicodeScalar(value & 255),
+        ]
+
+        return String(String.UnicodeScalarView(scalars.compactMap { $0 }))
+    }
+
+    private static func alignedPlayableTimeRange(for asset: AVURLAsset) async -> CMTimeRange? {
         let duration: CMTime?
         let tracks: [AVAssetTrack]
         let trackDurations: [CMTime]
@@ -401,7 +516,11 @@ private enum StoryVideoUploadNormalizer {
             return nil
         }
 
-        return shortest
+        return CMTimeRange(start: .zero, duration: shortest)
+    }
+
+    private static func alignedPlayableDuration(for asset: AVURLAsset) async -> CMTime? {
+        await alignedPlayableTimeRange(for: asset)?.duration
     }
 
     private static func exportVideo(_ export: AVAssetExportSession) async {
@@ -1510,7 +1629,10 @@ struct StoryComposerView: View {
                 .resizable()
                 .scaledToFill()
         case .video(let video):
-            StoryVideoPreview(url: video.url)
+            StoryVideoPreview(
+                url: video.url,
+                mirrorsHorizontally: video.source == .cameraFront
+            )
         case nil:
             if let photo = camera.capturedPhoto {
                 Image(uiImage: photo.image)
@@ -1520,13 +1642,16 @@ struct StoryComposerView: View {
                         store.selectedMedia = .image(photo)
                     }
             } else if let videoURL = camera.capturedVideoURL {
-                StoryVideoPreview(url: videoURL)
+                StoryVideoPreview(
+                    url: videoURL,
+                    mirrorsHorizontally: camera.capturedVideoCameraPosition == .front
+                )
                     .onAppear {
                         let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
                         store.selectedMedia = .video(StoryVideoUpload(url: videoURL, source: source))
                     }
             } else if camera.authorizationStatus == .authorized {
-                CameraPreview(session: camera.session)
+                CameraPreview(session: camera.session, cameraPosition: camera.cameraPosition)
             } else {
                 EmptyStateView(title: "Camera unavailable", message: "Enable camera access or choose media from your library.", systemImage: "camera")
             }
@@ -2093,15 +2218,16 @@ private struct StoryShutterButton: View {
 
 struct StoryVideoPreview: UIViewRepresentable {
     let url: URL
+    var mirrorsHorizontally = false
 
     func makeUIView(context: Context) -> StoryVideoPreviewView {
         let view = StoryVideoPreviewView()
-        view.configure(url: url)
+        view.configure(url: url, mirrorsHorizontally: mirrorsHorizontally)
         return view
     }
 
     func updateUIView(_ uiView: StoryVideoPreviewView, context: Context) {
-        uiView.configure(url: url)
+        uiView.configure(url: url, mirrorsHorizontally: mirrorsHorizontally)
     }
 }
 
@@ -2151,6 +2277,7 @@ final class StoryVideoPreviewView: UIView {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var currentURL: URL?
+    private var isMirrored = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2168,7 +2295,9 @@ final class StoryVideoPreviewView: UIView {
         playerLayer.frame = bounds
     }
 
-    func configure(url: URL) {
+    func configure(url: URL, mirrorsHorizontally: Bool) {
+        updateMirroring(mirrorsHorizontally)
+
         guard currentURL != url else {
             player?.play()
             return
@@ -2185,6 +2314,17 @@ final class StoryVideoPreviewView: UIView {
         player = queuePlayer
         playerLayer.player = queuePlayer
         queuePlayer.play()
+    }
+
+    private func updateMirroring(_ mirrorsHorizontally: Bool) {
+        guard isMirrored != mirrorsHorizontally else {
+            return
+        }
+
+        isMirrored = mirrorsHorizontally
+        playerLayer.setAffineTransform(
+            mirrorsHorizontally ? CGAffineTransform(scaleX: -1, y: 1) : .identity
+        )
     }
 
     deinit {

@@ -63,3 +63,14 @@ targets:
         NSMicrophoneUsageDescription: UBEYE uses the microphone when recording video stories.
         NSPhotoLibraryUsageDescription: UBEYE uses your photo library when you choose media for a story.
         NSPhotoLibraryAddUsageDescription: UBEYE can save edited story media to your library.
+  UBEYETests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - UBEYETests
+    dependencies:
+      - target: UBEYE
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.griffinaste.ubeye.tests
