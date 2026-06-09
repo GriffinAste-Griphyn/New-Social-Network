@@ -4,9 +4,9 @@ import UIKit
 
 private func preferredPortraitVideoRotationAngle(
     for connection: AVCaptureConnection,
-    cameraPosition: AVCaptureDevice.Position
+    cameraPosition _: AVCaptureDevice.Position
 ) -> CGFloat? {
-    let preferredAngles: [CGFloat] = cameraPosition == .front ? [270, 90] : [90, 270]
+    let preferredAngles: [CGFloat] = [90, 270]
 
     return preferredAngles.first { angle in
         connection.isVideoRotationAngleSupported(angle)
