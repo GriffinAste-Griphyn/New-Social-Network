@@ -28,7 +28,7 @@ export {
 } from "@/lib/story-media/access"
 
 const maxStoryUploadBytes = 25 * 1024 * 1024
-export const maxOriginalStoryVideoUploadBytes = 250 * 1024 * 1024
+export const maxOriginalStoryVideoUploadBytes = 300 * 1024 * 1024
 export const maxOriginalStoryVideoThumbnailUploadBytes = 2 * 1024 * 1024
 export const maxCloudflareStreamClientThumbnailUploadBytes = 2 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
