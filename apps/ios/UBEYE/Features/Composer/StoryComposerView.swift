@@ -805,7 +805,7 @@ struct StoryComposerView: View {
     private let footerSideControlSize: CGFloat = 58
     private let footerShutterSlotSize: CGFloat = 88
     private let footerHorizontalInset: CGFloat = 28
-    private let footerBottomInset: CGFloat = UBEYEMetrics.appBottomBarHeight + 40
+    private let footerBottomInset: CGFloat = 28
     private let selectedMediaFooterBottomInset: CGFloat = 28
     private var maxRecordingDuration: TimeInterval { TimeInterval(maxVideoSegments) * videoSegmentDuration }
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
