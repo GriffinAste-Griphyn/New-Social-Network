@@ -8,6 +8,7 @@ import {
   gt,
   inArray,
   isNotNull,
+  or,
 } from "drizzle-orm"
 import type { SocialStoryCard } from "@ubeye/shared"
 
@@ -73,6 +74,7 @@ type FeedStoryRow = {
   thumbnailUrl: string | null
   caption: string | null
   durationMs: number | null
+  processingStatus: string
   brandSignalScore: string | null
   createdAt: Date
   expiresAt: Date
@@ -151,7 +153,9 @@ export type SuggestedAccount = {
   monetization: string
 }
 
-export type FeedStoryCard = SocialStoryCard
+export type FeedStoryCard = SocialStoryCard & {
+  processingStatus?: string
+}
 
 export type MyStoryElement = {
   id: string
@@ -205,6 +209,7 @@ export type StoryStackItem = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  processingStatus?: string
   title: string
   postedAt: string
   durationSeconds?: number
@@ -427,12 +432,15 @@ function buildFeedStoryCard(
     assetKind: row.assetKind,
     mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+    processingStatus: row.processingStatus,
     title:
-      firstTextOverlay?.label.trim() ||
-      row.caption?.trim() ||
-      (mentions.length > 0
-        ? "Fresh story with tags moving through the feed."
-        : "Fresh story moving through the feed."),
+      row.assetKind === "video" && row.processingStatus === "processing"
+        ? "Video processing"
+        : firstTextOverlay?.label.trim() ||
+          row.caption?.trim() ||
+          (mentions.length > 0
+            ? "Fresh story with tags moving through the feed."
+            : "Fresh story moving through the feed."),
     textOverlays,
     durationSeconds:
       row.assetKind === "video"
@@ -675,6 +683,7 @@ function buildStoryStack(
       assetKind: row.assetKind,
       mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+      processingStatus: row.processingStatus,
       postedAt: formatStoryPostedAt(row.createdAt),
       durationSeconds:
         row.assetKind === "video"
@@ -776,6 +785,7 @@ async function getLiveStoryRows() {
       thumbnailUrl: stories.thumbnailUrl,
       caption: stories.caption,
       durationMs: stories.durationMs,
+      processingStatus: stories.processingStatus,
       brandSignalScore: stories.brandSignalScore,
       createdAt: stories.createdAt,
       expiresAt: stories.expiresAt,
@@ -806,8 +816,20 @@ async function getLiveStoryRows() {
   })
 }
 
-async function getLiveStoryRowsForCreator(creatorId: string) {
+async function getLiveStoryRowsForCreator(
+  creatorId: string,
+  options: { includeOwnerProcessing?: boolean } = {},
+) {
   const db = getDb()
+  const statusFilter = options.includeOwnerProcessing
+    ? or(
+        eq(stories.status, "live"),
+        and(
+          eq(stories.status, "processing"),
+          eq(stories.processingStatus, "processing"),
+        ),
+      )
+    : eq(stories.status, "live")
 
   const rows = await db
     .select({
@@ -821,6 +843,7 @@ async function getLiveStoryRowsForCreator(creatorId: string) {
       thumbnailUrl: stories.thumbnailUrl,
       caption: stories.caption,
       durationMs: stories.durationMs,
+      processingStatus: stories.processingStatus,
       brandSignalScore: stories.brandSignalScore,
       createdAt: stories.createdAt,
       expiresAt: stories.expiresAt,
@@ -835,7 +858,7 @@ async function getLiveStoryRowsForCreator(creatorId: string) {
     .where(
       and(
         eq(stories.creatorId, creatorId),
-        eq(stories.status, "live"),
+        statusFilter,
         eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
         isNotNull(users.displayName),
@@ -976,9 +999,11 @@ export async function getMyStoryStack(
     await refreshProcessingCloudflareStories({ creatorId: viewerId })
   }
 
-  const rows = (await getLiveStoryRowsForCreator(viewerId)).filter(
-    (story) => story.id !== MY_STORY_ROUTE_ID,
-  )
+  const rows = (
+    await getLiveStoryRowsForCreator(viewerId, {
+      includeOwnerProcessing: true,
+    })
+  ).filter((story) => story.id !== MY_STORY_ROUTE_ID)
   const storyIds = rows.map((story) => story.id)
   const [mentionRows, elementRows] = await Promise.all([
     getStoryMentions(storyIds),

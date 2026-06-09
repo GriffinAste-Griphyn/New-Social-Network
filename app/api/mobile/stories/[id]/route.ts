@@ -209,6 +209,7 @@ async function getMobileMyStoryStack(userId: string) {
       assetKind: item.assetKind,
       mediaUrl: item.mediaUrl,
       thumbnailUrl: item.thumbnailUrl,
+      processingStatus: item.processingStatus,
       title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
       postedAt: formatStoryPostedAt(new Date(item.createdAt)),
       durationSeconds:

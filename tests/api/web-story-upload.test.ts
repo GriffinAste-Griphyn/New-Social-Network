@@ -156,6 +156,10 @@ describe("web direct story upload API", () => {
       processingStatus: "ready",
       moderationStatus: "approved",
       moderationReason: null,
+      providerStatus: "ready",
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: null,
       isLive: true,
     })
     vi.mocked(publicStoryMediaUrl).mockImplementation((value, request) =>
