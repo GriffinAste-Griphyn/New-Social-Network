@@ -25,6 +25,7 @@ enum UBEYEMetrics {
     static let topAvatar: CGFloat = 42
     static let topAvatarTopInset: CGFloat = 14
     static let compactTopAvatar: CGFloat = 38
+    static let appBottomBarHeight: CGFloat = 67
 }
 
 extension View {
