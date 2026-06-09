@@ -4,6 +4,7 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   createStory,
+  getStoryByStoredAssetForOwner,
   getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
 } from "@/lib/story-store"
@@ -38,6 +39,7 @@ vi.mock("@/lib/request-security", async () => {
 
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
+  getStoryByStoredAssetForOwner: vi.fn(),
   getStoryTextOverlaysForOwner: vi.fn(),
   getStoryUploadStatusForOwner: vi.fn(),
 }))
@@ -90,6 +92,7 @@ async function responseJson(response: Response) {
 
 describe("mobile Cloudflare video upload API", () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(createStory).mockResolvedValue(
@@ -107,6 +110,7 @@ describe("mobile Cloudflare video upload API", () => {
       moderationReason: null,
       isLive: false,
     })
+    vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValue(null)
     vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([])
     vi.mocked(createCloudflareStreamClientThumbnailPathname).mockImplementation(
       (userId, uid) =>
@@ -357,6 +361,59 @@ describe("mobile Cloudflare video upload API", () => {
     })
   })
 
+  it("reuses an existing Cloudflare video story when completion is retried", async () => {
+    vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValueOnce({
+      id: "existing-cloudflare-story",
+      assetKind: "video",
+      mediaUrl:
+        "/api/story-media/cloudflare-stream/11111111111111111111111111111111/manifest/video.m3u8",
+      thumbnailUrl:
+        "/api/story-media/cloudflare-stream/11111111111111111111111111111111/thumbnails/thumbnail.jpg",
+      processingStatus: "processing",
+    })
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.30",
+        },
+        body: JSON.stringify({
+          uid: "11111111111111111111111111111111",
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+          durationMs: 7_200,
+          caption: "Retry should reuse",
+        }),
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(getStoryByStoredAssetForOwner).toHaveBeenCalledWith({
+      ownerId: "creator_123",
+      storageProvider: "cloudflare-stream",
+      storageKey: "11111111111111111111111111111111",
+    })
+    expect(getCloudflareStreamVideoDetails).not.toHaveBeenCalled()
+    expect(createCloudflareStreamClientThumbnailUrl).not.toHaveBeenCalled()
+    expect(createStory).not.toHaveBeenCalled()
+    expect(payload).toMatchObject({
+      ok: true,
+      storyId: "existing-cloudflare-story",
+      completionState: "reused",
+      asset: {
+        mediaUrl:
+          "https://app.example.com/api/story-media/cloudflare-stream/11111111111111111111111111111111/manifest/video.m3u8",
+        thumbnailUrl:
+          "https://app.example.com/api/story-media/cloudflare-stream/11111111111111111111111111111111/thumbnails/thumbnail.jpg",
+      },
+      processingStatus: "processing",
+      providerStatus: "processing",
+    })
+  })
+
   it("passes absolute signed moderation URLs for original-quality video completion", async () => {
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValueOnce({
       id: "22222222-2222-4222-8222-222222222222",
@@ -446,6 +503,85 @@ describe("mobile Cloudflare video upload API", () => {
       providerStatus: null,
       providerError: null,
       readyAt: "2026-06-08T16:00:00.000Z",
+    })
+  })
+
+  it("reuses an existing original-quality video story when completion is retried", async () => {
+    vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValueOnce({
+      id: "existing-original-story",
+      assetKind: "video",
+      mediaUrl: "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      thumbnailUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      processingStatus: "ready",
+    })
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValueOnce({
+      id: "existing-original-story",
+      status: "live",
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: "2026-06-08T16:00:00.000Z",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: true,
+    })
+    const { POST } = await import(
+      "@/app/api/mobile/stories/video-original-complete/route"
+    )
+    const response = await POST(
+      new Request(
+        "https://app.example.com/api/mobile/stories/video-original-complete",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.30",
+          },
+          body: JSON.stringify({
+            pathname: "stories/mobile-original/creator_123/story.mov",
+            contentType: "video/quicktime",
+            byteSize: 8 * 1024 * 1024,
+            checksum:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            thumbnailPathname:
+              "stories/mobile-original/creator_123/story-thumb.jpg",
+            thumbnailContentType: "image/jpeg",
+            thumbnailByteSize: 42_000,
+            thumbnailChecksum:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            durationMs: 6_500,
+            width: 1080,
+            height: 1920,
+            caption: "Retry should reuse",
+          }),
+        },
+      ),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(getStoryByStoredAssetForOwner).toHaveBeenCalledWith({
+      ownerId: "creator_123",
+      storageProvider: "vercel-blob",
+      storageKey: "stories/mobile-original/creator_123/story.mov",
+    })
+    expect(createOriginalQualityVideoStoryAsset).not.toHaveBeenCalled()
+    expect(createStory).not.toHaveBeenCalled()
+    expect(payload).toMatchObject({
+      ok: true,
+      storyId: "existing-original-story",
+      completionState: "reused",
+      asset: {
+        mediaUrl:
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+        thumbnailUrl:
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      },
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
     })
   })
 })
