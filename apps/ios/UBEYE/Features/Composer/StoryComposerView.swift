@@ -102,6 +102,7 @@ private struct PreparedStoryVideo {
     let durationMs: Int?
     let byteSize: Int64
     let shouldRemoveAfterUpload: Bool
+    let shouldUploadOriginalQuality: Bool
 }
 
 private struct StoryThumbnailOverlaySpec {
@@ -261,7 +262,8 @@ private enum StoryVideoUploadNormalizer {
                 url: url,
                 durationMs: originalDurationMs,
                 byteSize: originalByteSize,
-                shouldRemoveAfterUpload: false
+                shouldRemoveAfterUpload: false,
+                shouldUploadOriginalQuality: true
             )
         }
 
@@ -297,7 +299,8 @@ private enum StoryVideoUploadNormalizer {
             url: uploadURL,
             durationMs: durationMs,
             byteSize: byteSize,
-            shouldRemoveAfterUpload: normalizedURL != nil
+            shouldRemoveAfterUpload: normalizedURL != nil,
+            shouldUploadOriginalQuality: false
         )
     }
 
@@ -401,9 +404,9 @@ private enum StoryVideoUploadNormalizer {
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
+            AVAssetExportPresetHighestQuality,
             AVAssetExportPreset1920x1080,
-            AVAssetExportPreset1280x720,
-            AVAssetExportPresetHighestQuality
+            AVAssetExportPreset1280x720
         ]
         var presets: [String] = []
 
@@ -463,15 +466,9 @@ private enum StoryVideoUploadNormalizer {
             return false
         }
 
-        let isH264 = codecTypes.allSatisfy { $0 == "avc1" }
-        if !isH264 {
-            let codecs = codecTypes.sorted().joined(separator: ".")
-            MediaPerformance.mark(
-                "video_upload_original_unsupported reason=codec codecs=\(codecs)"
-            )
-        }
-
-        return isH264
+        let codecs = codecTypes.sorted().joined(separator: ".")
+        MediaPerformance.mark("video_upload_original_supported codecs=\(codecs)")
+        return true
     }
 
     private static func fourCharacterCodeString(_ value: FourCharCode) -> String {
@@ -730,6 +727,56 @@ final class StoryComposerStore: ObservableObject {
 
             attempt.begin(.prepareUpload)
             uploadStatus = attempt.phase.statusLabel
+            if preparedVideo.shouldUploadOriginalQuality {
+                let upload = try await api.prepareOriginalQualityVideoUpload(
+                    fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mov" : preparedVideo.url.lastPathComponent,
+                    fileURL: preparedVideo.url
+                )
+                let uploadedThumbnailData = await uploadOriginalQualityVideoThumbnailIfPossible(
+                    thumbnailData,
+                    upload: upload,
+                    api: api
+                )
+
+                attempt.begin(.videoUpload)
+                uploadStatus = attempt.phase.statusLabel
+                _ = try await api.uploadOriginalQualityVideoFile(
+                    fileURL: preparedVideo.url,
+                    upload: upload
+                )
+
+                attempt.begin(.completeStory)
+                uploadStatus = attempt.phase.statusLabel
+                let response = try await api.completeOriginalQualityVideoStory(
+                    upload: upload,
+                    fileURL: preparedVideo.url,
+                    caption: caption,
+                    brandTags: brandTags,
+                    textOverlay: textOverlay,
+                    textOverlayPositionX: textOverlayPositionX,
+                    textOverlayPositionY: textOverlayPositionY,
+                    linkLabel: linkLabel,
+                    linkUrl: normalizedLinkUrl,
+                    linkOverlayPositionX: linkOverlayPositionX,
+                    linkOverlayPositionY: linkOverlayPositionY,
+                    quoteReplyId: quotedReply?.id ?? "",
+                    quoteReplyPositionX: quoteReplyPositionX,
+                    quoteReplyPositionY: quoteReplyPositionY,
+                    durationMs: preparedVideo.durationMs,
+                    thumbnailData: uploadedThumbnailData
+                )
+
+                attempt.begin(.processing)
+                attempt.recordSuccess(processingStatus: response.processingStatus)
+                lastUploadReport = attempt.report
+                await MediaFileDiskCache.shared.storeLocalFile(
+                    sourceURL: preparedVideo.url,
+                    for: response.asset.mediaUrl,
+                    kind: .video
+                )
+                return response
+            }
+
             let upload = try await api.prepareVideoUpload(
                 fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
                 byteSize: preparedVideo.byteSize,
@@ -894,6 +941,25 @@ final class StoryComposerStore: ObservableObject {
 
         guard let data else {
             throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
+        }
+
+        return data
+    }
+
+    private func uploadOriginalQualityVideoThumbnailIfPossible(
+        _ data: Data?,
+        upload: OriginalVideoUploadResponse,
+        api: APIClient
+    ) async -> Data? {
+        guard let data else {
+            return nil
+        }
+
+        do {
+            try await api.uploadOriginalQualityVideoThumbnail(data: data, upload: upload)
+        } catch {
+            MediaPerformance.mark("video_original_thumbnail_upload_failed")
+            return nil
         }
 
         return data
