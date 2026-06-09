@@ -1065,32 +1065,26 @@ struct StoryComposerView: View {
 
             Spacer()
 
-            Button {
-                Task {
-                    await uploadSelectedMedia()
-                }
-            } label: {
-                uploadButtonIcon
-            }
-            .buttonStyle(.plain)
-            .disabled(store.isUploading)
+            uploadStoryButton
         }
     }
 
     private var selectedMediaFooter: some View {
-        HStack {
-            Spacer()
+        uploadStoryButton
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
 
-            Button {
-                Task {
-                    await uploadSelectedMedia()
-                }
-            } label: {
-                uploadButtonIcon
+    private var uploadStoryButton: some View {
+        Button {
+            Task {
+                await uploadSelectedMedia()
             }
-            .buttonStyle(.plain)
-            .disabled(store.isUploading)
+        } label: {
+            uploadButtonIcon
         }
+        .buttonStyle(.plain)
+        .disabled(store.isUploading)
+        .accessibilityLabel("Upload story")
     }
 
     private var uploadButtonIcon: some View {
