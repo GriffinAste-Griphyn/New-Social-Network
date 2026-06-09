@@ -246,9 +246,14 @@ describe("mobile Cloudflare video upload API", () => {
           thumbnailChecksum:
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           caption: "Cloudflare test",
+          brandTags: "CoffeeCo, UBEYE",
           textOverlays: "This is a test",
           textOverlayPositionX: "51.25",
           textOverlayPositionY: "62.50",
+          linkLabel: "Open",
+          linkUrl: "https://example.com/story",
+          linkOverlayPositionX: "45.00",
+          linkOverlayPositionY: "80.00",
         }),
       }),
     )
@@ -263,12 +268,25 @@ describe("mobile Cloudflare video upload API", () => {
     })
     expect(createStory).toHaveBeenCalledWith(
       expect.objectContaining({
+        caption: "Cloudflare test",
+        explicitBrandTags: ["coffeeco", "ubeye"],
+        moderationMediaUrl:
+          "https://app.example.com/api/story-media/cloudflare-stream/11111111111111111111111111111111/manifest/video.m3u8",
+        moderationThumbnailUrl:
+          "https://app.example.com/api/story-media/stories/mobile-cloudflare-thumbnails/creator_123/11111111111111111111111111111111-thumb.jpg",
         elements: expect.arrayContaining([
           expect.objectContaining({
             kind: "text",
             label: "This is a test",
             positionX: "51.25",
             positionY: "62.50",
+          }),
+          expect.objectContaining({
+            kind: "link",
+            label: "Open",
+            href: "https://example.com/story",
+            positionX: "45.00",
+            positionY: "80.00",
           }),
         ]),
         storedAsset: expect.objectContaining({
@@ -340,6 +358,18 @@ describe("mobile Cloudflare video upload API", () => {
   })
 
   it("passes absolute signed moderation URLs for original-quality video completion", async () => {
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValueOnce({
+      id: "22222222-2222-4222-8222-222222222222",
+      status: "live",
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: "2026-06-08T16:00:00.000Z",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: true,
+    })
     const { POST } = await import(
       "@/app/api/mobile/stories/video-original-complete/route"
     )
@@ -368,10 +398,15 @@ describe("mobile Cloudflare video upload API", () => {
             width: 1080,
             height: 1920,
             caption: "Original quality",
+            brandTags: "OriginalCo",
+            textOverlays: "Uploaded raw",
+            textOverlayPositionX: "49.00",
+            textOverlayPositionY: "65.00",
           }),
         },
       ),
     )
+    const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
     expect(createOriginalQualityVideoStoryAsset).toHaveBeenCalledWith(
@@ -382,11 +417,35 @@ describe("mobile Cloudflare video upload API", () => {
     )
     expect(createStory).toHaveBeenCalledWith(
       expect.objectContaining({
+        caption: "Original quality",
+        explicitBrandTags: ["originalco"],
         moderationMediaUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
         moderationThumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+        elements: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "text",
+            label: "Uploaded raw",
+            positionX: "49.00",
+            positionY: "65.00",
+          }),
+        ]),
       }),
     )
+    expect(payload).toMatchObject({
+      ok: true,
+      storyId: "22222222-2222-4222-8222-222222222222",
+      asset: {
+        mediaUrl:
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+        thumbnailUrl:
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      },
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
+      readyAt: "2026-06-08T16:00:00.000Z",
+    })
   })
 })
