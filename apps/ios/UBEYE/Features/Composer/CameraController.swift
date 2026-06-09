@@ -2,16 +2,15 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-private func preferredPortraitVideoRotationAngle(for connection: AVCaptureConnection) -> CGFloat? {
-    if connection.isVideoRotationAngleSupported(270) {
-        return 270
-    }
+private func preferredPortraitVideoRotationAngle(
+    for connection: AVCaptureConnection,
+    cameraPosition: AVCaptureDevice.Position
+) -> CGFloat? {
+    let preferredAngles: [CGFloat] = cameraPosition == .front ? [270, 90] : [90, 270]
 
-    if connection.isVideoRotationAngleSupported(90) {
-        return 90
+    return preferredAngles.first { angle in
+        connection.isVideoRotationAngleSupported(angle)
     }
-
-    return nil
 }
 
 @MainActor
@@ -315,7 +314,10 @@ final class CameraController: NSObject, ObservableObject {
         _ connection: AVCaptureConnection,
         mirrorsFrontCamera: Bool
     ) {
-        if let rotationAngle = preferredPortraitVideoRotationAngle(for: connection) {
+        if let rotationAngle = preferredPortraitVideoRotationAngle(
+            for: connection,
+            cameraPosition: cameraPosition
+        ) {
             connection.videoRotationAngle = rotationAngle
         }
         if connection.isVideoMirroringSupported {
@@ -427,7 +429,10 @@ final class PreviewView: UIView {
             return
         }
 
-        if let rotationAngle = preferredPortraitVideoRotationAngle(for: connection) {
+        if let rotationAngle = preferredPortraitVideoRotationAngle(
+            for: connection,
+            cameraPosition: cameraPosition
+        ) {
             connection.videoRotationAngle = rotationAngle
         }
 
