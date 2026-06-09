@@ -120,6 +120,7 @@ final class FeedStore: ObservableObject {
             title: response.asset.assetKind == .video && response.processingStatus != "ready"
                 ? "Video processing"
                 : "Story",
+            processingStatus: response.processingStatus,
             textOverlays: response.textOverlays ?? [],
             durationSeconds: response.asset.assetKind == .video ? 10 : nil,
             lastUploadedAt: nil,
@@ -850,7 +851,22 @@ struct StoryMediaView: View {
     let story: StoryCard
 
     var body: some View {
-        if story.assetKind == .video {
+        if story.isProcessingVideo {
+            ZStack {
+                if let thumbnailUrl = story.thumbnailUrl {
+                    CachedAsyncImage(url: thumbnailUrl) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.black
+                    }
+                } else {
+                    Color.black
+                }
+
+                ProgressView()
+                    .tint(.white)
+            }
+        } else if story.assetKind == .video {
             AutoPlayVideoPlayer(url: story.mediaUrl, thumbnailUrl: story.thumbnailUrl)
         } else {
             CachedAsyncImage(url: story.mediaUrl) { image in

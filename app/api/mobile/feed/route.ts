@@ -65,33 +65,11 @@ function collapseStoryCardsByCreator<T extends { handle: string }>(stories: T[])
   return collapsedStories
 }
 
-function jsonResponse(
-  payload: unknown,
-  request: Request,
-  options: { allowNotModified?: boolean } = {},
-) {
+function jsonResponse(payload: unknown) {
   const body = JSON.stringify(payload)
   const etag = `"${createHash("sha256").update(body).digest("base64url")}"`
-  const cacheControl = "private, max-age=15, stale-while-revalidate=60"
+  const cacheControl = "private, no-store"
   const vary = "Authorization, X-Device-Id"
-
-  if (
-    options.allowNotModified &&
-    request.headers
-      .get("if-none-match")
-      ?.split(",")
-      .map((value) => value.trim())
-      .includes(etag)
-  ) {
-    return new Response(null, {
-      status: 304,
-      headers: {
-        "Cache-Control": cacheControl,
-        ETag: etag,
-        Vary: vary,
-      },
-    })
-  }
 
   return new Response(body, {
     headers: {
@@ -105,7 +83,6 @@ function jsonResponse(
 
 async function feedResponse(
   request: Request,
-  options: { allowNotModified: boolean },
 ) {
   const startedAt = performance.now()
   const user = await getCompleteMobileSession(request)
@@ -187,8 +164,6 @@ async function feedResponse(
         ),
       },
     },
-    request,
-    options,
   )
   response.headers.set(
     "Server-Timing",
@@ -199,9 +174,9 @@ async function feedResponse(
 }
 
 export async function GET(request: Request) {
-  return feedResponse(request, { allowNotModified: true })
+  return feedResponse(request)
 }
 
 export async function POST(request: Request) {
-  return feedResponse(request, { allowNotModified: false })
+  return feedResponse(request)
 }

@@ -95,6 +95,7 @@ struct MainTabView: View {
         pendingQuotedReply = nil
         rememberStoryUpload(response)
         selectedTab = .home
+        api.invalidateMobileFeedCache()
         if let thumbnailUrl = response.asset.thumbnailUrl {
             MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
         }

@@ -382,7 +382,9 @@ struct StoryStackViewer: View {
         ZStack {
             Color.black
 
-            if item.assetKind == .video {
+            if item.isProcessingVideo {
+                processingVideoPlaceholder(item)
+            } else if item.assetKind == .video {
                 AutoPlayVideoPlayer(
                     url: item.mediaUrl,
                     thumbnailUrl: item.thumbnailUrl,
@@ -415,6 +417,29 @@ struct StoryStackViewer: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func processingVideoPlaceholder(_ item: StoryStackItem) -> some View {
+        ZStack {
+            storyImagePlaceholder(item)
+                .opacity(0.82)
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+                Text("Video processing")
+                    .font(.system(size: 18, weight: .bold))
+                Text("It will play here as soon as Cloudflare finishes preparing it.")
+                    .font(.system(size: 13, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.76))
+                    .padding(.horizontal, 32)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.black.opacity(0.28))
+        }
     }
 
     @ViewBuilder
@@ -933,7 +958,7 @@ struct StoryStackViewer: View {
                 MediaPreheater.preheat(stack: stack, around: index)
                 videoPlaybackPool.prepare(
                     urls: adjacentVideoUrls(in: stack, around: index),
-                    activeURL: next.assetKind == .video ? next.mediaUrl : nil
+                    activeURL: next.isPlayableVideo ? next.mediaUrl : nil
                 )
             }
         }
@@ -957,7 +982,7 @@ struct StoryStackViewer: View {
         }
 
         return stack.items[lowerBound...upperBound].compactMap { item in
-            item.assetKind == .video ? item.mediaUrl : nil
+            item.isPlayableVideo ? item.mediaUrl : nil
         }
     }
 

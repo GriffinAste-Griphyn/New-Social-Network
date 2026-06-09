@@ -1120,6 +1120,7 @@ final class APIClient: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(deviceId(), forHTTPHeaderField: "X-Device-Id")
         if let authToken {

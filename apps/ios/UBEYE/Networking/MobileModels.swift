@@ -140,11 +140,22 @@ struct StoryCard: Codable, Identifiable, Hashable {
     let mediaUrl: URL
     let thumbnailUrl: URL?
     let title: String
+    let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
     let durationSeconds: Double?
     let lastUploadedAt: String?
     let progressPercent: Double?
     let timelineSegmentCount: Int?
+}
+
+extension StoryCard {
+    var isProcessingVideo: Bool {
+        assetKind == .video && processingStatus != nil && processingStatus != "ready"
+    }
+
+    var isPlayableVideo: Bool {
+        assetKind == .video && !isProcessingVideo
+    }
 }
 
 struct DiscoverTile: Codable, Identifiable, Hashable {
@@ -320,11 +331,22 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
     let mediaUrl: URL
     let thumbnailUrl: URL?
     let title: String
+    let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
     let postedAt: String
     let durationSeconds: Double?
     let captionVerticalPercent: Double?
     let stats: Stats?
+}
+
+extension StoryStackItem {
+    var isProcessingVideo: Bool {
+        assetKind == .video && processingStatus != nil && processingStatus != "ready"
+    }
+
+    var isPlayableVideo: Bool {
+        assetKind == .video && !isProcessingVideo
+    }
 }
 
 struct StoryInteractionResponse: Codable {

@@ -1032,7 +1032,7 @@ enum MediaPreheater {
         )
 
         let videoUrls = nearbyItems.compactMap { item -> URL? in
-            item.assetKind == .video ? item.mediaUrl : nil
+            item.isPlayableVideo ? item.mediaUrl : nil
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
         let videoLimit = allowsPersistentDownloads ? 3 : 1

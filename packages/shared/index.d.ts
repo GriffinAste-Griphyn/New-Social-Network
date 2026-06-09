@@ -20,6 +20,7 @@ export interface SocialStoryCard {
   mediaUrl: string
   thumbnailUrl: string | null
   title: string
+  processingStatus?: string
   textOverlays?: Array<{
     id: string
     label: string

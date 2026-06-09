@@ -134,6 +134,10 @@ describe("story upload and mobile feed API", () => {
       processingStatus: "ready",
       moderationStatus: "approved",
       moderationReason: null,
+      providerStatus: "ready",
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: null,
       isLive: true,
     })
     vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([])
@@ -276,6 +280,7 @@ describe("story upload and mobile feed API", () => {
     const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store")
     expect(payload).toMatchObject({
       ok: true,
       session: {
@@ -292,5 +297,42 @@ describe("story upload and mobile feed API", () => {
         "https://cdn.example.com/my-thumb.jpg",
       ),
     })
+  })
+
+  it("does not return a 304 mobile feed from stale client etags", async () => {
+    vi.mocked(getFeedData).mockResolvedValue({
+      featuredStory: null,
+      followingStories: [],
+      followingTimelineStories: [],
+      discoverStories: [],
+      followingProfiles: [],
+      suggestedAccounts: [],
+      myStory: {
+        owner: {
+          id: "user_123",
+          name: "Creator",
+          handle: "@creator",
+          imageUrl: null,
+        },
+        hasActiveStory: false,
+        liveCount: 0,
+        latestThumbnailUrl: null,
+        latestAssetKind: null,
+        expiresSoonLabel: null,
+        items: [],
+      },
+    })
+
+    const { GET } = await import("@/app/api/mobile/feed/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/feed", {
+        headers: {
+          "if-none-match": "\"stale\"",
+        },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store")
   })
 })
