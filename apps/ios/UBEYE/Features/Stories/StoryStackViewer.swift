@@ -260,7 +260,7 @@ struct StoryStackViewer: View {
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
     private let maxVideoStoryDurationSeconds: TimeInterval = 120
-    private let storyTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+    private let storyTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
     private let ownerStatsHeight: CGFloat = 64
@@ -503,7 +503,7 @@ struct StoryStackViewer: View {
 
     private func storyTopChrome(stack: StoryStack, item: StoryStackItem) -> some View {
         VStack(spacing: 12) {
-            storyProgressIndicator(stack: stack)
+            storyProgressIndicator(stack: stack, item: item)
             storyHeader(stack: stack, item: item)
         }
         .padding(.horizontal, UBEYEMetrics.screenInset)
@@ -745,10 +745,13 @@ struct StoryStackViewer: View {
         .opacity(store.isPerformingAction ? 0.7 : 1)
     }
 
-    private func storyProgressIndicator(stack: StoryStack) -> some View {
+    private func storyProgressIndicator(stack: StoryStack, item: StoryStackItem) -> some View {
         HStack(spacing: 5) {
             ForEach(stack.items.indices, id: \.self) { itemIndex in
-                StoryProgressSegment(progress: progressValue(for: itemIndex))
+                StoryProgressSegment(
+                    progress: progressValue(for: itemIndex),
+                    timing: progressTiming(for: itemIndex, activeItem: item)
+                )
             }
         }
         .frame(maxWidth: .infinity)
@@ -764,6 +767,21 @@ struct StoryStackViewer: View {
             return storyProgress
         }
         return 0
+    }
+
+    private func progressTiming(for itemIndex: Int, activeItem: StoryStackItem) -> StoryProgressTiming? {
+        guard itemIndex == index,
+              activeItem.assetKind != .video,
+              !shouldPauseStoryProgress else {
+            return nil
+        }
+
+        let duration = displayDuration(for: activeItem)
+        guard duration > 0 else {
+            return nil
+        }
+
+        return StoryProgressTiming(startedAt: storyStartedAt, duration: duration)
     }
 
     private func tapNavigationOverlay(item: StoryStackItem) -> some View {
@@ -1156,21 +1174,43 @@ struct StoryStackViewer: View {
     }
 }
 
+private struct StoryProgressTiming {
+    let startedAt: Date
+    let duration: TimeInterval
+
+    func progress(at date: Date) -> Double {
+        min(max(date.timeIntervalSince(startedAt) / duration, 0), 1)
+    }
+}
+
 private struct StoryProgressSegment: View {
     let progress: Double
+    let timing: StoryProgressTiming?
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.32))
-                Capsule()
-                    .fill(.white)
-                    .frame(width: max(0, min(1, progress)) * proxy.size.width)
+        Group {
+            if let timing {
+                TimelineView(.animation) { context in
+                    track(progress: timing.progress(at: context.date))
+                }
+            } else {
+                track(progress: progress)
             }
         }
         .frame(height: 4)
         .frame(maxWidth: .infinity)
+    }
+
+    private func track(progress: Double) -> some View {
+        let clampedProgress = CGFloat(max(0, min(1, progress)))
+
+        return ZStack(alignment: .leading) {
+            Capsule()
+                .fill(.white.opacity(0.32))
+            Capsule()
+                .fill(.white)
+                .scaleEffect(x: clampedProgress, y: 1, anchor: .leading)
+        }
     }
 }
 
@@ -2047,6 +2087,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var onFinished: () -> Void = {}
     private var playbackRetryCount = 0
     private var layerReadyForDisplay = false
+    private let progressObserverInterval = CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600)
+    private let minimumPublishedProgressDelta = 0.0001
     private let maxPlaybackRetries = 2
 
     func play(
@@ -2359,9 +2401,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func observeProgress(player: AVPlayer) {
         removeTimeObserver()
 
-        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
         timeObserverPlayer = player
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: progressObserverInterval, queue: .main) { [weak self, weak player] time in
             Task { @MainActor in
                 guard let self, self.player === player, let player else {
                     return
@@ -2381,7 +2422,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         let currentSeconds = max(0, currentTime.seconds)
         let progress = min(max(currentSeconds / durationSeconds, 0), 1)
-        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.01 else {
+        guard progress >= 0.995 || progress - lastPublishedProgress >= minimumPublishedProgressDelta else {
             return
         }
 
