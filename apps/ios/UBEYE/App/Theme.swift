@@ -233,6 +233,10 @@ enum MediaPerformance {
         "media_file_cache_hit",
         "media_file_cache_skip",
         "media_file_cache_write",
+        "hls_asset_download_failed",
+        "hls_asset_download_finished",
+        "hls_asset_download_start",
+        "hls_asset_package_hit",
         "story_open",
         "story_open_warm",
         "story_stack_cache_clear",
@@ -783,6 +787,250 @@ actor MediaFileDiskCache {
 }
 
 @MainActor
+final class HLSAssetDownloadCoordinator: NSObject {
+    static let shared = HLSAssetDownloadCoordinator()
+
+    private let fileManager = FileManager.default
+    private let persistedDownloadsKey = "com.ubeye.hls.downloaded-assets"
+    private var activeTasks: [URL: AVAssetDownloadTask] = [:]
+    private var downloadedPackageURLs: [URL: URL] = [:]
+    private var failedAt: [URL: Date] = [:]
+    private let retryWindow: TimeInterval = 300
+
+    private lazy var downloadSession: AVAssetDownloadURLSession = {
+        let configuration = URLSessionConfiguration.background(
+            withIdentifier: "com.griffinaste.ubeye.hls-downloads"
+        )
+        configuration.allowsCellularAccess = false
+        configuration.allowsExpensiveNetworkAccess = false
+        configuration.allowsConstrainedNetworkAccess = false
+        configuration.sessionSendsLaunchEvents = false
+
+        let queue = OperationQueue()
+        queue.name = "ubeye.hls-downloads"
+        queue.maxConcurrentOperationCount = 1
+
+        return AVAssetDownloadURLSession(
+            configuration: configuration,
+            assetDownloadDelegate: self,
+            delegateQueue: queue
+        )
+    }()
+
+    private override init() {
+        super.init()
+        restoreDownloadedPackages()
+    }
+
+    func localAssetURL(for remoteURL: URL) -> URL? {
+        guard isHTTPStreamingPlaylist(remoteURL) else {
+            return nil
+        }
+
+        let identityURL = cacheIdentityURL(for: remoteURL)
+        guard let packageURL = storedPackageURL(for: identityURL) else {
+            return nil
+        }
+
+        MediaPerformance.mark("hls_asset_package_hit url=\(remoteURL.lastPathComponent)")
+        return packageURL
+    }
+
+    func preheat(urls: [URL], limit: Int) {
+        guard limit > 0 else {
+            return
+        }
+
+        var seen = Set<URL>()
+        let now = Date()
+        let candidates = urls
+            .filter { isHTTPStreamingPlaylist($0) }
+            .map { (remoteURL: $0, identityURL: cacheIdentityURL(for: $0)) }
+            .filter { seen.insert($0.identityURL).inserted }
+            .filter { candidate in
+                storedPackageURL(for: candidate.identityURL) == nil &&
+                    activeTasks[candidate.identityURL] == nil &&
+                    shouldRetry(identityURL: candidate.identityURL, now: now)
+            }
+            .prefix(limit)
+
+        for candidate in candidates {
+            startDownload(remoteURL: candidate.remoteURL, identityURL: candidate.identityURL)
+        }
+    }
+
+    func removeAll() {
+        for task in activeTasks.values {
+            task.cancel()
+        }
+        activeTasks.removeAll()
+
+        for packageURL in downloadedPackageURLs.values {
+            try? fileManager.removeItem(at: packageURL)
+        }
+        downloadedPackageURLs.removeAll()
+        failedAt.removeAll()
+        persistDownloadedPackages()
+    }
+
+    private func startDownload(remoteURL: URL, identityURL: URL) {
+        let asset = AVURLAsset(url: remoteURL)
+        let options: [String: Any] = [
+            AVAssetDownloadTaskMinimumRequiredMediaBitrateKey: NetworkQualityMonitor.shared.isConstrained
+                ? 1_500_000
+                : 3_000_000
+        ]
+
+        guard let task = downloadSession.makeAssetDownloadTask(
+            asset: asset,
+            assetTitle: assetTitle(for: remoteURL),
+            assetArtworkData: nil,
+            options: options
+        ) else {
+            failedAt[identityURL] = Date()
+            MediaPerformance.mark("hls_asset_download_failed url=\(remoteURL.lastPathComponent)")
+            return
+        }
+
+        task.taskDescription = identityURL.absoluteString
+        activeTasks[identityURL] = task
+        task.resume()
+        MediaPerformance.mark("hls_asset_download_start url=\(remoteURL.lastPathComponent)")
+    }
+
+    private func finishDownload(identityURL: URL, location: URL) {
+        downloadedPackageURLs[identityURL] = location
+        failedAt[identityURL] = nil
+        persistDownloadedPackages()
+        MediaPerformance.mark("hls_asset_download_finished url=\(identityURL.lastPathComponent)")
+    }
+
+    private func completeTask(identityURL: URL, error: Error?) {
+        activeTasks[identityURL] = nil
+
+        guard let error else {
+            return
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else {
+            return
+        }
+
+        failedAt[identityURL] = Date()
+        MediaPerformance.mark("hls_asset_download_failed url=\(identityURL.lastPathComponent)")
+    }
+
+    private func shouldRetry(identityURL: URL, now: Date) -> Bool {
+        guard let failedAt = failedAt[identityURL] else {
+            return true
+        }
+
+        return now.timeIntervalSince(failedAt) > retryWindow
+    }
+
+    private func storedPackageURL(for identityURL: URL) -> URL? {
+        guard let packageURL = downloadedPackageURLs[identityURL] else {
+            return nil
+        }
+
+        guard fileManager.fileExists(atPath: packageURL.path) else {
+            downloadedPackageURLs[identityURL] = nil
+            persistDownloadedPackages()
+            return nil
+        }
+
+        return packageURL
+    }
+
+    private func restoreDownloadedPackages() {
+        guard let stored = UserDefaults.standard.dictionary(forKey: persistedDownloadsKey) as? [String: String] else {
+            return
+        }
+
+        downloadedPackageURLs = stored.reduce(into: [:]) { result, entry in
+            guard let identityURL = URL(string: entry.key),
+                  let packageURL = URL(string: entry.value),
+                  fileManager.fileExists(atPath: packageURL.path) else {
+                return
+            }
+            result[identityURL] = packageURL
+        }
+
+        if downloadedPackageURLs.count != stored.count {
+            persistDownloadedPackages()
+        }
+    }
+
+    private func persistDownloadedPackages() {
+        let stored = downloadedPackageURLs.reduce(into: [String: String]()) { result, entry in
+            result[entry.key.absoluteString] = entry.value.absoluteString
+        }
+        UserDefaults.standard.set(stored, forKey: persistedDownloadsKey)
+    }
+
+    private func cacheIdentityURL(for url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+
+        components.queryItems = components.queryItems?
+            .filter {
+                let name = $0.name.lowercased()
+                return name != "token" && name != "v"
+            }
+            .sorted { $0.name < $1.name }
+
+        return components.url ?? url
+    }
+
+    private func assetTitle(for url: URL) -> String {
+        let title = url.deletingPathExtension().lastPathComponent
+        guard title.isEmpty else {
+            return title
+        }
+
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+            .prefix(6)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "story-hls-\(digest)"
+    }
+}
+
+extension HLSAssetDownloadCoordinator: AVAssetDownloadDelegate {
+    nonisolated func urlSession(
+        _ session: URLSession,
+        assetDownloadTask: AVAssetDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        guard let description = assetDownloadTask.taskDescription,
+              let identityURL = URL(string: description) else {
+            return
+        }
+
+        Task { @MainActor in
+            HLSAssetDownloadCoordinator.shared.finishDownload(identityURL: identityURL, location: location)
+        }
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        guard let description = task.taskDescription,
+              let identityURL = URL(string: description) else {
+            return
+        }
+
+        Task { @MainActor in
+            HLSAssetDownloadCoordinator.shared.completeTask(identityURL: identityURL, error: error)
+        }
+    }
+}
+
+@MainActor
 final class MediaImageCache {
     static let shared = MediaImageCache()
 
@@ -994,8 +1242,8 @@ enum MediaPreheater {
         ] +
         feed.followingProfiles.map(\.imageUrl) +
         feed.suggestedAccounts.map(\.imageUrl) +
-        feed.verticalFollowingStories.map { $0.thumbnailUrl ?? ($0.assetKind == .image ? $0.mediaUrl : nil) } +
-        feed.followingStories.map { $0.thumbnailUrl ?? ($0.assetKind == .image ? $0.mediaUrl : nil) } +
+        feed.verticalFollowingStories.map { $0.playbackThumbnailUrl ?? ($0.assetKind == .image ? $0.playbackMediaUrl : nil) } +
+        feed.followingStories.map { $0.playbackThumbnailUrl ?? ($0.assetKind == .image ? $0.playbackMediaUrl : nil) } +
         feed.discoverTiles.map { $0.thumbnailUrl ?? $0.imageUrl }
 
         MediaImageCache.shared.preheat(
@@ -1018,11 +1266,11 @@ enum MediaPreheater {
         let nearbyItems = Array(stack.items[lowerBound...upperBound])
         let imageUrls = nearbyItems.flatMap { item -> [URL] in
             var urls: [URL] = []
-            if let thumbnailUrl = item.thumbnailUrl {
+            if let thumbnailUrl = item.playbackThumbnailUrl {
                 urls.append(thumbnailUrl)
             }
             if item.assetKind == .image {
-                urls.append(item.mediaUrl)
+                urls.append(item.playbackMediaUrl)
             }
             return urls
         }
@@ -1032,7 +1280,7 @@ enum MediaPreheater {
         )
 
         let videoUrls = nearbyItems.compactMap { item -> URL? in
-            item.isPlayableVideo ? item.mediaUrl : nil
+            item.isPlayableVideo ? item.playbackMediaUrl : nil
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
         let videoLimit = allowsPersistentDownloads ? 3 : 1
@@ -1096,7 +1344,12 @@ actor MediaVideoPreheater {
         let startedAt = Date()
         let playbackURL: URL
 
-        if allowsPersistentDownloads,
+        if isHTTPStreamingPlaylist(url) {
+            if allowsPersistentDownloads {
+                await HLSAssetDownloadCoordinator.shared.preheat(urls: [url], limit: 1)
+            }
+            playbackURL = await HLSAssetDownloadCoordinator.shared.localAssetURL(for: url) ?? url
+        } else if allowsPersistentDownloads,
            await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video),
            let cachedURL = await MediaFileDiskCache.shared.cache(url: url, kind: .video) {
             playbackURL = cachedURL

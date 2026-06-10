@@ -34,17 +34,18 @@ final class StoryStackStore: ObservableObject {
     private var impressionStartedAt = Date()
     private var lastImpressionStoryId: String?
 
-    func load(storyId: String, api: APIClient) async {
+    func load(storyId: String, api: APIClient, mediaEngine: MediaEngine) async {
         if stack == nil, let cached = await api.cachedStoryStackForDisplay(storyId: storyId) {
             applyLoadedStack(cached.story)
+            mediaEngine.prepare(stack: cached.story, around: 0, activeURL: nil)
         }
 
         isLoading = stack == nil
         error = nil
         do {
             let response = try await api.storyStack(storyId: storyId, refresh: true)
-            MediaPreheater.preheat(stack: response.story)
             applyLoadedStack(response.story)
+            mediaEngine.prepare(stack: response.story, around: 0, activeURL: nil)
         } catch {
             self.error = error.localizedDescription
         }
@@ -241,6 +242,7 @@ struct StoryStackViewer: View {
     let route: StoryRoute
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var mediaEngine: MediaEngine
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = StoryStackStore()
     @State private var index = 0
@@ -255,12 +257,11 @@ struct StoryStackViewer: View {
     @State private var repliesSheetItem: StoryStackItem?
     @State private var confirmationDismissTask: Task<Void, Never>?
     @State private var reportConfirmationDismissTask: Task<Void, Never>?
-    @StateObject private var videoPlaybackPool = StoryVideoPlaybackPool()
     @FocusState private var isReplyFieldFocused: Bool
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
     private let maxVideoStoryDurationSeconds: TimeInterval = 120
-    private let storyTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+    private let storyTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
     private let ownerStatsHeight: CGFloat = 64
@@ -320,7 +321,8 @@ struct StoryStackViewer: View {
         }
         .simultaneousGesture(verticalStorySwipeGesture)
         .task {
-            await store.load(storyId: route.id, api: api)
+            mediaEngine.storyViewerDidAppear()
+            await store.load(storyId: route.id, api: api, mediaEngine: mediaEngine)
             MediaPerformance.measure("story_open id=\(route.id)", since: route.openedAt)
             if route.source != .ownStory {
                 await store.loadFollows(api: api)
@@ -329,11 +331,7 @@ struct StoryStackViewer: View {
                 resetStoryTimer(for: item)
             }
             if let stack = store.stack {
-                MediaPreheater.preheat(stack: stack, around: index)
-                videoPlaybackPool.prepare(
-                    urls: adjacentVideoUrls(in: stack, around: index),
-                    activeURL: nil
-                )
+                mediaEngine.prepare(stack: stack, around: index, activeURL: nil)
             }
         }
         .onReceive(storyTimer) { now in
@@ -348,7 +346,7 @@ struct StoryStackViewer: View {
         .onDisappear {
             confirmationDismissTask?.cancel()
             reportConfirmationDismissTask?.cancel()
-            videoPlaybackPool.removeAll()
+            mediaEngine.storyViewerDidDisappear()
         }
         .fullScreenCover(item: $reportingItem) { item in
             ReportStoryReasonView(
@@ -386,10 +384,10 @@ struct StoryStackViewer: View {
                 processingVideoPlaceholder(item)
             } else if item.assetKind == .video {
                 AutoPlayVideoPlayer(
-                    url: item.mediaUrl,
-                    thumbnailUrl: item.thumbnailUrl,
+                    url: item.playbackMediaUrl,
+                    thumbnailUrl: item.playbackThumbnailUrl,
                     preloadUrls: adjacentVideoUrls(for: item),
-                    playerPool: videoPlaybackPool,
+                    playerPool: mediaEngine.storyVideoPlaybackPool,
                     showsThumbnailWhileLoading: true,
                     isPaused: shouldPauseVideoPlayback,
                     onReadyForPlayback: {
@@ -406,7 +404,7 @@ struct StoryStackViewer: View {
                     }
                 )
             } else {
-                CachedAsyncImage(url: item.mediaUrl) { image in
+                CachedAsyncImage(url: item.playbackMediaUrl) { image in
                     image
                         .resizable()
                         .scaledToFit()
@@ -444,7 +442,7 @@ struct StoryStackViewer: View {
 
     @ViewBuilder
     private func storyImagePlaceholder(_ item: StoryStackItem) -> some View {
-        if let thumbnailUrl = item.thumbnailUrl {
+        if let thumbnailUrl = item.playbackThumbnailUrl {
             CachedAsyncImage(url: thumbnailUrl) { image in
                 image
                     .resizable()
@@ -955,10 +953,10 @@ struct StoryStackViewer: View {
             store.markActiveItem(next)
             resetStoryTimer(for: next)
             if let stack = store.stack {
-                MediaPreheater.preheat(stack: stack, around: index)
-                videoPlaybackPool.prepare(
-                    urls: adjacentVideoUrls(in: stack, around: index),
-                    activeURL: next.isPlayableVideo ? next.mediaUrl : nil
+                mediaEngine.prepare(
+                    stack: stack,
+                    around: index,
+                    activeURL: next.isPlayableVideo ? next.playbackMediaUrl : nil
                 )
             }
         }
@@ -982,7 +980,7 @@ struct StoryStackViewer: View {
         }
 
         return stack.items[lowerBound...upperBound].compactMap { item in
-            item.isPlayableVideo ? item.mediaUrl : nil
+            item.isPlayableVideo ? item.playbackMediaUrl : nil
         }
     }
 
@@ -1039,9 +1037,15 @@ struct StoryStackViewer: View {
             return
         }
 
-        storyProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
+        let nextProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
 
-        guard storyProgress >= 1, !didFinishCurrentItem else {
+        if nextProgress >= 1 {
+            storyProgress = 1
+        } else if abs(nextProgress - storyProgress) >= 0.012 {
+            storyProgress = nextProgress
+        }
+
+        guard nextProgress >= 1, !didFinishCurrentItem else {
             return
         }
 
@@ -1055,7 +1059,12 @@ struct StoryStackViewer: View {
             return
         }
 
-        storyProgress = min(max(progress, 0), 1)
+        let nextProgress = min(max(progress, 0), 1)
+        guard nextProgress >= 1 || abs(nextProgress - storyProgress) >= 0.012 else {
+            return
+        }
+
+        storyProgress = nextProgress
     }
 
     private func finishVideoStory(_ item: StoryStackItem) {
@@ -1793,146 +1802,6 @@ private struct StoryViewerActionIcon: View {
     }
 }
 
-@MainActor
-final class StoryVideoPlaybackPool: ObservableObject {
-    struct PreparedPlayer {
-        let player: AVPlayer
-        let playbackURL: URL
-        let cacheState: String
-    }
-
-    private var preparedPlayers: [URL: PreparedPlayer] = [:]
-    private var prepareTasks: [URL: Task<Void, Never>] = [:]
-    private let maxPreparedPlayers = 3
-
-    func takePreparedPlayer(for url: URL) -> PreparedPlayer? {
-        prepareTasks[url]?.cancel()
-        prepareTasks[url] = nil
-
-        guard let prepared = preparedPlayers.removeValue(forKey: url) else {
-            return nil
-        }
-
-        prepared.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        MediaPerformance.mark("video_player_pool_hit url=\(url.lastPathComponent)")
-        return prepared
-    }
-
-    func prepare(urls: [URL], activeURL: URL?) {
-        var seen = Set<URL>()
-        let desiredUrls = urls
-            .filter { seen.insert($0).inserted }
-            .filter { $0 != activeURL }
-            .prefix(maxPreparedPlayers)
-
-        let desiredSet = Set(desiredUrls)
-        prune(keeping: desiredSet)
-
-        for url in desiredUrls where preparedPlayers[url] == nil && prepareTasks[url] == nil {
-            prepareTasks[url] = Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
-                let startedAt = Date()
-                guard let prepared = await Self.buildPreparedPlayer(for: url),
-                      !Task.isCancelled else {
-                    self.prepareTasks[url] = nil
-                    return
-                }
-
-                self.preparedPlayers[url] = prepared
-                self.prepareTasks[url] = nil
-                MediaPerformance.measure("video_player_prepared url=\(url.lastPathComponent)", since: startedAt)
-                self.prune(keeping: desiredSet)
-            }
-        }
-    }
-
-    func removeAll() {
-        for task in prepareTasks.values {
-            task.cancel()
-        }
-        prepareTasks.removeAll()
-
-        for prepared in preparedPlayers.values {
-            prepared.player.pause()
-        }
-        preparedPlayers.removeAll()
-    }
-
-    private static func buildPreparedPlayer(for url: URL) async -> PreparedPlayer? {
-        let resolved = await resolvePlaybackURL(for: url)
-        let asset = AVURLAsset(url: resolved.playbackURL)
-
-        do {
-            guard try await asset.load(.isPlayable) else {
-                return nil
-            }
-            _ = try? await asset.load(.duration)
-        } catch {
-            MediaPerformance.mark("video_player_prepare_failed url=\(url.lastPathComponent)")
-            return nil
-        }
-
-        let item = AVPlayerItem(asset: asset)
-        configureStreamingHints(for: item, playbackURL: resolved.playbackURL)
-        item.preferredForwardBufferDuration = resolved.playbackURL.pathExtension.lowercased() == "m3u8" ? 6 : 3
-
-        let player = AVPlayer(playerItem: item)
-        player.actionAtItemEnd = .pause
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.pause()
-
-        return PreparedPlayer(
-            player: player,
-            playbackURL: resolved.playbackURL,
-            cacheState: resolved.cacheState
-        )
-    }
-
-    private static func resolvePlaybackURL(for url: URL) async -> (playbackURL: URL, cacheState: String) {
-        let canPersistVideo = await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video)
-
-        if canPersistVideo,
-           let cachedPlaybackURL = await MediaFileDiskCache.shared.cachedFileURL(for: url) {
-            return (cachedPlaybackURL, "hit")
-        }
-
-        return (url, "miss")
-    }
-
-    private static func configureStreamingHints(for item: AVPlayerItem, playbackURL: URL) {
-        guard playbackURL.pathExtension.lowercased() == "m3u8" else {
-            return
-        }
-
-        item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
-        item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
-    }
-
-    private func prune(keeping desiredSet: Set<URL>) {
-        for url in Array(prepareTasks.keys) where !desiredSet.contains(url) {
-            prepareTasks[url]?.cancel()
-            prepareTasks[url] = nil
-        }
-
-        for url in Array(preparedPlayers.keys) where !desiredSet.contains(url) {
-            preparedPlayers[url]?.player.pause()
-            preparedPlayers[url] = nil
-        }
-
-        guard preparedPlayers.count > maxPreparedPlayers else {
-            return
-        }
-
-        for url in Array(preparedPlayers.keys) where preparedPlayers.count > maxPreparedPlayers {
-            preparedPlayers[url]?.player.pause()
-            preparedPlayers[url] = nil
-        }
-    }
-}
-
 struct AutoPlayVideoPlayer: View {
     let url: URL
     let thumbnailUrl: URL?
@@ -2095,8 +1964,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 "video_startup delivery=\(delivery) cache=\(cacheState) source=\(playerSource) url=\(url.lastPathComponent)"
             )
 
-            if cacheState == "hit" {
-                MediaPerformance.mark("video_disk_cache_hit url=\(url.lastPathComponent)")
+            if cacheState == "hit" || cacheState == "hls_download" {
+                MediaPerformance.mark("video_disk_cache_hit state=\(cacheState) url=\(url.lastPathComponent)")
             }
 
             guard !Task.isCancelled else {
@@ -2131,6 +2000,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     private func resolvePlaybackURL(for url: URL) async -> (playbackURL: URL, cacheState: String) {
+        if url.pathExtension.lowercased() == "m3u8",
+           let localPlaybackURL = HLSAssetDownloadCoordinator.shared.localAssetURL(for: url) {
+            return (localPlaybackURL, "hls_download")
+        }
+
         let canPersistVideo = await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video)
 
         if canPersistVideo,
@@ -2359,7 +2233,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func observeProgress(player: AVPlayer) {
         removeTimeObserver()
 
-        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.15, preferredTimescale: 600)
         timeObserverPlayer = player
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
             Task { @MainActor in
@@ -2381,7 +2255,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         let currentSeconds = max(0, currentTime.seconds)
         let progress = min(max(currentSeconds / durationSeconds, 0), 1)
-        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.01 else {
+        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.012 else {
             return
         }
 

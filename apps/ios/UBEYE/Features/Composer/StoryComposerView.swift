@@ -338,7 +338,7 @@ final class StoryComposerStore: ObservableObject {
                 lastUploadReport = attempt.report
                 await MediaFileDiskCache.shared.storeLocalFile(
                     sourceURL: preparedVideo.url,
-                    for: response.asset.mediaUrl,
+                    for: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
                     kind: .video
                 )
                 return response
@@ -396,14 +396,62 @@ final class StoryComposerStore: ObservableObject {
             lastUploadReport = attempt.report
             await MediaFileDiskCache.shared.storeLocalFile(
                 sourceURL: preparedVideo.url,
-                for: response.asset.mediaUrl,
+                for: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
                 kind: .video
+            )
+            startOriginalRenditionUploadIfNeeded(
+                preparedVideo: preparedVideo,
+                response: response,
+                api: api
             )
             return response
         } catch {
             attempt.recordFailure(error)
             lastUploadReport = attempt.report
             throw error
+        }
+    }
+
+    private func startOriginalRenditionUploadIfNeeded(
+        preparedVideo: PreparedStoryVideo,
+        response: StoryUploadResponse,
+        api: APIClient
+    ) {
+        guard preparedVideo.shouldAttachOriginalRendition else {
+            return
+        }
+
+        let storyId = response.storyId
+        let originalURL = preparedVideo.inspection.originalURL
+        let originalDurationMs = preparedVideo.inspection.durationMs
+        let fileName = originalURL.lastPathComponent.isEmpty ? "story-video.mov" : originalURL.lastPathComponent
+
+        Task { @MainActor [api] in
+            let startedAt = Date()
+            MediaPerformance.mark("video_original_attach_started storyId=\(storyId)")
+
+            do {
+                let upload = try await api.prepareOriginalQualityVideoUpload(
+                    fileName: fileName,
+                    fileURL: originalURL
+                )
+                _ = try await api.uploadOriginalQualityVideoFile(
+                    fileURL: originalURL,
+                    upload: upload
+                )
+                _ = try await api.attachOriginalQualityVideoRendition(
+                    storyId: storyId,
+                    upload: upload,
+                    fileURL: originalURL,
+                    durationMs: originalDurationMs
+                )
+                api.invalidateStoryStacks(ids: ["my-story", storyId])
+                api.prefetchStoryStacks(ids: ["my-story", storyId], refresh: true, limit: 2)
+                MediaPerformance.measure("video_original_attach_succeeded storyId=\(storyId)", since: startedAt)
+            } catch {
+                let reason = StoryVideoUploadAttempt.sanitizedDiagnostic(error.localizedDescription)
+                MediaPerformance.measure("video_original_attach_failed storyId=\(storyId) reason=\(reason)", since: startedAt)
+            }
         }
     }
 
@@ -894,6 +942,7 @@ struct StoryComposerView: View {
     @State private var recordingStartedAt = Date()
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
+    @State private var stagedMedia: PickedStoryMedia?
     @FocusState private var isOverlayInputFocused: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
@@ -901,6 +950,8 @@ struct StoryComposerView: View {
 
     private let maxVideoSegments = 6
     private let videoSegmentDuration: TimeInterval = 10
+    private let footerSideControlSize: CGFloat = 58
+    private let footerShutterSlotSize: CGFloat = 88
     private var maxRecordingDuration: TimeInterval { TimeInterval(maxVideoSegments) * videoSegmentDuration }
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -940,7 +991,7 @@ struct StoryComposerView: View {
                         VStack(spacing: 8) {
                             TopAvatarSpacer()
 
-                            if store.selectedMedia == nil {
+                            if stagedMedia == nil {
                                 Button {
                                     camera.switchCamera()
                                 } label: {
@@ -978,51 +1029,14 @@ struct StoryComposerView: View {
                         .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
                         .padding(.horizontal, 22)
                         .padding(.bottom, 16)
-                } else if store.selectedMedia == nil {
+                } else if stagedMedia == nil {
                     Text("Tap for photo, hold for video")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white.opacity(0.65))
                         .padding(.bottom, 24)
                 }
 
-                HStack {
-                    PhotosPicker(
-                        selection: $photoPickerItem,
-                        matching: .any(of: [.images, .videos]),
-                        preferredItemEncoding: .current
-                    ) {
-                        LibraryPickerThumbnail(image: latestLibraryThumbnail)
-                    }
-
-                    Spacer()
-
-                    StoryShutterButton(
-                        isRecording: camera.isRecording,
-                        progress: recordingProgress,
-                        segmentCount: recordingSegmentCount,
-                        maxSegments: maxVideoSegments,
-                        capturePhoto: capturePhoto,
-                        startRecording: startRecording,
-                        stopRecording: stopRecording
-                    )
-
-                    Spacer()
-
-                    Button {
-                        Task {
-                            if let response = await store.upload(api: api) {
-                                onUploadRegistered(response)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
-                            .font(.system(size: 21, weight: .bold))
-                            .frame(width: 58, height: 58)
-                            .background(.black.opacity(0.34), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.isUploading)
-                }
+                composerFooter
                 .padding(.horizontal, 28)
                 .padding(.bottom, 28)
             }
@@ -1047,13 +1061,13 @@ struct StoryComposerView: View {
         }
         .onChange(of: camera.capturedPhoto) { _, photo in
             if let photo {
-                store.selectedMedia = .image(photo)
+                enterComposer(with: .image(photo))
             }
         }
         .onChange(of: camera.capturedVideoURL) { _, url in
             if let url {
                 let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                store.selectedMedia = .video(StoryVideoUpload(url: url, source: source))
+                enterComposer(with: .video(StoryVideoUpload(url: url, source: source)))
                 recordingElapsed = 0
             }
         }
@@ -1065,6 +1079,90 @@ struct StoryComposerView: View {
                 finishOverlayInput()
             }
         }
+    }
+
+    @ViewBuilder
+    private var composerFooter: some View {
+        Group {
+            if stagedMedia == nil {
+                captureFooter
+            } else {
+                selectedMediaFooter
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: footerShutterSlotSize)
+    }
+
+    private var captureFooter: some View {
+        HStack {
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                LibraryPickerThumbnail(image: latestLibraryThumbnail)
+            }
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            StoryShutterButton(
+                isRecording: camera.isRecording,
+                progress: recordingProgress,
+                segmentCount: recordingSegmentCount,
+                maxSegments: maxVideoSegments,
+                capturePhoto: capturePhoto,
+                startRecording: startRecording,
+                stopRecording: stopRecording
+            )
+            .disabled(store.isUploading)
+
+            Spacer()
+
+            uploadStoryButton
+        }
+    }
+
+    private var selectedMediaFooter: some View {
+        HStack {
+            footerPlaceholder(size: footerSideControlSize)
+
+            Spacer()
+
+            footerPlaceholder(size: footerShutterSlotSize)
+
+            Spacer()
+
+            uploadStoryButton
+        }
+    }
+
+    private func footerPlaceholder(size: CGFloat) -> some View {
+        Color.clear
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+
+    private var uploadStoryButton: some View {
+        Button {
+            Task {
+                await uploadSelectedMedia()
+            }
+        } label: {
+            uploadButtonIcon
+        }
+        .buttonStyle(.plain)
+        .disabled(store.isUploading)
+        .accessibilityLabel("Upload story")
+        .accessibilityIdentifier("story-composer-upload-button")
+    }
+
+    private var uploadButtonIcon: some View {
+        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
+            .font(.system(size: 21, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 58, height: 58)
+            .background(.black.opacity(0.34), in: Circle())
     }
 
     private var composerToolRail: some View {
@@ -1095,7 +1193,7 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var composerOverlayLayer: some View {
-        if store.selectedMedia != nil {
+        if stagedMedia != nil {
             GeometryReader { proxy in
                 if overlayInputMode == .text || !store.textOverlay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     EditableStoryOverlayChip(
@@ -1162,7 +1260,7 @@ struct StoryComposerView: View {
     }
 
     private func openOverlayInput(_ mode: ComposerOverlayInputMode) {
-        guard store.selectedMedia != nil else {
+        guard stagedMedia != nil else {
             return
         }
 
@@ -1256,7 +1354,7 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var mediaPreview: some View {
-        switch store.selectedMedia {
+        switch stagedMedia ?? store.selectedMedia {
         case .image(let upload):
             Image(uiImage: upload.image)
                 .resizable()
@@ -1272,7 +1370,7 @@ struct StoryComposerView: View {
                     .resizable()
                     .scaledToFill()
                     .onAppear {
-                        store.selectedMedia = .image(photo)
+                        enterComposer(with: .image(photo))
                     }
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(
@@ -1281,7 +1379,7 @@ struct StoryComposerView: View {
                 )
                     .onAppear {
                         let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack
-                        store.selectedMedia = .video(StoryVideoUpload(url: videoURL, source: source))
+                        enterComposer(with: .video(StoryVideoUpload(url: videoURL, source: source)))
                     }
             } else if camera.authorizationStatus == .authorized {
                 CameraPreview(
@@ -1322,15 +1420,31 @@ struct StoryComposerView: View {
             return
         }
 
-        if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-            if let pickedVideo = try? await item.loadTransferable(type: PickedVideo.self) {
-                store.selectedMedia = .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
-            }
-            return
+        store.error = nil
+        store.uploadStatus = nil
+        overlayInputMode = nil
+        isOverlayInputFocused = false
+        camera.capturedPhoto = nil
+        camera.capturedVideoURL = nil
+        defer {
+            photoPickerItem = nil
         }
 
-        if let pickedImage = try? await item.loadTransferable(type: PickedImage.self) {
-            store.selectedMedia = .image(pickedImage.upload)
+        do {
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
+               let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
+                enterComposer(with: .video(StoryVideoUpload(url: pickedVideo.url, source: .library)))
+                return
+            }
+
+            if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
+                enterComposer(with: .image(pickedImage.upload))
+                return
+            }
+
+            store.error = "Could not load that media. Try another photo or video."
+        } catch {
+            store.error = "Could not load that media. Try another photo or video."
         }
     }
 
@@ -1422,7 +1536,19 @@ struct StoryComposerView: View {
         camera.stopRecording()
     }
 
+    private func uploadSelectedMedia() async {
+        guard !store.isUploading else {
+            return
+        }
+
+        if let response = await store.upload(api: api) {
+            stagedMedia = nil
+            onUploadRegistered(response)
+        }
+    }
+
     private func resetCapture(clearQuote: Bool = false) {
+        stagedMedia = nil
         store.selectedMedia = nil
         store.error = nil
         store.textOverlay = ""
@@ -1440,6 +1566,15 @@ struct StoryComposerView: View {
         isOverlayInputFocused = false
         camera.capturedPhoto = nil
         camera.capturedVideoURL = nil
+    }
+
+    private func enterComposer(with media: PickedStoryMedia) {
+        store.error = nil
+        store.uploadStatus = nil
+        overlayInputMode = nil
+        isOverlayInputFocused = false
+        stagedMedia = media
+        store.selectedMedia = media
     }
 
     private func updateRecordingProgress(now: Date) {

@@ -246,6 +246,13 @@
       "when": 1780926000000,
       "tag": "0034_video_startup_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1781100000000,
+      "tag": "0035_story_original_renditions",
+      "breakpoints": true
     }
   ]
 }

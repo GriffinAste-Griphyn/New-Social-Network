@@ -261,6 +261,7 @@ final class AuthStore: ObservableObject {
         api.clearCurrentUserMediaCache()
         Task {
             await MediaFileDiskCache.shared.removeAll()
+            HLSAssetDownloadCoordinator.shared.removeAll()
         }
         api.authToken = nil
         stage = .landing

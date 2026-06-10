@@ -29,6 +29,7 @@ import type { ContentModerationResult } from "@/lib/safety/policy"
 import {
   creatorProfiles,
   creatorScores,
+  mediaAssets,
   stories,
   storyElements,
   storyInteractions,
@@ -72,6 +73,23 @@ type FeedStoryRow = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  storageProvider: string | null
+  storageKey: string | null
+  contentType: string | null
+  byteSize: number | null
+  checksum: string | null
+  width: number | null
+  height: number | null
+  originalMediaUrl: string | null
+  originalThumbnailUrl: string | null
+  originalStorageProvider: string | null
+  originalStorageKey: string | null
+  originalContentType: string | null
+  originalByteSize: number | null
+  originalChecksum: string | null
+  originalWidth: number | null
+  originalHeight: number | null
+  originalDurationMs: number | null
   caption: string | null
   durationMs: number | null
   processingStatus: string
@@ -112,6 +130,25 @@ type RankedStoryRow = FeedStoryRow & {
   feedScore: number
 }
 
+type StoryMediaRendition = {
+  mediaUrl: string
+  thumbnailUrl: string | null
+  storageProvider?: string | null
+  storageKey?: string | null
+  contentType?: string | null
+  byteSize?: number | null
+  checksum?: string | null
+  width?: number | null
+  height?: number | null
+  durationMs?: number | null
+  processingStatus?: string | null
+}
+
+type StoryMediaRenditions = {
+  playback: StoryMediaRendition
+  original: StoryMediaRendition | null
+}
+
 function toCompleteStoryRow<T extends {
   creatorName: string | null
   creatorHandle: string | null
@@ -127,6 +164,43 @@ function toCompleteStoryRow<T extends {
     ...row,
     creatorName: row.creatorName,
     creatorHandle: row.creatorHandle,
+  }
+}
+
+function storyMediaRenditions(row: FeedStoryRow): StoryMediaRenditions {
+  const playbackMediaUrl = publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl
+  const playbackThumbnailUrl = publicStoryMediaUrl(row.thumbnailUrl)
+
+  return {
+    playback: {
+      mediaUrl: playbackMediaUrl,
+      thumbnailUrl: playbackThumbnailUrl,
+      storageProvider: row.storageProvider,
+      storageKey: row.storageKey,
+      contentType: row.contentType,
+      byteSize: row.byteSize,
+      checksum: row.checksum,
+      width: row.width,
+      height: row.height,
+      durationMs: row.durationMs,
+      processingStatus: row.processingStatus,
+    },
+    original: row.originalMediaUrl
+      ? {
+          mediaUrl:
+            publicStoryMediaUrl(row.originalMediaUrl) ?? row.originalMediaUrl,
+          thumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
+          storageProvider: row.originalStorageProvider,
+          storageKey: row.originalStorageKey,
+          contentType: row.originalContentType,
+          byteSize: row.originalByteSize,
+          checksum: row.originalChecksum,
+          width: row.originalWidth,
+          height: row.originalHeight,
+          durationMs: row.originalDurationMs,
+          processingStatus: "ready",
+        }
+      : null,
   }
 }
 
@@ -155,6 +229,7 @@ export type SuggestedAccount = {
 
 export type FeedStoryCard = SocialStoryCard & {
   processingStatus?: string
+  renditions?: StoryMediaRenditions
 }
 
 export type MyStoryElement = {
@@ -209,6 +284,7 @@ export type StoryStackItem = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  renditions?: StoryMediaRenditions
   processingStatus?: string
   title: string
   postedAt: string
@@ -267,6 +343,24 @@ type StoredAssetStory = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  storageProvider?: string | null
+  storageKey?: string | null
+  contentType?: string | null
+  byteSize?: number | null
+  checksum?: string | null
+  width?: number | null
+  height?: number | null
+  durationMs?: number | null
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
+  originalStorageProvider?: string | null
+  originalStorageKey?: string | null
+  originalContentType?: string | null
+  originalByteSize?: number | null
+  originalChecksum?: string | null
+  originalWidth?: number | null
+  originalHeight?: number | null
+  originalDurationMs?: number | null
   processingStatus: string
 }
 
@@ -440,6 +534,7 @@ function buildFeedStoryCard(
     assetKind: row.assetKind,
     mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+    renditions: storyMediaRenditions(row),
     processingStatus: row.processingStatus,
     title:
       row.assetKind === "video" && row.processingStatus === "processing"
@@ -691,6 +786,7 @@ function buildStoryStack(
       assetKind: row.assetKind,
       mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+      renditions: storyMediaRenditions(row),
       processingStatus: row.processingStatus,
       postedAt: formatStoryPostedAt(row.createdAt),
       durationSeconds:
@@ -791,6 +887,23 @@ async function getLiveStoryRows() {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      storageProvider: stories.storageProvider,
+      storageKey: stories.storageKey,
+      contentType: stories.contentType,
+      byteSize: stories.byteSize,
+      checksum: stories.checksum,
+      width: stories.width,
+      height: stories.height,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
+      originalStorageProvider: stories.originalStorageProvider,
+      originalStorageKey: stories.originalStorageKey,
+      originalContentType: stories.originalContentType,
+      originalByteSize: stories.originalByteSize,
+      originalChecksum: stories.originalChecksum,
+      originalWidth: stories.originalWidth,
+      originalHeight: stories.originalHeight,
+      originalDurationMs: stories.originalDurationMs,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -849,6 +962,23 @@ async function getLiveStoryRowsForCreator(
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      storageProvider: stories.storageProvider,
+      storageKey: stories.storageKey,
+      contentType: stories.contentType,
+      byteSize: stories.byteSize,
+      checksum: stories.checksum,
+      width: stories.width,
+      height: stories.height,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
+      originalStorageProvider: stories.originalStorageProvider,
+      originalStorageKey: stories.originalStorageKey,
+      originalContentType: stories.originalContentType,
+      originalByteSize: stories.originalByteSize,
+      originalChecksum: stories.originalChecksum,
+      originalWidth: stories.originalWidth,
+      originalHeight: stories.originalHeight,
+      originalDurationMs: stories.originalDurationMs,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -1449,6 +1579,16 @@ export async function createStory(input: CreateStoryInput) {
     thumbnailUrl: input.storedAsset.thumbnailUrl,
     storageProvider: input.storedAsset.storageProvider,
     storageKey: input.storedAsset.storageKey,
+    originalMediaUrl: input.storedAsset.originalMediaUrl ?? null,
+    originalThumbnailUrl: input.storedAsset.originalThumbnailUrl ?? null,
+    originalStorageProvider: input.storedAsset.originalStorageProvider ?? null,
+    originalStorageKey: input.storedAsset.originalStorageKey ?? null,
+    originalContentType: input.storedAsset.originalContentType ?? null,
+    originalByteSize: input.storedAsset.originalByteSize ?? null,
+    originalChecksum: input.storedAsset.originalChecksum ?? null,
+    originalWidth: input.storedAsset.originalWidth ?? null,
+    originalHeight: input.storedAsset.originalHeight ?? null,
+    originalDurationMs: input.storedAsset.originalDurationMs ?? null,
     contentType: input.storedAsset.contentType,
     byteSize: input.storedAsset.byteSize,
     checksum: input.storedAsset.checksum,
@@ -1535,6 +1675,24 @@ export async function getStoryByStoredAssetForOwner(input: {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      storageProvider: stories.storageProvider,
+      storageKey: stories.storageKey,
+      contentType: stories.contentType,
+      byteSize: stories.byteSize,
+      checksum: stories.checksum,
+      width: stories.width,
+      height: stories.height,
+      durationMs: stories.durationMs,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
+      originalStorageProvider: stories.originalStorageProvider,
+      originalStorageKey: stories.originalStorageKey,
+      originalContentType: stories.originalContentType,
+      originalByteSize: stories.originalByteSize,
+      originalChecksum: stories.originalChecksum,
+      originalWidth: stories.originalWidth,
+      originalHeight: stories.originalHeight,
+      originalDurationMs: stories.originalDurationMs,
       processingStatus: stories.processingStatus,
     })
     .from(stories)
@@ -1550,6 +1708,82 @@ export async function getStoryByStoredAssetForOwner(input: {
     .limit(1)
 
   return story ?? null
+}
+
+export async function attachOriginalStoryRenditionForOwner(input: {
+  ownerId: string
+  storyId: string
+  storedAsset: StoredStoryAsset
+}) {
+  const db = getDb()
+  const [story] = await db
+    .select({
+      id: stories.id,
+      assetKind: stories.assetKind,
+      mediaAssetId: stories.mediaAssetId,
+      originalStorageProvider: stories.originalStorageProvider,
+      originalStorageKey: stories.originalStorageKey,
+    })
+    .from(stories)
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.creatorId, input.ownerId),
+        eq(stories.assetKind, "video"),
+      ),
+    )
+    .limit(1)
+
+  if (!story) {
+    throw new StoryUploadError("Story not found.")
+  }
+
+  if (
+    story.originalStorageProvider === input.storedAsset.storageProvider &&
+    story.originalStorageKey === input.storedAsset.storageKey
+  ) {
+    return { storyId: story.id, alreadyAttached: true }
+  }
+
+  const originalFields = {
+    originalMediaUrl:
+      input.storedAsset.originalMediaUrl ?? input.storedAsset.mediaUrl,
+    originalThumbnailUrl:
+      input.storedAsset.originalThumbnailUrl ?? input.storedAsset.thumbnailUrl,
+    originalStorageProvider:
+      input.storedAsset.originalStorageProvider ?? input.storedAsset.storageProvider,
+    originalStorageKey:
+      input.storedAsset.originalStorageKey ?? input.storedAsset.storageKey,
+    originalContentType:
+      input.storedAsset.originalContentType ?? input.storedAsset.contentType,
+    originalByteSize:
+      input.storedAsset.originalByteSize ?? input.storedAsset.byteSize,
+    originalChecksum:
+      input.storedAsset.originalChecksum ?? input.storedAsset.checksum,
+    originalWidth: input.storedAsset.originalWidth ?? input.storedAsset.width,
+    originalHeight: input.storedAsset.originalHeight ?? input.storedAsset.height,
+    originalDurationMs:
+      input.storedAsset.originalDurationMs ?? input.storedAsset.durationMs,
+  }
+
+  await db
+    .update(stories)
+    .set(originalFields)
+    .where(eq(stories.id, story.id))
+
+  await db
+    .update(mediaAssets)
+    .set({
+      ...originalFields,
+      updatedAt: new Date(),
+    })
+    .where(eq(mediaAssets.id, story.mediaAssetId))
+
+  await invalidateMobileFeedSnapshotsForCreator(input.ownerId).catch(
+    () => undefined,
+  )
+
+  return { storyId: story.id, alreadyAttached: false }
 }
 
 export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {

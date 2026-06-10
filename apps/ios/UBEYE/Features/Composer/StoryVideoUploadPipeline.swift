@@ -15,6 +15,10 @@ struct PreparedStoryVideo {
     let shouldUploadOriginalQuality: Bool
     let strategy: StoryVideoUploadStrategy
     let inspection: StoryVideoInspection
+
+    var shouldAttachOriginalRendition: Bool {
+        strategy == .normalized && inspection.supportsOriginalQualityUpload
+    }
 }
 
 struct StoryVideoInspection {
@@ -35,6 +39,18 @@ struct StoryVideoInspection {
         }
     }
 
+    var isPlaybackOptimizedOriginal: Bool {
+        switch originalURL.pathExtension.lowercased() {
+        case "mp4", "m4v":
+            return !codecTypes.isEmpty && codecTypes.allSatisfy { codec in
+                let normalizedCodec = codec.lowercased()
+                return normalizedCodec == "avc1" || normalizedCodec == "avc3"
+            }
+        default:
+            return false
+        }
+    }
+
     var diagnosticSummary: String {
         [
             "source=\(source.diagnosticName)",
@@ -44,6 +60,7 @@ struct StoryVideoInspection {
             preferredTransform.map { "transform=\(Self.transformSummary($0))" },
             codecTypes.isEmpty ? "codecs=none" : "codecs=\(codecTypes.joined(separator: "."))",
             "originalSupported=\(supportsOriginalQualityUpload)",
+            "playbackOptimized=\(isPlaybackOptimizedOriginal)",
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -164,6 +181,10 @@ struct StoryVideoUploadAttempt {
             .joined(separator: " ")
     }
 
+    static func sanitizedDiagnostic(_ value: String) -> String {
+        sanitize(value)
+    }
+
     private static func sanitize(_ value: String) -> String {
         let allowed = value.map { character -> Character in
             character.isLetter || character.isNumber || "-_./:".contains(character)
@@ -177,6 +198,7 @@ struct StoryVideoUploadAttempt {
 
 enum StoryVideoUploadNormalizer {
     private static let maxUploadBytes: Int64 = 300 * 1024 * 1024
+    private static let maxOriginalFastPathBytes: Int64 = 75 * 1024 * 1024
 
     static func prepare(
         url: URL,
@@ -190,7 +212,7 @@ enum StoryVideoUploadNormalizer {
             throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
         }
 
-        if inspection.byteSize <= maxUploadBytes, inspection.supportsOriginalQualityUpload {
+        if inspection.byteSize <= maxOriginalFastPathBytes, inspection.isPlaybackOptimizedOriginal {
             MediaPerformance.mark("video_upload_strategy original \(inspection.diagnosticSummary)")
             return PreparedStoryVideo(
                 url: url,
@@ -201,6 +223,12 @@ enum StoryVideoUploadNormalizer {
                 strategy: .originalQuality,
                 inspection: inspection
             )
+        }
+        if inspection.supportsOriginalQualityUpload {
+            let reason = inspection.byteSize > maxOriginalFastPathBytes
+                ? "large_original"
+                : "container_or_codec"
+            MediaPerformance.mark("video_upload_original_proxy_required reason=\(reason) \(inspection.diagnosticSummary)")
         }
 
         let normalizedURL = try await normalizedVideoURL(
@@ -386,9 +414,9 @@ enum StoryVideoUploadNormalizer {
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
-            AVAssetExportPresetHighestQuality,
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
+            AVAssetExportPresetHighestQuality,
         ]
         var presets: [String] = []
 

@@ -132,6 +132,7 @@ describe("story upload and mobile feed API", () => {
       id: createdStoryId,
       status: "live",
       processingStatus: "ready",
+      hasOriginalRendition: false,
       moderationStatus: "approved",
       moderationReason: null,
       providerStatus: "ready",

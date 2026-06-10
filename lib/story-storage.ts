@@ -59,6 +59,16 @@ export type StoredStoryAsset = {
   thumbnailUrl: string | null
   storageProvider: "local" | "vercel-blob" | "cloudflare-stream"
   storageKey: string
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
+  originalStorageProvider?: "local" | "vercel-blob" | "cloudflare-stream" | null
+  originalStorageKey?: string | null
+  originalContentType?: string | null
+  originalByteSize?: number | null
+  originalChecksum?: string | null
+  originalWidth?: number | null
+  originalHeight?: number | null
+  originalDurationMs?: number | null
   contentType: string
   byteSize: number
   checksum: string
@@ -419,12 +429,24 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
   }
 
+  const mediaUrl = buildStoryMediaRoute(input.pathname)
+
   return {
     assetKind: "video",
-    mediaUrl: buildStoryMediaRoute(input.pathname),
+    mediaUrl,
     thumbnailUrl,
     storageProvider: "vercel-blob",
     storageKey: input.pathname,
+    originalMediaUrl: mediaUrl,
+    originalThumbnailUrl: thumbnailUrl,
+    originalStorageProvider: "vercel-blob",
+    originalStorageKey: input.pathname,
+    originalContentType: input.contentType,
+    originalByteSize: input.byteSize,
+    originalChecksum: input.checksum,
+    originalWidth: input.width ?? null,
+    originalHeight: input.height ?? null,
+    originalDurationMs: input.durationMs ?? null,
     contentType: input.contentType,
     byteSize: input.byteSize,
     checksum: input.checksum,

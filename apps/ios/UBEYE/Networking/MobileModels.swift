@@ -124,6 +124,25 @@ struct StoryTextOverlay: Codable, Hashable, Identifiable {
     let sourceActorAvatarUrl: URL?
 }
 
+struct StoryMediaRendition: Codable, Hashable {
+    let mediaUrl: URL
+    let thumbnailUrl: URL?
+    let storageProvider: String?
+    let storageKey: String?
+    let contentType: String?
+    let byteSize: Int?
+    let checksum: String?
+    let width: Int?
+    let height: Int?
+    let durationMs: Int?
+    let processingStatus: String?
+}
+
+struct StoryMediaRenditions: Codable, Hashable {
+    let playback: StoryMediaRendition
+    let original: StoryMediaRendition?
+}
+
 struct QuotedStoryReply: Identifiable, Hashable {
     let id: String
     let actorName: String
@@ -139,6 +158,7 @@ struct StoryCard: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
@@ -149,6 +169,14 @@ struct StoryCard: Codable, Identifiable, Hashable {
 }
 
 extension StoryCard {
+    var playbackMediaUrl: URL {
+        renditions?.playback.mediaUrl ?? mediaUrl
+    }
+
+    var playbackThumbnailUrl: URL? {
+        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+    }
+
     var isProcessingVideo: Bool {
         assetKind == .video && processingStatus != nil && processingStatus != "ready"
     }
@@ -204,6 +232,7 @@ struct MobileFeedResponse: Codable {
     let followingStories: [StoryCard]
     let followingTimelineStories: [StoryCard]?
     let discoverTiles: [DiscoverTile]
+    let initialStoryStacks: [String: StoryStackResponse]?
     let suggestedAccounts: [SuggestedAccount]
     let myStory: MyStorySummary
 }
@@ -330,6 +359,7 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
@@ -340,6 +370,14 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
 }
 
 extension StoryStackItem {
+    var playbackMediaUrl: URL {
+        renditions?.playback.mediaUrl ?? mediaUrl
+    }
+
+    var playbackThumbnailUrl: URL? {
+        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+    }
+
     var isProcessingVideo: Bool {
         assetKind == .video && processingStatus != nil && processingStatus != "ready"
     }
@@ -354,6 +392,7 @@ struct StoryInteractionResponse: Codable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let renditions: StoryMediaRenditions?
     }
 
     let ok: Bool
@@ -461,6 +500,7 @@ struct StoryUploadResponse: Codable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let renditions: StoryMediaRenditions?
     }
 
     let ok: Bool
@@ -511,11 +551,18 @@ struct OriginalVideoBlobUploadResult: Codable {
     let etag: String?
 }
 
+struct OriginalVideoAttachResponse: Codable {
+    let ok: Bool
+    let storyId: String
+    let alreadyAttached: Bool?
+}
+
 struct StoryStatusResponse: Codable {
     struct Story: Codable {
         let id: String
         let status: String
         let processingStatus: String
+        let hasOriginalRendition: Bool?
         let isLive: Bool
     }
 

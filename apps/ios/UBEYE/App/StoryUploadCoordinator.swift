@@ -43,7 +43,7 @@ final class StoryUploadCoordinator: ObservableObject {
     }
 
     private func preheatUploadThumbnail(_ response: StoryUploadResponse) {
-        guard let thumbnailUrl = response.asset.thumbnailUrl else {
+        guard let thumbnailUrl = response.asset.renditions?.playback.thumbnailUrl ?? response.asset.thumbnailUrl else {
             return
         }
 

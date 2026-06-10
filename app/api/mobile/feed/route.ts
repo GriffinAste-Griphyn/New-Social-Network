@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { getMobileInitialStoryStacks } from "@/lib/mobile-story-stacks"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
@@ -37,15 +38,60 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 function absoluteStoryCardMedia<T extends {
   mediaUrl: string
   thumbnailUrl: string | null
+  renditions?: {
+    playback: {
+      mediaUrl: string
+      thumbnailUrl: string | null
+    }
+    original: {
+      mediaUrl: string
+      thumbnailUrl: string | null
+    } | null
+  }
 }>(story: T, request: Request) {
+  const mediaUrl =
+    publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
+    story.mediaUrl
+  const thumbnailUrl = publicStoryMediaUrl(story.thumbnailUrl, request, {
+    signed: true,
+  })
+
   return {
     ...story,
-    mediaUrl:
-      publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
-      story.mediaUrl,
-    thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl, request, {
-      signed: true,
-    }),
+    mediaUrl,
+    thumbnailUrl,
+    renditions: story.renditions
+      ? {
+          playback: {
+            ...story.renditions.playback,
+            mediaUrl:
+              publicStoryMediaUrl(story.renditions.playback.mediaUrl, request, {
+                signed: true,
+              }) ?? story.renditions.playback.mediaUrl,
+            thumbnailUrl: publicStoryMediaUrl(
+              story.renditions.playback.thumbnailUrl,
+              request,
+              { signed: true },
+            ),
+          },
+          original: story.renditions.original
+            ? {
+                ...story.renditions.original,
+                mediaUrl:
+                  publicStoryMediaUrl(
+                    story.renditions.original.mediaUrl,
+                    request,
+                    { signed: true },
+                  ) ?? story.renditions.original.mediaUrl,
+                thumbnailUrl: publicStoryMediaUrl(
+                  story.renditions.original.thumbnailUrl,
+                  request,
+                  { signed: true },
+                ),
+              }
+            : null,
+        }
+      : undefined,
   }
 }
 
@@ -63,6 +109,30 @@ function collapseStoryCardsByCreator<T extends { handle: string }>(stories: T[])
   })
 
   return collapsedStories
+}
+
+function initialStoryStackIds(input: {
+  hasActiveMyStory: boolean
+  followingStories: Array<{ id: string }>
+  followingTimelineStories: Array<{ id: string }>
+  discoverStories: Array<{ id: string }>
+}) {
+  const seen = new Set<string>()
+  const ids = [
+    ...(input.hasActiveMyStory ? ["my-story"] : []),
+    ...input.followingTimelineStories.slice(0, 4).map((story) => story.id),
+    ...input.followingStories.slice(0, 2).map((story) => story.id),
+    ...input.discoverStories.slice(0, 2).map((story) => story.id),
+  ]
+
+  return ids.filter((id) => {
+    if (seen.has(id)) {
+      return false
+    }
+
+    seen.add(id)
+    return true
+  })
 }
 
 function jsonResponse(payload: unknown) {
@@ -109,6 +179,17 @@ async function feedResponse(
   const discoverStories = collapseStoryCardsByCreator(
     feed.discoverStories.map((story) => absoluteStoryCardMedia(story, request)),
   ).filter((story) => !followedCreatorNames.has(story.creator.toLowerCase()))
+  const initialStoryStacks = await getMobileInitialStoryStacks({
+    storyIds: initialStoryStackIds({
+      hasActiveMyStory: feed.myStory.hasActiveStory,
+      followingStories,
+      followingTimelineStories,
+      discoverStories,
+    }),
+    viewerId: user.id,
+    request,
+    limit: 4,
+  })
   const latestMyStoryItem =
     feed.myStory.items.length > 0
       ? feed.myStory.items[feed.myStory.items.length - 1]
@@ -143,6 +224,7 @@ async function feedResponse(
         title: story.creator,
         subtitle: story.title,
       })),
+      initialStoryStacks,
       suggestedAccounts: feed.suggestedAccounts.map((account) => ({
         ...account,
         imageUrl:

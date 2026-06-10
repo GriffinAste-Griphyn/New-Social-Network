@@ -11,7 +11,12 @@ final class FeedStore: ObservableObject {
     private var uploadedStoryOverrides: [StoryUploadResponse] = []
     private let foregroundRefreshCooldown: TimeInterval = 45
 
-    func load(api: APIClient, showsLoading: Bool = true, useDiskCache: Bool = true) async {
+    func load(
+        api: APIClient,
+        mediaEngine: MediaEngine,
+        showsLoading: Bool = true,
+        useDiskCache: Bool = true
+    ) async {
         let restoreStartedAt = Date()
         if showsLoading, feed == nil {
             isLoading = true
@@ -23,10 +28,10 @@ final class FeedStore: ObservableObject {
             applyUploadedStoryOverridesIfNeeded()
             MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
             if let feed {
-                MediaPreheater.preheat(feed: feed)
+                mediaEngine.preheat(feed: feed, priority: .visible)
             }
             let storyIds = storyStackPrefetchIds(from: feed ?? cached)
-            restoreInitialStoryStacks(ids: storyIds, api: api, refresh: false)
+            restoreInitialStoryStacks(ids: storyIds, api: api, mediaEngine: mediaEngine, refresh: false)
         }
 
         let networkStartedAt = Date()
@@ -37,16 +42,18 @@ final class FeedStore: ObservableObject {
             applyUploadedStoryOverridesIfNeeded()
             MediaPerformance.measure("feed_load", since: networkStartedAt)
             if let feed {
-                MediaPreheater.preheat(feed: feed)
+                mediaEngine.preheat(feed: feed, priority: .visible)
             }
             restoreInitialStoryStacks(
                 ids: storyStackPrefetchIds(from: feed ?? response),
                 api: api,
+                mediaEngine: mediaEngine,
                 refresh: true
             )
             scheduleStoryStackPrefetch(
                 ids: storyStackPrefetchIds(from: feed ?? response),
                 api: api,
+                mediaEngine: mediaEngine,
                 refresh: true
             )
         } catch {
@@ -61,21 +68,26 @@ final class FeedStore: ObservableObject {
         }
     }
 
-    func refreshIfStale(api: APIClient) async {
+    func refreshIfStale(api: APIClient, mediaEngine: MediaEngine) async {
         guard shouldRefreshAfterForeground else {
             if let feed {
-                restoreInitialStoryStacks(ids: storyStackPrefetchIds(from: feed), api: api, refresh: false)
+                restoreInitialStoryStacks(
+                    ids: storyStackPrefetchIds(from: feed),
+                    api: api,
+                    mediaEngine: mediaEngine,
+                    refresh: false
+                )
             }
             return
         }
 
-        await load(api: api, showsLoading: false, useDiskCache: false)
+        await load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
     }
 
-    func warmStoryOpen(storyId: String, in feed: MobileFeedResponse, api: APIClient) {
+    func warmStoryOpen(storyId: String, in feed: MobileFeedResponse, api: APIClient, mediaEngine: MediaEngine) {
         let ids = storyStackPrefetchIds(from: feed)
         let adjacentIds = adjacentStoryIds(to: storyId, in: ids)
-        api.warmStoryOpening(storyId: storyId, adjacentIds: adjacentIds)
+        mediaEngine.warmStoryOpen(storyId: storyId, adjacentIds: adjacentIds, api: api)
     }
 
     func registerUploadedStory(_ response: StoryUploadResponse) {
@@ -104,8 +116,9 @@ final class FeedStore: ObservableObject {
 
     private func feedWithUploadedStory(_ response: StoryUploadResponse, in current: MobileFeedResponse) -> MobileFeedResponse {
         let thumbnailUrl =
+            response.asset.renditions?.playback.thumbnailUrl ??
             response.asset.thumbnailUrl ??
-            (response.asset.assetKind == .image ? response.asset.mediaUrl : nil)
+            (response.asset.assetKind == .image ? response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl : nil)
         if let thumbnailUrl {
             MediaImageCache.shared.preheat([thumbnailUrl], limit: 1)
         }
@@ -115,8 +128,9 @@ final class FeedStore: ObservableObject {
             creator: current.myStory.owner.name,
             handle: current.myStory.owner.handle,
             assetKind: response.asset.assetKind,
-            mediaUrl: response.asset.mediaUrl,
+            mediaUrl: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
             thumbnailUrl: thumbnailUrl,
+            renditions: response.asset.renditions,
             title: response.asset.assetKind == .video && response.processingStatus != "ready"
                 ? "Video processing"
                 : "Story",
@@ -146,6 +160,7 @@ final class FeedStore: ObservableObject {
             followingStories: current.followingStories,
             followingTimelineStories: current.followingTimelineStories,
             discoverTiles: current.discoverTiles,
+            initialStoryStacks: current.initialStoryStacks,
             suggestedAccounts: current.suggestedAccounts,
             myStory: myStory
         )
@@ -172,28 +187,35 @@ final class FeedStore: ObservableObject {
         return ids
     }
 
-    private func restoreInitialStoryStacks(ids: [String], api: APIClient, refresh: Bool) {
+    private func restoreInitialStoryStacks(ids: [String], api: APIClient, mediaEngine: MediaEngine, refresh: Bool) {
         let initialIds = Array(ids.prefix(4))
         guard !initialIds.isEmpty else {
             return
         }
 
-        Task { @MainActor [api] in
-            let restoredStoryCount = await api.restoreCachedStoryStacks(ids: initialIds, limit: 4)
-            MediaPerformance.mark("media_cache_summary feed=visible restored_story_stacks=\(restoredStoryCount)")
-            api.prefetchStoryStacks(ids: initialIds, refresh: refresh, limit: 4)
-        }
+        mediaEngine.restoreAndPrefetchStoryStacks(
+            ids: initialIds,
+            api: api,
+            priority: .visible,
+            refresh: refresh,
+            limit: 4
+        )
     }
 
-    private func scheduleStoryStackPrefetch(ids: [String], api: APIClient, refresh: Bool) {
+    private func scheduleStoryStackPrefetch(ids: [String], api: APIClient, mediaEngine: MediaEngine, refresh: Bool) {
         storyStackPrefetchTask?.cancel()
-        storyStackPrefetchTask = Task { @MainActor [weak self, api] in
+        storyStackPrefetchTask = Task { @MainActor [weak self, api, mediaEngine] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else {
                 return
             }
 
-            api.prefetchStoryStacks(ids: ids, refresh: refresh)
+            mediaEngine.prefetchStoryStacks(
+                ids: ids,
+                api: api,
+                priority: .background,
+                refresh: refresh
+            )
             self?.storyStackPrefetchTask = nil
         }
     }
@@ -220,6 +242,9 @@ final class FeedStore: ObservableObject {
         let discoverTiles = current.discoverTiles.filter { tile in
             tile.id != storyId && tile.activeStoryId != storyId
         }
+        let initialStoryStacks = current.initialStoryStacks?.filter { key, response in
+            key != storyId && !response.story.items.contains { $0.id == storyId }
+        }
         let myStoryItems = current.myStory.items.filter { $0.id != storyId }
         let myStoryWasDeleted = myStoryItems.count != current.myStory.items.count
         let latestMyStoryItem = myStoryItems.last
@@ -228,8 +253,8 @@ final class FeedStore: ObservableObject {
                 owner: current.myStory.owner,
                 hasActiveStory: !myStoryItems.isEmpty,
                 liveCount: myStoryItems.count,
-                latestThumbnailUrl: latestMyStoryItem.flatMap {
-                    $0.assetKind == .image ? $0.mediaUrl : $0.thumbnailUrl
+            latestThumbnailUrl: latestMyStoryItem.flatMap {
+                    $0.assetKind == .image ? $0.playbackMediaUrl : $0.playbackThumbnailUrl
                 },
                 latestAssetKind: latestMyStoryItem?.assetKind,
                 latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
@@ -245,6 +270,7 @@ final class FeedStore: ObservableObject {
             followingStories: followingStories,
             followingTimelineStories: followingTimelineStories,
             discoverTiles: discoverTiles,
+            initialStoryStacks: initialStoryStacks,
             suggestedAccounts: current.suggestedAccounts,
             myStory: myStory
         )
@@ -253,6 +279,7 @@ final class FeedStore: ObservableObject {
 
 struct HomeView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var mediaEngine: MediaEngine
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
     @Environment(\.scenePhase) private var scenePhase
     var uploadedStoryRegistrations: [StoryUploadResponse] = []
@@ -267,7 +294,6 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
-                    uploadNoticeBanner
 
                     if store.isLoading && store.feed == nil {
                         ProgressView()
@@ -288,13 +314,21 @@ struct HomeView: View {
                 .padding(.bottom, 104)
             }
             .refreshable {
-                await store.load(api: api, useDiskCache: false)
+                await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
+            .overlay(alignment: .top) {
+                uploadNoticeBanner
+                    .padding(.horizontal, UBEYEMetrics.screenInset)
+                    .padding(.top, UBEYEMetrics.topAvatarTopInset + UBEYEMetrics.topAvatar + 12)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+            }
+            .animation(.easeOut(duration: 0.16), value: storyUploadNotice.state)
             .task {
-                await store.load(api: api)
+                await store.load(api: api, mediaEngine: mediaEngine)
             }
             .task(id: uploadedStoryRegistrationKey) {
                 applyUploadedStoryRegistrations()
@@ -302,7 +336,7 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
                 Task {
                     api.invalidateStoryStacks()
-                    await store.load(api: api, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidRegister)) { notification in
@@ -313,14 +347,14 @@ struct HomeView: View {
                 store.registerUploadedStory(response)
                 if response.processingStatus == "ready" {
                     Task {
-                        await store.load(api: api, showsLoading: false, useDiskCache: false)
+                        await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                     }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
                 Task {
                     api.invalidateStoryStacks(ids: ["my-story"])
-                    await store.load(api: api, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
@@ -332,7 +366,7 @@ struct HomeView: View {
                 Task {
                     api.invalidateMobileFeedCache()
                     api.invalidateStoryStacks(ids: ["my-story"] + [storyId].compactMap { $0 })
-                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -341,7 +375,7 @@ struct HomeView: View {
                 }
 
                 Task {
-                    await store.refreshIfStale(api: api)
+                    await store.refreshIfStale(api: api, mediaEngine: mediaEngine)
                 }
             }
             .fullScreenCover(item: $selectedStory) { route in
@@ -466,7 +500,12 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     MyStoryHomeCard(myStory: feed.myStory) {
                         if feed.myStory.hasActiveStory {
-                            store.warmStoryOpen(storyId: "my-story", in: feed, api: api)
+                            store.warmStoryOpen(
+                                storyId: "my-story",
+                                in: feed,
+                                api: api,
+                                mediaEngine: mediaEngine
+                            )
                             selectedStory = StoryRoute(id: "my-story", source: .ownStory)
                         }
                     }
@@ -474,10 +513,20 @@ struct HomeView: View {
                     ForEach(feed.followingStories) { story in
                         StoryThumb(story: story)
                             .onAppear {
-                                api.prefetchStoryStacks(ids: [story.id], limit: 1)
+                                mediaEngine.prefetchStoryStacks(
+                                    ids: [story.id],
+                                    api: api,
+                                    priority: .visible,
+                                    limit: 1
+                                )
                             }
                             .onTapGesture {
-                                store.warmStoryOpen(storyId: story.id, in: feed, api: api)
+                                store.warmStoryOpen(
+                                    storyId: story.id,
+                                    in: feed,
+                                    api: api,
+                                    mediaEngine: mediaEngine
+                                )
                                 selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                             }
                     }
@@ -517,13 +566,23 @@ struct HomeView: View {
     }
 
     private func prefetchDiscoverTile(_ tile: DiscoverTile) {
-        api.prefetchStoryStacks(ids: [tile.activeStoryId ?? tile.id], limit: 1)
+        mediaEngine.prefetchStoryStacks(
+            ids: [tile.activeStoryId ?? tile.id],
+            api: api,
+            priority: .visible,
+            limit: 1
+        )
     }
 
     private func openDiscoverTile(_ tile: DiscoverTile) {
         let storyId = tile.activeStoryId ?? tile.id
         if let feed = store.feed {
-            store.warmStoryOpen(storyId: storyId, in: feed, api: api)
+            store.warmStoryOpen(
+                storyId: storyId,
+                in: feed,
+                api: api,
+                mediaEngine: mediaEngine
+            )
         }
         selectedStory = StoryRoute(id: storyId, source: .discover)
     }
@@ -539,7 +598,7 @@ struct HomeView: View {
                 body: Body(creatorId: creator.id)
             )
             NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
-            await store.load(api: api)
+            await store.load(api: api, mediaEngine: mediaEngine)
             return true
         } catch {
             store.error = error.localizedDescription
@@ -664,7 +723,7 @@ struct StoryThumb: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            CachedAsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
+            CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 Color.ubeyeSubtle
@@ -853,7 +912,7 @@ struct StoryMediaView: View {
     var body: some View {
         if story.isProcessingVideo {
             ZStack {
-                if let thumbnailUrl = story.thumbnailUrl {
+                if let thumbnailUrl = story.playbackThumbnailUrl {
                     CachedAsyncImage(url: thumbnailUrl) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
@@ -867,9 +926,9 @@ struct StoryMediaView: View {
                     .tint(.white)
             }
         } else if story.assetKind == .video {
-            AutoPlayVideoPlayer(url: story.mediaUrl, thumbnailUrl: story.thumbnailUrl)
+            AutoPlayVideoPlayer(url: story.playbackMediaUrl, thumbnailUrl: story.playbackThumbnailUrl)
         } else {
-            CachedAsyncImage(url: story.mediaUrl) { image in
+            CachedAsyncImage(url: story.playbackMediaUrl) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ProgressView().tint(.white)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FollowingView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var mediaEngine: MediaEngine
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
@@ -46,7 +47,12 @@ struct FollowingView: View {
                                     )
                                 }
                                 .onAppear {
-                                    api.prefetchStoryStacks(ids: [story.id], limit: 1)
+                                    mediaEngine.prefetchStoryStacks(
+                                        ids: [story.id],
+                                        api: api,
+                                        priority: .visible,
+                                        limit: 1
+                                    )
                                 }
                             }
                         }
@@ -57,22 +63,22 @@ struct FollowingView: View {
                 .padding(.bottom, 108)
             }
             .refreshable {
-                await store.load(api: api, useDiskCache: false)
+                await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
             }
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
             .task {
-                await store.load(api: api)
+                await store.load(api: api, mediaEngine: mediaEngine)
             }
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
                 Task {
                     api.invalidateStoryStacks()
-                    await store.load(api: api, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
                 Task {
-                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
@@ -84,7 +90,7 @@ struct FollowingView: View {
                 Task {
                     api.invalidateMobileFeedCache()
                     api.invalidateStoryStacks(ids: [storyId].compactMap { $0 })
-                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -93,7 +99,7 @@ struct FollowingView: View {
                 }
 
                 Task {
-                    await store.load(api: api, showsLoading: false, useDiskCache: false)
+                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
             .fullScreenCover(item: $selectedStory) { route in
@@ -131,7 +137,7 @@ private struct FollowingStoryFeedCard: View {
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
-                CachedAsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
+                CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     FollowingStoryCardSkeleton()

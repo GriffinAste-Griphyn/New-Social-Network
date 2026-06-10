@@ -142,12 +142,15 @@ final class APIClient: ObservableObject {
         }
 
         MediaPerformance.mark(allowExpired ? "feed_disk_cache_restore" : "feed_disk_cache_hit")
+        cacheInitialStoryStacks(response.initialStoryStacks, source: allowExpired ? "feed_disk_restore" : "feed_disk")
         return response
     }
 
     func mobileFeed() async throws -> MobileFeedResponse {
         let response: MobileFeedResponse = try await get("/api/mobile/feed")
+        cacheInitialStoryStacks(response.initialStoryStacks, source: "feed_network")
         await saveFeedToDisk(response)
+        await saveInitialStoryStacksToDisk(response.initialStoryStacks)
         return response
     }
 
@@ -911,6 +914,34 @@ final class APIClient: ObservableObject {
         )
     }
 
+    func attachOriginalQualityVideoRendition(
+        storyId: String,
+        upload: OriginalVideoUploadResponse,
+        fileURL: URL,
+        durationMs: Int?
+    ) async throws -> OriginalVideoAttachResponse {
+        struct Body: Encodable {
+            let pathname: String
+            let contentType: String
+            let byteSize: Int64
+            let checksum: String
+            let durationMs: Int?
+        }
+
+        let byteSize = try videoFileSize(fileURL)
+
+        return try await post(
+            "/api/mobile/stories/\(storyId)/original-video",
+            body: Body(
+                pathname: upload.pathname,
+                contentType: videoMimeType(for: fileURL),
+                byteSize: byteSize,
+                checksum: try fileSHA256Hex(fileURL),
+                durationMs: durationMs
+            )
+        )
+    }
+
     func completeVideoStory(
         upload: VideoUploadResponse,
         fileURL: URL,
@@ -1086,6 +1117,31 @@ final class APIClient: ObservableObject {
 
         await responseCache.write(response, namespace: cacheNamespace, key: "feed")
         MediaPerformance.mark("feed_disk_cache_write")
+    }
+
+    private func cacheInitialStoryStacks(_ stacks: [String: StoryStackResponse]?, source: String) {
+        guard let stacks, !stacks.isEmpty else {
+            return
+        }
+
+        let cachedAt = Date()
+        stacks.forEach { storyId, response in
+            storyStackCache[storyId] = response
+            storyStackRefreshedAt[storyId] = cachedAt
+            MediaPreheater.preheat(stack: response.story)
+        }
+        MediaPerformance.mark("story_stack_manifest_cache source=\(source) count=\(stacks.count)")
+    }
+
+    private func saveInitialStoryStacksToDisk(_ stacks: [String: StoryStackResponse]?) async {
+        guard let cacheNamespace, let stacks, !stacks.isEmpty else {
+            return
+        }
+
+        for (storyId, response) in stacks {
+            await responseCache.write(response, namespace: cacheNamespace, key: storyStackCacheKey(storyId))
+        }
+        MediaPerformance.mark("story_stack_manifest_disk_write count=\(stacks.count)")
     }
 
     private func saveStoryStackToDisk(_ response: StoryStackResponse, storyId: String) async {
