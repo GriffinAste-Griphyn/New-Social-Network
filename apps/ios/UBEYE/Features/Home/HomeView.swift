@@ -17,30 +17,36 @@ final class FeedStore: ObservableObject {
         showsLoading: Bool = true,
         useDiskCache: Bool = true
     ) async {
-        let restoreStartedAt = Date()
         if showsLoading, feed == nil {
             isLoading = true
         }
         error = nil
 
+        let restoreInterval = useDiskCache && feed == nil
+            ? MediaPerformance.beginInterval("feed_disk_restore source=disk")
+            : nil
         if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
             feed = cached
             applyUploadedStoryOverridesIfNeeded()
-            MediaPerformance.measure("feed_disk_restore", since: restoreStartedAt)
+            if let restoreInterval {
+                MediaPerformance.endInterval(restoreInterval, event: "feed_disk_restore source=disk")
+            }
             if let feed {
                 mediaEngine.preheat(feed: feed, priority: .visible)
             }
             let storyIds = storyStackPrefetchIds(from: feed ?? cached)
             restoreInitialStoryStacks(ids: storyIds, api: api, mediaEngine: mediaEngine, refresh: false)
+        } else if let restoreInterval {
+            MediaPerformance.cancelInterval(restoreInterval, reason: "miss")
         }
 
-        let networkStartedAt = Date()
+        let networkInterval = MediaPerformance.beginInterval("feed_load source=network")
         do {
             let response = try await api.mobileFeed()
             lastNetworkLoadAt = Date()
             feed = response
             applyUploadedStoryOverridesIfNeeded()
-            MediaPerformance.measure("feed_load", since: networkStartedAt)
+            MediaPerformance.endInterval(networkInterval, event: "feed_load source=network")
             if let feed {
                 mediaEngine.preheat(feed: feed, priority: .visible)
             }
@@ -57,6 +63,7 @@ final class FeedStore: ObservableObject {
                 refresh: true
             )
         } catch {
+            MediaPerformance.cancelInterval(networkInterval, reason: "failed")
             if feed == nil {
                 self.error = error.localizedDescription
             } else {

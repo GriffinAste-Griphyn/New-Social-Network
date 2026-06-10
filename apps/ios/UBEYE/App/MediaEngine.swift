@@ -250,16 +250,21 @@ final class StoryVideoPlaybackPool: ObservableObject {
                     return
                 }
 
-                let startedAt = Date()
+                let prepareInterval = MediaPerformance.beginInterval("video_player_prepared url=\(url.lastPathComponent)")
                 guard let prepared = await Self.buildPreparedPlayer(for: url),
                       !Task.isCancelled else {
+                    MediaPerformance.cancelInterval(prepareInterval, reason: "failed_or_cancelled")
                     self.prepareTasks[url] = nil
                     return
                 }
 
                 self.preparedPlayers[url] = prepared
                 self.prepareTasks[url] = nil
-                MediaPerformance.measure("video_player_prepared url=\(url.lastPathComponent)", since: startedAt)
+                MediaPerformance.endInterval(
+                    prepareInterval,
+                    event: "video_player_prepared url=\(url.lastPathComponent)",
+                    upload: false
+                )
                 self.prune(keeping: desiredSet)
             }
         }

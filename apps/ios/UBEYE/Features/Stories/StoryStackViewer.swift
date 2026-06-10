@@ -322,8 +322,15 @@ struct StoryStackViewer: View {
         .simultaneousGesture(verticalStorySwipeGesture)
         .task {
             mediaEngine.storyViewerDidAppear()
+            let storyOpenMetadata = "id=\(route.id) source=\(String(describing: route.source))"
+            let stackLoadInterval = MediaPerformance.beginInterval("story_open phase=stack_load \(storyOpenMetadata)")
             await store.load(storyId: route.id, api: api, mediaEngine: mediaEngine)
-            MediaPerformance.measure("story_open id=\(route.id)", since: route.openedAt)
+            MediaPerformance.endInterval(
+                stackLoadInterval,
+                event: "story_open phase=stack_load \(storyOpenMetadata)",
+                upload: false
+            )
+            MediaPerformance.measure("story_open \(storyOpenMetadata)", since: route.openedAt)
             if route.source != .ownStory {
                 await store.loadFollows(api: api)
             }
@@ -1911,6 +1918,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var revealTask: Task<Void, Never>?
     private var stallRecoveryTask: Task<Void, Never>?
     private var playbackStartedAt: Date?
+    private var startupInterval: MediaPerformance.Interval?
+    private var startupMetadata = ""
     private var onReadyForPlayback: () -> Void = {}
     private var onProgress: (Double) -> Void = { _ in }
     private var onFinished: () -> Void = {}
@@ -1953,6 +1962,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playTask = Task { @MainActor in
             let startedAt = Date()
             playbackStartedAt = startedAt
+            let startupInterval = MediaPerformance.beginInterval("video_startup url=\(url.lastPathComponent)")
+            self.startupInterval = startupInterval
+            startupMetadata = "url=\(url.lastPathComponent)"
             let prepared = playerPool?.takePreparedPlayer(for: url)
             let resolved = prepared == nil ? await resolvePlaybackURL(for: url) : nil
             let playbackURL = prepared?.playbackURL ?? resolved?.playbackURL ?? url
@@ -1960,9 +1972,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             let delivery = playbackDelivery(for: url)
             let cacheState = prepared?.cacheState ?? resolved?.cacheState ?? "miss"
             let playerSource = prepared == nil ? "fresh" : "pooled"
-            MediaPerformance.mark(
-                "video_startup delivery=\(delivery) cache=\(cacheState) source=\(playerSource) url=\(url.lastPathComponent)"
-            )
+            startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) url=\(url.lastPathComponent)"
+            MediaPerformance.mark("video_startup \(startupMetadata)")
 
             if cacheState == "hit" || cacheState == "hls_download" {
                 MediaPerformance.mark("video_disk_cache_hit state=\(cacheState) url=\(url.lastPathComponent)")
@@ -2103,10 +2114,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         let startedAt = playbackStartedAt ?? Date()
         isReadyForPlayback = true
         onReadyForPlayback()
-        MediaPerformance.measure(
-            "video_first_frame reason=\(reason) url=\(activeURL?.lastPathComponent ?? "unknown")",
-            since: startedAt
-        )
+        let metadata = startupMetadata.isEmpty
+            ? "url=\(activeURL?.lastPathComponent ?? "unknown")"
+            : startupMetadata
+        let firstFrameEvent = "video_first_frame reason=\(reason) \(metadata)"
+        if let startupInterval {
+            MediaPerformance.endInterval(startupInterval, event: firstFrameEvent)
+            self.startupInterval = nil
+        } else {
+            MediaPerformance.measure(firstFrameEvent, since: startedAt)
+        }
     }
 
     private var isPlayerReadyToReveal: Bool {
@@ -2342,6 +2359,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         if let reason, let activeURL {
             MediaPerformance.mark("video_dismissed reason=\(reason) url=\(activeURL.lastPathComponent)")
         }
+        if let startupInterval {
+            MediaPerformance.cancelInterval(startupInterval, reason: reason ?? "cleanup")
+            self.startupInterval = nil
+        }
 
         player?.pause()
         player = nil
@@ -2351,6 +2372,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         lastPublishedProgress = 0
         playbackStartedAt = nil
         activePlaybackURL = nil
+        startupMetadata = ""
     }
 
     private func removeTimeObserver() {

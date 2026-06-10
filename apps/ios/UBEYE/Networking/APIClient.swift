@@ -253,10 +253,10 @@ final class APIClient: ObservableObject {
                     throw APIClientError.invalidResponse
                 }
 
-                let startedAt = Date()
+                let prefetchInterval = MediaPerformance.beginInterval("story_stack_prefetch_end id=\(id)")
                 MediaPerformance.mark("story_stack_prefetch_start id=\(id)")
                 defer {
-                    MediaPerformance.measure("story_stack_prefetch_end id=\(id)", since: startedAt)
+                    MediaPerformance.endInterval(prefetchInterval, event: "story_stack_prefetch_end id=\(id)")
                     self.storyStackFetches[id] = nil
                 }
 
@@ -1082,13 +1082,18 @@ final class APIClient: ObservableObject {
     }
 
     private func fetchStoryStackFromNetwork(storyId: String) async throws -> StoryStackResponse {
-        let startedAt = Date()
-        let response: StoryStackResponse = try await get("/api/mobile/stories/\(storyId)")
-        storyStackCache[storyId] = response
-        storyStackRefreshedAt[storyId] = Date()
-        await saveStoryStackToDisk(response, storyId: storyId)
-        MediaPerformance.measure("story_stack_network id=\(storyId)", since: startedAt)
-        return response
+        let networkInterval = MediaPerformance.beginInterval("story_stack_network id=\(storyId)")
+        do {
+            let response: StoryStackResponse = try await get("/api/mobile/stories/\(storyId)")
+            storyStackCache[storyId] = response
+            storyStackRefreshedAt[storyId] = Date()
+            await saveStoryStackToDisk(response, storyId: storyId)
+            MediaPerformance.endInterval(networkInterval, event: "story_stack_network id=\(storyId)")
+            return response
+        } catch {
+            MediaPerformance.cancelInterval(networkInterval, reason: "failed")
+            throw error
+        }
     }
 
     private func cachedStoryStack(storyId: String) async -> StoryStackResponse? {

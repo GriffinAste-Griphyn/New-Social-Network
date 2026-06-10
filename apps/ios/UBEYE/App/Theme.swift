@@ -216,6 +216,7 @@ struct TopAvatarSpacer: View {
 
 enum MediaPerformance {
     private static let logger = Logger(subsystem: "com.griffinaste.ubeye", category: "media")
+    private static let signpostLog = OSLog(subsystem: "com.griffinaste.ubeye", category: "media.signpost")
     private static let uploadableEventNames: Set<String> = [
         "api_request",
         "api_server_timing",
@@ -266,6 +267,12 @@ enum MediaPerformance {
         "video_stalled",
     ]
 
+    struct Interval {
+        fileprivate let event: String
+        fileprivate let startedAt: Date
+        fileprivate let signpostID: OSSignpostID
+    }
+
     static func configureUpload(
         _ send: @escaping ([MobilePerformanceEventUpload]) async throws -> Void
     ) {
@@ -274,15 +281,79 @@ enum MediaPerformance {
         }
     }
 
+    @discardableResult
+    static func beginInterval(_ event: String) -> Interval {
+        let signpostID = OSSignpostID(log: signpostLog)
+        os_signpost(
+            .begin,
+            log: signpostLog,
+            name: "MediaOperation",
+            signpostID: signpostID,
+            "%{public}@",
+            event as NSString
+        )
+        logger.debug("begin \(event, privacy: .public)")
+        return Interval(event: event, startedAt: Date(), signpostID: signpostID)
+    }
+
+    static func endInterval(_ interval: Interval, event: String? = nil, upload: Bool = true) {
+        let resolvedEvent = event ?? interval.event
+        let elapsedMs = Int(Date().timeIntervalSince(interval.startedAt) * 1000)
+        os_signpost(
+            .end,
+            log: signpostLog,
+            name: "MediaOperation",
+            signpostID: interval.signpostID,
+            "%{public}@ duration_ms=%{public}ld",
+            resolvedEvent as NSString,
+            elapsedMs
+        )
+        logMeasuredEvent(resolvedEvent, elapsedMs: elapsedMs, upload: upload)
+    }
+
+    static func cancelInterval(_ interval: Interval, reason: String) {
+        os_signpost(
+            .end,
+            log: signpostLog,
+            name: "MediaOperation",
+            signpostID: interval.signpostID,
+            "%{public}@ cancelled reason=%{public}@",
+            interval.event as NSString,
+            reason as NSString
+        )
+        logger.debug("cancel \(interval.event, privacy: .public) reason=\(reason, privacy: .public)")
+    }
+
     static func mark(_ event: String) {
+        os_signpost(
+            .event,
+            log: signpostLog,
+            name: "MediaEvent",
+            "%{public}@",
+            event as NSString
+        )
         logger.info("\(event, privacy: .public)")
         enqueue(event, durationMs: nil)
     }
 
     static func measure(_ event: String, since start: Date) {
         let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+        logMeasuredEvent(event, elapsedMs: elapsedMs, upload: true)
+    }
+
+    private static func logMeasuredEvent(_ event: String, elapsedMs: Int, upload: Bool) {
+        os_signpost(
+            .event,
+            log: signpostLog,
+            name: "MediaMeasure",
+            "%{public}@ duration_ms=%{public}ld",
+            event as NSString,
+            elapsedMs
+        )
         logger.info("\(event, privacy: .public) \(elapsedMs)ms")
-        enqueue(event, durationMs: elapsedMs)
+        if upload {
+            enqueue(event, durationMs: elapsedMs)
+        }
     }
 
     private static func enqueue(_ event: String, durationMs: Int?) {
@@ -325,6 +396,10 @@ enum MediaPerformance {
         }
 
         return (name, metadata)
+    }
+
+    static func parsedEventForTesting(_ event: String) -> (name: String, metadata: [String: String])? {
+        parse(event)
     }
 }
 
@@ -1341,7 +1416,9 @@ actor MediaVideoPreheater {
     }
 
     private static func preheatOne(_ url: URL, allowsPersistentDownloads: Bool) async {
-        let startedAt = Date()
+        let preheatInterval = MediaPerformance.beginInterval(
+            "video_asset_preheated persistent=\(allowsPersistentDownloads) url=\(url.lastPathComponent)"
+        )
         let playbackURL: URL
 
         if isHTTPStreamingPlaylist(url) {
@@ -1362,8 +1439,13 @@ actor MediaVideoPreheater {
         do {
             _ = try await asset.load(.isPlayable)
             _ = try? await asset.load(.duration)
-            MediaPerformance.measure("video_asset_preheated url=\(url.lastPathComponent)", since: startedAt)
+            MediaPerformance.endInterval(
+                preheatInterval,
+                event: "video_asset_preheated url=\(url.lastPathComponent)",
+                upload: false
+            )
         } catch {
+            MediaPerformance.cancelInterval(preheatInterval, reason: "failed")
             MediaPerformance.mark("video_asset_preheat_failed url=\(url.lastPathComponent)")
         }
     }
