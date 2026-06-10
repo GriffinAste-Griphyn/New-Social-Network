@@ -1,19 +1,18 @@
 import { del } from "@vercel/blob"
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
-  getExistingMobileVideoStoryCompletionByChecksum,
 } from "@/lib/stories/mobile-video-completion"
+import { setStoryThumbnail } from "@/lib/story-store"
 import {
-  createCloudflareStreamOriginalVideoStoryAsset,
+  createOriginalQualityVideoThumbnail,
+  createOriginalQualityVideoStoryAsset,
   isAllowedOriginalQualityVideoContentType,
   maxOriginalStoryVideoUploadBytes,
-  originalQualityVideoSourceFingerprint,
-  publicStoryMediaUrl,
   removeStoryAsset,
   isAllowedOriginalQualityVideoThumbnailContentType,
   maxOriginalStoryVideoThumbnailUploadBytes,
@@ -72,13 +71,6 @@ function originalVideoThumbnailPathname(pathname: string) {
   return extensionIndex >= 0
     ? `${pathname.slice(0, extensionIndex)}-thumb.jpg`
     : `${pathname}-thumb.jpg`
-}
-
-function storyMediaRouteForPathname(pathname: string) {
-  return `/api/story-media/${pathname
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/")}`
 }
 
 function logOriginalVideoCompleteEvent(
@@ -203,38 +195,12 @@ export async function POST(request: Request) {
       return NextResponse.json(existingCompletion)
     }
 
-    const normalizedChecksum = parsed.data.checksum.toLowerCase()
-    const sourceFingerprint = originalQualityVideoSourceFingerprint({
-      pathname: parsed.data.pathname,
-      checksum: normalizedChecksum,
-    })
-    const existingCloudflareCompletion =
-      await getExistingMobileVideoStoryCompletionByChecksum({
-        request,
-        session,
-        checksum: sourceFingerprint,
-        storageProvider: "cloudflare-stream",
-      })
-
-    if (existingCloudflareCompletion) {
-      logOriginalVideoCompleteEvent("complete_reused_cloudflare_copy", {
-        userId: session.id,
-        pathname: parsed.data.pathname,
-        storyId: existingCloudflareCompletion.storyId,
-        processingStatus: existingCloudflareCompletion.processingStatus,
-        moderationStatus: existingCloudflareCompletion.moderationStatus ?? null,
-      })
-
-      return NextResponse.json(existingCloudflareCompletion)
-    }
-
     uploadedPathname = parsed.data.pathname
-    storedAsset = await createCloudflareStreamOriginalVideoStoryAsset({
-      request,
+    storedAsset = await createOriginalQualityVideoStoryAsset({
       pathname: parsed.data.pathname,
       contentType: parsed.data.contentType,
       byteSize: parsed.data.byteSize,
-      checksum: normalizedChecksum,
+      checksum: parsed.data.checksum.toLowerCase(),
       thumbnailPathname: parsed.data.thumbnailPathname ?? null,
       thumbnailContentType: parsed.data.thumbnailContentType ?? null,
       thumbnailByteSize: parsed.data.thumbnailByteSize ?? null,
@@ -243,26 +209,31 @@ export async function POST(request: Request) {
       width: parsed.data.width ?? null,
       height: parsed.data.height ?? null,
     })
-    const moderationMediaUrl = publicStoryMediaUrl(
-      storyMediaRouteForPathname(parsed.data.pathname),
-      request,
-      { signed: true },
-    )
-    const moderationThumbnailUrl = parsed.data.thumbnailPathname
-      ? publicStoryMediaUrl(
-          storyMediaRouteForPathname(parsed.data.thumbnailPathname),
-          request,
-          { signed: true },
-        )
-      : null
+    const thumbnailPathname = parsed.data.pathname
     const completion = await completeMobileVideoStory({
       request,
       session,
       fields: parsed.data,
       storedAsset,
-      moderationMediaUrl,
-      moderationThumbnailUrl,
-      providerStatusFallback: storedAsset.processingStatus,
+      onStoryCreated: async (storyId) => {
+        if (storedAsset?.thumbnailUrl) {
+          return
+        }
+
+        after(async () => {
+          try {
+            const thumbnailUrl =
+              await createOriginalQualityVideoThumbnail(thumbnailPathname)
+            await setStoryThumbnail(storyId, thumbnailUrl)
+          } catch (thumbnailError) {
+            console.error("Could not create original story video thumbnail.", {
+              storyId,
+              pathname: thumbnailPathname,
+              error: thumbnailError,
+            })
+          }
+        })
+      },
     })
 
     const completedAsset = storedAsset
@@ -289,8 +260,7 @@ export async function POST(request: Request) {
     })
     if (storedAsset) {
       await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
-    }
-    if (uploadedPathname) {
+    } else if (uploadedPathname) {
       await del(uploadedPathname).catch(() => undefined)
       await del(originalVideoThumbnailPathname(uploadedPathname)).catch(
         () => undefined,

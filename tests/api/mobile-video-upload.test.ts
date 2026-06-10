@@ -4,7 +4,6 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   createStory,
-  getStoryByChecksumForOwner,
   getStoryByStoredAssetForOwner,
   getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
@@ -13,11 +12,10 @@ import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamClientThumbnailUrl,
   createCloudflareStreamDirectUpload,
-  createCloudflareStreamOriginalVideoStoryAsset,
   createCloudflareStreamStoredVideoAsset,
   createCloudflareStreamTusUpload,
+  createOriginalQualityVideoStoryAsset,
   getCloudflareStreamVideoDetails,
-  originalQualityVideoSourceFingerprint,
   publicStoryMediaUrl,
   removeStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
@@ -41,7 +39,6 @@ vi.mock("@/lib/request-security", async () => {
 
 vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
-  getStoryByChecksumForOwner: vi.fn(),
   getStoryByStoredAssetForOwner: vi.fn(),
   getStoryTextOverlaysForOwner: vi.fn(),
   getStoryUploadStatusForOwner: vi.fn(),
@@ -58,9 +55,9 @@ vi.mock("@/lib/story-storage", async () => {
     createCloudflareStreamClientThumbnailPathname: vi.fn(),
     createCloudflareStreamClientThumbnailUrl: vi.fn(),
     createCloudflareStreamDirectUpload: vi.fn(),
-    createCloudflareStreamOriginalVideoStoryAsset: vi.fn(),
     createCloudflareStreamStoredVideoAsset: vi.fn(),
     createCloudflareStreamTusUpload: vi.fn(),
+    createOriginalQualityVideoStoryAsset: vi.fn(),
     getCloudflareStreamVideoDetails: vi.fn(),
     publicStoryMediaUrl: vi.fn(),
     removeStoryAsset: vi.fn(),
@@ -114,7 +111,6 @@ describe("mobile Cloudflare video upload API", () => {
       isLive: false,
     })
     vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValue(null)
-    vi.mocked(getStoryByChecksumForOwner).mockResolvedValue(null)
     vi.mocked(getStoryTextOverlaysForOwner).mockResolvedValue([])
     vi.mocked(createCloudflareStreamClientThumbnailPathname).mockImplementation(
       (userId, uid) =>
@@ -141,25 +137,20 @@ describe("mobile Cloudflare video upload API", () => {
       }),
     )
     vi.mocked(createCloudflareStreamTusUpload).mockReset()
-    vi.mocked(createCloudflareStreamOriginalVideoStoryAsset).mockResolvedValue({
+    vi.mocked(createOriginalQualityVideoStoryAsset).mockResolvedValue({
       assetKind: "video",
-      mediaUrl:
-        "/api/story-media/cloudflare-stream/22222222222222222222222222222222/manifest/video.m3u8",
+      mediaUrl: "/api/story-media/stories/mobile-original/creator_123/story.mov",
       thumbnailUrl:
         "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
-      storageProvider: "cloudflare-stream",
-      storageKey: "22222222222222222222222222222222",
+      storageProvider: "vercel-blob",
+      storageKey: "stories/mobile-original/creator_123/story.mov",
       contentType: "video/quicktime",
       byteSize: 8 * 1024 * 1024,
-      checksum: originalQualityVideoSourceFingerprint({
-        pathname: "stories/mobile-original/creator_123/story.mov",
-        checksum:
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      }),
+      checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       width: 1080,
       height: 1920,
       durationMs: 6_500,
-      processingStatus: "processing",
+      processingStatus: "ready",
     })
     vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValue({
       readyToStream: false,
@@ -423,7 +414,19 @@ describe("mobile Cloudflare video upload API", () => {
     })
   })
 
-  it("copies original-quality video completion to Cloudflare while passing original moderation URLs", async () => {
+  it("passes absolute signed moderation URLs for original-quality video completion", async () => {
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValueOnce({
+      id: "22222222-2222-4222-8222-222222222222",
+      status: "live",
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: "2026-06-08T16:00:00.000Z",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: true,
+    })
     const { POST } = await import(
       "@/app/api/mobile/stories/video-original-complete/route"
     )
@@ -463,27 +466,10 @@ describe("mobile Cloudflare video upload API", () => {
     const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
-    expect(getStoryByStoredAssetForOwner).toHaveBeenCalledWith({
-      ownerId: "creator_123",
-      storageProvider: "vercel-blob",
-      storageKey: "stories/mobile-original/creator_123/story.mov",
-    })
-    expect(getStoryByChecksumForOwner).toHaveBeenCalledWith({
-      ownerId: "creator_123",
-      checksum: originalQualityVideoSourceFingerprint({
-        pathname: "stories/mobile-original/creator_123/story.mov",
-        checksum:
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      }),
-      storageProvider: "cloudflare-stream",
-    })
-    expect(createCloudflareStreamOriginalVideoStoryAsset).toHaveBeenCalledWith(
+    expect(createOriginalQualityVideoStoryAsset).toHaveBeenCalledWith(
       expect.objectContaining({
-        request: expect.any(Request),
         pathname: "stories/mobile-original/creator_123/story.mov",
         contentType: "video/quicktime",
-        checksum:
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       }),
     )
     expect(createStory).toHaveBeenCalledWith(
@@ -494,15 +480,6 @@ describe("mobile Cloudflare video upload API", () => {
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
         moderationThumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
-        storedAsset: expect.objectContaining({
-          mediaUrl:
-            "/api/story-media/cloudflare-stream/22222222222222222222222222222222/manifest/video.m3u8",
-          storageProvider: "cloudflare-stream",
-          storageKey: "22222222222222222222222222222222",
-          thumbnailUrl:
-            "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
-          processingStatus: "processing",
-        }),
         elements: expect.arrayContaining([
           expect.objectContaining({
             kind: "text",
@@ -518,90 +495,14 @@ describe("mobile Cloudflare video upload API", () => {
       storyId: "22222222-2222-4222-8222-222222222222",
       asset: {
         mediaUrl:
-          "https://app.example.com/api/story-media/cloudflare-stream/22222222222222222222222222222222/manifest/video.m3u8",
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
         thumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
       },
-      processingStatus: "processing",
-      providerStatus: "processing",
+      processingStatus: "ready",
+      providerStatus: null,
       providerError: null,
-      readyAt: null,
-    })
-  })
-
-  it("reuses an existing Cloudflare copy when original-quality completion is retried", async () => {
-    vi.mocked(getStoryByChecksumForOwner).mockResolvedValueOnce({
-      id: "existing-cloudflare-original-copy",
-      assetKind: "video",
-      mediaUrl:
-        "/api/story-media/cloudflare-stream/22222222222222222222222222222222/manifest/video.m3u8",
-      thumbnailUrl:
-        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
-      processingStatus: "processing",
-    })
-    const { POST } = await import(
-      "@/app/api/mobile/stories/video-original-complete/route"
-    )
-    const response = await POST(
-      new Request(
-        "https://app.example.com/api/mobile/stories/video-original-complete",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-forwarded-for": "203.0.113.30",
-          },
-          body: JSON.stringify({
-            pathname: "stories/mobile-original/creator_123/story.mov",
-            contentType: "video/quicktime",
-            byteSize: 8 * 1024 * 1024,
-            checksum:
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            thumbnailPathname:
-              "stories/mobile-original/creator_123/story-thumb.jpg",
-            thumbnailContentType: "image/jpeg",
-            thumbnailByteSize: 42_000,
-            thumbnailChecksum:
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            durationMs: 6_500,
-            width: 1080,
-            height: 1920,
-            caption: "Retry should reuse Cloudflare copy",
-          }),
-        },
-      ),
-    )
-    const payload = await responseJson(response)
-
-    expect(response.status).toBe(200)
-    expect(getStoryByStoredAssetForOwner).toHaveBeenCalledWith({
-      ownerId: "creator_123",
-      storageProvider: "vercel-blob",
-      storageKey: "stories/mobile-original/creator_123/story.mov",
-    })
-    expect(getStoryByChecksumForOwner).toHaveBeenCalledWith({
-      ownerId: "creator_123",
-      checksum: originalQualityVideoSourceFingerprint({
-        pathname: "stories/mobile-original/creator_123/story.mov",
-        checksum:
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      }),
-      storageProvider: "cloudflare-stream",
-    })
-    expect(createCloudflareStreamOriginalVideoStoryAsset).not.toHaveBeenCalled()
-    expect(createStory).not.toHaveBeenCalled()
-    expect(payload).toMatchObject({
-      ok: true,
-      storyId: "existing-cloudflare-original-copy",
-      completionState: "reused",
-      asset: {
-        mediaUrl:
-          "https://app.example.com/api/story-media/cloudflare-stream/22222222222222222222222222222222/manifest/video.m3u8",
-        thumbnailUrl:
-          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
-      },
-      processingStatus: "processing",
-      providerStatus: "processing",
+      readyAt: "2026-06-08T16:00:00.000Z",
     })
   })
 
@@ -666,8 +567,7 @@ describe("mobile Cloudflare video upload API", () => {
       storageProvider: "vercel-blob",
       storageKey: "stories/mobile-original/creator_123/story.mov",
     })
-    expect(getStoryByChecksumForOwner).not.toHaveBeenCalled()
-    expect(createCloudflareStreamOriginalVideoStoryAsset).not.toHaveBeenCalled()
+    expect(createOriginalQualityVideoStoryAsset).not.toHaveBeenCalled()
     expect(createStory).not.toHaveBeenCalled()
     expect(payload).toMatchObject({
       ok: true,

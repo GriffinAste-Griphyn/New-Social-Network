@@ -217,33 +217,6 @@ async function getBlobMetadata(blobPathname: string) {
   }
 }
 
-function storyMediaMetadataHeaders(
-  request: Request,
-  mediaPathname: string,
-  metadata: {
-    size: number
-    contentType: string
-    etag?: string | null
-  },
-) {
-  const headers = new Headers({
-    "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
-    "Content-Length": metadata.size.toString(),
-    "Content-Type": metadata.contentType,
-    "X-Content-Type-Options": "nosniff",
-  })
-
-  if (metadata.etag) {
-    headers.set("ETag", metadata.etag)
-  }
-
-  if (metadata.contentType.startsWith("video/")) {
-    headers.set("Accept-Ranges", "bytes")
-  }
-
-  return headers
-}
-
 async function getStoryForMediaPathname(mediaPathname: string) {
   const encodedRoute = `/api/story-media/${encodeStoryMediaPathname(mediaPathname)}`
   const decodedRoute = `/api/story-media/${mediaPathname}`
@@ -337,61 +310,6 @@ async function canServeStoryMedia(request: Request, mediaPathname: string) {
   return (
     Boolean(session && (isAdmin || isLive || isOwner))
   )
-}
-
-export async function HEAD(
-  request: Request,
-  context: { params: Promise<{ pathname: string[] }> },
-) {
-  const { pathname } = await context.params
-  const mediaPathname = pathname.join("/")
-  const cloudflareStreamMedia = parseCloudflareStreamMediaPathname(mediaPathname)
-  const localMediaFileName = getLocalStoryMediaFileName(mediaPathname)
-
-  if (!isSafeStoryMediaPathname(mediaPathname)) {
-    return notFound()
-  }
-
-  if (!(await canServeStoryMedia(request, mediaPathname))) {
-    return notFound()
-  }
-
-  if (cloudflareStreamMedia) {
-    const remoteUrl =
-      cloudflareStreamMedia.kind === "thumbnail"
-        ? await createCloudflareStreamThumbnailUrl(cloudflareStreamMedia.uid)
-        : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
-    const response = NextResponse.redirect(remoteUrl, { status: 302 })
-
-    response.headers.set(
-      "Cache-Control",
-      getStoryMediaCacheControl(request, mediaPathname),
-    )
-
-    return response
-  }
-
-  if (localMediaFileName) {
-    const metadata = await getLocalStoryMediaMetadata(mediaPathname)
-
-    if (!metadata) {
-      return notFound()
-    }
-
-    return new Response(null, {
-      headers: storyMediaMetadataHeaders(request, mediaPathname, metadata),
-    })
-  }
-
-  const metadata = await getBlobMetadata(mediaPathname)
-
-  if (!metadata) {
-    return notFound()
-  }
-
-  return new Response(null, {
-    headers: storyMediaMetadataHeaders(request, mediaPathname, metadata),
-  })
 }
 
 async function serveLocalStoryMedia(request: Request, mediaPathname: string) {
