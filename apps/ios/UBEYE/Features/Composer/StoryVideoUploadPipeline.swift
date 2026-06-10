@@ -198,7 +198,7 @@ struct StoryVideoUploadAttempt {
 
 enum StoryVideoUploadNormalizer {
     private static let maxUploadBytes: Int64 = 300 * 1024 * 1024
-    private static let maxOriginalFastPathBytes: Int64 = 75 * 1024 * 1024
+    private static let maxOriginalFastPathBytes: Int64 = 110 * 1024 * 1024
 
     static func prepare(
         url: URL,
@@ -414,9 +414,9 @@ enum StoryVideoUploadNormalizer {
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
+            AVAssetExportPresetHighestQuality,
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
-            AVAssetExportPresetHighestQuality,
         ]
         var presets: [String] = []
 

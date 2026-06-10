@@ -933,7 +933,12 @@ struct StoryMediaView: View {
                     .tint(.white)
             }
         } else if story.assetKind == .video {
-            AutoPlayVideoPlayer(url: story.playbackMediaUrl, thumbnailUrl: story.playbackThumbnailUrl)
+            AutoPlayVideoPlayer(
+                url: story.playbackMediaUrl,
+                highQualityUrl: MediaPlaybackQuality.highQualityCandidate(for: story),
+                thumbnailUrl: story.playbackThumbnailUrl,
+                preloadUrls: MediaPlaybackQuality.preloadURLs(for: story)
+            )
         } else {
             CachedAsyncImage(url: story.playbackMediaUrl) { image in
                 image.resizable().scaledToFill()

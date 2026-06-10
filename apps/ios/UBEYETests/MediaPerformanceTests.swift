@@ -35,4 +35,71 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(parsed?.metadata.keys.first?.count, 40)
         XCTAssertEqual(parsed?.metadata.values.first?.count, 500)
     }
+
+    func testDirectPlayableOriginalRequiresSafeReadyMp4UnderCap() {
+        XCTAssertTrue(
+            MediaPlaybackQuality.isDirectPlayableOriginal(
+                rendition(
+                    url: URL(string: "https://example.com/story.mp4")!,
+                    contentType: "video/mp4",
+                    byteSize: 20 * 1024 * 1024,
+                    processingStatus: "ready"
+                )
+            )
+        )
+
+        XCTAssertFalse(
+            MediaPlaybackQuality.isDirectPlayableOriginal(
+                rendition(
+                    url: URL(string: "https://example.com/story.mov")!,
+                    contentType: "video/quicktime",
+                    byteSize: 20 * 1024 * 1024,
+                    processingStatus: "ready"
+                )
+            )
+        )
+
+        XCTAssertFalse(
+            MediaPlaybackQuality.isDirectPlayableOriginal(
+                rendition(
+                    url: URL(string: "https://example.com/story.mp4")!,
+                    contentType: "video/mp4",
+                    byteSize: 120 * 1024 * 1024,
+                    processingStatus: "ready"
+                )
+            )
+        )
+
+        XCTAssertFalse(
+            MediaPlaybackQuality.isDirectPlayableOriginal(
+                rendition(
+                    url: URL(string: "https://example.com/story.mp4")!,
+                    contentType: "video/mp4",
+                    byteSize: 20 * 1024 * 1024,
+                    processingStatus: "processing"
+                )
+            )
+        )
+    }
+
+    private func rendition(
+        url: URL,
+        contentType: String?,
+        byteSize: Int?,
+        processingStatus: String?
+    ) -> StoryMediaRendition {
+        StoryMediaRendition(
+            mediaUrl: url,
+            thumbnailUrl: nil,
+            storageProvider: "vercel-blob",
+            storageKey: "story.mp4",
+            contentType: contentType,
+            byteSize: byteSize,
+            checksum: nil,
+            width: 1080,
+            height: 1920,
+            durationMs: 10_000,
+            processingStatus: processingStatus
+        )
+    }
 }

@@ -392,6 +392,7 @@ struct StoryStackViewer: View {
             } else if item.assetKind == .video {
                 AutoPlayVideoPlayer(
                     url: item.playbackMediaUrl,
+                    highQualityUrl: MediaPlaybackQuality.highQualityCandidate(for: item),
                     thumbnailUrl: item.playbackThumbnailUrl,
                     preloadUrls: adjacentVideoUrls(for: item),
                     playerPool: mediaEngine.storyVideoPlaybackPool,
@@ -986,8 +987,8 @@ struct StoryStackViewer: View {
             return []
         }
 
-        return stack.items[lowerBound...upperBound].compactMap { item in
-            item.isPlayableVideo ? item.playbackMediaUrl : nil
+        return stack.items[lowerBound...upperBound].flatMap { item in
+            MediaPlaybackQuality.preloadURLs(for: item)
         }
     }
 
@@ -1811,6 +1812,7 @@ private struct StoryViewerActionIcon: View {
 
 struct AutoPlayVideoPlayer: View {
     let url: URL
+    let highQualityUrl: URL?
     let thumbnailUrl: URL?
     let preloadUrls: [URL]
     let playerPool: StoryVideoPlaybackPool?
@@ -1823,6 +1825,7 @@ struct AutoPlayVideoPlayer: View {
 
     init(
         url: URL,
+        highQualityUrl: URL? = nil,
         thumbnailUrl: URL? = nil,
         preloadUrls: [URL] = [],
         playerPool: StoryVideoPlaybackPool? = nil,
@@ -1833,6 +1836,7 @@ struct AutoPlayVideoPlayer: View {
         onFinished: @escaping () -> Void = {}
     ) {
         self.url = url
+        self.highQualityUrl = highQualityUrl
         self.thumbnailUrl = thumbnailUrl
         self.preloadUrls = preloadUrls
         self.playerPool = playerPool
@@ -1866,9 +1870,10 @@ struct AutoPlayVideoPlayer: View {
         .animation(.easeOut(duration: 0.12), value: playback.isReadyForPlayback)
         .background(Color.black)
         .onAppear {
-            playerPool?.prepare(urls: [url] + preloadUrls, activeURL: nil)
+            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: nil)
             playback.play(
                 url: url,
+                highQualityUrl: highQualityUrl,
                 playerPool: playerPool,
                 isPaused: isPaused,
                 onReadyForPlayback: onReadyForPlayback,
@@ -1877,9 +1882,22 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: url) { _, nextURL in
-            playerPool?.prepare(urls: [nextURL] + preloadUrls, activeURL: nil)
+            playerPool?.prepare(urls: [nextURL] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: nil)
             playback.play(
                 url: nextURL,
+                highQualityUrl: highQualityUrl,
+                playerPool: playerPool,
+                isPaused: isPaused,
+                onReadyForPlayback: onReadyForPlayback,
+                onProgress: onProgress,
+                onFinished: onFinished
+            )
+        }
+        .onChange(of: highQualityUrl) { _, nextURL in
+            playerPool?.prepare(urls: [url] + [nextURL].compactMap { $0 } + preloadUrls, activeURL: nil)
+            playback.play(
+                url: url,
+                highQualityUrl: nextURL,
                 playerPool: playerPool,
                 isPaused: isPaused,
                 onReadyForPlayback: onReadyForPlayback,
@@ -1888,7 +1906,7 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: preloadUrls) { _, nextUrls in
-            playerPool?.prepare(urls: [url] + nextUrls, activeURL: nil)
+            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + nextUrls, activeURL: nil)
         }
         .onChange(of: isPaused) { _, nextValue in
             playback.setPaused(nextValue)
@@ -1905,6 +1923,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     @Published private(set) var isReadyForPlayback = false
 
     private var activeURL: URL?
+    private var activeHighQualityURL: URL?
     private var activePlaybackURL: URL?
     private var isPaused = false
     private var didFinishPlayback = false
@@ -1929,6 +1948,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
     func play(
         url: URL,
+        highQualityUrl: URL?,
         playerPool: StoryVideoPlaybackPool?,
         isPaused: Bool,
         onReadyForPlayback: @escaping () -> Void,
@@ -1940,22 +1960,23 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         self.onFinished = onFinished
         self.isPaused = isPaused
 
-        if activeURL == url, player != nil {
+        if activeURL == url, activeHighQualityURL == highQualityUrl, player != nil {
             setPaused(isPaused)
             return
         }
 
         cleanupCurrentPlayer(reason: activeURL == nil ? nil : "replace")
         activeURL = url
+        activeHighQualityURL = highQualityUrl
         playbackRetryCount = 0
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
         lastPublishedProgress = 0
-        startPlayback(url: url, playerPool: playerPool)
+        startPlayback(url: url, highQualityUrl: highQualityUrl, playerPool: playerPool)
     }
 
-    private func startPlayback(url: URL, playerPool: StoryVideoPlaybackPool?) {
+    private func startPlayback(url: URL, highQualityUrl: URL?, playerPool: StoryVideoPlaybackPool?) {
         playTask?.cancel()
         revealTask?.cancel()
         revealTask = nil
@@ -1965,18 +1986,23 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             let startupInterval = MediaPerformance.beginInterval("video_startup url=\(url.lastPathComponent)")
             self.startupInterval = startupInterval
             startupMetadata = "url=\(url.lastPathComponent)"
-            let prepared = playerPool?.takePreparedPlayer(for: url)
-            let resolved = prepared == nil ? await resolvePlaybackURL(for: url) : nil
-            let playbackURL = prepared?.playbackURL ?? resolved?.playbackURL ?? url
+            let selected = await MediaPlaybackQuality.preferredPlaybackURL(
+                defaultURL: url,
+                highQualityURL: highQualityUrl,
+                playerPool: playerPool
+            )
+            let prepared = playerPool?.takePreparedPlayer(for: selected.url)
+            let resolved = prepared == nil ? await resolvePlaybackURL(for: selected.url) : nil
+            let playbackURL = prepared?.playbackURL ?? resolved?.playbackURL ?? selected.url
             activePlaybackURL = playbackURL
-            let delivery = playbackDelivery(for: url)
+            let delivery = playbackDelivery(for: selected.url)
             let cacheState = prepared?.cacheState ?? resolved?.cacheState ?? "miss"
             let playerSource = prepared == nil ? "fresh" : "pooled"
-            startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) url=\(url.lastPathComponent)"
+            startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) quality=\(selected.quality) url=\(selected.url.lastPathComponent)"
             MediaPerformance.mark("video_startup \(startupMetadata)")
 
             if cacheState == "hit" || cacheState == "hls_download" {
-                MediaPerformance.mark("video_disk_cache_hit state=\(cacheState) url=\(url.lastPathComponent)")
+                MediaPerformance.mark("video_disk_cache_hit state=\(cacheState) quality=\(selected.quality) url=\(selected.url.lastPathComponent)")
             }
 
             guard !Task.isCancelled else {
@@ -1986,10 +2012,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             player?.pause()
             let next = prepared?.player ?? makeFreshPlayer(playbackURL: playbackURL)
             player = next
-            observeReadiness(player: next, url: url, startedAt: startedAt)
-            observeStalls(player: next, url: url)
-            observeFailures(player: next, url: url)
-            observeCompletion(player: next, url: url)
+            observeReadiness(player: next, url: selected.url, startedAt: startedAt)
+            observeStalls(player: next, url: selected.url)
+            observeFailures(player: next, url: selected.url)
+            observeCompletion(player: next, url: selected.url)
             observeProgress(player: next)
             AppAudioSession.configureForVideoPlayback()
             if isPaused {
@@ -2031,8 +2057,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
-        item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
-        item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
+        item.preferredPeakBitRate = MediaPlaybackQuality.preferredStreamingPeakBitRate
+        item.preferredMaximumResolution = MediaPlaybackQuality.preferredStreamingMaximumResolution
     }
 
     private func playbackDelivery(for url: URL) -> String {
@@ -2302,20 +2328,21 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         guard self.player === player,
               !isReadyForPlayback,
               !didFinishPlayback,
-              activeURL == url,
+              let retryURL = activeURL,
               playbackRetryCount < maxPlaybackRetries else {
             return
         }
 
         playbackRetryCount += 1
-        MediaPerformance.mark("video_retry reason=\(reason) attempt=\(playbackRetryCount) url=\(url.lastPathComponent)")
+        MediaPerformance.mark("video_retry reason=\(reason) attempt=\(playbackRetryCount) url=\(url.lastPathComponent) fallback=\(retryURL.lastPathComponent)")
         cleanupCurrentPlayer(reason: nil)
-        activeURL = url
+        activeURL = retryURL
+        activeHighQualityURL = nil
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
         lastPublishedProgress = 0
-        startPlayback(url: url, playerPool: nil)
+        startPlayback(url: retryURL, highQualityUrl: nil, playerPool: nil)
     }
 
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
@@ -2371,6 +2398,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         didFinishPlayback = false
         lastPublishedProgress = 0
         playbackStartedAt = nil
+        activeHighQualityURL = nil
         activePlaybackURL = nil
         startupMetadata = ""
     }

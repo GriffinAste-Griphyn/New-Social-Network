@@ -178,8 +178,8 @@ final class MediaEngine: ObservableObject {
             return []
         }
 
-        return stack.items[lowerBound...upperBound].compactMap { item in
-            item.isPlayableVideo ? item.playbackMediaUrl : nil
+        return stack.items[lowerBound...upperBound].flatMap { item in
+            MediaPlaybackQuality.preloadURLs(for: item)
         }
     }
 
@@ -220,6 +220,10 @@ final class StoryVideoPlaybackPool: ObservableObject {
     private var preparedPlayers: [URL: PreparedPlayer] = [:]
     private var prepareTasks: [URL: Task<Void, Never>] = [:]
     private let maxPreparedPlayers = 3
+
+    func hasPreparedPlayer(for url: URL) -> Bool {
+        preparedPlayers[url] != nil
+    }
 
     func takePreparedPlayer(for url: URL) -> PreparedPlayer? {
         prepareTasks[url]?.cancel()
@@ -333,8 +337,8 @@ final class StoryVideoPlaybackPool: ObservableObject {
             return
         }
 
-        item.preferredPeakBitRate = NetworkQualityMonitor.shared.isConstrained ? 4_000_000 : 10_000_000
-        item.preferredMaximumResolution = CGSize(width: 1920, height: 1920)
+        item.preferredPeakBitRate = MediaPlaybackQuality.preferredStreamingPeakBitRate
+        item.preferredMaximumResolution = MediaPlaybackQuality.preferredStreamingMaximumResolution
     }
 
     private func prune(keeping desiredSet: Set<URL>) {

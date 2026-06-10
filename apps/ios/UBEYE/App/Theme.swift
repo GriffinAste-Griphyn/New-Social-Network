@@ -602,7 +602,7 @@ enum MediaFileKind: String {
     case video
 }
 
-private func isHTTPStreamingPlaylist(_ url: URL) -> Bool {
+func isHTTPStreamingPlaylist(_ url: URL) -> Bool {
     url.pathExtension.lowercased() == "m3u8"
 }
 
@@ -630,6 +630,10 @@ actor MediaFileDiskCache {
         }
 
         return nil
+    }
+
+    func hasCachedFile(for url: URL) -> Bool {
+        candidateFileURLs(for: url).contains { fileManager.fileExists(atPath: $0.path) }
     }
 
     func playbackURL(for url: URL) -> URL {
@@ -1354,8 +1358,8 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        let videoUrls = nearbyItems.compactMap { item -> URL? in
-            item.isPlayableVideo ? item.playbackMediaUrl : nil
+        let videoUrls = nearbyItems.flatMap { item in
+            MediaPlaybackQuality.preloadURLs(for: item)
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
         let videoLimit = allowsPersistentDownloads ? 3 : 1
