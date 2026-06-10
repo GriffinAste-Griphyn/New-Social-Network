@@ -1,4 +1,6 @@
 import AVFoundation
+import CoreImage
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -21,8 +23,10 @@ final class CameraController: NSObject, ObservableObject {
     @Published var authorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
     @Published var microphoneAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     @Published var capturedPhoto: StoryImageUpload?
+    @Published var capturedPhotoPreview: UIImage?
     @Published var capturedVideoURL: URL?
     @Published var capturedVideoCameraPosition: AVCaptureDevice.Position = .back
+    @Published var isCapturingPhoto = false
     @Published var isRecording = false
     @Published var cameraPosition: AVCaptureDevice.Position = .back
     @Published var activeVideoDevice: AVCaptureDevice?
@@ -30,6 +34,9 @@ final class CameraController: NSObject, ObservableObject {
 
     private let output = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
+    private let previewFrameOutput = AVCaptureVideoDataOutput()
+    private let previewFrameQueue = DispatchQueue(label: "com.ubeye.camera.preview-frame")
+    private let previewFrameSampler = PreviewFrameSampler()
     private var photoDelegate: PhotoCaptureDelegate?
     private var movieDelegate: MovieCaptureDelegate?
     private var videoInput: AVCaptureDeviceInput?
@@ -38,6 +45,7 @@ final class CameraController: NSObject, ObservableObject {
     private var isConfigured = false
     private var captureRotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var configuredMaxPhotoDimensions: CMVideoDimensions?
+    private let frontCameraPhotoMaxPixels = 3_000_000
     private let preferredVideoBitrate = 18_000_000
     private let preferredVideoFrameRate = 30
 
@@ -75,29 +83,58 @@ final class CameraController: NSObject, ObservableObject {
         guard session.isRunning else {
             return
         }
+        previewFrameSampler.clear()
         Task.detached { [session] in
             session.stopRunning()
         }
     }
 
     func capturePhoto() {
+        let captureStartedAt = Date()
+        let capturePosition = cameraPosition
+        capturedPhotoPreview = nil
+        isCapturingPhoto = true
+        if let liveFramePreview = previewFrameSampler.currentImage() {
+            capturedPhotoPreview = liveFramePreview
+            MediaPerformance.measure(
+                "photo_capture_live_preview position=\(cameraLabel(for: capturePosition))",
+                since: captureStartedAt
+            )
+        }
+
         let settings = makePhotoSettings()
         settings.flashMode = preferredPhotoFlashMode()
-        settings.photoQualityPrioritization = .quality
+        settings.photoQualityPrioritization = capturePosition == .front ? .speed : .quality
         if let configuredMaxPhotoDimensions {
             settings.maxPhotoDimensions = configuredMaxPhotoDimensions
         }
-        let delegate = PhotoCaptureDelegate { [weak self] result in
-            Task { @MainActor in
-                switch result {
-                case .success(let photo):
-                    self?.capturedPhoto = photo
-                case .failure(let error):
-                    self?.error = error.localizedDescription
+        configurePhotoPreviewFormats(settings)
+
+        let delegate = PhotoCaptureDelegate(
+            completion: { [weak self] result in
+                Task { @MainActor in
+                    self?.isCapturingPhoto = false
+                    switch result {
+                    case .success(let photo):
+                        self?.capturedPhotoPreview = nil
+                        self?.capturedPhoto = photo
+                    case .failure(let error):
+                        self?.capturedPhotoPreview = nil
+                        self?.error = error.localizedDescription
+                    }
+                    self?.photoDelegate = nil
                 }
-                self?.photoDelegate = nil
-            }
-        }
+            },
+            previewHandler: { [weak self] preview in
+                Task { @MainActor in
+                    self?.capturedPhotoPreview = preview
+                }
+            },
+            metadata: .init(
+                cameraPosition: capturePosition,
+                startedAt: captureStartedAt
+            )
+        )
         photoDelegate = delegate
         output.capturePhoto(with: settings, delegate: delegate)
     }
@@ -119,6 +156,7 @@ final class CameraController: NSObject, ObservableObject {
         configureMovieAudioConnection()
 
         capturedPhoto = nil
+        capturedPhotoPreview = nil
         capturedVideoURL = nil
         recordingCameraPosition = cameraPosition
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mov")
@@ -178,6 +216,7 @@ final class CameraController: NSObject, ObservableObject {
                 device: camera,
                 previewLayer: nil
             )
+            previewFrameSampler.clear()
             configurePhotoOutput(for: camera)
             updateOutputOrientation()
         } else if let videoInput, session.canAddInput(videoInput) {
@@ -225,6 +264,7 @@ final class CameraController: NSObject, ObservableObject {
         }
         session.addOutput(output)
         session.addOutput(movieOutput)
+        configurePreviewFrameOutput()
         configurePhotoOutput(for: input.device)
         output.maxPhotoQualityPrioritization = .quality
         configureMovieVideoOutputSettings()
@@ -254,6 +294,21 @@ final class CameraController: NSObject, ObservableObject {
         MediaPerformance.mark("capture_video_settings codec=\(codec.rawValue) bitrate=\(preferredVideoBitrate) fps=\(preferredVideoFrameRate)")
     }
 
+    private func configurePreviewFrameOutput() {
+        previewFrameOutput.alwaysDiscardsLateVideoFrames = true
+        previewFrameOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ]
+        previewFrameOutput.setSampleBufferDelegate(previewFrameSampler, queue: previewFrameQueue)
+
+        guard session.canAddOutput(previewFrameOutput) else {
+            MediaPerformance.mark("capture_preview_frame_output_unavailable")
+            return
+        }
+
+        session.addOutput(previewFrameOutput)
+    }
+
     private func makePhotoSettings() -> AVCapturePhotoSettings {
         if output.availablePhotoCodecTypes.contains(.jpeg) {
             return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
@@ -262,13 +317,27 @@ final class CameraController: NSObject, ObservableObject {
         return AVCapturePhotoSettings()
     }
 
+    private func configurePhotoPreviewFormats(_ settings: AVCapturePhotoSettings) {
+        guard let previewPixelFormat = settings.availablePreviewPhotoPixelFormatTypes.first else {
+            return
+        }
+
+        let previewDimensions = CGSize(width: 720, height: 1280)
+        settings.previewPhotoFormat = [
+            kCVPixelBufferPixelFormatTypeKey as String: previewPixelFormat,
+            kCVPixelBufferWidthKey as String: Int(previewDimensions.width),
+            kCVPixelBufferHeightKey as String: Int(previewDimensions.height),
+        ]
+    }
+
     private func preferredPhotoFlashMode() -> AVCaptureDevice.FlashMode {
         cameraPosition == .front ? .off : .auto
     }
 
     private func configurePhotoOutput(for device: AVCaptureDevice) {
-        if let maxDimensions = largestPhotoDimensions(
-            in: device.activeFormat.supportedMaxPhotoDimensions
+        if let maxDimensions = preferredPhotoDimensions(
+            in: device.activeFormat.supportedMaxPhotoDimensions,
+            position: device.position
         ) {
             output.maxPhotoDimensions = maxDimensions
             configuredMaxPhotoDimensions = maxDimensions
@@ -277,12 +346,25 @@ final class CameraController: NSObject, ObservableObject {
         }
     }
 
-    private func largestPhotoDimensions(
-        in dimensions: [CMVideoDimensions]
+    private func preferredPhotoDimensions(
+        in dimensions: [CMVideoDimensions],
+        position: AVCaptureDevice.Position
     ) -> CMVideoDimensions? {
-        dimensions.max { left, right in
-            Int(left.width) * Int(left.height) < Int(right.width) * Int(right.height)
+        let sortedDimensions = dimensions.sorted { left, right in
+            pixelCount(left) < pixelCount(right)
         }
+
+        guard position == .front else {
+            return sortedDimensions.last
+        }
+
+        return sortedDimensions.last { dimensions in
+            pixelCount(dimensions) <= frontCameraPhotoMaxPixels
+        } ?? sortedDimensions.first
+    }
+
+    private func pixelCount(_ dimensions: CMVideoDimensions) -> Int {
+        Int(dimensions.width) * Int(dimensions.height)
     }
 
     private func preferredCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
@@ -326,6 +408,10 @@ final class CameraController: NSObject, ObservableObject {
         if let movieConnection = movieOutput.connection(with: .video) {
             configureVideoConnection(movieConnection, mirrorsFrontCamera: false)
         }
+
+        if let previewFrameConnection = previewFrameOutput.connection(with: .video) {
+            configureVideoConnection(previewFrameConnection, mirrorsFrontCamera: true)
+        }
     }
 
     private func configureVideoConnection(
@@ -359,28 +445,176 @@ final class CameraController: NSObject, ObservableObject {
 
         return error.localizedDescription
     }
+
+    private func cameraLabel(for position: AVCaptureDevice.Position) -> String {
+        switch position {
+        case .front:
+            return "front"
+        case .back:
+            return "back"
+        default:
+            return "unspecified"
+        }
+    }
+}
+
+private final class PreviewFrameSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private let lock = NSLock()
+    private let imageContext = CIContext()
+    private var latestPixelBuffer: CVPixelBuffer?
+    private let maxPreviewDimension: CGFloat = 1280
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
+        }
+
+        lock.lock()
+        latestPixelBuffer = pixelBuffer
+        lock.unlock()
+    }
+
+    func currentImage() -> UIImage? {
+        lock.lock()
+        let pixelBuffer = latestPixelBuffer
+        lock.unlock()
+
+        guard let pixelBuffer else {
+            return nil
+        }
+
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let longestDimension = max(image.extent.width, image.extent.height)
+        let scale = longestDimension > 0 ? min(1, maxPreviewDimension / longestDimension) : 1
+        let previewImage = scale < 1
+            ? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            : image
+
+        guard let cgImage = imageContext.createCGImage(previewImage, from: previewImage.extent) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage)
+    }
+
+    func clear() {
+        lock.lock()
+        latestPixelBuffer = nil
+        lock.unlock()
+    }
 }
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let completion: (Result<StoryImageUpload, Error>) -> Void
+    struct Metadata {
+        let cameraPosition: AVCaptureDevice.Position
+        let startedAt: Date
+    }
 
-    init(completion: @escaping (Result<StoryImageUpload, Error>) -> Void) {
+    private let completion: (Result<StoryImageUpload, Error>) -> Void
+    private let previewHandler: (UIImage) -> Void
+    private let metadata: Metadata
+
+    init(
+        completion: @escaping (Result<StoryImageUpload, Error>) -> Void,
+        previewHandler: @escaping (UIImage) -> Void,
+        metadata: Metadata
+    ) {
         self.completion = completion
+        self.previewHandler = previewHandler
+        self.metadata = metadata
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error {
+            MediaPerformance.measure(
+                "photo_capture_failed position=\(Self.cameraLabel(for: metadata.cameraPosition))",
+                since: metadata.startedAt
+            )
             completion(.failure(error))
             return
         }
 
+        let flattenStartedAt = Date()
+        let previewImage = Self.previewImage(from: photo)
+        if let previewImage {
+            previewHandler(previewImage)
+        }
+
         guard let data = photo.fileDataRepresentation(),
-              let upload = StoryImageUpload(data: data, fallbackFileName: "story-photo") else {
+              let upload = StoryImageUpload(
+                data: data,
+                fallbackFileName: "story-photo",
+                displayImage: previewImage
+              ) else {
+            MediaPerformance.measure(
+                "photo_capture_failed position=\(Self.cameraLabel(for: metadata.cameraPosition)) reason=file_data",
+                since: metadata.startedAt
+            )
             completion(.failure(APIClientError.invalidResponse))
             return
         }
 
+        let cameraLabel = Self.cameraLabel(for: metadata.cameraPosition)
+        MediaPerformance.measure(
+            "photo_capture_file_data position=\(cameraLabel) bytes=\(data.count)",
+            since: flattenStartedAt
+        )
+        MediaPerformance.measure(
+            "photo_capture_ready position=\(cameraLabel) bytes=\(data.count)",
+            since: metadata.startedAt
+        )
         completion(.success(upload))
+    }
+
+    private static func previewImage(from photo: AVCapturePhoto) -> UIImage? {
+        guard let cgImage = photo.previewCGImageRepresentation() else {
+            return nil
+        }
+
+        return UIImage(
+            cgImage: cgImage,
+            scale: 1,
+            orientation: imageOrientation(from: photo.metadata)
+        )
+    }
+
+    private static func imageOrientation(from metadata: [String: Any]) -> UIImage.Orientation {
+        let rawValue = metadata[kCGImagePropertyOrientation as String] as? UInt32
+        let cgOrientation = rawValue.flatMap(CGImagePropertyOrientation.init(rawValue:)) ?? .up
+
+        switch cgOrientation {
+        case .up:
+            return .up
+        case .upMirrored:
+            return .upMirrored
+        case .down:
+            return .down
+        case .downMirrored:
+            return .downMirrored
+        case .left:
+            return .left
+        case .leftMirrored:
+            return .leftMirrored
+        case .right:
+            return .right
+        case .rightMirrored:
+            return .rightMirrored
+        }
+    }
+
+    private static func cameraLabel(for position: AVCaptureDevice.Position) -> String {
+        switch position {
+        case .front:
+            return "front"
+        case .back:
+            return "back"
+        default:
+            return "unspecified"
+        }
     }
 }
 

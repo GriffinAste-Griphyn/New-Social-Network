@@ -1,5 +1,6 @@
 import AVKit
 import SwiftUI
+import UIKit
 
 struct StoryRoute: Identifiable, Hashable {
     let id: String
@@ -248,6 +249,7 @@ struct StoryStackViewer: View {
     @State private var index = 0
     @State private var storyStartedAt = Date()
     @State private var storyProgress = 0.0
+    @State private var storyProgressResetToken = 0
     @State private var timedStoryId: String?
     @State private var videoReadyItemId: String?
     @State private var didFinishCurrentItem = false
@@ -261,7 +263,7 @@ struct StoryStackViewer: View {
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
     private let maxVideoStoryDurationSeconds: TimeInterval = 120
-    private let storyTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
+    private let storyTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
     private let ownerStatsHeight: CGFloat = 64
@@ -752,24 +754,18 @@ struct StoryStackViewer: View {
     }
 
     private func storyProgressIndicator(stack: StoryStack) -> some View {
-        HStack(spacing: 5) {
-            ForEach(stack.items.indices, id: \.self) { itemIndex in
-                StoryProgressSegment(progress: progressValue(for: itemIndex))
-            }
-        }
+        StoryTimelineProgressView(
+            segmentCount: stack.items.count,
+            activeIndex: index,
+            activeProgress: storyProgress,
+            activeDuration: stack.items[safe: index].map { displayDuration(for: $0) } ?? defaultStoryDurationSeconds,
+            isPaused: shouldPauseStoryProgress,
+            resetToken: storyProgressResetToken
+        )
         .frame(maxWidth: .infinity)
+        .frame(height: 4)
         .padding(.top, 2)
         .accessibilityLabel("Story \(index + 1) of \(stack.items.count)")
-    }
-
-    private func progressValue(for itemIndex: Int) -> Double {
-        if itemIndex < index {
-            return 1
-        }
-        if itemIndex == index {
-            return storyProgress
-        }
-        return 0
     }
 
     private func tapNavigationOverlay(item: StoryStackItem) -> some View {
@@ -1024,6 +1020,7 @@ struct StoryStackViewer: View {
         videoReadyItemId = item.assetKind == .video ? nil : item.id
         storyStartedAt = Date()
         storyProgress = 0
+        storyProgressResetToken += 1
         didFinishCurrentItem = false
     }
 
@@ -1040,12 +1037,15 @@ struct StoryStackViewer: View {
 
         let duration = displayDuration(for: item)
 
+        let nextProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
+
         if shouldPauseStoryProgress {
-            storyStartedAt = now.addingTimeInterval(-storyProgress * duration)
+            if abs(nextProgress - storyProgress) >= 0.004 {
+                storyProgress = nextProgress
+            }
+            storyStartedAt = now.addingTimeInterval(-nextProgress * duration)
             return
         }
-
-        let nextProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
 
         if nextProgress >= 1 {
             storyProgress = 1
@@ -1173,21 +1173,294 @@ struct StoryStackViewer: View {
     }
 }
 
-private struct StoryProgressSegment: View {
-    let progress: Double
+private struct StoryTimelineProgressView: UIViewRepresentable {
+    let segmentCount: Int
+    let activeIndex: Int
+    let activeProgress: Double
+    let activeDuration: TimeInterval
+    let isPaused: Bool
+    let resetToken: Int
 
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.32))
-                Capsule()
-                    .fill(.white)
-                    .frame(width: max(0, min(1, progress)) * proxy.size.width)
-            }
+    func makeUIView(context: Context) -> StoryTimelineProgressUIView {
+        let view = StoryTimelineProgressUIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: StoryTimelineProgressUIView, context: Context) {
+        uiView.configure(
+            segmentCount: segmentCount,
+            activeIndex: activeIndex,
+            activeProgress: activeProgress,
+            activeDuration: activeDuration,
+            isPaused: isPaused,
+            resetToken: resetToken
+        )
+    }
+}
+
+private final class StoryTimelineProgressUIView: UIView {
+    private struct Configuration: Equatable {
+        var segmentCount = 0
+        var activeIndex = 0
+        var activeProgress: CGFloat = 0
+        var activeDuration: TimeInterval = 0
+        var isPaused = true
+        var resetToken = 0
+    }
+
+    private final class Segment {
+        let container = CALayer()
+        let background = CALayer()
+        let fill = CALayer()
+    }
+
+    private let segmentSpacing: CGFloat = 5
+    private let correctionThreshold: CGFloat = 0.045
+    private var segments: [Segment] = []
+    private var configuration = Configuration()
+    private var didConfigure = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        layer.masksToBounds = false
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isOpaque = false
+        backgroundColor = .clear
+        layer.masksToBounds = false
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutSegmentLayers()
+    }
+
+    func configure(
+        segmentCount: Int,
+        activeIndex: Int,
+        activeProgress: Double,
+        activeDuration: TimeInterval,
+        isPaused: Bool,
+        resetToken: Int
+    ) {
+        let nextSegmentCount = max(0, segmentCount)
+        let nextActiveIndex = nextSegmentCount > 0
+            ? min(max(activeIndex, 0), nextSegmentCount - 1)
+            : 0
+        let next = Configuration(
+            segmentCount: nextSegmentCount,
+            activeIndex: nextActiveIndex,
+            activeProgress: CGFloat(Self.clamped(activeProgress)),
+            activeDuration: max(0.001, activeDuration),
+            isPaused: isPaused,
+            resetToken: resetToken
+        )
+
+        if next.segmentCount != segments.count {
+            rebuildSegments(count: next.segmentCount)
         }
-        .frame(height: 4)
-        .frame(maxWidth: .infinity)
+
+        let previous = configuration
+        configuration = next
+        layoutSegmentLayers()
+
+        let needsHardReset = !didConfigure ||
+            previous.segmentCount != next.segmentCount ||
+            previous.activeIndex != next.activeIndex ||
+            previous.resetToken != next.resetToken
+
+        if needsHardReset {
+            applyStaticProgress(activeProgress: next.activeProgress)
+            if !next.isPaused {
+                startActiveAnimation(from: next.activeProgress)
+            }
+            didConfigure = true
+            return
+        }
+
+        applyPassiveSegmentProgress()
+
+        if previous.isPaused != next.isPaused {
+            if next.isPaused {
+                freezeActiveAnimation()
+            } else {
+                startActiveAnimation(from: activePresentationProgress())
+            }
+            return
+        }
+
+        guard !next.isPaused else {
+            return
+        }
+
+        if next.activeProgress >= 0.995 {
+            setActiveProgress(1)
+            return
+        }
+
+        let presentationProgress = activePresentationProgress()
+        if abs(next.activeProgress - presentationProgress) > correctionThreshold ||
+            previous.activeDuration != next.activeDuration {
+            startActiveAnimation(from: next.activeProgress)
+        }
+    }
+
+    private func rebuildSegments(count: Int) {
+        segments.forEach { $0.container.removeFromSuperlayer() }
+        segments = (0..<count).map { _ in
+            let segment = Segment()
+            segment.container.masksToBounds = true
+            segment.background.backgroundColor = UIColor.white.withAlphaComponent(0.32).cgColor
+            segment.fill.backgroundColor = UIColor.white.cgColor
+            segment.fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+            segment.container.addSublayer(segment.background)
+            segment.container.addSublayer(segment.fill)
+            layer.addSublayer(segment.container)
+            return segment
+        }
+    }
+
+    private func layoutSegmentLayers() {
+        guard !segments.isEmpty else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let height = bounds.height
+        let totalSpacing = segmentSpacing * CGFloat(max(segments.count - 1, 0))
+        let segmentWidth = max(0, (bounds.width - totalSpacing) / CGFloat(segments.count))
+        let cornerRadius = height / 2
+
+        for (index, segment) in segments.enumerated() {
+            let originX = CGFloat(index) * (segmentWidth + segmentSpacing)
+            let frame = CGRect(x: originX, y: 0, width: segmentWidth, height: height)
+            segment.container.frame = frame
+            segment.container.cornerRadius = cornerRadius
+            segment.background.frame = segment.container.bounds
+            segment.background.cornerRadius = cornerRadius
+            segment.fill.bounds = segment.container.bounds
+            segment.fill.position = CGPoint(x: 0, y: height / 2)
+            segment.fill.cornerRadius = cornerRadius
+            segment.fill.contentsScale = UIScreen.main.scale
+            segment.background.contentsScale = UIScreen.main.scale
+        }
+
+        CATransaction.commit()
+    }
+
+    private func applyStaticProgress(activeProgress: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        for (index, segment) in segments.enumerated() {
+            segment.fill.removeAllAnimations()
+            let progress: CGFloat
+            if index < configuration.activeIndex {
+                progress = 1
+            } else if index == configuration.activeIndex {
+                progress = activeProgress
+            } else {
+                progress = 0
+            }
+            segment.fill.transform = CATransform3DMakeScale(progress, 1, 1)
+        }
+
+        CATransaction.commit()
+    }
+
+    private func applyPassiveSegmentProgress() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        for (index, segment) in segments.enumerated() where index != configuration.activeIndex {
+            segment.fill.removeAllAnimations()
+            let progress: CGFloat = index < configuration.activeIndex ? 1 : 0
+            segment.fill.transform = CATransform3DMakeScale(progress, 1, 1)
+        }
+
+        CATransaction.commit()
+    }
+
+    private func activePresentationProgress() -> CGFloat {
+        guard segments.indices.contains(configuration.activeIndex) else {
+            return 0
+        }
+
+        let fill = segments[configuration.activeIndex].fill
+        let transform = fill.presentation()?.transform ?? fill.transform
+        return min(max(CGFloat(transform.m11), 0), 1)
+    }
+
+    private func startActiveAnimation(from rawProgress: CGFloat) {
+        guard segments.indices.contains(configuration.activeIndex) else {
+            return
+        }
+
+        let progress = min(max(rawProgress, 0), 1)
+        let fill = segments[configuration.activeIndex].fill
+        fill.removeAllAnimations()
+
+        if progress >= 0.995 {
+            setActiveProgress(1)
+            return
+        }
+
+        let duration = max(0.001, configuration.activeDuration * TimeInterval(1 - progress))
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.transform = CATransform3DMakeScale(1, 1, 1)
+        CATransaction.commit()
+
+        let animation = CABasicAnimation(keyPath: "transform.scale.x")
+        animation.fromValue = progress
+        animation.toValue = 1
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.fillMode = .forwards
+        animation.isRemovedOnCompletion = false
+        fill.add(animation, forKey: "story-progress-fill")
+    }
+
+    private func freezeActiveAnimation() {
+        guard segments.indices.contains(configuration.activeIndex) else {
+            return
+        }
+
+        let progress = activePresentationProgress()
+        let fill = segments[configuration.activeIndex].fill
+        fill.removeAllAnimations()
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.transform = CATransform3DMakeScale(progress, 1, 1)
+        CATransaction.commit()
+    }
+
+    private func setActiveProgress(_ rawProgress: CGFloat) {
+        guard segments.indices.contains(configuration.activeIndex) else {
+            return
+        }
+
+        let progress = min(max(rawProgress, 0), 1)
+        let fill = segments[configuration.activeIndex].fill
+        fill.removeAllAnimations()
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.transform = CATransform3DMakeScale(progress, 1, 1)
+        CATransaction.commit()
+    }
+
+    private static func clamped(_ value: Double) -> Double {
+        min(max(value, 0), 1)
     }
 }
 

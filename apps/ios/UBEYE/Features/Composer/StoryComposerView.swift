@@ -31,8 +31,12 @@ struct StoryImageUpload: Equatable {
     let fileName: String
     let mimeType: String
 
-    init?(data: Data, fallbackFileName: String = "story-photo") {
-        guard let image = UIImage(data: data) else {
+    init?(
+        data: Data,
+        fallbackFileName: String = "story-photo",
+        displayImage: UIImage? = nil
+    ) {
+        guard let image = displayImage ?? UIImage(data: data) else {
             return nil
         }
 
@@ -1001,7 +1005,7 @@ struct StoryComposerView: View {
                                         .background(.black.opacity(0.34), in: Circle())
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(camera.isRecording)
+                                .disabled(camera.isRecording || camera.isCapturingPhoto)
                             } else {
                                 composerToolRail
                             }
@@ -1029,6 +1033,11 @@ struct StoryComposerView: View {
                         .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
                         .padding(.horizontal, 22)
                         .padding(.bottom, 16)
+                } else if camera.isCapturingPhoto {
+                    Text("Preparing photo")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .padding(.bottom, 24)
                 } else if stagedMedia == nil {
                     Text("Tap for photo, hold for video")
                         .font(.system(size: 15, weight: .bold))
@@ -1372,6 +1381,10 @@ struct StoryComposerView: View {
                     .onAppear {
                         enterComposer(with: .image(photo))
                     }
+            } else if let photoPreview = camera.capturedPhotoPreview {
+                Image(uiImage: photoPreview)
+                    .resizable()
+                    .scaledToFill()
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(
                     url: videoURL,
@@ -1509,7 +1522,7 @@ struct StoryComposerView: View {
     }
 
     private func capturePhoto() {
-        guard !camera.isRecording, !store.isUploading else {
+        guard !camera.isRecording, !camera.isCapturingPhoto, !store.isUploading else {
             return
         }
 
@@ -1518,7 +1531,7 @@ struct StoryComposerView: View {
     }
 
     private func startRecording() {
-        guard !camera.isRecording, !store.isUploading else {
+        guard !camera.isRecording, !camera.isCapturingPhoto, !store.isUploading else {
             return
         }
 
@@ -1565,6 +1578,7 @@ struct StoryComposerView: View {
         overlayInputMode = nil
         isOverlayInputFocused = false
         camera.capturedPhoto = nil
+        camera.capturedPhotoPreview = nil
         camera.capturedVideoURL = nil
     }
 
