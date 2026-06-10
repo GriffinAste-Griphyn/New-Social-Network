@@ -130,9 +130,11 @@ describe("mobile story interactions API", () => {
   })
 
   it("returns received and sent reply history", async () => {
-    const { GET } = await import("@/app/api/mobile/stories/[id]/interactions/route")
+    const { GET } = await import(
+      "@/app/api/mobile/stories/inbox/interactions/route"
+    )
     const response = await GET(
-      new Request("https://app.example.com/api/mobile/stories/my-story/interactions"),
+      new Request("https://app.example.com/api/mobile/stories/inbox/interactions"),
     )
 
     expect(response.status).toBe(200)
@@ -176,6 +178,29 @@ describe("mobile story interactions API", () => {
     })
   })
 
+  it("keeps the story interactions GET as a backwards-compatible inbox alias", async () => {
+    const { GET } = await import("@/app/api/mobile/stories/[id]/interactions/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/stories/my-story/interactions"),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      interactions: [{ id: "received_123" }],
+      sentInteractions: [{ id: "sent_123" }],
+    })
+    expect(listStoryInteractionsForCreator).toHaveBeenCalledWith({
+      creatorId: session.id,
+      kinds: ["reply", "comment"],
+      limit: 100,
+    })
+    expect(listStoryInteractionsForActor).toHaveBeenCalledWith({
+      actorId: session.id,
+      kinds: ["reply", "comment"],
+      limit: 100,
+    })
+  })
 
   it("deletes a reply for the sender or receiver", async () => {
     const { DELETE } = await import(
@@ -224,9 +249,11 @@ describe("mobile story interactions API", () => {
   it("requires a mobile session", async () => {
     vi.mocked(getCompleteMobileSession).mockResolvedValue(null)
 
-    const { GET } = await import("@/app/api/mobile/stories/[id]/interactions/route")
+    const { GET } = await import(
+      "@/app/api/mobile/stories/inbox/interactions/route"
+    )
     const response = await GET(
-      new Request("https://app.example.com/api/mobile/stories/my-story/interactions"),
+      new Request("https://app.example.com/api/mobile/stories/inbox/interactions"),
     )
 
     expect(response.status).toBe(401)
