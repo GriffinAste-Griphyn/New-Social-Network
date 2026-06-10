@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
+import { createMobileStoryMediaUrlResolver } from "@/lib/story-media/mobile-playback"
 import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
 
@@ -34,17 +35,23 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
   }
 }
 
-function absoluteStoryCardMedia<T extends {
+async function absoluteStoryCardMedia<T extends {
+  assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
-}>(story: T, request: Request) {
+  processingStatus?: string | null
+}>(
+  story: T,
+  resolver: ReturnType<typeof createMobileStoryMediaUrlResolver>,
+) {
   return {
     ...story,
-    mediaUrl:
-      publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
-      story.mediaUrl,
-    thumbnailUrl: publicStoryMediaUrl(story.thumbnailUrl, request, {
-      signed: true,
+    mediaUrl: await resolver.resolve(story.mediaUrl, {
+      assetKind: story.assetKind,
+      processingStatus: story.processingStatus,
+    }),
+    thumbnailUrl: await resolver.resolve(story.thumbnailUrl, {
+      directVideoPlayback: false,
     }),
   }
 }
@@ -95,19 +102,33 @@ async function feedResponse(
   }
 
   const feed = await getFeedData(user.id)
+  const mediaUrlResolver = createMobileStoryMediaUrlResolver(request, {
+    fallbackUrl: (value) =>
+      publicStoryMediaUrl(value, request, { signed: true }) ?? value,
+  })
   const followingStories = collapseStoryCardsByCreator(
-    feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
+    await Promise.all(
+      feed.followingStories.map((story) =>
+        absoluteStoryCardMedia(story, mediaUrlResolver),
+      ),
+    ),
   )
   const followingTimelineStories = collapseStoryCardsByCreator(
-    feed.followingTimelineStories.map((story) =>
-      absoluteStoryCardMedia(story, request),
+    await Promise.all(
+      feed.followingTimelineStories.map((story) =>
+        absoluteStoryCardMedia(story, mediaUrlResolver),
+      ),
     ),
   )
   const followedCreatorNames = new Set(
     followingStories.map((story) => story.creator.toLowerCase()),
   )
   const discoverStories = collapseStoryCardsByCreator(
-    feed.discoverStories.map((story) => absoluteStoryCardMedia(story, request)),
+    await Promise.all(
+      feed.discoverStories.map((story) =>
+        absoluteStoryCardMedia(story, mediaUrlResolver),
+      ),
+    ),
   ).filter((story) => !followedCreatorNames.has(story.creator.toLowerCase()))
   const latestMyStoryItem =
     feed.myStory.items.length > 0
@@ -159,8 +180,10 @@ async function feedResponse(
         },
         latestThumbnailUrl: latestMyStoryThumbnailUrl,
         latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
-        items: feed.myStory.items.map((story) =>
-          absoluteStoryCardMedia(story, request),
+        items: await Promise.all(
+          feed.myStory.items.map((story) =>
+            absoluteStoryCardMedia(story, mediaUrlResolver),
+          ),
         ),
       },
     },

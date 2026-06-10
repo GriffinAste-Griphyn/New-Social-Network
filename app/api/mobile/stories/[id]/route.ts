@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
+import { createMobileStoryMediaUrlResolver } from "@/lib/story-media/mobile-playback"
 import {
   getMyStoryStack,
   getStoryStackForStory,
@@ -43,7 +44,10 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 
   try {
     const url = new URL(value)
-    if (url.hostname.endsWith("cloudflarestream.com")) {
+    if (
+      url.hostname.endsWith("blob.vercel-storage.com") ||
+      url.hostname.endsWith("cloudflarestream.com")
+    ) {
       return value
     }
 
@@ -79,7 +83,16 @@ function parseCloudflareStoryMediaUrl(value: string | null, request: Request) {
   }
 }
 
-async function mobileStoryMediaUrl(value: string | null, request: Request) {
+async function mobileStoryMediaUrlWithResolver(
+  value: string | null,
+  request: Request,
+  resolver: ReturnType<typeof createMobileStoryMediaUrlResolver>,
+  options: {
+    assetKind?: "image" | "video" | null
+    directVideoPlayback?: boolean
+    processingStatus?: string | null
+  } = {},
+) {
   const cloudflareMedia = parseCloudflareStoryMediaUrl(value, request)
 
   if (cloudflareMedia) {
@@ -88,7 +101,7 @@ async function mobileStoryMediaUrl(value: string | null, request: Request) {
       : await createCloudflareStreamPlaybackUrl(cloudflareMedia.uid)
   }
 
-  return publicStoryMediaUrl(value, request, { signed: true }) ?? value
+  return resolver.resolve(value, options)
 }
 
 export async function GET(
@@ -111,15 +124,34 @@ export async function GET(
     return NextResponse.json({ error: "Story not found." }, { status: 404 })
   }
 
+  const mediaUrlResolver = createMobileStoryMediaUrlResolver(request, {
+    fallbackUrl: (value) =>
+      publicStoryMediaUrl(value, request, { signed: true }) ?? value,
+  })
   const storyItems = await Promise.all(
     story.items.map(async (item) => ({
       ...item,
       mediaUrl: versionMediaUrl(
-        await mobileStoryMediaUrl(item.mediaUrl, request),
+        await mobileStoryMediaUrlWithResolver(
+          item.mediaUrl,
+          request,
+          mediaUrlResolver,
+          {
+            assetKind: item.assetKind,
+            processingStatus: item.processingStatus,
+          },
+        ),
         item.id,
       ),
       thumbnailUrl: versionMediaUrl(
-        await mobileStoryMediaUrl(item.thumbnailUrl, request),
+        await mobileStoryMediaUrlWithResolver(
+          item.thumbnailUrl,
+          request,
+          mediaUrlResolver,
+          {
+            directVideoPlayback: false,
+          },
+        ),
         item.id,
       ),
     })),
