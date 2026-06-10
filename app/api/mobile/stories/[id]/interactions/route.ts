@@ -2,12 +2,8 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import {
-  listStoryInteractionsForActor,
-  createStoryInteraction,
-  listStoryInteractionsForCreator,
-} from "@/lib/story-interactions"
-import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
+import { mobileStoryInteractionInboxResponse } from "@/lib/mobile-story-interaction-inbox"
+import { createStoryInteraction } from "@/lib/story-interactions"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
@@ -35,81 +31,7 @@ function getStringFormValue(formData: FormData, key: string) {
 }
 
 export async function GET(request: Request) {
-  const session = await getCompleteMobileSession(request)
-
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
-
-  const [interactions, sentInteractions] = await Promise.all([
-    listStoryInteractionsForCreator({
-      creatorId: session.id,
-      kinds: ["reply", "comment"],
-      limit: 100,
-    }),
-    listStoryInteractionsForActor({
-      actorId: session.id,
-      kinds: ["reply", "comment"],
-      limit: 100,
-    }),
-  ])
-
-  const withPublicMediaUrls = <
-    TInteraction extends {
-      mediaUrl: string | null
-      mediaThumbnailUrl: string | null
-      story: {
-        mediaUrl: string
-        thumbnailUrl: string | null
-      }
-    },
-  >(
-    interaction: TInteraction,
-  ) => ({
-    ...interaction,
-    story: {
-      ...interaction.story,
-      mediaUrl:
-        publicStoryMediaUrl(interaction.story.mediaUrl, request, {
-          signed: true,
-        }) ?? interaction.story.mediaUrl,
-      thumbnailUrl: publicStoryMediaUrl(
-        interaction.story.thumbnailUrl,
-        request,
-        { signed: true },
-      ),
-    },
-    mediaUrl:
-      publicStoryMediaUrl(interaction.mediaUrl, request, { signed: true }) ??
-      interaction.mediaUrl,
-    mediaThumbnailUrl: publicStoryMediaUrl(
-      interaction.mediaThumbnailUrl,
-      request,
-      { signed: true },
-    ),
-  })
-
-  return NextResponse.json({
-    ok: true,
-    interactions: interactions.map((interaction) => ({
-      ...withPublicMediaUrls(interaction),
-      actor: {
-        ...interaction.actor,
-        imageUrl: publicProfileAvatarUrl(interaction.actor.imageUrl, request),
-      },
-    })),
-    sentInteractions: sentInteractions.map((interaction) => ({
-      ...withPublicMediaUrls(interaction),
-      actor: {
-        ...interaction.actor,
-        imageUrl: publicProfileAvatarUrl(interaction.actor.imageUrl, request),
-      },
-      target: {
-        ...interaction.target,
-        imageUrl: publicProfileAvatarUrl(interaction.target.imageUrl, request),
-      },
-    })),
-  })
+  return mobileStoryInteractionInboxResponse(request)
 }
 
 export async function POST(
