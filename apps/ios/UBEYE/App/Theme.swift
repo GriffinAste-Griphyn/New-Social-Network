@@ -720,7 +720,7 @@ actor MediaFileDiskCache {
         components.queryItems = components.queryItems?
             .filter {
                 let name = $0.name.lowercased()
-                return name != "token" && name != "v"
+                return name != "token" && name != "v" && !name.hasPrefix("vercel-blob-")
             }
             .sorted { $0.name < $1.name }
 
