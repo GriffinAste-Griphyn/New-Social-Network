@@ -17,7 +17,6 @@ import {
   getPrivateVercelBlobPathname,
   isVercelBlobUrl,
   localStoryMediaPrefix,
-  publicStoryMediaUrl as resolvePublicStoryMediaUrl,
   storyMediaAccessTokenTtlMs,
   withConfiguredPublicBaseUrl,
 } from "@/lib/story-media/access"
@@ -287,26 +286,6 @@ type CloudflareStreamVideoDetailsResponse = {
   }
 }
 
-type CloudflareStreamCopyResponse = {
-  success: boolean
-  errors?: Array<{ message?: string }>
-  result?: {
-    uid?: string
-    readyToStream?: boolean
-    size?: number | null
-    status?: {
-      state?: string
-      errorReasonCode?: string
-      errorReasonText?: string
-    } | null
-    duration?: number | null
-    input?: {
-      width?: number | null
-      height?: number | null
-    } | null
-  }
-}
-
 type CloudflareStreamUpdateResponse = {
   success: boolean
   errors?: Array<{ message?: string }>
@@ -379,7 +358,7 @@ export function isAllowedOriginalQualityVideoContentType(contentType: string) {
   )
 }
 
-type OriginalQualityVideoStoryAssetInput = {
+export async function createOriginalQualityVideoStoryAsset(input: {
   pathname: string
   contentType: string
   byteSize: number
@@ -391,11 +370,7 @@ type OriginalQualityVideoStoryAssetInput = {
   durationMs?: number | null
   width?: number | null
   height?: number | null
-}
-
-async function verifyOriginalQualityVideoUpload(
-  input: OriginalQualityVideoStoryAssetInput,
-) {
+}): Promise<StoredStoryAsset> {
   if (
     input.pathname.includes("..") ||
     !input.pathname.startsWith("stories/mobile-original/") ||
@@ -444,23 +419,6 @@ async function verifyOriginalQualityVideoUpload(
     thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
   }
 
-  return { thumbnailUrl }
-}
-
-export function originalQualityVideoSourceFingerprint(input: {
-  pathname: string
-  checksum: string
-}) {
-  return createHash("sha256")
-    .update(`mobile-original-cloudflare:${input.pathname}:${input.checksum}`)
-    .digest("hex")
-}
-
-export async function createOriginalQualityVideoStoryAsset(
-  input: OriginalQualityVideoStoryAssetInput,
-): Promise<StoredStoryAsset> {
-  const { thumbnailUrl } = await verifyOriginalQualityVideoUpload(input)
-
   return {
     assetKind: "video",
     mediaUrl: buildStoryMediaRoute(input.pathname),
@@ -474,115 +432,6 @@ export async function createOriginalQualityVideoStoryAsset(
     height: input.height ?? null,
     durationMs: input.durationMs ?? null,
     processingStatus: "ready",
-  }
-}
-
-async function copyCloudflareStreamVideoFromUrl(input: {
-  sourceUrl: string
-  fileName: string
-  maxDurationSeconds: number
-}) {
-  assertCloudflareStreamUploadsEnabled()
-
-  const { accountId, apiToken } = getCloudflareStreamConfig()
-  const copyResponse = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/copy`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url: input.sourceUrl,
-        maxDurationSeconds: input.maxDurationSeconds,
-        meta: { name: input.fileName },
-        requireSignedURLs: true,
-      }),
-    },
-  )
-  const copyPayload = (await copyResponse.json().catch(() => null)) as
-    | CloudflareStreamCopyResponse
-    | null
-  const uid = copyPayload?.result?.uid
-
-  if (!copyResponse.ok || !copyPayload?.success || !uid) {
-    throw new StoryUploadError(
-      copyPayload?.errors?.[0]?.message ??
-        "Cloudflare Stream could not copy the original story video.",
-    )
-  }
-
-  if (!isCloudflareStreamUid(uid)) {
-    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
-  }
-
-  await setCloudflareStreamThumbnailToLastFrame(uid).catch(() => undefined)
-
-  return {
-    uid,
-    readyToStream: copyPayload.result?.readyToStream ?? false,
-    state: copyPayload.result?.status?.state ?? null,
-    errorReason:
-      copyPayload.result?.status?.errorReasonText ??
-      copyPayload.errors?.[0]?.message ??
-      null,
-    durationMs:
-      typeof copyPayload.result?.duration === "number" &&
-      Number.isFinite(copyPayload.result.duration) &&
-      copyPayload.result.duration > 0
-        ? Math.round(copyPayload.result.duration * 1_000)
-        : null,
-    width:
-      typeof copyPayload.result?.input?.width === "number"
-        ? Math.round(copyPayload.result.input.width)
-        : null,
-    height:
-      typeof copyPayload.result?.input?.height === "number"
-        ? Math.round(copyPayload.result.input.height)
-        : null,
-  }
-}
-
-export async function createCloudflareStreamOriginalVideoStoryAsset(
-  input: OriginalQualityVideoStoryAssetInput & { request: Request },
-): Promise<StoredStoryAsset> {
-  const { thumbnailUrl } = await verifyOriginalQualityVideoUpload(input)
-  const sourceUrl = resolvePublicStoryMediaUrl(
-    buildStoryMediaRoute(input.pathname),
-    input.request,
-    { signed: true },
-  )
-
-  if (!sourceUrl) {
-    throw new StoryUploadError("Could not create a signed original story video URL.")
-  }
-
-  const copiedVideo = await copyCloudflareStreamVideoFromUrl({
-    sourceUrl,
-    fileName: path.basename(input.pathname) || "story-video.mov",
-    maxDurationSeconds: Math.max(
-      1,
-      Math.ceil((input.durationMs ?? 120_000) / 1_000),
-    ),
-  })
-  const storedAsset = createCloudflareStreamStoredVideoAsset({
-    uid: copiedVideo.uid,
-    contentType: input.contentType,
-    byteSize: input.byteSize,
-    durationMs: input.durationMs ?? copiedVideo.durationMs,
-    width: input.width ?? copiedVideo.width,
-    height: input.height ?? copiedVideo.height,
-    processingStatus: copiedVideo.readyToStream ? "ready" : "processing",
-  })
-
-  return {
-    ...storedAsset,
-    thumbnailUrl: thumbnailUrl ?? storedAsset.thumbnailUrl,
-    checksum: originalQualityVideoSourceFingerprint({
-      pathname: input.pathname,
-      checksum: input.checksum.toLowerCase(),
-    }),
   }
 }
 
