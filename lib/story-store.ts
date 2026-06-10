@@ -1552,6 +1552,37 @@ export async function getStoryByStoredAssetForOwner(input: {
   return story ?? null
 }
 
+export async function getStoryByChecksumForOwner(input: {
+  ownerId: string
+  checksum: string
+  storageProvider?: string
+}): Promise<StoredAssetStory | null> {
+  const db = getDb()
+  const [story] = await db
+    .select({
+      id: stories.id,
+      assetKind: stories.assetKind,
+      mediaUrl: stories.mediaUrl,
+      thumbnailUrl: stories.thumbnailUrl,
+      processingStatus: stories.processingStatus,
+    })
+    .from(stories)
+    .where(
+      and(
+        eq(stories.creatorId, input.ownerId),
+        eq(stories.assetKind, "video"),
+        eq(stories.checksum, input.checksum),
+        input.storageProvider
+          ? eq(stories.storageProvider, input.storageProvider)
+          : undefined,
+      ),
+    )
+    .orderBy(desc(stories.createdAt))
+    .limit(1)
+
+  return story ?? null
+}
+
 export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {
   await getDb()
     .update(stories)

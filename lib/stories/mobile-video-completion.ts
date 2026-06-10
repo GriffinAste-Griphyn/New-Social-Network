@@ -2,6 +2,7 @@ import type { CompleteAuthSession } from "@/lib/auth"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
   createStory,
+  getStoryByChecksumForOwner,
   getStoryByStoredAssetForOwner,
   getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
@@ -39,6 +40,8 @@ type CompleteMobileVideoStoryInput = {
   fields: MobileVideoStoryCompletionFields
   providerStatusFallback?: string | null
   providerErrorFallback?: string | null
+  moderationMediaUrl?: string | null
+  moderationThumbnailUrl?: string | null
   onStoryCreated?: (storyId: string) => void | Promise<void>
 }
 
@@ -142,19 +145,46 @@ export async function getExistingMobileVideoStoryCompletion(input: {
   })
 }
 
+export async function getExistingMobileVideoStoryCompletionByChecksum(input: {
+  request: Request
+  session: CompleteAuthSession
+  checksum: string
+  storageProvider?: string
+}) {
+  const existingStory = await getStoryByChecksumForOwner({
+    ownerId: input.session.id,
+    checksum: input.checksum,
+    storageProvider: input.storageProvider,
+  })
+
+  if (!existingStory) {
+    return null
+  }
+
+  return mobileVideoStoryResponse({
+    request: input.request,
+    session: input.session,
+    storyId: existingStory.id,
+    asset: existingStory,
+    completionState: "reused",
+  })
+}
+
 export async function completeMobileVideoStory(
   input: CompleteMobileVideoStoryInput,
 ) {
   const formData = mobileVideoFieldsToFormData(input.fields)
   const moderationMediaUrl =
+    input.moderationMediaUrl ??
     publicStoryMediaUrl(input.storedAsset.mediaUrl, input.request, {
       signed: true,
-    }) ?? input.storedAsset.mediaUrl
-  const moderationThumbnailUrl = publicStoryMediaUrl(
-    input.storedAsset.thumbnailUrl,
-    input.request,
-    { signed: true },
-  )
+    }) ??
+    input.storedAsset.mediaUrl
+  const moderationThumbnailUrl =
+    input.moderationThumbnailUrl ??
+    publicStoryMediaUrl(input.storedAsset.thumbnailUrl, input.request, {
+      signed: true,
+    })
   const storyElements = parseStoryElements(formData)
   const storyId = await createStory({
     session: input.session,
