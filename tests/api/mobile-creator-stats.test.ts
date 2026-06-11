@@ -53,8 +53,8 @@ describe("mobile creator stats API", () => {
       completionRate: 42,
       averageViewedSeconds: 3.5,
       totalViewedSeconds: 42,
-      comments: 1,
-      replies: 2,
+      comments: 0,
+      replies: 1,
       earnings: {
         totalCents: 0,
         pendingCents: 0,
@@ -79,14 +79,14 @@ describe("mobile creator stats API", () => {
           completedViews: 5,
           completionRate: 42,
           averageViewedSeconds: 3.5,
-          comments: 1,
-          replies: 2,
+          comments: 0,
+          replies: 1,
           earningsCents: 0,
           pendingEarningsCents: 0,
           paidEarningsCents: 0,
           commentItems: [
             {
-              id: "comment_123",
+              id: "reply_123",
               storyId: "story_123",
               actor: {
                 id: "viewer_123",
@@ -136,7 +136,7 @@ describe("mobile creator stats API", () => {
               "https://cdn.example.com/api/story-media/stories/story-thumb.jpg?v=story_123",
             commentItems: [
               {
-                id: "comment_123",
+                id: "reply_123",
                 storyId: "story_123",
                 body: "Great story",
                 actor: {
