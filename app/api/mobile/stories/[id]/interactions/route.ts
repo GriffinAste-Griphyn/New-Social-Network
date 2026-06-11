@@ -30,8 +30,16 @@ function getStringFormValue(formData: FormData, key: string) {
   return typeof value === "string" ? value : undefined
 }
 
-export async function GET(request: Request) {
-  return mobileStoryInteractionInboxResponse(request)
+export async function GET(
+  request: Request,
+  context: RouteContext<"/api/mobile/stories/[id]/interactions">,
+) {
+  const { id } = await context.params
+  const storyId = id === "inbox" || id === "my-story" ? undefined : id
+
+  return mobileStoryInteractionInboxResponse(request, {
+    storyId,
+  })
 }
 
 export async function POST(

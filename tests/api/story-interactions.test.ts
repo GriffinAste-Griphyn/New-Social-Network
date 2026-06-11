@@ -176,12 +176,41 @@ describe("mobile story interactions API", () => {
         },
       ],
     })
+    expect(listStoryInteractionsForCreator).toHaveBeenCalledWith({
+      creatorId: "viewer_123",
+      storyId: undefined,
+      kinds: ["reply", "comment"],
+      limit: 100,
+    })
+  })
+
+  it("filters reply history to the requested story id", async () => {
+    const { GET } = await import("@/app/api/mobile/stories/[id]/interactions/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/stories/story_123/interactions"),
+      { params: Promise.resolve({ id: "story_123" }) } as never,
+    )
+
+    expect(response.status).toBe(200)
+    expect(listStoryInteractionsForCreator).toHaveBeenCalledWith({
+      creatorId: "viewer_123",
+      storyId: "story_123",
+      kinds: ["reply", "comment"],
+      limit: 100,
+    })
+    expect(listStoryInteractionsForActor).toHaveBeenCalledWith({
+      actorId: "viewer_123",
+      storyId: "story_123",
+      kinds: ["reply", "comment"],
+      limit: 100,
+    })
   })
 
   it("keeps the story interactions GET as a backwards-compatible inbox alias", async () => {
     const { GET } = await import("@/app/api/mobile/stories/[id]/interactions/route")
     const response = await GET(
       new Request("https://app.example.com/api/mobile/stories/my-story/interactions"),
+      { params: Promise.resolve({ id: "my-story" }) } as never,
     )
 
     expect(response.status).toBe(200)
@@ -192,11 +221,13 @@ describe("mobile story interactions API", () => {
     })
     expect(listStoryInteractionsForCreator).toHaveBeenCalledWith({
       creatorId: session.id,
+      storyId: undefined,
       kinds: ["reply", "comment"],
       limit: 100,
     })
     expect(listStoryInteractionsForActor).toHaveBeenCalledWith({
       actorId: session.id,
+      storyId: undefined,
       kinds: ["reply", "comment"],
       limit: 100,
     })
