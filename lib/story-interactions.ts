@@ -374,6 +374,7 @@ export async function deleteStoryInteractionForUser(input: {
 
 export async function listStoryInteractionsForCreator(input: {
   creatorId: string
+  storyId?: string
   kinds?: StoryInteractionKind[]
   limit?: number
 }): Promise<StoryInteractionEvent[]> {
@@ -383,6 +384,7 @@ export async function listStoryInteractionsForCreator(input: {
   const filters = [
     eq(storyInteractions.creatorId, input.creatorId),
     eq(storyInteractions.moderationStatus, "approved"),
+    input.storyId ? eq(storyInteractions.storyId, input.storyId) : undefined,
     kinds ? inArray(storyInteractions.kind, kinds) : undefined,
   ].filter(Boolean)
 
@@ -426,6 +428,7 @@ export async function listStoryInteractionsForCreator(input: {
 
 export async function listStoryInteractionsForActor(input: {
   actorId: string
+  storyId?: string
   kinds?: StoryInteractionKind[]
   limit?: number
 }): Promise<SentStoryInteractionEvent[]> {
@@ -437,6 +440,7 @@ export async function listStoryInteractionsForActor(input: {
   const filters = [
     eq(storyInteractions.actorId, input.actorId),
     eq(storyInteractions.moderationStatus, "approved"),
+    input.storyId ? eq(storyInteractions.storyId, input.storyId) : undefined,
     kinds ? inArray(storyInteractions.kind, kinds) : undefined,
   ].filter(Boolean)
 

@@ -8,7 +8,10 @@ import {
 } from "@/lib/story-interactions"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
 
-export async function mobileStoryInteractionInboxResponse(request: Request) {
+export async function mobileStoryInteractionInboxResponse(
+  request: Request,
+  input: { storyId?: string } = {},
+) {
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
@@ -18,11 +21,13 @@ export async function mobileStoryInteractionInboxResponse(request: Request) {
   const [interactions, sentInteractions] = await Promise.all([
     listStoryInteractionsForCreator({
       creatorId: session.id,
+      storyId: input.storyId,
       kinds: ["reply", "comment"],
       limit: 100,
     }),
     listStoryInteractionsForActor({
       actorId: session.id,
+      storyId: input.storyId,
       kinds: ["reply", "comment"],
       limit: 100,
     }),
