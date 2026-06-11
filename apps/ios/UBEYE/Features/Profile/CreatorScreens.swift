@@ -797,13 +797,14 @@ struct MyStoryStatsView: View {
 
     private func storyComments(story: CreatorStatsResponse.Stats.Story) -> some View {
         let comments = story.commentItems
+        let commentCount = max(story.comments + story.replies, comments.count)
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Story comments")
                     .font(.system(size: 20, weight: .bold))
                 Spacer()
-                Text(formattedNumber(story.comments))
+                Text(formattedNumber(commentCount))
                     .font(.caption.weight(.bold))
                     .foregroundStyle(Color.ubeyeMuted)
                     .padding(.horizontal, 10)

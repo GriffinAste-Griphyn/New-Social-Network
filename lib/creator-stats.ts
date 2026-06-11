@@ -153,7 +153,7 @@ async function listCreatorStoryComments(input: {
       and(
         eq(storyInteractions.creatorId, input.creatorId),
         inArray(storyInteractions.storyId, input.storyIds),
-        eq(storyInteractions.kind, "comment"),
+        inArray(storyInteractions.kind, ["reply", "comment"]),
         eq(storyInteractions.moderationStatus, "approved"),
       ),
     )
