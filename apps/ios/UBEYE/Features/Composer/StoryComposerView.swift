@@ -199,19 +199,32 @@ final class StoryComposerStore: ObservableObject {
                     fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mov" : preparedVideo.url.lastPathComponent,
                     fileURL: preparedVideo.url
                 )
+                let playbackTargets = upload.playbackRenditionUploads ?? []
+                let playbackRenditions: [StoryVideoPlaybackRendition]
                 let playbackRendition: StoryVideoPlaybackRendition?
-                if upload.playbackPathname != nil,
-                   upload.playbackUploadUrl != nil,
-                   upload.playbackClientToken != nil,
-                   upload.playbackContentType != nil,
-                   upload.maxPlaybackSizeBytes != nil {
-                    playbackRendition = try await StoryVideoUploadNormalizer.playbackRendition(for: preparedVideo.url)
+
+                if !playbackTargets.isEmpty {
+                    playbackRenditions = try await StoryVideoUploadNormalizer.playbackRenditions(
+                        for: preparedVideo.url,
+                        targets: playbackTargets
+                    )
+                    playbackRendition = playbackRenditions.first { $0.quality == "1080p" }
+                } else if upload.playbackPathname != nil,
+                          upload.playbackUploadUrl != nil,
+                          upload.playbackClientToken != nil,
+                          upload.playbackContentType != nil,
+                          upload.maxPlaybackSizeBytes != nil {
+                    let legacyPlaybackRendition = try await StoryVideoUploadNormalizer.playbackRendition(for: preparedVideo.url)
+                    playbackRenditions = []
+                    playbackRendition = legacyPlaybackRendition
                 } else {
+                    playbackRenditions = []
                     playbackRendition = nil
                 }
                 defer {
-                    if let playbackRendition {
-                        try? FileManager.default.removeItem(at: playbackRendition.url)
+                    var removed = Set<URL>()
+                    for rendition in playbackRenditions + [playbackRendition].compactMap({ $0 }) where removed.insert(rendition.url).inserted {
+                        try? FileManager.default.removeItem(at: rendition.url)
                     }
                 }
                 let uploadedThumbnailData = await uploadOriginalQualityVideoThumbnailIfPossible(
@@ -222,7 +235,21 @@ final class StoryComposerStore: ObservableObject {
 
                 attempt.begin(.videoUpload)
                 uploadStatus = attempt.phase.statusLabel
-                if let playbackRendition {
+                if !playbackTargets.isEmpty {
+                    var targetsByQuality: [String: OriginalVideoPlaybackRenditionUpload] = [:]
+                    playbackTargets.forEach { targetsByQuality[$0.quality] = $0 }
+
+                    for rendition in playbackRenditions {
+                        guard let target = targetsByQuality[rendition.quality] else {
+                            continue
+                        }
+
+                        _ = try await api.uploadOriginalQualityPlaybackRenditionFile(
+                            fileURL: rendition.url,
+                            target: target
+                        )
+                    }
+                } else if let playbackRendition {
                     _ = try await api.uploadOriginalQualityPlaybackVideoFile(
                         fileURL: playbackRendition.url,
                         upload: upload
@@ -239,6 +266,7 @@ final class StoryComposerStore: ObservableObject {
                     upload: upload,
                     fileURL: preparedVideo.url,
                     playbackRendition: playbackRendition,
+                    playbackRenditions: playbackRenditions,
                     caption: caption,
                     brandTags: brandTags,
                     textOverlay: textOverlay,
@@ -263,6 +291,19 @@ final class StoryComposerStore: ObservableObject {
                     for: response.asset.mediaUrl,
                     kind: .video
                 )
+                if let remoteRenditions = response.asset.renditions?.playbackLadder {
+                    for rendition in playbackRenditions {
+                        guard let remote = remoteRenditions.first(where: { $0.quality == rendition.quality })?.mediaUrl else {
+                            continue
+                        }
+
+                        await MediaFileDiskCache.shared.storeLocalFile(
+                            sourceURL: rendition.url,
+                            for: remote,
+                            kind: .video
+                        )
+                    }
+                }
                 return response
             }
 

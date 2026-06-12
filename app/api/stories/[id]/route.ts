@@ -26,6 +26,7 @@ async function removeStoryMediaAssets(input: {
   thumbnailUrl: string | null
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
+  playbackRenditions?: Array<{ mediaUrl: string | null }> | null
 }) {
   const mediaUrls = Array.from(
     new Set(
@@ -34,6 +35,7 @@ async function removeStoryMediaAssets(input: {
         input.thumbnailUrl,
         input.originalMediaUrl,
         input.originalThumbnailUrl,
+        ...(input.playbackRenditions ?? []).map((rendition) => rendition.mediaUrl),
       ].filter((value): value is string => Boolean(value)),
     ),
   )

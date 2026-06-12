@@ -18,6 +18,7 @@ struct PreparedStoryVideo {
 }
 
 struct StoryVideoPlaybackRendition {
+    let quality: String
     let url: URL
     let durationMs: Int?
     let byteSize: Int64
@@ -250,8 +251,41 @@ enum StoryVideoUploadNormalizer {
     }
 
     static func playbackRendition(for url: URL) async throws -> StoryVideoPlaybackRendition {
-        guard let renditionURL = try await playbackRenditionURL(for: url) else {
-            throw APIClientError.server("Could not prepare a 1080p playback copy. Try a different video.", 0)
+        try await playbackRendition(for: url, quality: "1080p", maxHeight: 1080)
+    }
+
+    static func playbackRenditions(
+        for url: URL,
+        targets: [OriginalVideoPlaybackRenditionUpload]
+    ) async throws -> [StoryVideoPlaybackRendition] {
+        var renditions: [StoryVideoPlaybackRendition] = []
+
+        for target in targets.sorted(by: { $0.maxHeight > $1.maxHeight }) {
+            do {
+                let rendition = try await playbackRendition(
+                    for: url,
+                    quality: target.quality,
+                    maxHeight: target.maxHeight
+                )
+                renditions.append(rendition)
+            } catch {
+                MediaPerformance.mark("video_upload_playback_rendition_failed quality=\(target.quality)")
+                if target.quality == "1080p" || renditions.isEmpty {
+                    throw error
+                }
+            }
+        }
+
+        return renditions
+    }
+
+    private static func playbackRendition(
+        for url: URL,
+        quality: String,
+        maxHeight: Int
+    ) async throws -> StoryVideoPlaybackRendition {
+        guard let renditionURL = try await playbackRenditionURL(for: url, maxHeight: maxHeight) else {
+            throw APIClientError.server("Could not prepare a \(quality) playback copy. Try a different video.", 0)
         }
 
         do {
@@ -264,10 +298,11 @@ enum StoryVideoUploadNormalizer {
 
             let presentationSize = await videoPresentationSize(for: renditionURL)
             MediaPerformance.mark(
-                "video_upload_playback_rendition bytes=\(byteSize) durationMs=\(durationMs ?? 0) width=\(Int(presentationSize?.width ?? 0)) height=\(Int(presentationSize?.height ?? 0))"
+                "video_upload_playback_rendition quality=\(quality) bytes=\(byteSize) durationMs=\(durationMs ?? 0) width=\(Int(presentationSize?.width ?? 0)) height=\(Int(presentationSize?.height ?? 0))"
             )
 
             return StoryVideoPlaybackRendition(
+                quality: quality,
                 url: renditionURL,
                 durationMs: durationMs,
                 byteSize: byteSize,
@@ -280,9 +315,12 @@ enum StoryVideoUploadNormalizer {
         }
     }
 
-    private static func playbackRenditionURL(for url: URL) async throws -> URL? {
+    private static func playbackRenditionURL(for url: URL, maxHeight: Int) async throws -> URL? {
         let asset = AVURLAsset(url: url)
-        let presets = await compatiblePlaybackExportPresets(for: asset)
+        let presets = await compatiblePlaybackExportPresets(
+            for: asset,
+            maxHeight: maxHeight
+        )
         let timeRange = await alignedPlayableTimeRange(for: asset)
 
         for preset in presets {
@@ -497,11 +535,28 @@ enum StoryVideoUploadNormalizer {
         return presets
     }
 
-    private static func compatiblePlaybackExportPresets(for asset: AVAsset) async -> [String] {
-        let candidates = [
-            AVAssetExportPreset1920x1080,
-            AVAssetExportPreset1280x720,
-        ]
+    private static func compatiblePlaybackExportPresets(
+        for asset: AVAsset,
+        maxHeight: Int
+    ) async -> [String] {
+        let candidates: [String]
+
+        if maxHeight >= 1080 {
+            candidates = [
+                AVAssetExportPreset1920x1080,
+                AVAssetExportPreset1280x720,
+                AVAssetExportPreset960x540,
+            ]
+        } else if maxHeight >= 720 {
+            candidates = [
+                AVAssetExportPreset1280x720,
+                AVAssetExportPreset960x540,
+            ]
+        } else {
+            candidates = [
+                AVAssetExportPreset960x540,
+            ]
+        }
         var presets: [String] = []
 
         for candidate in candidates {

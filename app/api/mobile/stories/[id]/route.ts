@@ -61,11 +61,13 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 function storyItemPayload<T extends {
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
+  playbackRenditions?: unknown
 }>(item: T) {
   const payload = { ...item }
 
   delete payload.originalMediaUrl
   delete payload.originalThumbnailUrl
+  delete payload.playbackRenditions
 
   return payload
 }
@@ -123,6 +125,14 @@ async function mobileStoryRenditions(
     thumbnailUrl: string | null
     originalMediaUrl?: string | null
     originalThumbnailUrl?: string | null
+    playbackRenditions?: Array<{
+      quality: string
+      mediaUrl: string
+      thumbnailUrl: string | null
+      width: number | null
+      height: number | null
+      durationMs: number | null
+    }> | null
     processingStatus?: string | null
   },
   request: Request,
@@ -167,12 +177,39 @@ async function mobileStoryRenditions(
         ),
       ])
     : [directMediaUrl, thumbnailUrl]
+  const playbackLadder = await Promise.all(
+    (item.playbackRenditions ?? []).map(async (rendition) => ({
+      quality: rendition.quality,
+      mediaUrl: await mobileStoryMediaUrlWithResolver(
+        rendition.mediaUrl,
+        request,
+        resolver,
+        {
+          assetKind: item.assetKind,
+          directVideoPlayback: false,
+          processingStatus: item.processingStatus,
+        },
+      ),
+      thumbnailUrl: await mobileStoryMediaUrlWithResolver(
+        rendition.thumbnailUrl,
+        request,
+        resolver,
+        {
+          directVideoPlayback: false,
+        },
+      ),
+      width: rendition.width ?? null,
+      height: rendition.height ?? null,
+      durationMs: rendition.durationMs ?? null,
+    })),
+  )
 
   return {
     playback: {
       mediaUrl: playbackMediaUrl,
       thumbnailUrl,
     },
+    playbackLadder,
     original:
       originalMediaUrl && originalMediaUrl !== playbackMediaUrl
         ? {
@@ -251,6 +288,11 @@ export async function GET(
                     ),
                   }
                 : null,
+              playbackLadder: renditions.playbackLadder.map((rendition) => ({
+                ...rendition,
+                mediaUrl: versionMediaUrl(rendition.mediaUrl, item.id),
+                thumbnailUrl: versionMediaUrl(rendition.thumbnailUrl, item.id),
+              })),
             }
           : undefined,
       }
@@ -306,6 +348,9 @@ export async function DELETE(
           removedStory.thumbnailUrl,
           removedStory.originalMediaUrl,
           removedStory.originalThumbnailUrl,
+          ...(removedStory.playbackRenditions ?? []).map(
+            (rendition) => rendition.mediaUrl,
+          ),
         ].filter((value): value is string => Boolean(value)),
       ),
     )
@@ -346,6 +391,7 @@ async function getMobileMyStoryStack(userId: string) {
       thumbnailUrl: item.thumbnailUrl,
       originalMediaUrl: item.originalMediaUrl,
       originalThumbnailUrl: item.originalThumbnailUrl,
+      playbackRenditions: item.playbackRenditions,
       processingStatus: item.processingStatus,
       title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
       postedAt: formatStoryPostedAt(new Date(item.createdAt)),

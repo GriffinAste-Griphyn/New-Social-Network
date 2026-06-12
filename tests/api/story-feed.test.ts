@@ -317,6 +317,24 @@ describe("story upload and mobile feed API", () => {
           originalMediaUrl: "/api/story-media/stories/mobile-original/video.mov",
           originalThumbnailUrl:
             "/api/story-media/stories/mobile-original/video-thumb.jpg",
+          playbackRenditions: [
+            {
+              quality: "1080p",
+              mediaUrl: "/api/story-media/stories/mobile-playback/video.mp4",
+              thumbnailUrl: null,
+              width: 1080,
+              height: 1920,
+              durationMs: 6_500,
+            },
+            {
+              quality: "720p",
+              mediaUrl: "/api/story-media/stories/mobile-playback/video-playback-720p.mp4",
+              thumbnailUrl: null,
+              width: 720,
+              height: 1280,
+              durationMs: 6_500,
+            },
+          ],
           processingStatus: "ready",
         }),
       ],
@@ -361,6 +379,18 @@ describe("story upload and mobile feed API", () => {
             mediaUrl:
               "https://cdn.example.com/api/story-media/stories/mobile-original/video.mov",
           },
+          playbackLadder: [
+            {
+              quality: "1080p",
+              mediaUrl:
+                "https://cdn.example.com/api/story-media/stories/mobile-playback/video.mp4",
+            },
+            {
+              quality: "720p",
+              mediaUrl:
+                "https://cdn.example.com/api/story-media/stories/mobile-playback/video-playback-720p.mp4",
+            },
+          ],
         },
       },
     ])

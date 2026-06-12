@@ -46,6 +46,7 @@ import {
   publicStoryMediaUrl,
   StoryUploadError,
   type StoredStoryAsset,
+  type StoredStoryPlaybackRendition,
 } from "@/lib/story-storage"
 import { refreshProcessingCloudflareStories } from "@/lib/stories/cloudflare-status"
 import { getBlockedPeerIds, isBlockedBetween } from "@/lib/social-safety"
@@ -74,6 +75,7 @@ type FeedStoryRow = {
   thumbnailUrl: string | null
   originalMediaUrl: string | null
   originalThumbnailUrl: string | null
+  playbackRenditions: StoredStoryPlaybackRendition[] | null
   caption: string | null
   durationMs: number | null
   processingStatus: string
@@ -159,6 +161,7 @@ export type FeedStoryCard = SocialStoryCard & {
   processingStatus?: string
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
+  playbackRenditions?: StoredStoryPlaybackRendition[] | null
 }
 
 export type MyStoryElement = {
@@ -215,6 +218,7 @@ export type StoryStackItem = {
   thumbnailUrl: string | null
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
+  playbackRenditions?: StoredStoryPlaybackRendition[] | null
   processingStatus?: string
   title: string
   postedAt: string
@@ -275,6 +279,7 @@ type StoredAssetStory = {
   thumbnailUrl: string | null
   originalMediaUrl: string | null
   originalThumbnailUrl: string | null
+  playbackRenditions: StoredStoryPlaybackRendition[] | null
   processingStatus: string
 }
 
@@ -332,6 +337,20 @@ function textOverlaysFromElements(elements: StoryElementRecord[]) {
       positionX: positionStringToNumber(element.positionX, 50),
       positionY: positionStringToNumber(element.positionY, 74),
     }))
+}
+
+function publicPlaybackRenditions(
+  renditions: StoredStoryPlaybackRendition[] | null | undefined,
+) {
+  if (!renditions || renditions.length === 0) {
+    return null
+  }
+
+  return renditions.map((rendition) => ({
+    ...rendition,
+    mediaUrl: publicStoryMediaUrl(rendition.mediaUrl) ?? rendition.mediaUrl,
+    thumbnailUrl: publicStoryMediaUrl(rendition.thumbnailUrl),
+  }))
 }
 
 function formatLiveWindow(createdAt: Date) {
@@ -450,6 +469,7 @@ function buildFeedStoryCard(
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
     originalMediaUrl: publicStoryMediaUrl(row.originalMediaUrl),
     originalThumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
+    playbackRenditions: publicPlaybackRenditions(row.playbackRenditions),
     processingStatus: row.processingStatus,
     title:
       row.assetKind === "video" && row.processingStatus === "processing"
@@ -703,6 +723,7 @@ function buildStoryStack(
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
       originalMediaUrl: publicStoryMediaUrl(row.originalMediaUrl),
       originalThumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
+      playbackRenditions: publicPlaybackRenditions(row.playbackRenditions),
       processingStatus: row.processingStatus,
       postedAt: formatStoryPostedAt(row.createdAt),
       durationSeconds:
@@ -805,6 +826,7 @@ async function getLiveStoryRows() {
       thumbnailUrl: stories.thumbnailUrl,
       originalMediaUrl: stories.originalMediaUrl,
       originalThumbnailUrl: stories.originalThumbnailUrl,
+      playbackRenditions: stories.playbackRenditions,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -865,6 +887,7 @@ async function getLiveStoryRowsForCreator(
       thumbnailUrl: stories.thumbnailUrl,
       originalMediaUrl: stories.originalMediaUrl,
       originalThumbnailUrl: stories.originalThumbnailUrl,
+      playbackRenditions: stories.playbackRenditions,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -1481,6 +1504,7 @@ export async function createStory(input: CreateStoryInput) {
     originalWidth: input.storedAsset.originalWidth ?? null,
     originalHeight: input.storedAsset.originalHeight ?? null,
     originalDurationMs: input.storedAsset.originalDurationMs ?? null,
+    playbackRenditions: input.storedAsset.playbackRenditions ?? null,
     processingStatus: mediaAsset.processingStatus,
     caption: input.caption || null,
     durationMs:
@@ -1563,6 +1587,7 @@ export async function getStoryByStoredAssetForOwner(input: {
       thumbnailUrl: stories.thumbnailUrl,
       originalMediaUrl: stories.originalMediaUrl,
       originalThumbnailUrl: stories.originalThumbnailUrl,
+      playbackRenditions: stories.playbackRenditions,
       processingStatus: stories.processingStatus,
     })
     .from(stories)
@@ -1721,6 +1746,7 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
       thumbnailUrl: stories.thumbnailUrl,
       originalMediaUrl: stories.originalMediaUrl,
       originalThumbnailUrl: stories.originalThumbnailUrl,
+      playbackRenditions: stories.playbackRenditions,
     })
     .from(stories)
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
@@ -1747,5 +1773,6 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
     thumbnailUrl: story.thumbnailUrl,
     originalMediaUrl: story.originalMediaUrl,
     originalThumbnailUrl: story.originalThumbnailUrl,
+    playbackRenditions: story.playbackRenditions,
   }
 }

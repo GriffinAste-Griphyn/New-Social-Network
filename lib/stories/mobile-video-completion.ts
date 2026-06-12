@@ -9,6 +9,7 @@ import {
 import {
   publicStoryMediaUrl,
   type StoredStoryAsset,
+  type StoredStoryPlaybackRendition,
 } from "@/lib/story-storage"
 import {
   parseBrandTags,
@@ -50,6 +51,9 @@ type MobileVideoStoryResponseInput = {
     assetKind: "image" | "video"
     mediaUrl: string
     thumbnailUrl: string | null
+    originalMediaUrl?: string | null
+    originalThumbnailUrl?: string | null
+    playbackRenditions?: StoredStoryPlaybackRendition[] | null
     processingStatus: string
   }
   providerStatusFallback?: string | null
@@ -87,19 +91,69 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
     input.session.id,
   )
 
+  const signedPlaybackMediaUrl =
+    publicStoryMediaUrl(input.asset.mediaUrl, input.request, {
+      signed: true,
+    }) ?? input.asset.mediaUrl
+  const signedPlaybackThumbnailUrl = publicStoryMediaUrl(
+    input.asset.thumbnailUrl,
+    input.request,
+    { signed: true },
+  )
+  const signedOriginalMediaUrl = publicStoryMediaUrl(
+    input.asset.originalMediaUrl ?? null,
+    input.request,
+    { signed: true },
+  )
+  const signedOriginalThumbnailUrl = publicStoryMediaUrl(
+    input.asset.originalThumbnailUrl ?? input.asset.thumbnailUrl,
+    input.request,
+    { signed: true },
+  )
+  const playbackLadder = (input.asset.playbackRenditions ?? []).map(
+    (rendition) => ({
+      quality: rendition.quality,
+      mediaUrl:
+        publicStoryMediaUrl(rendition.mediaUrl, input.request, {
+          signed: true,
+        }) ?? rendition.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(
+        rendition.thumbnailUrl ?? input.asset.thumbnailUrl,
+        input.request,
+        { signed: true },
+      ),
+      width: rendition.width,
+      height: rendition.height,
+      durationMs: rendition.durationMs,
+    }),
+  )
+
   return {
     ok: true,
     storyId: input.storyId,
     completionState: input.completionState,
     asset: {
       assetKind: input.asset.assetKind,
-      mediaUrl:
-        publicStoryMediaUrl(input.asset.mediaUrl, input.request, {
-          signed: true,
-        }) ?? input.asset.mediaUrl,
-      thumbnailUrl: publicStoryMediaUrl(input.asset.thumbnailUrl, input.request, {
-        signed: true,
-      }),
+      mediaUrl: signedPlaybackMediaUrl,
+      thumbnailUrl: signedPlaybackThumbnailUrl,
+      renditions:
+        input.asset.assetKind === "video"
+          ? {
+              playback: {
+                mediaUrl: signedPlaybackMediaUrl,
+                thumbnailUrl: signedPlaybackThumbnailUrl,
+              },
+              playbackLadder,
+              original:
+                signedOriginalMediaUrl &&
+                signedOriginalMediaUrl !== signedPlaybackMediaUrl
+                  ? {
+                      mediaUrl: signedOriginalMediaUrl,
+                      thumbnailUrl: signedOriginalThumbnailUrl,
+                    }
+                  : null,
+            }
+          : undefined,
     },
     processingStatus: storyStatus?.processingStatus ?? input.asset.processingStatus,
     providerStatus:
@@ -176,6 +230,9 @@ export async function completeMobileVideoStory(
       assetKind: input.storedAsset.assetKind,
       mediaUrl: input.storedAsset.mediaUrl,
       thumbnailUrl: input.storedAsset.thumbnailUrl,
+      originalMediaUrl: input.storedAsset.originalMediaUrl,
+      originalThumbnailUrl: input.storedAsset.originalThumbnailUrl,
+      playbackRenditions: input.storedAsset.playbackRenditions,
       processingStatus: input.storedAsset.processingStatus,
     },
     providerStatusFallback: input.providerStatusFallback,

@@ -5,7 +5,7 @@ import { follows, mobileFeedSnapshots } from "@/lib/db/schema"
 import type { FeedData } from "@/lib/story-store"
 
 const mobileFeedSnapshotTtlMs = 60 * 1000
-const mobileFeedSnapshotVersion = "mobile-feed:v1"
+const mobileFeedSnapshotVersion = "mobile-feed:v2-playback-renditions"
 let snapshotTableUnavailableUntil = 0
 
 function snapshotExpiresAt() {

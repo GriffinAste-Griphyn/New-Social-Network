@@ -598,6 +598,24 @@ final class APIClient: ObservableObject {
         )
     }
 
+    func uploadOriginalQualityPlaybackRenditionFile(
+        fileURL: URL,
+        target: OriginalVideoPlaybackRenditionUpload
+    ) async throws -> OriginalVideoBlobUploadResult {
+        let byteSize = try videoFileSize(fileURL)
+        guard byteSize <= target.maxSizeBytes else {
+            throw APIClientError.invalidResponse
+        }
+
+        return try await uploadOriginalQualityBlobFile(
+            fileURL: fileURL,
+            uploadUrl: target.uploadUrl,
+            clientToken: target.clientToken,
+            contentType: target.contentType,
+            errorMessage: "Playback video upload failed."
+        )
+    }
+
     private func uploadOriginalQualityBlobFile(
         fileURL: URL,
         uploadUrl: URL,
@@ -881,6 +899,7 @@ final class APIClient: ObservableObject {
         upload: OriginalVideoUploadResponse,
         fileURL: URL,
         playbackRendition: StoryVideoPlaybackRendition?,
+        playbackRenditions: [StoryVideoPlaybackRendition] = [],
         caption: String,
         brandTags: String,
         textOverlay: String,
@@ -896,6 +915,17 @@ final class APIClient: ObservableObject {
         durationMs: Int?,
         thumbnailData: Data?
     ) async throws -> StoryUploadResponse {
+        struct PlaybackRenditionBody: Encodable {
+            let quality: String
+            let pathname: String
+            let contentType: String
+            let byteSize: Int64
+            let checksum: String
+            let durationMs: Int?
+            let width: Int?
+            let height: Int?
+        }
+
         struct Body: Encodable {
             let pathname: String
             let contentType: String
@@ -908,6 +938,7 @@ final class APIClient: ObservableObject {
             let playbackDurationMs: Int?
             let playbackWidth: Int?
             let playbackHeight: Int?
+            let playbackRenditions: [PlaybackRenditionBody]
             let thumbnailPathname: String?
             let thumbnailContentType: String?
             let thumbnailByteSize: Int?
@@ -930,6 +961,25 @@ final class APIClient: ObservableObject {
 
         let byteSize = try videoFileSize(fileURL)
         let playbackByteSize = try playbackRendition.map { try videoFileSize($0.url) }
+        let targetsByQuality = Dictionary(
+            uniqueKeysWithValues: (upload.playbackRenditionUploads ?? []).map { ($0.quality, $0) }
+        )
+        let playbackRenditionPayloads = try playbackRenditions.compactMap { rendition -> PlaybackRenditionBody? in
+            guard let target = targetsByQuality[rendition.quality] else {
+                return nil
+            }
+
+            return PlaybackRenditionBody(
+                quality: rendition.quality,
+                pathname: target.pathname,
+                contentType: target.contentType,
+                byteSize: try videoFileSize(rendition.url),
+                checksum: try fileSHA256Hex(rendition.url),
+                durationMs: rendition.durationMs,
+                width: rendition.width,
+                height: rendition.height
+            )
+        }
 
         return try await post(
             "/api/mobile/stories/video-original-complete",
@@ -945,6 +995,7 @@ final class APIClient: ObservableObject {
                 playbackDurationMs: playbackRendition?.durationMs,
                 playbackWidth: playbackRendition?.width,
                 playbackHeight: playbackRendition?.height,
+                playbackRenditions: playbackRenditionPayloads,
                 thumbnailPathname: thumbnailData == nil ? nil : upload.thumbnailPathname,
                 thumbnailContentType: thumbnailData == nil ? nil : upload.thumbnailContentType,
                 thumbnailByteSize: thumbnailData?.count,

@@ -55,6 +55,20 @@ type StoryAssetMetadata = {
 
 export class StoryUploadError extends Error {}
 
+export type StoredStoryPlaybackRendition = {
+  quality: string
+  mediaUrl: string
+  thumbnailUrl: string | null
+  storageProvider: "vercel-blob"
+  storageKey: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width: number | null
+  height: number | null
+  durationMs: number | null
+}
+
 export type StoredStoryAsset = {
   assetKind: "image" | "video"
   mediaUrl: string
@@ -78,6 +92,7 @@ export type StoredStoryAsset = {
   originalWidth?: number | null
   originalHeight?: number | null
   originalDurationMs?: number | null
+  playbackRenditions?: StoredStoryPlaybackRendition[] | null
 }
 
 type StoryStorageProvider = {
@@ -376,6 +391,76 @@ export function isAllowedOriginalQualityPlaybackVideoContentType(
   return contentType.toLowerCase() === "video/mp4"
 }
 
+type OriginalQualityPlaybackRenditionInput = {
+  quality: string
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+}
+
+function inferredPlaybackRenditionQuality(input: {
+  pathname: string
+  width?: number | null
+  height?: number | null
+}) {
+  if (input.width && input.height && input.width > 0 && input.height > 0) {
+    return `${Math.min(input.width, input.height)}p`
+  }
+
+  if (input.height && input.height > 0) {
+    return `${input.height}p`
+  }
+
+  const match = input.pathname.match(/(?:^|-)(\d{3,4})p(?:\.|-)/i)
+
+  return match?.[1] ? `${match[1]}p` : "1080p"
+}
+
+async function verifyOriginalQualityPlaybackRendition(
+  input: OriginalQualityPlaybackRenditionInput,
+) {
+  if (
+    input.pathname.includes("..") ||
+    !input.pathname.startsWith("stories/mobile-playback/") ||
+    !input.pathname.endsWith(".mp4") ||
+    !isAllowedOriginalQualityPlaybackVideoContentType(input.contentType) ||
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize <= 0 ||
+    input.byteSize > maxOriginalStoryVideoPlaybackUploadBytes ||
+    !/^[a-f0-9]{64}$/i.test(input.checksum)
+  ) {
+    throw new StoryUploadError("Could not verify the playback story video.")
+  }
+
+  const playbackMetadata = await head(input.pathname).catch(() => null)
+
+  if (
+    !playbackMetadata ||
+    playbackMetadata.size !== input.byteSize ||
+    playbackMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
+  ) {
+    throw new StoryUploadError("Could not verify the playback story video.")
+  }
+
+  return {
+    quality: input.quality,
+    mediaUrl: buildStoryMediaRoute(input.pathname),
+    thumbnailUrl: null,
+    storageProvider: "vercel-blob" as const,
+    storageKey: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum.toLowerCase(),
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+  } satisfies StoredStoryPlaybackRendition
+}
+
 export async function createOriginalQualityVideoStoryAsset(input: {
   pathname: string
   contentType: string
@@ -388,6 +473,7 @@ export async function createOriginalQualityVideoStoryAsset(input: {
   playbackDurationMs?: number | null
   playbackWidth?: number | null
   playbackHeight?: number | null
+  playbackRenditions?: OriginalQualityPlaybackRenditionInput[] | null
   thumbnailPathname?: string | null
   thumbnailContentType?: string | null
   thumbnailByteSize?: number | null
@@ -466,17 +552,64 @@ export async function createOriginalQualityVideoStoryAsset(input: {
   }
 
   if (input.playbackPathname) {
-    const playbackMetadata = await head(input.playbackPathname).catch(() => null)
-
-    if (
-      !playbackMetadata ||
-      playbackMetadata.size !== input.playbackByteSize ||
-      playbackMetadata.contentType.toLowerCase() !==
-        input.playbackContentType?.toLowerCase()
-    ) {
-      throw new StoryUploadError("Could not verify the playback story video.")
-    }
+    await verifyOriginalQualityPlaybackRendition({
+      quality: inferredPlaybackRenditionQuality({
+        pathname: input.playbackPathname,
+        width: input.playbackWidth,
+        height: input.playbackHeight,
+      }),
+      pathname: input.playbackPathname,
+      contentType: input.playbackContentType!,
+      byteSize: input.playbackByteSize!,
+      checksum: input.playbackChecksum!,
+      durationMs: input.playbackDurationMs ?? input.durationMs ?? null,
+      width: input.playbackWidth ?? input.width ?? null,
+      height: input.playbackHeight ?? input.height ?? null,
+    })
   }
+
+  const inputPlaybackRenditions = input.playbackRenditions ?? []
+  const playbackRenditionInputsByPathname = new Map<
+    string,
+    OriginalQualityPlaybackRenditionInput
+  >()
+
+  inputPlaybackRenditions.forEach((rendition) => {
+    playbackRenditionInputsByPathname.set(rendition.pathname, rendition)
+  })
+
+  if (input.playbackPathname) {
+    playbackRenditionInputsByPathname.set(input.playbackPathname, {
+      quality: inferredPlaybackRenditionQuality({
+        pathname: input.playbackPathname,
+        width: input.playbackWidth,
+        height: input.playbackHeight,
+      }),
+      pathname: input.playbackPathname,
+      contentType: input.playbackContentType!,
+      byteSize: input.playbackByteSize!,
+      checksum: input.playbackChecksum!,
+      durationMs: input.playbackDurationMs ?? input.durationMs ?? null,
+      width: input.playbackWidth ?? input.width ?? null,
+      height: input.playbackHeight ?? input.height ?? null,
+    })
+  }
+
+  const playbackRenditions = (
+    await Promise.all(
+      Array.from(playbackRenditionInputsByPathname.values()).map((rendition) =>
+        verifyOriginalQualityPlaybackRendition(rendition),
+      ),
+    )
+  ).sort((left, right) => {
+    const leftHeight = left.height ?? Number(left.quality.match(/\d+/)?.[0] ?? 0)
+    const rightHeight = right.height ?? Number(right.quality.match(/\d+/)?.[0] ?? 0)
+
+    return rightHeight - leftHeight
+  }).map((rendition) => ({
+    ...rendition,
+    thumbnailUrl,
+  }))
 
   const mediaPathname = input.playbackPathname
     ? input.playbackPathname
@@ -521,6 +654,7 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     originalDurationMs: input.playbackPathname
       ? input.durationMs ?? null
       : null,
+    playbackRenditions: playbackRenditions.length > 0 ? playbackRenditions : null,
   }
 }
 

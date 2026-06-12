@@ -35,12 +35,22 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
   }
 }
 
+type StoryPlaybackRendition = {
+  quality: string
+  mediaUrl: string
+  thumbnailUrl: string | null
+  width: number | null
+  height: number | null
+  durationMs: number | null
+}
+
 async function absoluteStoryCardMedia<T extends {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
+  playbackRenditions?: StoryPlaybackRendition[] | null
   processingStatus?: string | null
 }>(
   story: T,
@@ -49,6 +59,7 @@ async function absoluteStoryCardMedia<T extends {
   const {
     originalMediaUrl: sourceOriginalMediaUrl,
     originalThumbnailUrl: sourceOriginalThumbnailUrl,
+    playbackRenditions: sourcePlaybackRenditions,
     ...storyPayload
   } = story
   const mediaUrl = await resolver.resolve(story.mediaUrl, {
@@ -85,6 +96,22 @@ async function absoluteStoryCardMedia<T extends {
         directVideoPlayback: false,
       })
     : thumbnailUrl
+  const playbackLadder = await Promise.all(
+    (sourcePlaybackRenditions ?? []).map(async (rendition) => ({
+      quality: rendition.quality,
+      mediaUrl: await resolver.resolve(rendition.mediaUrl, {
+        assetKind: story.assetKind,
+        directVideoPlayback: false,
+        processingStatus: story.processingStatus,
+      }),
+      thumbnailUrl: await resolver.resolve(rendition.thumbnailUrl, {
+        directVideoPlayback: false,
+      }),
+      width: rendition.width ?? null,
+      height: rendition.height ?? null,
+      durationMs: rendition.durationMs ?? null,
+    })),
+  )
 
   return {
     ...storyPayload,
@@ -95,6 +122,7 @@ async function absoluteStoryCardMedia<T extends {
         mediaUrl: playbackMediaUrl,
         thumbnailUrl,
       },
+      playbackLadder,
       original: originalMediaUrl
         ? {
             mediaUrl: originalMediaUrl,

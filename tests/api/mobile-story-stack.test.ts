@@ -171,6 +171,25 @@ describe("mobile my story stack API", () => {
           originalMediaUrl: "/api/story-media/stories/mobile-original/video.mov",
           originalThumbnailUrl:
             "/api/story-media/stories/mobile-original/video-thumb.jpg",
+          playbackRenditions: [
+            {
+              quality: "1080p",
+              mediaUrl: "/api/story-media/stories/mobile-playback/video.mp4",
+              thumbnailUrl: null,
+              width: 1080,
+              height: 1920,
+              durationMs: 6_500,
+            },
+            {
+              quality: "540p",
+              mediaUrl:
+                "/api/story-media/stories/mobile-playback/video-playback-540p.mp4",
+              thumbnailUrl: null,
+              width: 540,
+              height: 960,
+              durationMs: 6_500,
+            },
+          ],
           processingStatus: "ready",
           title: "Ready video",
           textOverlays: [],
@@ -205,6 +224,18 @@ describe("mobile my story stack API", () => {
                 mediaUrl:
                   "https://cdn.example.com/api/story-media/stories/mobile-original/video.mov?v=story_ready",
               },
+              playbackLadder: [
+                {
+                  quality: "1080p",
+                  mediaUrl:
+                    "https://cdn.example.com/api/story-media/stories/mobile-playback/video.mp4?v=story_ready",
+                },
+                {
+                  quality: "540p",
+                  mediaUrl:
+                    "https://cdn.example.com/api/story-media/stories/mobile-playback/video-playback-540p.mp4?v=story_ready",
+                },
+              ],
             },
           },
         ],

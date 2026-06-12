@@ -24,6 +24,11 @@ const allowedOriginalQualityVideoContentTypes = [
   "video/quicktime",
   "video/x-m4v",
 ]
+const playbackRenditionProfiles = [
+  { quality: "1080p", maxHeight: 1080 },
+  { quality: "720p", maxHeight: 720 },
+  { quality: "540p", maxHeight: 540 },
+] as const
 
 const originalVideoUploadSchema = z.object({
   fileName: z.string().trim().min(1).max(180).default("story-video.mov"),
@@ -55,18 +60,22 @@ function thumbnailPathname(pathname: string) {
     : `${pathname}-thumb.jpg`
 }
 
-function playbackPathname(pathname: string) {
+function playbackPathname(
+  pathname: string,
+  quality: (typeof playbackRenditionProfiles)[number]["quality"] = "1080p",
+) {
   const fileName = pathname.split("/").pop() || "story-video.mov"
   const extensionIndex = fileName.lastIndexOf(".")
   const baseName =
     extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName
   const safeBaseName = safeUploadFileName(baseName).replace(/\.[^.]+$/, "")
   const ownerPrefix = pathname.split("/").slice(0, -1).join("/")
+  const renditionSuffix = quality === "1080p" ? "playback" : `playback-${quality}`
 
   return `${ownerPrefix.replace(
     "stories/mobile-original/",
     "stories/mobile-playback/",
-  )}/${safeBaseName}-playback.mp4`
+  )}/${safeBaseName}-${renditionSuffix}.mp4`
 }
 
 function blobApiUploadUrl(pathname: string) {
@@ -129,10 +138,14 @@ export async function POST(request: Request) {
   }
 
   const pathname = `stories/mobile-original/${session.id}/${randomUUID()}-${safeUploadFileName(parsed.data.fileName)}`
-  const playbackPath = playbackPathname(pathname)
+  const playbackRenditionPaths = playbackRenditionProfiles.map((profile) => ({
+    ...profile,
+    pathname: playbackPathname(pathname, profile.quality),
+  }))
+  const primaryPlaybackPath = playbackRenditionPaths[0]!
   const thumbPathname = thumbnailPathname(pathname)
   const validUntil = Date.now() + 15 * 60 * 1000
-  const [clientToken, playbackClientToken, thumbnailClientToken] =
+  const [clientToken, playbackClientTokens, thumbnailClientToken] =
     await Promise.all([
       generateClientTokenFromReadWriteToken({
         pathname,
@@ -142,14 +155,18 @@ export async function POST(request: Request) {
         addRandomSuffix: false,
         allowOverwrite: false,
       }),
-      generateClientTokenFromReadWriteToken({
-        pathname: playbackPath,
-        allowedContentTypes: ["video/mp4"],
-        maximumSizeInBytes: maxOriginalStoryVideoPlaybackUploadBytes,
-        validUntil,
-        addRandomSuffix: false,
-        allowOverwrite: false,
-      }),
+      Promise.all(
+        playbackRenditionPaths.map((rendition) =>
+          generateClientTokenFromReadWriteToken({
+            pathname: rendition.pathname,
+            allowedContentTypes: ["video/mp4"],
+            maximumSizeInBytes: maxOriginalStoryVideoPlaybackUploadBytes,
+            validUntil,
+            addRandomSuffix: false,
+            allowOverwrite: false,
+          }),
+        ),
+      ),
       generateClientTokenFromReadWriteToken({
         pathname: thumbPathname,
         allowedContentTypes: ["image/jpeg"],
@@ -167,11 +184,20 @@ export async function POST(request: Request) {
     clientToken,
     contentType: parsed.data.contentType,
     maxSizeBytes: maxOriginalStoryVideoUploadBytes,
-    playbackPathname: playbackPath,
-    playbackUploadUrl: blobApiUploadUrl(playbackPath),
-    playbackClientToken,
+    playbackPathname: primaryPlaybackPath.pathname,
+    playbackUploadUrl: blobApiUploadUrl(primaryPlaybackPath.pathname),
+    playbackClientToken: playbackClientTokens[0],
     playbackContentType: "video/mp4",
     maxPlaybackSizeBytes: maxOriginalStoryVideoPlaybackUploadBytes,
+    playbackRenditionUploads: playbackRenditionPaths.map((rendition, index) => ({
+      quality: rendition.quality,
+      maxHeight: rendition.maxHeight,
+      pathname: rendition.pathname,
+      uploadUrl: blobApiUploadUrl(rendition.pathname),
+      clientToken: playbackClientTokens[index],
+      contentType: "video/mp4",
+      maxSizeBytes: maxOriginalStoryVideoPlaybackUploadBytes,
+    })),
     thumbnailPathname: thumbPathname,
     thumbnailUploadUrl: blobApiUploadUrl(thumbPathname),
     thumbnailClientToken,

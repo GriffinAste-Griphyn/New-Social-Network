@@ -1032,8 +1032,8 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        let videoUrls = nearbyItems.compactMap { item -> URL? in
-            item.isPlayableVideo ? item.playbackMediaUrl : nil
+        let videoUrls = nearbyItems.flatMap { item -> [URL] in
+            item.isPlayableVideo ? item.videoPreloadUrls : []
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
         let videoLimit = allowsPersistentDownloads ? 3 : 1

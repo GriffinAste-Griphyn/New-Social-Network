@@ -317,6 +317,21 @@ export const mediaAssets = pgTable(
     originalWidth: integer("original_width"),
     originalHeight: integer("original_height"),
     originalDurationMs: integer("original_duration_ms"),
+    playbackRenditions: jsonb("playback_renditions").$type<
+      Array<{
+        quality: string
+        mediaUrl: string
+        thumbnailUrl: string | null
+        storageProvider: "vercel-blob"
+        storageKey: string
+        contentType: string
+        byteSize: number
+        checksum: string
+        width: number | null
+        height: number | null
+        durationMs: number | null
+      }>
+    >(),
     processingStatus: mediaAssetStatus("processing_status")
       .notNull()
       .default("processing"),
@@ -714,6 +729,21 @@ export const stories = pgTable(
     originalWidth: integer("original_width"),
     originalHeight: integer("original_height"),
     originalDurationMs: integer("original_duration_ms"),
+    playbackRenditions: jsonb("playback_renditions").$type<
+      Array<{
+        quality: string
+        mediaUrl: string
+        thumbnailUrl: string | null
+        storageProvider: "vercel-blob"
+        storageKey: string
+        contentType: string
+        byteSize: number
+        checksum: string
+        width: number | null
+        height: number | null
+        durationMs: number | null
+      }>
+    >(),
     processingStatus: text("processing_status").notNull().default("ready"),
     moderationStatus: text("moderation_status").notNull().default("approved"),
     moderationReason: text("moderation_reason"),
