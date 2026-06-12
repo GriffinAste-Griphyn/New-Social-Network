@@ -567,15 +567,53 @@ final class APIClient: ObservableObject {
     }
 
     func uploadOriginalQualityVideoFile(fileURL: URL, upload: OriginalVideoUploadResponse) async throws -> OriginalVideoBlobUploadResult {
+        return try await uploadOriginalQualityBlobFile(
+            fileURL: fileURL,
+            uploadUrl: upload.uploadUrl,
+            clientToken: upload.clientToken,
+            contentType: upload.contentType,
+            errorMessage: "Original video upload failed."
+        )
+    }
+
+    func uploadOriginalQualityPlaybackVideoFile(fileURL: URL, upload: OriginalVideoUploadResponse) async throws -> OriginalVideoBlobUploadResult {
+        guard let uploadUrl = upload.playbackUploadUrl,
+              let clientToken = upload.playbackClientToken,
+              let contentType = upload.playbackContentType,
+              let maxPlaybackSizeBytes = upload.maxPlaybackSizeBytes else {
+            throw APIClientError.invalidResponse
+        }
+
         let byteSize = try videoFileSize(fileURL)
-        var request = URLRequest(url: upload.uploadUrl)
+        guard byteSize <= maxPlaybackSizeBytes else {
+            throw APIClientError.invalidResponse
+        }
+
+        return try await uploadOriginalQualityBlobFile(
+            fileURL: fileURL,
+            uploadUrl: uploadUrl,
+            clientToken: clientToken,
+            contentType: contentType,
+            errorMessage: "Playback video upload failed."
+        )
+    }
+
+    private func uploadOriginalQualityBlobFile(
+        fileURL: URL,
+        uploadUrl: URL,
+        clientToken: String,
+        contentType: String,
+        errorMessage: String
+    ) async throws -> OriginalVideoBlobUploadResult {
+        let byteSize = try videoFileSize(fileURL)
+        var request = URLRequest(url: uploadUrl)
         request.httpMethod = "PUT"
         request.timeoutInterval = Self.largeVideoUploadTimeout
-        request.setValue("Bearer \(upload.clientToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(clientToken)", forHTTPHeaderField: "Authorization")
         request.setValue("private", forHTTPHeaderField: "x-vercel-blob-access")
-        request.setValue(upload.contentType, forHTTPHeaderField: "x-content-type")
+        request.setValue(contentType, forHTTPHeaderField: "x-content-type")
         request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
-        request.setValue(blobRequestId(clientToken: upload.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+        request.setValue(blobRequestId(clientToken: clientToken), forHTTPHeaderField: "x-api-blob-request-id")
         request.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
         request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
 
@@ -584,7 +622,7 @@ final class APIClient: ObservableObject {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             let envelope = try? decoder.decode(BlobUploadErrorEnvelope.self, from: data)
             let detail = envelope?.error?.message ?? envelope?.error?.code
-            throw APIClientError.server(detail ?? "Original video upload failed.", statusCode)
+            throw APIClientError.server(detail ?? errorMessage, statusCode)
         }
 
         return try decoder.decode(OriginalVideoBlobUploadResult.self, from: data)
@@ -842,6 +880,7 @@ final class APIClient: ObservableObject {
     func completeOriginalQualityVideoStory(
         upload: OriginalVideoUploadResponse,
         fileURL: URL,
+        playbackRendition: StoryVideoPlaybackRendition?,
         caption: String,
         brandTags: String,
         textOverlay: String,
@@ -862,6 +901,13 @@ final class APIClient: ObservableObject {
             let contentType: String
             let byteSize: Int64
             let checksum: String
+            let playbackPathname: String?
+            let playbackContentType: String?
+            let playbackByteSize: Int64?
+            let playbackChecksum: String?
+            let playbackDurationMs: Int?
+            let playbackWidth: Int?
+            let playbackHeight: Int?
             let thumbnailPathname: String?
             let thumbnailContentType: String?
             let thumbnailByteSize: Int?
@@ -883,6 +929,7 @@ final class APIClient: ObservableObject {
         }
 
         let byteSize = try videoFileSize(fileURL)
+        let playbackByteSize = try playbackRendition.map { try videoFileSize($0.url) }
 
         return try await post(
             "/api/mobile/stories/video-original-complete",
@@ -891,6 +938,13 @@ final class APIClient: ObservableObject {
                 contentType: videoMimeType(for: fileURL),
                 byteSize: byteSize,
                 checksum: try fileSHA256Hex(fileURL),
+                playbackPathname: playbackRendition == nil ? nil : upload.playbackPathname,
+                playbackContentType: playbackRendition == nil ? nil : upload.playbackContentType,
+                playbackByteSize: playbackByteSize,
+                playbackChecksum: try playbackRendition.map { try fileSHA256Hex($0.url) },
+                playbackDurationMs: playbackRendition?.durationMs,
+                playbackWidth: playbackRendition?.width,
+                playbackHeight: playbackRendition?.height,
                 thumbnailPathname: thumbnailData == nil ? nil : upload.thumbnailPathname,
                 thumbnailContentType: thumbnailData == nil ? nil : upload.thumbnailContentType,
                 thumbnailByteSize: thumbnailData?.count,

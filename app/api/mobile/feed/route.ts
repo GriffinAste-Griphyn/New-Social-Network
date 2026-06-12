@@ -39,11 +39,18 @@ async function absoluteStoryCardMedia<T extends {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
   processingStatus?: string | null
 }>(
   story: T,
   resolver: ReturnType<typeof createMobileStoryMediaUrlResolver>,
 ) {
+  const {
+    originalMediaUrl: sourceOriginalMediaUrl,
+    originalThumbnailUrl: sourceOriginalThumbnailUrl,
+    ...storyPayload
+  } = story
   const mediaUrl = await resolver.resolve(story.mediaUrl, {
     assetKind: story.assetKind,
     processingStatus: story.processingStatus,
@@ -54,7 +61,7 @@ async function absoluteStoryCardMedia<T extends {
 
   if (story.assetKind !== "video") {
     return {
-      ...story,
+      ...storyPayload,
       mediaUrl,
       thumbnailUrl,
     }
@@ -65,11 +72,22 @@ async function absoluteStoryCardMedia<T extends {
     directVideoPlayback: false,
     processingStatus: story.processingStatus,
   })
-  const originalMediaUrl =
-    mediaUrl && mediaUrl !== playbackMediaUrl ? mediaUrl : null
+  const originalMediaUrl = sourceOriginalMediaUrl
+    ? await resolver.resolve(sourceOriginalMediaUrl, {
+        assetKind: story.assetKind,
+        processingStatus: "ready",
+      })
+    : mediaUrl && mediaUrl !== playbackMediaUrl
+      ? mediaUrl
+      : null
+  const originalThumbnailUrl = sourceOriginalThumbnailUrl
+    ? await resolver.resolve(sourceOriginalThumbnailUrl, {
+        directVideoPlayback: false,
+      })
+    : thumbnailUrl
 
   return {
-    ...story,
+    ...storyPayload,
     mediaUrl,
     thumbnailUrl,
     renditions: {
@@ -80,7 +98,7 @@ async function absoluteStoryCardMedia<T extends {
       original: originalMediaUrl
         ? {
             mediaUrl: originalMediaUrl,
-            thumbnailUrl,
+            thumbnailUrl: originalThumbnailUrl,
           }
         : null,
     },

@@ -246,6 +246,13 @@
       "when": 1780926000000,
       "tag": "0034_video_startup_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1781234576731,
+      "tag": "0035_chemical_thunderbolts",
+      "breakpoints": true
     }
   ]
 }

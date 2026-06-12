@@ -12,6 +12,8 @@ import {
   createOriginalQualityVideoThumbnail,
   createOriginalQualityVideoStoryAsset,
   isAllowedOriginalQualityVideoContentType,
+  isAllowedOriginalQualityPlaybackVideoContentType,
+  maxOriginalStoryVideoPlaybackUploadBytes,
   maxOriginalStoryVideoUploadBytes,
   removeStoryAsset,
   isAllowedOriginalQualityVideoThumbnailContentType,
@@ -33,6 +35,23 @@ const completeOriginalVideoSchema = z.object({
   contentType: z.string().trim().min(1).max(120),
   byteSize: z.number().int().positive().max(maxOriginalStoryVideoUploadBytes),
   checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+  playbackPathname: z.string().trim().min(1).max(500).nullable().optional(),
+  playbackContentType: z.string().trim().min(1).max(120).nullable().optional(),
+  playbackByteSize: z
+    .number()
+    .int()
+    .positive()
+    .max(maxOriginalStoryVideoPlaybackUploadBytes)
+    .nullable()
+    .optional(),
+  playbackChecksum: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i)
+    .nullable()
+    .optional(),
+  playbackDurationMs: z.number().int().positive().nullable().optional(),
+  playbackWidth: z.number().int().positive().nullable().optional(),
+  playbackHeight: z.number().int().positive().nullable().optional(),
   thumbnailPathname: z.string().trim().min(1).max(500).nullable().optional(),
   thumbnailContentType: z.string().trim().min(1).max(120).nullable().optional(),
   thumbnailByteSize: z
@@ -91,6 +110,7 @@ function logOriginalVideoCompleteEvent(
 
 export async function POST(request: Request) {
   let uploadedPathname: string | undefined
+  let uploadedPlaybackPathname: string | undefined
   let storedAsset: StoredStoryAsset | undefined
 
   try {
@@ -138,12 +158,17 @@ export async function POST(request: Request) {
       userId: session.id,
       pathname: parsed.data.pathname,
       byteSize: parsed.data.byteSize,
+      playbackByteSize: parsed.data.playbackByteSize ?? null,
       durationMs: parsed.data.durationMs ?? null,
+      playbackDurationMs: parsed.data.playbackDurationMs ?? null,
+      hasPlaybackRendition: Boolean(parsed.data.playbackPathname),
       hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
     })
 
     const expectedPrefix = `stories/mobile-original/${session.id}/`
+    const expectedPlaybackPrefix = `stories/mobile-playback/${session.id}/`
     const hasThumbnailUpload = Boolean(parsed.data.thumbnailPathname)
+    const hasPlaybackUpload = Boolean(parsed.data.playbackPathname)
 
     if (
       !parsed.data.pathname.startsWith(expectedPrefix) ||
@@ -176,6 +201,24 @@ export async function POST(request: Request) {
       )
     }
 
+    if (
+      hasPlaybackUpload &&
+      (!parsed.data.playbackPathname?.startsWith(expectedPlaybackPrefix) ||
+        parsed.data.playbackPathname.includes("..") ||
+        !parsed.data.playbackPathname.endsWith(".mp4") ||
+        !parsed.data.playbackContentType ||
+        !isAllowedOriginalQualityPlaybackVideoContentType(
+          parsed.data.playbackContentType,
+        ) ||
+        !parsed.data.playbackByteSize ||
+        !parsed.data.playbackChecksum)
+    ) {
+      return NextResponse.json(
+        { error: "Could not finish the original video upload." },
+        { status: 400 },
+      )
+    }
+
     const existingCompletion = await getExistingMobileVideoStoryCompletion({
       request,
       session,
@@ -196,11 +239,19 @@ export async function POST(request: Request) {
     }
 
     uploadedPathname = parsed.data.pathname
+    uploadedPlaybackPathname = parsed.data.playbackPathname ?? undefined
     storedAsset = await createOriginalQualityVideoStoryAsset({
       pathname: parsed.data.pathname,
       contentType: parsed.data.contentType,
       byteSize: parsed.data.byteSize,
       checksum: parsed.data.checksum.toLowerCase(),
+      playbackPathname: parsed.data.playbackPathname ?? null,
+      playbackContentType: parsed.data.playbackContentType ?? null,
+      playbackByteSize: parsed.data.playbackByteSize ?? null,
+      playbackChecksum: parsed.data.playbackChecksum?.toLowerCase() ?? null,
+      playbackDurationMs: parsed.data.playbackDurationMs ?? null,
+      playbackWidth: parsed.data.playbackWidth ?? null,
+      playbackHeight: parsed.data.playbackHeight ?? null,
       thumbnailPathname: parsed.data.thumbnailPathname ?? null,
       thumbnailContentType: parsed.data.thumbnailContentType ?? null,
       thumbnailByteSize: parsed.data.thumbnailByteSize ?? null,
@@ -238,6 +289,7 @@ export async function POST(request: Request) {
 
     const completedAsset = storedAsset
     uploadedPathname = undefined
+    uploadedPlaybackPathname = undefined
     storedAsset = undefined
 
     logOriginalVideoCompleteEvent("complete_succeeded", {
@@ -259,12 +311,30 @@ export async function POST(request: Request) {
           : "unknown",
     })
     if (storedAsset) {
-      await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
-    } else if (uploadedPathname) {
-      await del(uploadedPathname).catch(() => undefined)
-      await del(originalVideoThumbnailPathname(uploadedPathname)).catch(
-        () => undefined,
+      const mediaUrls = Array.from(
+        new Set(
+          [
+            storedAsset.mediaUrl,
+            storedAsset.thumbnailUrl,
+            storedAsset.originalMediaUrl,
+            storedAsset.originalThumbnailUrl,
+          ].filter((value): value is string => Boolean(value)),
+        ),
       )
+      await Promise.allSettled(
+        mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)),
+      )
+    } else if (uploadedPathname) {
+      const pathnames = Array.from(
+        new Set(
+          [
+            uploadedPathname,
+            uploadedPlaybackPathname,
+            originalVideoThumbnailPathname(uploadedPathname),
+          ].filter((value): value is string => Boolean(value)),
+        ),
+      )
+      await Promise.allSettled(pathnames.map((pathname) => del(pathname)))
     }
 
     return NextResponse.json(

@@ -30,6 +30,7 @@ export {
 const maxStoryUploadBytes = 25 * 1024 * 1024
 export const maxStoryVideoUploadBytes = 512 * 1024 * 1024
 export const maxOriginalStoryVideoUploadBytes = maxStoryVideoUploadBytes
+export const maxOriginalStoryVideoPlaybackUploadBytes = maxStoryVideoUploadBytes
 export const maxOriginalStoryVideoThumbnailUploadBytes = 2 * 1024 * 1024
 export const maxCloudflareStreamClientThumbnailUploadBytes = 2 * 1024 * 1024
 const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
@@ -67,6 +68,16 @@ export type StoredStoryAsset = {
   height: number | null
   durationMs: number | null
   processingStatus: StoryAssetProcessingStatus
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
+  originalStorageProvider?: "local" | "vercel-blob" | "cloudflare-stream" | null
+  originalStorageKey?: string | null
+  originalContentType?: string | null
+  originalByteSize?: number | null
+  originalChecksum?: string | null
+  originalWidth?: number | null
+  originalHeight?: number | null
+  originalDurationMs?: number | null
 }
 
 type StoryStorageProvider = {
@@ -359,11 +370,24 @@ export function isAllowedOriginalQualityVideoContentType(contentType: string) {
   )
 }
 
+export function isAllowedOriginalQualityPlaybackVideoContentType(
+  contentType: string,
+) {
+  return contentType.toLowerCase() === "video/mp4"
+}
+
 export async function createOriginalQualityVideoStoryAsset(input: {
   pathname: string
   contentType: string
   byteSize: number
   checksum: string
+  playbackPathname?: string | null
+  playbackContentType?: string | null
+  playbackByteSize?: number | null
+  playbackChecksum?: string | null
+  playbackDurationMs?: number | null
+  playbackWidth?: number | null
+  playbackHeight?: number | null
   thumbnailPathname?: string | null
   thumbnailContentType?: string | null
   thumbnailByteSize?: number | null
@@ -383,12 +407,13 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     throw new StoryUploadError("Could not verify the original story video.")
   }
 
-  const videoMetadata = await head(input.pathname).catch(() => null)
+  const originalVideoMetadata = await head(input.pathname).catch(() => null)
 
   if (
-    !videoMetadata ||
-    videoMetadata.size !== input.byteSize ||
-    videoMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
+    !originalVideoMetadata ||
+    originalVideoMetadata.size !== input.byteSize ||
+    originalVideoMetadata.contentType.toLowerCase() !==
+      input.contentType.toLowerCase()
   ) {
     throw new StoryUploadError("Could not verify the original story video.")
   }
@@ -420,19 +445,82 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
   }
 
+  const hasPlaybackRendition = Boolean(input.playbackPathname)
+
+  if (
+    hasPlaybackRendition &&
+    (!input.playbackPathname ||
+      input.playbackPathname.includes("..") ||
+      !input.playbackPathname.startsWith("stories/mobile-playback/") ||
+      !input.playbackContentType ||
+      !isAllowedOriginalQualityPlaybackVideoContentType(
+        input.playbackContentType,
+      ) ||
+      !input.playbackByteSize ||
+      !Number.isSafeInteger(input.playbackByteSize) ||
+      input.playbackByteSize <= 0 ||
+      input.playbackByteSize > maxOriginalStoryVideoPlaybackUploadBytes ||
+      !input.playbackChecksum)
+  ) {
+    throw new StoryUploadError("Could not verify the playback story video.")
+  }
+
+  if (input.playbackPathname) {
+    const playbackMetadata = await head(input.playbackPathname).catch(() => null)
+
+    if (
+      !playbackMetadata ||
+      playbackMetadata.size !== input.playbackByteSize ||
+      playbackMetadata.contentType.toLowerCase() !==
+        input.playbackContentType?.toLowerCase()
+    ) {
+      throw new StoryUploadError("Could not verify the playback story video.")
+    }
+  }
+
+  const mediaPathname = input.playbackPathname
+    ? input.playbackPathname
+    : input.pathname
+  const mediaContentType = input.playbackPathname
+    ? input.playbackContentType!
+    : input.contentType
+  const mediaByteSize = input.playbackPathname
+    ? input.playbackByteSize!
+    : input.byteSize
+  const mediaChecksum = input.playbackPathname
+    ? input.playbackChecksum!
+    : input.checksum
+  const mediaWidth = input.playbackWidth ?? input.width ?? null
+  const mediaHeight = input.playbackHeight ?? input.height ?? null
+  const mediaDurationMs = input.playbackDurationMs ?? input.durationMs ?? null
+
   return {
     assetKind: "video",
-    mediaUrl: buildStoryMediaRoute(input.pathname),
+    mediaUrl: buildStoryMediaRoute(mediaPathname),
     thumbnailUrl,
     storageProvider: "vercel-blob",
-    storageKey: input.pathname,
-    contentType: input.contentType,
-    byteSize: input.byteSize,
-    checksum: input.checksum,
-    width: input.width ?? null,
-    height: input.height ?? null,
-    durationMs: input.durationMs ?? null,
+    storageKey: mediaPathname,
+    contentType: mediaContentType,
+    byteSize: mediaByteSize,
+    checksum: mediaChecksum,
+    width: mediaWidth,
+    height: mediaHeight,
+    durationMs: mediaDurationMs,
     processingStatus: "ready",
+    originalMediaUrl: input.playbackPathname
+      ? buildStoryMediaRoute(input.pathname)
+      : null,
+    originalThumbnailUrl: input.playbackPathname ? thumbnailUrl : null,
+    originalStorageProvider: input.playbackPathname ? "vercel-blob" : null,
+    originalStorageKey: input.playbackPathname ? input.pathname : null,
+    originalContentType: input.playbackPathname ? input.contentType : null,
+    originalByteSize: input.playbackPathname ? input.byteSize : null,
+    originalChecksum: input.playbackPathname ? input.checksum : null,
+    originalWidth: input.playbackPathname ? input.width ?? null : null,
+    originalHeight: input.playbackPathname ? input.height ?? null : null,
+    originalDurationMs: input.playbackPathname
+      ? input.durationMs ?? null
+      : null,
   }
 }
 

@@ -72,6 +72,8 @@ type FeedStoryRow = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl: string | null
+  originalThumbnailUrl: string | null
   caption: string | null
   durationMs: number | null
   processingStatus: string
@@ -155,6 +157,8 @@ export type SuggestedAccount = {
 
 export type FeedStoryCard = SocialStoryCard & {
   processingStatus?: string
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
 }
 
 export type MyStoryElement = {
@@ -209,6 +213,8 @@ export type StoryStackItem = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
   processingStatus?: string
   title: string
   postedAt: string
@@ -267,6 +273,8 @@ type StoredAssetStory = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl: string | null
+  originalThumbnailUrl: string | null
   processingStatus: string
 }
 
@@ -440,6 +448,8 @@ function buildFeedStoryCard(
     assetKind: row.assetKind,
     mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+    originalMediaUrl: publicStoryMediaUrl(row.originalMediaUrl),
+    originalThumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
     processingStatus: row.processingStatus,
     title:
       row.assetKind === "video" && row.processingStatus === "processing"
@@ -691,6 +701,8 @@ function buildStoryStack(
       assetKind: row.assetKind,
       mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+      originalMediaUrl: publicStoryMediaUrl(row.originalMediaUrl),
+      originalThumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
       processingStatus: row.processingStatus,
       postedAt: formatStoryPostedAt(row.createdAt),
       durationSeconds:
@@ -791,6 +803,8 @@ async function getLiveStoryRows() {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -849,6 +863,8 @@ async function getLiveStoryRowsForCreator(
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
       caption: stories.caption,
       durationMs: stories.durationMs,
       processingStatus: stories.processingStatus,
@@ -1455,6 +1471,16 @@ export async function createStory(input: CreateStoryInput) {
     mediaAssetId: mediaAsset.id,
     width: input.storedAsset.width,
     height: input.storedAsset.height,
+    originalMediaUrl: input.storedAsset.originalMediaUrl ?? null,
+    originalThumbnailUrl: input.storedAsset.originalThumbnailUrl ?? null,
+    originalStorageProvider: input.storedAsset.originalStorageProvider ?? null,
+    originalStorageKey: input.storedAsset.originalStorageKey ?? null,
+    originalContentType: input.storedAsset.originalContentType ?? null,
+    originalByteSize: input.storedAsset.originalByteSize ?? null,
+    originalChecksum: input.storedAsset.originalChecksum ?? null,
+    originalWidth: input.storedAsset.originalWidth ?? null,
+    originalHeight: input.storedAsset.originalHeight ?? null,
+    originalDurationMs: input.storedAsset.originalDurationMs ?? null,
     processingStatus: mediaAsset.processingStatus,
     caption: input.caption || null,
     durationMs:
@@ -1535,6 +1561,8 @@ export async function getStoryByStoredAssetForOwner(input: {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
       processingStatus: stories.processingStatus,
     })
     .from(stories)
@@ -1542,8 +1570,16 @@ export async function getStoryByStoredAssetForOwner(input: {
       and(
         eq(stories.creatorId, input.ownerId),
         eq(stories.assetKind, "video"),
-        eq(stories.storageProvider, input.storageProvider),
-        eq(stories.storageKey, input.storageKey),
+        or(
+          and(
+            eq(stories.storageProvider, input.storageProvider),
+            eq(stories.storageKey, input.storageKey),
+          ),
+          and(
+            eq(stories.originalStorageProvider, input.storageProvider),
+            eq(stories.originalStorageKey, input.storageKey),
+          ),
+        ),
       ),
     )
     .orderBy(desc(stories.createdAt))
@@ -1683,6 +1719,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
       id: stories.id,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
     })
     .from(stories)
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
@@ -1707,5 +1745,7 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
   return {
     mediaUrl: story.mediaUrl,
     thumbnailUrl: story.thumbnailUrl,
+    originalMediaUrl: story.originalMediaUrl,
+    originalThumbnailUrl: story.originalThumbnailUrl,
   }
 }

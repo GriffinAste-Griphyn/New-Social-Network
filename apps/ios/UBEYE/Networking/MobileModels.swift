@@ -626,6 +626,11 @@ struct OriginalVideoUploadResponse: Codable {
     let clientToken: String
     let contentType: String
     let maxSizeBytes: Int64
+    let playbackPathname: String?
+    let playbackUploadUrl: URL?
+    let playbackClientToken: String?
+    let playbackContentType: String?
+    let maxPlaybackSizeBytes: Int64?
     let thumbnailPathname: String
     let thumbnailUploadUrl: URL
     let thumbnailClientToken: String

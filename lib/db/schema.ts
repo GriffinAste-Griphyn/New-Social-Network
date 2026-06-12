@@ -307,6 +307,16 @@ export const mediaAssets = pgTable(
     width: integer("width"),
     height: integer("height"),
     durationMs: integer("duration_ms"),
+    originalMediaUrl: text("original_media_url"),
+    originalThumbnailUrl: text("original_thumbnail_url"),
+    originalStorageProvider: mediaStorageProvider("original_storage_provider"),
+    originalStorageKey: text("original_storage_key"),
+    originalContentType: text("original_content_type"),
+    originalByteSize: integer("original_byte_size"),
+    originalChecksum: text("original_checksum"),
+    originalWidth: integer("original_width"),
+    originalHeight: integer("original_height"),
+    originalDurationMs: integer("original_duration_ms"),
     processingStatus: mediaAssetStatus("processing_status")
       .notNull()
       .default("processing"),
@@ -328,6 +338,10 @@ export const mediaAssets = pgTable(
     index("media_assets_provider_key_idx").on(
       table.storageProvider,
       table.storageKey,
+    ),
+    index("media_assets_original_provider_key_idx").on(
+      table.originalStorageProvider,
+      table.originalStorageKey,
     ),
     index("media_assets_owner_idx").on(table.ownerUserId, table.createdAt),
     index("media_assets_processing_idx").on(
@@ -690,6 +704,16 @@ export const stories = pgTable(
       .references(() => mediaAssets.id),
     width: integer("width"),
     height: integer("height"),
+    originalMediaUrl: text("original_media_url"),
+    originalThumbnailUrl: text("original_thumbnail_url"),
+    originalStorageProvider: text("original_storage_provider"),
+    originalStorageKey: text("original_storage_key"),
+    originalContentType: text("original_content_type"),
+    originalByteSize: integer("original_byte_size"),
+    originalChecksum: text("original_checksum"),
+    originalWidth: integer("original_width"),
+    originalHeight: integer("original_height"),
+    originalDurationMs: integer("original_duration_ms"),
     processingStatus: text("processing_status").notNull().default("ready"),
     moderationStatus: text("moderation_status").notNull().default("approved"),
     moderationReason: text("moderation_reason"),
@@ -709,6 +733,7 @@ export const stories = pgTable(
   },
   (table) => [
     index("stories_storage_key_idx").on(table.storageKey),
+    index("stories_original_storage_key_idx").on(table.originalStorageKey),
     index("stories_moderation_status_idx").on(table.moderationStatus),
     index("stories_live_feed_idx").on(
       table.status,

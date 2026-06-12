@@ -237,6 +237,7 @@ async function getStoryForMediaPathname(mediaPathname: string) {
     .where(
       or(
         eq(stories.storageKey, mediaPathname),
+        eq(stories.originalStorageKey, mediaPathname),
         cloudflareStreamMedia
           ? and(
               eq(stories.storageProvider, "cloudflare-stream"),
@@ -245,10 +246,20 @@ async function getStoryForMediaPathname(mediaPathname: string) {
           : undefined,
         eq(stories.mediaUrl, encodedRoute),
         eq(stories.thumbnailUrl, encodedRoute),
+        eq(stories.originalMediaUrl, encodedRoute),
+        eq(stories.originalThumbnailUrl, encodedRoute),
         eq(stories.mediaUrl, decodedRoute),
         eq(stories.thumbnailUrl, decodedRoute),
+        eq(stories.originalMediaUrl, decodedRoute),
+        eq(stories.originalThumbnailUrl, decodedRoute),
         localUploadsRoute ? eq(stories.mediaUrl, localUploadsRoute) : undefined,
         localUploadsRoute ? eq(stories.thumbnailUrl, localUploadsRoute) : undefined,
+        localUploadsRoute
+          ? eq(stories.originalMediaUrl, localUploadsRoute)
+          : undefined,
+        localUploadsRoute
+          ? eq(stories.originalThumbnailUrl, localUploadsRoute)
+          : undefined,
       ),
     )
     .limit(1)

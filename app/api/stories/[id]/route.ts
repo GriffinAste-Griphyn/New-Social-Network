@@ -24,12 +24,17 @@ export const runtime = "nodejs"
 async function removeStoryMediaAssets(input: {
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
 }) {
   const mediaUrls = Array.from(
     new Set(
-      [input.mediaUrl, input.thumbnailUrl].filter(
-        (value): value is string => Boolean(value),
-      ),
+      [
+        input.mediaUrl,
+        input.thumbnailUrl,
+        input.originalMediaUrl,
+        input.originalThumbnailUrl,
+      ].filter((value): value is string => Boolean(value)),
     ),
   )
 

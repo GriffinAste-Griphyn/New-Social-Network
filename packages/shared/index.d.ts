@@ -19,6 +19,8 @@ export interface SocialStoryCard {
   assetKind: SocialAssetKind
   mediaUrl: string
   thumbnailUrl: string | null
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
   title: string
   processingStatus?: string
   textOverlays?: Array<{

@@ -199,6 +199,21 @@ final class StoryComposerStore: ObservableObject {
                     fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mov" : preparedVideo.url.lastPathComponent,
                     fileURL: preparedVideo.url
                 )
+                let playbackRendition: StoryVideoPlaybackRendition?
+                if upload.playbackPathname != nil,
+                   upload.playbackUploadUrl != nil,
+                   upload.playbackClientToken != nil,
+                   upload.playbackContentType != nil,
+                   upload.maxPlaybackSizeBytes != nil {
+                    playbackRendition = try await StoryVideoUploadNormalizer.playbackRendition(for: preparedVideo.url)
+                } else {
+                    playbackRendition = nil
+                }
+                defer {
+                    if let playbackRendition {
+                        try? FileManager.default.removeItem(at: playbackRendition.url)
+                    }
+                }
                 let uploadedThumbnailData = await uploadOriginalQualityVideoThumbnailIfPossible(
                     thumbnailData,
                     upload: upload,
@@ -207,6 +222,12 @@ final class StoryComposerStore: ObservableObject {
 
                 attempt.begin(.videoUpload)
                 uploadStatus = attempt.phase.statusLabel
+                if let playbackRendition {
+                    _ = try await api.uploadOriginalQualityPlaybackVideoFile(
+                        fileURL: playbackRendition.url,
+                        upload: upload
+                    )
+                }
                 _ = try await api.uploadOriginalQualityVideoFile(
                     fileURL: preparedVideo.url,
                     upload: upload
@@ -217,6 +238,7 @@ final class StoryComposerStore: ObservableObject {
                 let response = try await api.completeOriginalQualityVideoStory(
                     upload: upload,
                     fileURL: preparedVideo.url,
+                    playbackRendition: playbackRendition,
                     caption: caption,
                     brandTags: brandTags,
                     textOverlay: textOverlay,
@@ -237,7 +259,7 @@ final class StoryComposerStore: ObservableObject {
                 attempt.recordSuccess(processingStatus: response.processingStatus)
                 lastUploadReport = attempt.report
                 await MediaFileDiskCache.shared.storeLocalFile(
-                    sourceURL: preparedVideo.url,
+                    sourceURL: playbackRendition?.url ?? preparedVideo.url,
                     for: response.asset.mediaUrl,
                     kind: .video
                 )
