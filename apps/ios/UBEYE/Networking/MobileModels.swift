@@ -139,6 +139,7 @@ struct StoryCard: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
@@ -156,6 +157,43 @@ extension StoryCard {
     var isPlayableVideo: Bool {
         assetKind == .video && !isProcessingVideo
     }
+
+    var playbackMediaUrl: URL {
+        renditions?.playback.mediaUrl ?? mediaUrl
+    }
+
+    var playbackThumbnailUrl: URL? {
+        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+    }
+
+    var originalMediaUrl: URL? {
+        guard let original = renditions?.original?.mediaUrl,
+              original != playbackMediaUrl else {
+            return nil
+        }
+
+        return original
+    }
+
+    var videoPreloadUrls: [URL] {
+        guard isPlayableVideo else {
+            return []
+        }
+
+        var seen = Set<URL>()
+        return ([playbackMediaUrl] + [originalMediaUrl].compactMap { $0 })
+            .filter { seen.insert($0).inserted }
+    }
+}
+
+struct StoryMediaRenditions: Codable, Hashable {
+    let playback: StoryMediaRendition
+    let original: StoryMediaRendition?
+}
+
+struct StoryMediaRendition: Codable, Hashable {
+    let mediaUrl: URL
+    let thumbnailUrl: URL?
 }
 
 struct DiscoverTile: Codable, Identifiable, Hashable {
@@ -395,6 +433,7 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
     let textOverlays: [StoryTextOverlay]?
@@ -411,6 +450,33 @@ extension StoryStackItem {
 
     var isPlayableVideo: Bool {
         assetKind == .video && !isProcessingVideo
+    }
+
+    var playbackMediaUrl: URL {
+        renditions?.playback.mediaUrl ?? mediaUrl
+    }
+
+    var playbackThumbnailUrl: URL? {
+        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+    }
+
+    var originalMediaUrl: URL? {
+        guard let original = renditions?.original?.mediaUrl,
+              original != playbackMediaUrl else {
+            return nil
+        }
+
+        return original
+    }
+
+    var videoPreloadUrls: [URL] {
+        guard isPlayableVideo else {
+            return []
+        }
+
+        var seen = Set<URL>()
+        return ([playbackMediaUrl] + [originalMediaUrl].compactMap { $0 })
+            .filter { seen.insert($0).inserted }
     }
 }
 

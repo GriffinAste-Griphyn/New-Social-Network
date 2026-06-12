@@ -117,6 +117,7 @@ final class FeedStore: ObservableObject {
             assetKind: response.asset.assetKind,
             mediaUrl: response.asset.mediaUrl,
             thumbnailUrl: thumbnailUrl,
+            renditions: nil,
             title: response.asset.assetKind == .video && response.processingStatus != "ready"
                 ? "Video processing"
                 : "Story",

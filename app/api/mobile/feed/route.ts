@@ -44,15 +44,46 @@ async function absoluteStoryCardMedia<T extends {
   story: T,
   resolver: ReturnType<typeof createMobileStoryMediaUrlResolver>,
 ) {
+  const mediaUrl = await resolver.resolve(story.mediaUrl, {
+    assetKind: story.assetKind,
+    processingStatus: story.processingStatus,
+  })
+  const thumbnailUrl = await resolver.resolve(story.thumbnailUrl, {
+    directVideoPlayback: false,
+  })
+
+  if (story.assetKind !== "video") {
+    return {
+      ...story,
+      mediaUrl,
+      thumbnailUrl,
+    }
+  }
+
+  const playbackMediaUrl = await resolver.resolve(story.mediaUrl, {
+    assetKind: story.assetKind,
+    directVideoPlayback: false,
+    processingStatus: story.processingStatus,
+  })
+  const originalMediaUrl =
+    mediaUrl && mediaUrl !== playbackMediaUrl ? mediaUrl : null
+
   return {
     ...story,
-    mediaUrl: await resolver.resolve(story.mediaUrl, {
-      assetKind: story.assetKind,
-      processingStatus: story.processingStatus,
-    }),
-    thumbnailUrl: await resolver.resolve(story.thumbnailUrl, {
-      directVideoPlayback: false,
-    }),
+    mediaUrl,
+    thumbnailUrl,
+    renditions: {
+      playback: {
+        mediaUrl: playbackMediaUrl,
+        thumbnailUrl,
+      },
+      original: originalMediaUrl
+        ? {
+            mediaUrl: originalMediaUrl,
+            thumbnailUrl,
+          }
+        : null,
+    },
   }
 }
 
