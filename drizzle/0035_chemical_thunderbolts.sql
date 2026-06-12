@@ -1,22 +1,22 @@
-ALTER TABLE "media_assets" ADD COLUMN "original_media_url" text;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_thumbnail_url" text;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_storage_provider" "media_storage_provider";--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_storage_key" text;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_content_type" text;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_byte_size" integer;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_checksum" text;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_width" integer;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_height" integer;--> statement-breakpoint
-ALTER TABLE "media_assets" ADD COLUMN "original_duration_ms" integer;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_media_url" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_thumbnail_url" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_storage_provider" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_storage_key" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_content_type" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_byte_size" integer;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_checksum" text;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_width" integer;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_height" integer;--> statement-breakpoint
-ALTER TABLE "stories" ADD COLUMN "original_duration_ms" integer;--> statement-breakpoint
-CREATE INDEX "media_assets_original_provider_key_idx" ON "media_assets" USING btree ("original_storage_provider","original_storage_key");--> statement-breakpoint
-CREATE INDEX "stories_original_storage_key_idx" ON "stories" USING btree ("original_storage_key");
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_media_url" text;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_thumbnail_url" text;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_storage_provider" "media_storage_provider";--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_storage_key" text;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_content_type" text;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_byte_size" integer;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_checksum" text;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_width" integer;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_height" integer;--> statement-breakpoint
+ALTER TABLE "media_assets" ADD COLUMN IF NOT EXISTS "original_duration_ms" integer;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_media_url" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_thumbnail_url" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_storage_provider" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_storage_key" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_content_type" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_byte_size" integer;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_checksum" text;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_width" integer;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_height" integer;--> statement-breakpoint
+ALTER TABLE "stories" ADD COLUMN IF NOT EXISTS "original_duration_ms" integer;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "media_assets_original_provider_key_idx" ON "media_assets" USING btree ("original_storage_provider","original_storage_key");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "stories_original_storage_key_idx" ON "stories" USING btree ("original_storage_key");
