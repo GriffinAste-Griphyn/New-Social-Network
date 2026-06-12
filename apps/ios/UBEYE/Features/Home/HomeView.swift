@@ -268,7 +268,6 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
-                    uploadNoticeBanner
 
                     if store.isLoading && store.feed == nil {
                         ProgressView()
@@ -294,6 +293,13 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
+            .overlay(alignment: .top) {
+                uploadNoticeBanner
+                    .padding(.horizontal, 16)
+                    .padding(.top, 74)
+                    .allowsHitTesting(false)
+            }
+            .animation(.snappy, value: storyUploadNotice.state)
             .task {
                 await store.load(api: api)
             }
