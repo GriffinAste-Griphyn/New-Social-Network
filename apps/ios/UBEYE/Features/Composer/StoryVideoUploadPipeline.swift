@@ -17,6 +17,14 @@ struct PreparedStoryVideo {
     let inspection: StoryVideoInspection
 }
 
+struct StoryVideoPlaybackRendition {
+    let url: URL
+    let durationMs: Int?
+    let byteSize: Int64
+    let width: Int?
+    let height: Int?
+}
+
 struct StoryVideoInspection {
     let source: StoryVideoUpload.Source
     let originalURL: URL
@@ -241,6 +249,86 @@ enum StoryVideoUploadNormalizer {
         }
     }
 
+    static func playbackRendition(for url: URL) async throws -> StoryVideoPlaybackRendition {
+        guard let renditionURL = try await playbackRenditionURL(for: url) else {
+            throw APIClientError.server("Could not prepare a 1080p playback copy. Try a different video.", 0)
+        }
+
+        do {
+            let durationMs = await videoDurationMs(for: renditionURL)
+            let byteSize = try videoFileSize(for: renditionURL)
+
+            if byteSize > maxUploadBytes {
+                throw APIClientError.server("Story videos are capped at 512 MB.", 0)
+            }
+
+            let presentationSize = await videoPresentationSize(for: renditionURL)
+            MediaPerformance.mark(
+                "video_upload_playback_rendition bytes=\(byteSize) durationMs=\(durationMs ?? 0) width=\(Int(presentationSize?.width ?? 0)) height=\(Int(presentationSize?.height ?? 0))"
+            )
+
+            return StoryVideoPlaybackRendition(
+                url: renditionURL,
+                durationMs: durationMs,
+                byteSize: byteSize,
+                width: presentationSize.map { Int($0.width.rounded()) },
+                height: presentationSize.map { Int($0.height.rounded()) }
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: renditionURL)
+            throw error
+        }
+    }
+
+    private static func playbackRenditionURL(for url: URL) async throws -> URL? {
+        let asset = AVURLAsset(url: url)
+        let presets = await compatiblePlaybackExportPresets(for: asset)
+        let timeRange = await alignedPlayableTimeRange(for: asset)
+
+        for preset in presets {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("story-playback-\(UUID().uuidString).mp4")
+
+            guard let export = try await exportSession(
+                asset: asset,
+                preset: preset,
+                outputURL: outputURL,
+                timeRange: timeRange,
+                mirrorsHorizontally: false
+            ) else {
+                continue
+            }
+
+            guard export.supportedFileTypes.contains(.mp4) else {
+                MediaPerformance.mark("video_upload_playback_skipped preset=\(preset) unsupported_mp4")
+                continue
+            }
+
+            await exportVideo(export)
+
+            if export.status == .completed {
+                let byteSize = (try? videoFileSize(for: outputURL)) ?? 0
+
+                if byteSize <= maxUploadBytes {
+                    MediaPerformance.mark("video_upload_playback_exported preset=\(preset) bytes=\(byteSize)")
+                    return outputURL
+                }
+
+                try? FileManager.default.removeItem(at: outputURL)
+                MediaPerformance.mark("video_upload_playback_too_large preset=\(preset) bytes=\(byteSize)")
+                continue
+            }
+
+            try? FileManager.default.removeItem(at: outputURL)
+            let nsError = export.error as NSError?
+            MediaPerformance.mark(
+                "video_upload_playback_failed preset=\(preset) status=\(export.status.rawValue) code=\(nsError?.code ?? 0)"
+            )
+        }
+
+        return nil
+    }
+
     private static func inspect(url: URL, source: StoryVideoUpload.Source) async throws -> StoryVideoInspection {
         let asset = AVURLAsset(url: url)
         let byteSize = try videoFileSize(for: url)
@@ -409,6 +497,30 @@ enum StoryVideoUploadNormalizer {
         return presets
     }
 
+    private static func compatiblePlaybackExportPresets(for asset: AVAsset) async -> [String] {
+        let candidates = [
+            AVAssetExportPreset1920x1080,
+            AVAssetExportPreset1280x720,
+        ]
+        var presets: [String] = []
+
+        for candidate in candidates {
+            guard !presets.contains(candidate) else {
+                continue
+            }
+
+            if await AVAssetExportSession.compatibility(
+                ofExportPreset: candidate,
+                with: asset,
+                outputFileType: .mp4
+            ) {
+                presets.append(candidate)
+            }
+        }
+
+        return presets
+    }
+
     private static func alignedPlayableTimeRange(for asset: AVURLAsset) async -> CMTimeRange? {
         let duration: CMTime?
         let tracks: [AVAssetTrack]
@@ -457,6 +569,32 @@ enum StoryVideoUploadNormalizer {
         }
 
         return asset.tracks(withMediaType: .video).first
+    }
+
+    private static func videoPresentationSize(for url: URL) async -> CGSize? {
+        let asset = AVURLAsset(url: url)
+        guard let videoTrack = await firstVideoTrack(in: asset) else {
+            return nil
+        }
+
+        let naturalSize: CGSize
+        let preferredTransform: CGAffineTransform
+
+        if #available(iOS 16.0, *) {
+            guard let loadedNaturalSize = try? await videoTrack.load(.naturalSize),
+                  let loadedPreferredTransform = try? await videoTrack.load(.preferredTransform) else {
+                return nil
+            }
+            naturalSize = loadedNaturalSize
+            preferredTransform = loadedPreferredTransform
+        } else {
+            naturalSize = videoTrack.naturalSize
+            preferredTransform = videoTrack.preferredTransform
+        }
+
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+
+        return CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
     }
 
     private static func codecTypes(from formatDescriptions: [CMFormatDescription]) -> [String] {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
-import { getMyStoryStack } from "@/lib/story-store"
+import { getMyStoryStack, getStoryStackForStory } from "@/lib/story-store"
 
 vi.mock("@/lib/auth", () => ({
   getCompleteMobileSession: vi.fn(),
@@ -153,5 +153,63 @@ describe("mobile my story stack API", () => {
         ],
       },
     })
+  })
+
+  it("returns separate playback and original renditions for story stack videos", async () => {
+    vi.mocked(getStoryStackForStory).mockResolvedValue({
+      id: "story_ready",
+      creatorId: "creator_456",
+      creator: "Creator",
+      handle: "@creator",
+      avatarUrl: null,
+      items: [
+        {
+          id: "story_ready",
+          assetKind: "video",
+          mediaUrl: "/api/story-media/stories/mobile-playback/video.mp4",
+          thumbnailUrl: "/api/story-media/stories/mobile-original/video-thumb.jpg",
+          originalMediaUrl: "/api/story-media/stories/mobile-original/video.mov",
+          originalThumbnailUrl:
+            "/api/story-media/stories/mobile-original/video-thumb.jpg",
+          processingStatus: "ready",
+          title: "Ready video",
+          textOverlays: [],
+          postedAt: "now",
+          durationSeconds: 7,
+        },
+      ],
+    })
+
+    const { GET } = await import("@/app/api/mobile/stories/[id]/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/stories/story_ready"),
+      { params: Promise.resolve({ id: "story_ready" }) } as never,
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      story: {
+        items: [
+          {
+            id: "story_ready",
+            mediaUrl:
+              "https://cdn.example.com/api/story-media/stories/mobile-playback/video.mp4?v=story_ready",
+            renditions: {
+              playback: {
+                mediaUrl:
+                  "https://cdn.example.com/api/story-media/stories/mobile-playback/video.mp4?v=story_ready",
+              },
+              original: {
+                mediaUrl:
+                  "https://cdn.example.com/api/story-media/stories/mobile-original/video.mov?v=story_ready",
+              },
+            },
+          },
+        ],
+      },
+    })
+    expect(payload.story.items[0]).not.toHaveProperty("originalMediaUrl")
   })
 })

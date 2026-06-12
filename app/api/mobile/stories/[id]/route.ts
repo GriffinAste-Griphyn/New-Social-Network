@@ -58,6 +58,18 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
   }
 }
 
+function storyItemPayload<T extends {
+  originalMediaUrl?: string | null
+  originalThumbnailUrl?: string | null
+}>(item: T) {
+  const payload = { ...item }
+
+  delete payload.originalMediaUrl
+  delete payload.originalThumbnailUrl
+
+  return payload
+}
+
 function parseCloudflareStoryMediaUrl(value: string | null, request: Request) {
   if (!value) {
     return null
@@ -109,6 +121,8 @@ async function mobileStoryRenditions(
     assetKind: "image" | "video"
     mediaUrl: string
     thumbnailUrl: string | null
+    originalMediaUrl?: string | null
+    originalThumbnailUrl?: string | null
     processingStatus?: string | null
   },
   request: Request,
@@ -132,6 +146,27 @@ async function mobileStoryRenditions(
       directVideoPlayback: false,
     }),
   ])
+  const [originalMediaUrl, originalThumbnailUrl] = item.originalMediaUrl
+    ? await Promise.all([
+        mobileStoryMediaUrlWithResolver(
+          item.originalMediaUrl,
+          request,
+          resolver,
+          {
+            assetKind: item.assetKind,
+            processingStatus: "ready",
+          },
+        ),
+        mobileStoryMediaUrlWithResolver(
+          item.originalThumbnailUrl ?? item.thumbnailUrl,
+          request,
+          resolver,
+          {
+            directVideoPlayback: false,
+          },
+        ),
+      ])
+    : [directMediaUrl, thumbnailUrl]
 
   return {
     playback: {
@@ -139,10 +174,10 @@ async function mobileStoryRenditions(
       thumbnailUrl,
     },
     original:
-      directMediaUrl && directMediaUrl !== playbackMediaUrl
+      originalMediaUrl && originalMediaUrl !== playbackMediaUrl
         ? {
-            mediaUrl: directMediaUrl,
-            thumbnailUrl,
+            mediaUrl: originalMediaUrl,
+            thumbnailUrl: originalThumbnailUrl,
           }
         : null,
   }
@@ -174,6 +209,7 @@ export async function GET(
   })
   const storyItems = await Promise.all(
     story.items.map(async (item) => {
+      const itemPayload = storyItemPayload(item)
       const [mediaUrl, thumbnailUrl, renditions] = await Promise.all([
         mobileStoryMediaUrlWithResolver(item.mediaUrl, request, mediaUrlResolver, {
           assetKind: item.assetKind,
@@ -191,7 +227,7 @@ export async function GET(
       ])
 
       return {
-        ...item,
+        ...itemPayload,
         mediaUrl: versionMediaUrl(mediaUrl, item.id),
         thumbnailUrl: versionMediaUrl(thumbnailUrl, item.id),
         renditions: renditions
@@ -265,9 +301,12 @@ export async function DELETE(
     const removedStory = await removeStoryForOwner(id, session.id)
     const mediaUrls = Array.from(
       new Set(
-        [removedStory.mediaUrl, removedStory.thumbnailUrl].filter(
-          (value): value is string => Boolean(value),
-        ),
+        [
+          removedStory.mediaUrl,
+          removedStory.thumbnailUrl,
+          removedStory.originalMediaUrl,
+          removedStory.originalThumbnailUrl,
+        ].filter((value): value is string => Boolean(value)),
       ),
     )
 
@@ -305,6 +344,8 @@ async function getMobileMyStoryStack(userId: string) {
       assetKind: item.assetKind,
       mediaUrl: item.mediaUrl,
       thumbnailUrl: item.thumbnailUrl,
+      originalMediaUrl: item.originalMediaUrl,
+      originalThumbnailUrl: item.originalThumbnailUrl,
       processingStatus: item.processingStatus,
       title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
       postedAt: formatStoryPostedAt(new Date(item.createdAt)),

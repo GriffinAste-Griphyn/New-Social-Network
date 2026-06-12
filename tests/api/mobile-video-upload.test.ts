@@ -139,18 +139,32 @@ describe("mobile Cloudflare video upload API", () => {
     vi.mocked(createCloudflareStreamTusUpload).mockReset()
     vi.mocked(createOriginalQualityVideoStoryAsset).mockResolvedValue({
       assetKind: "video",
-      mediaUrl: "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      mediaUrl:
+        "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
       thumbnailUrl:
         "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
       storageProvider: "vercel-blob",
-      storageKey: "stories/mobile-original/creator_123/story.mov",
-      contentType: "video/quicktime",
-      byteSize: 8 * 1024 * 1024,
-      checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      storageKey: "stories/mobile-playback/creator_123/story-playback.mp4",
+      contentType: "video/mp4",
+      byteSize: 4 * 1024 * 1024,
+      checksum: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       width: 1080,
       height: 1920,
       durationMs: 6_500,
       processingStatus: "ready",
+      originalMediaUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      originalThumbnailUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      originalStorageProvider: "vercel-blob",
+      originalStorageKey: "stories/mobile-original/creator_123/story.mov",
+      originalContentType: "video/quicktime",
+      originalByteSize: 8 * 1024 * 1024,
+      originalChecksum:
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      originalWidth: 2160,
+      originalHeight: 3840,
+      originalDurationMs: 6_500,
     })
     vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValue({
       readyToStream: false,
@@ -445,6 +459,15 @@ describe("mobile Cloudflare video upload API", () => {
             byteSize: 8 * 1024 * 1024,
             checksum:
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            playbackPathname:
+              "stories/mobile-playback/creator_123/story-playback.mp4",
+            playbackContentType: "video/mp4",
+            playbackByteSize: 4 * 1024 * 1024,
+            playbackChecksum:
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            playbackDurationMs: 6_500,
+            playbackWidth: 1080,
+            playbackHeight: 1920,
             thumbnailPathname:
               "stories/mobile-original/creator_123/story-thumb.jpg",
             thumbnailContentType: "image/jpeg",
@@ -470,6 +493,8 @@ describe("mobile Cloudflare video upload API", () => {
       expect.objectContaining({
         pathname: "stories/mobile-original/creator_123/story.mov",
         contentType: "video/quicktime",
+        playbackPathname: "stories/mobile-playback/creator_123/story-playback.mp4",
+        playbackContentType: "video/mp4",
       }),
     )
     expect(createStory).toHaveBeenCalledWith(
@@ -477,7 +502,7 @@ describe("mobile Cloudflare video upload API", () => {
         caption: "Original quality",
         explicitBrandTags: ["originalco"],
         moderationMediaUrl:
-          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+          "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
         moderationThumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
         elements: expect.arrayContaining([
@@ -495,7 +520,7 @@ describe("mobile Cloudflare video upload API", () => {
       storyId: "22222222-2222-4222-8222-222222222222",
       asset: {
         mediaUrl:
-          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+          "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
         thumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
       },
@@ -510,8 +535,13 @@ describe("mobile Cloudflare video upload API", () => {
     vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValueOnce({
       id: "existing-original-story",
       assetKind: "video",
-      mediaUrl: "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      mediaUrl:
+        "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
       thumbnailUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      originalMediaUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      originalThumbnailUrl:
         "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
       processingStatus: "ready",
     })
@@ -545,6 +575,15 @@ describe("mobile Cloudflare video upload API", () => {
             byteSize: 8 * 1024 * 1024,
             checksum:
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            playbackPathname:
+              "stories/mobile-playback/creator_123/story-playback.mp4",
+            playbackContentType: "video/mp4",
+            playbackByteSize: 4 * 1024 * 1024,
+            playbackChecksum:
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            playbackDurationMs: 6_500,
+            playbackWidth: 1080,
+            playbackHeight: 1920,
             thumbnailPathname:
               "stories/mobile-original/creator_123/story-thumb.jpg",
             thumbnailContentType: "image/jpeg",
@@ -575,7 +614,7 @@ describe("mobile Cloudflare video upload API", () => {
       completionState: "reused",
       asset: {
         mediaUrl:
-          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+          "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
         thumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
       },

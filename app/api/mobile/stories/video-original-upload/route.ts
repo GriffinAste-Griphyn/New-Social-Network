@@ -6,6 +6,7 @@ import { z } from "zod"
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
   isAllowedOriginalQualityVideoContentType,
+  maxOriginalStoryVideoPlaybackUploadBytes,
   maxOriginalStoryVideoThumbnailUploadBytes,
   maxOriginalStoryVideoUploadBytes,
 } from "@/lib/story-storage"
@@ -52,6 +53,20 @@ function thumbnailPathname(pathname: string) {
   return extensionIndex >= 0
     ? `${pathname.slice(0, extensionIndex)}-thumb.jpg`
     : `${pathname}-thumb.jpg`
+}
+
+function playbackPathname(pathname: string) {
+  const fileName = pathname.split("/").pop() || "story-video.mov"
+  const extensionIndex = fileName.lastIndexOf(".")
+  const baseName =
+    extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName
+  const safeBaseName = safeUploadFileName(baseName).replace(/\.[^.]+$/, "")
+  const ownerPrefix = pathname.split("/").slice(0, -1).join("/")
+
+  return `${ownerPrefix.replace(
+    "stories/mobile-original/",
+    "stories/mobile-playback/",
+  )}/${safeBaseName}-playback.mp4`
 }
 
 function blobApiUploadUrl(pathname: string) {
@@ -114,26 +129,36 @@ export async function POST(request: Request) {
   }
 
   const pathname = `stories/mobile-original/${session.id}/${randomUUID()}-${safeUploadFileName(parsed.data.fileName)}`
+  const playbackPath = playbackPathname(pathname)
   const thumbPathname = thumbnailPathname(pathname)
   const validUntil = Date.now() + 15 * 60 * 1000
-  const [clientToken, thumbnailClientToken] = await Promise.all([
-    generateClientTokenFromReadWriteToken({
-      pathname,
-      allowedContentTypes: allowedOriginalQualityVideoContentTypes,
-      maximumSizeInBytes: maxOriginalStoryVideoUploadBytes,
-      validUntil,
-      addRandomSuffix: false,
-      allowOverwrite: false,
-    }),
-    generateClientTokenFromReadWriteToken({
-      pathname: thumbPathname,
-      allowedContentTypes: ["image/jpeg"],
-      maximumSizeInBytes: maxOriginalStoryVideoThumbnailUploadBytes,
-      validUntil,
-      addRandomSuffix: false,
-      allowOverwrite: false,
-    }),
-  ])
+  const [clientToken, playbackClientToken, thumbnailClientToken] =
+    await Promise.all([
+      generateClientTokenFromReadWriteToken({
+        pathname,
+        allowedContentTypes: allowedOriginalQualityVideoContentTypes,
+        maximumSizeInBytes: maxOriginalStoryVideoUploadBytes,
+        validUntil,
+        addRandomSuffix: false,
+        allowOverwrite: false,
+      }),
+      generateClientTokenFromReadWriteToken({
+        pathname: playbackPath,
+        allowedContentTypes: ["video/mp4"],
+        maximumSizeInBytes: maxOriginalStoryVideoPlaybackUploadBytes,
+        validUntil,
+        addRandomSuffix: false,
+        allowOverwrite: false,
+      }),
+      generateClientTokenFromReadWriteToken({
+        pathname: thumbPathname,
+        allowedContentTypes: ["image/jpeg"],
+        maximumSizeInBytes: maxOriginalStoryVideoThumbnailUploadBytes,
+        validUntil,
+        addRandomSuffix: false,
+        allowOverwrite: false,
+      }),
+    ])
 
   return NextResponse.json({
     ok: true,
@@ -142,6 +167,11 @@ export async function POST(request: Request) {
     clientToken,
     contentType: parsed.data.contentType,
     maxSizeBytes: maxOriginalStoryVideoUploadBytes,
+    playbackPathname: playbackPath,
+    playbackUploadUrl: blobApiUploadUrl(playbackPath),
+    playbackClientToken,
+    playbackContentType: "video/mp4",
+    maxPlaybackSizeBytes: maxOriginalStoryVideoPlaybackUploadBytes,
     thumbnailPathname: thumbPathname,
     thumbnailUploadUrl: blobApiUploadUrl(thumbPathname),
     thumbnailClientToken,
