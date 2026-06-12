@@ -63,6 +63,7 @@ final class APIClient: ObservableObject {
     private static let deviceIdKey = "ubeye.ios.deviceId"
     private static let productionBaseURL = "https://new-social-network-nine.vercel.app"
     private static let vercelBlobApiVersion = "12"
+    private static let largeVideoUploadTimeout: TimeInterval = 10 * 60
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
@@ -569,6 +570,7 @@ final class APIClient: ObservableObject {
         let byteSize = try videoFileSize(fileURL)
         var request = URLRequest(url: upload.uploadUrl)
         request.httpMethod = "PUT"
+        request.timeoutInterval = Self.largeVideoUploadTimeout
         request.setValue("Bearer \(upload.clientToken)", forHTTPHeaderField: "Authorization")
         request.setValue("private", forHTTPHeaderField: "x-vercel-blob-access")
         request.setValue(upload.contentType, forHTTPHeaderField: "x-content-type")
