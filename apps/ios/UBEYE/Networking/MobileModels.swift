@@ -162,6 +162,19 @@ extension StoryCard {
         renditions?.playback.mediaUrl ?? mediaUrl
     }
 
+    var startupMediaUrl: URL {
+        renditions?.startupRendition?.mediaUrl ?? playbackMediaUrl
+    }
+
+    var highQualityMediaUrl: URL? {
+        let highQuality = playbackMediaUrl
+        if highQuality != startupMediaUrl {
+            return highQuality
+        }
+
+        return originalMediaUrl
+    }
+
     var playbackThumbnailUrl: URL? {
         renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
@@ -181,19 +194,65 @@ extension StoryCard {
         }
 
         var seen = Set<URL>()
-        return ([playbackMediaUrl] + [originalMediaUrl].compactMap { $0 })
+        return ([startupMediaUrl, playbackMediaUrl] + (renditions?.playbackLadderUrls ?? []) + [originalMediaUrl].compactMap { $0 })
             .filter { seen.insert($0).inserted }
     }
 }
 
 struct StoryMediaRenditions: Codable, Hashable {
     let playback: StoryMediaRendition
+    let playbackLadder: [StoryMediaRendition]?
     let original: StoryMediaRendition?
 }
 
 struct StoryMediaRendition: Codable, Hashable {
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let quality: String?
+    let width: Int?
+    let height: Int?
+    let durationMs: Int?
+}
+
+extension StoryMediaRenditions {
+    var startupRendition: StoryMediaRendition? {
+        sortedPlaybackLadder.first { $0.shortEdgePixels == 720 } ??
+            sortedPlaybackLadder.first { ($0.shortEdgePixels ?? 0) < 1080 } ??
+            sortedPlaybackLadder.last
+    }
+
+    var playbackLadderUrls: [URL] {
+        sortedPlaybackLadder.map(\.mediaUrl)
+    }
+
+    private var sortedPlaybackLadder: [StoryMediaRendition] {
+        (playbackLadder ?? []).sorted { left, right in
+            (left.shortEdgePixels ?? 0) < (right.shortEdgePixels ?? 0)
+        }
+    }
+}
+
+private extension StoryMediaRendition {
+    var shortEdgePixels: Int? {
+        if let width, let height {
+            return min(width, height)
+        }
+
+        if let qualityPixels {
+            return qualityPixels
+        }
+
+        return nil
+    }
+
+    var qualityPixels: Int? {
+        guard let quality else {
+            return nil
+        }
+
+        let digits = quality.filter(\.isNumber)
+        return Int(digits)
+    }
 }
 
 struct DiscoverTile: Codable, Identifiable, Hashable {
@@ -456,6 +515,19 @@ extension StoryStackItem {
         renditions?.playback.mediaUrl ?? mediaUrl
     }
 
+    var startupMediaUrl: URL {
+        renditions?.startupRendition?.mediaUrl ?? playbackMediaUrl
+    }
+
+    var highQualityMediaUrl: URL? {
+        let highQuality = playbackMediaUrl
+        if highQuality != startupMediaUrl {
+            return highQuality
+        }
+
+        return originalMediaUrl
+    }
+
     var playbackThumbnailUrl: URL? {
         renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
@@ -475,7 +547,7 @@ extension StoryStackItem {
         }
 
         var seen = Set<URL>()
-        return ([playbackMediaUrl] + [originalMediaUrl].compactMap { $0 })
+        return ([startupMediaUrl, playbackMediaUrl] + (renditions?.playbackLadderUrls ?? []) + [originalMediaUrl].compactMap { $0 })
             .filter { seen.insert($0).inserted }
     }
 }
@@ -592,6 +664,7 @@ struct StoryUploadResponse: Codable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let renditions: StoryMediaRenditions?
     }
 
     let ok: Bool
@@ -619,6 +692,16 @@ struct VideoUploadResponse: Codable {
     let maxThumbnailSizeBytes: Int64?
 }
 
+struct OriginalVideoPlaybackRenditionUpload: Codable, Hashable {
+    let quality: String
+    let maxHeight: Int
+    let pathname: String
+    let uploadUrl: URL
+    let clientToken: String
+    let contentType: String
+    let maxSizeBytes: Int64
+}
+
 struct OriginalVideoUploadResponse: Codable {
     let ok: Bool
     let pathname: String
@@ -631,6 +714,7 @@ struct OriginalVideoUploadResponse: Codable {
     let playbackClientToken: String?
     let playbackContentType: String?
     let maxPlaybackSizeBytes: Int64?
+    let playbackRenditionUploads: [OriginalVideoPlaybackRenditionUpload]?
     let thumbnailPathname: String
     let thumbnailUploadUrl: URL
     let thumbnailClientToken: String

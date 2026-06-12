@@ -253,6 +253,13 @@
       "when": 1781234576731,
       "tag": "0035_chemical_thunderbolts",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781238766234,
+      "tag": "0036_flaky_zarek",
+      "breakpoints": true
     }
   ]
 }

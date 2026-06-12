@@ -165,6 +165,39 @@ describe("mobile Cloudflare video upload API", () => {
       originalWidth: 2160,
       originalHeight: 3840,
       originalDurationMs: 6_500,
+      playbackRenditions: [
+        {
+          quality: "1080p",
+          mediaUrl:
+            "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+          thumbnailUrl: null,
+          storageProvider: "vercel-blob",
+          storageKey: "stories/mobile-playback/creator_123/story-playback.mp4",
+          contentType: "video/mp4",
+          byteSize: 4 * 1024 * 1024,
+          checksum:
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          width: 1080,
+          height: 1920,
+          durationMs: 6_500,
+        },
+        {
+          quality: "720p",
+          mediaUrl:
+            "/api/story-media/stories/mobile-playback/creator_123/story-playback-720p.mp4",
+          thumbnailUrl: null,
+          storageProvider: "vercel-blob",
+          storageKey:
+            "stories/mobile-playback/creator_123/story-playback-720p.mp4",
+          contentType: "video/mp4",
+          byteSize: 3 * 1024 * 1024,
+          checksum:
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          width: 720,
+          height: 1280,
+          durationMs: 6_500,
+        },
+      ],
     })
     vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValue({
       readyToStream: false,
@@ -468,6 +501,31 @@ describe("mobile Cloudflare video upload API", () => {
             playbackDurationMs: 6_500,
             playbackWidth: 1080,
             playbackHeight: 1920,
+            playbackRenditions: [
+              {
+                quality: "1080p",
+                pathname: "stories/mobile-playback/creator_123/story-playback.mp4",
+                contentType: "video/mp4",
+                byteSize: 4 * 1024 * 1024,
+                checksum:
+                  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                durationMs: 6_500,
+                width: 1080,
+                height: 1920,
+              },
+              {
+                quality: "720p",
+                pathname:
+                  "stories/mobile-playback/creator_123/story-playback-720p.mp4",
+                contentType: "video/mp4",
+                byteSize: 3 * 1024 * 1024,
+                checksum:
+                  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                durationMs: 6_500,
+                width: 720,
+                height: 1280,
+              },
+            ],
             thumbnailPathname:
               "stories/mobile-original/creator_123/story-thumb.jpg",
             thumbnailContentType: "image/jpeg",
@@ -495,6 +553,15 @@ describe("mobile Cloudflare video upload API", () => {
         contentType: "video/quicktime",
         playbackPathname: "stories/mobile-playback/creator_123/story-playback.mp4",
         playbackContentType: "video/mp4",
+        playbackRenditions: expect.arrayContaining([
+          expect.objectContaining({
+            quality: "720p",
+            pathname:
+              "stories/mobile-playback/creator_123/story-playback-720p.mp4",
+            checksum:
+              "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          }),
+        ]),
       }),
     )
     expect(createStory).toHaveBeenCalledWith(
@@ -523,6 +590,20 @@ describe("mobile Cloudflare video upload API", () => {
           "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
         thumbnailUrl:
           "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+        renditions: {
+          playbackLadder: [
+            expect.objectContaining({
+              quality: "1080p",
+              mediaUrl:
+                "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+            }),
+            expect.objectContaining({
+              quality: "720p",
+              mediaUrl:
+                "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback-720p.mp4",
+            }),
+          ],
+        },
       },
       processingStatus: "ready",
       providerStatus: null,

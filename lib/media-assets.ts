@@ -116,6 +116,7 @@ export async function createMediaAssetFromStoredStoryAsset(input: {
     originalWidth: input.storedAsset.originalWidth ?? null,
     originalHeight: input.storedAsset.originalHeight ?? null,
     originalDurationMs: input.storedAsset.originalDurationMs ?? null,
+    playbackRenditions: input.storedAsset.playbackRenditions ?? null,
     processingStatus,
     scanStatus: scan.scanStatus,
     scanReason: scan.scanReason,

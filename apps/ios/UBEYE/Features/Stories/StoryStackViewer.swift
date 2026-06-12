@@ -386,8 +386,8 @@ struct StoryStackViewer: View {
                 processingVideoPlaceholder(item)
             } else if item.assetKind == .video {
                 AutoPlayVideoPlayer(
-                    url: item.playbackMediaUrl,
-                    highQualityUrl: item.originalMediaUrl,
+                    url: item.startupMediaUrl,
+                    highQualityUrl: item.highQualityMediaUrl,
                     thumbnailUrl: item.playbackThumbnailUrl,
                     preloadUrls: adjacentVideoUrls(for: item),
                     playerPool: videoPlaybackPool,
@@ -977,7 +977,7 @@ struct StoryStackViewer: View {
                 MediaPreheater.preheat(stack: stack, around: index)
                 videoPlaybackPool.prepare(
                     urls: adjacentVideoUrls(in: stack, around: index),
-                    activeURL: next.isPlayableVideo ? next.playbackMediaUrl : nil
+                    activeURL: next.isPlayableVideo ? next.startupMediaUrl : nil
                 )
             }
         }
