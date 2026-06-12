@@ -8,6 +8,7 @@ import {
   createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamTusUpload,
   maxCloudflareStreamClientThumbnailUploadBytes,
+  maxStoryVideoUploadBytes,
   StoryUploadError,
 } from "@/lib/story-storage"
 import {
@@ -18,7 +19,6 @@ import {
 
 export const runtime = "nodejs"
 
-const maxMobileStoryVideoUploadBytes = 300 * 1024 * 1024
 const maxMobileStoryVideoDurationSeconds = 120
 
 const videoUploadSchema = z.object({
@@ -27,7 +27,7 @@ const videoUploadSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(maxMobileStoryVideoUploadBytes)
+    .max(maxStoryVideoUploadBytes)
     .optional(),
   maxDurationSeconds: z
     .number()
@@ -39,7 +39,7 @@ const videoUploadSchema = z.object({
     .number()
     .int()
     .min(1024)
-    .max(maxMobileStoryVideoUploadBytes)
+    .max(maxStoryVideoUploadBytes)
     .optional(),
 })
 
