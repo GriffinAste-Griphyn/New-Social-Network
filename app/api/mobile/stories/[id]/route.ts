@@ -104,6 +104,50 @@ async function mobileStoryMediaUrlWithResolver(
   return resolver.resolve(value, options)
 }
 
+async function mobileStoryRenditions(
+  item: {
+    assetKind: "image" | "video"
+    mediaUrl: string
+    thumbnailUrl: string | null
+    processingStatus?: string | null
+  },
+  request: Request,
+  resolver: ReturnType<typeof createMobileStoryMediaUrlResolver>,
+) {
+  if (item.assetKind !== "video") {
+    return undefined
+  }
+
+  const [playbackMediaUrl, directMediaUrl, thumbnailUrl] = await Promise.all([
+    mobileStoryMediaUrlWithResolver(item.mediaUrl, request, resolver, {
+      assetKind: item.assetKind,
+      directVideoPlayback: false,
+      processingStatus: item.processingStatus,
+    }),
+    mobileStoryMediaUrlWithResolver(item.mediaUrl, request, resolver, {
+      assetKind: item.assetKind,
+      processingStatus: item.processingStatus,
+    }),
+    mobileStoryMediaUrlWithResolver(item.thumbnailUrl, request, resolver, {
+      directVideoPlayback: false,
+    }),
+  ])
+
+  return {
+    playback: {
+      mediaUrl: playbackMediaUrl,
+      thumbnailUrl,
+    },
+    original:
+      directMediaUrl && directMediaUrl !== playbackMediaUrl
+        ? {
+            mediaUrl: directMediaUrl,
+            thumbnailUrl,
+          }
+        : null,
+  }
+}
+
 export async function GET(
   request: Request,
   context: RouteContext<"/api/mobile/stories/[id]">,
@@ -129,22 +173,13 @@ export async function GET(
       publicStoryMediaUrl(value, request, { signed: true }) ?? value,
   })
   const storyItems = await Promise.all(
-    story.items.map(async (item) => ({
-      ...item,
-      mediaUrl: versionMediaUrl(
-        await mobileStoryMediaUrlWithResolver(
-          item.mediaUrl,
-          request,
-          mediaUrlResolver,
-          {
-            assetKind: item.assetKind,
-            processingStatus: item.processingStatus,
-          },
-        ),
-        item.id,
-      ),
-      thumbnailUrl: versionMediaUrl(
-        await mobileStoryMediaUrlWithResolver(
+    story.items.map(async (item) => {
+      const [mediaUrl, thumbnailUrl, renditions] = await Promise.all([
+        mobileStoryMediaUrlWithResolver(item.mediaUrl, request, mediaUrlResolver, {
+          assetKind: item.assetKind,
+          processingStatus: item.processingStatus,
+        }),
+        mobileStoryMediaUrlWithResolver(
           item.thumbnailUrl,
           request,
           mediaUrlResolver,
@@ -152,9 +187,38 @@ export async function GET(
             directVideoPlayback: false,
           },
         ),
-        item.id,
-      ),
-    })),
+        mobileStoryRenditions(item, request, mediaUrlResolver),
+      ])
+
+      return {
+        ...item,
+        mediaUrl: versionMediaUrl(mediaUrl, item.id),
+        thumbnailUrl: versionMediaUrl(thumbnailUrl, item.id),
+        renditions: renditions
+          ? {
+              playback: {
+                mediaUrl: versionMediaUrl(renditions.playback.mediaUrl, item.id),
+                thumbnailUrl: versionMediaUrl(
+                  renditions.playback.thumbnailUrl,
+                  item.id,
+                ),
+              },
+              original: renditions.original
+                ? {
+                    mediaUrl: versionMediaUrl(
+                      renditions.original.mediaUrl,
+                      item.id,
+                    ),
+                    thumbnailUrl: versionMediaUrl(
+                      renditions.original.thumbnailUrl,
+                      item.id,
+                    ),
+                  }
+                : null,
+            }
+          : undefined,
+      }
+    }),
   )
 
   return NextResponse.json({

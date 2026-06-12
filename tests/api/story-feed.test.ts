@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { issueSignedToken, presignUrl } from "@vercel/blob"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
@@ -28,6 +29,18 @@ vi.mock("@/lib/request-security", async () => {
   return {
     ...actual,
     enforceRequestRateLimits: vi.fn(),
+  }
+})
+
+vi.mock("@vercel/blob", async () => {
+  const actual = await vi.importActual<typeof import("@vercel/blob")>(
+    "@vercel/blob",
+  )
+
+  return {
+    ...actual,
+    issueSignedToken: vi.fn(),
+    presignUrl: vi.fn(),
   }
 })
 
@@ -97,7 +110,12 @@ async function responseJson(response: Response) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
-function storyCard(id: string, handle = "@creator", creator = "Creator") {
+function storyCard(
+  id: string,
+  handle = "@creator",
+  creator = "Creator",
+  overrides: Record<string, unknown> = {},
+) {
   return {
     id,
     creator,
@@ -119,6 +137,7 @@ function storyCard(id: string, handle = "@creator", creator = "Creator") {
     brandTags: ["coffee"],
     elements: [],
     textOverlays: [],
+    ...overrides,
   }
 }
 
@@ -297,6 +316,72 @@ describe("story upload and mobile feed API", () => {
         "https://cdn.example.com/my-thumb.jpg",
       ),
     })
+  })
+
+  it("returns playback and original video renditions for mobile feed stories", async () => {
+    vi.mocked(issueSignedToken).mockResolvedValue({ token: "blob-token" } as never)
+    vi.mocked(presignUrl).mockImplementation(async (_token, options) => {
+      const { pathname } = options as { pathname: string }
+
+      return {
+        presignedUrl: `https://blob.example.com/${pathname}?signed=1`,
+      } as never
+    })
+    vi.mocked(getFeedData).mockResolvedValue({
+      featuredStory: null,
+      followingStories: [
+        storyCard("following-video", "@creator", "Creator", {
+          assetKind: "video",
+          mediaUrl: "/api/story-media/stories/mobile-original/video.mp4",
+          thumbnailUrl:
+            "/api/story-media/stories/mobile-original/video-thumb.jpg",
+          processingStatus: "ready",
+        }),
+      ],
+      followingTimelineStories: [],
+      discoverStories: [],
+      followingProfiles: [],
+      suggestedAccounts: [],
+      myStory: {
+        owner: {
+          id: "user_123",
+          name: "Creator",
+          handle: "@creator",
+          imageUrl: null,
+        },
+        hasActiveStory: false,
+        liveCount: 0,
+        latestThumbnailUrl: null,
+        latestAssetKind: null,
+        expiresSoonLabel: null,
+        items: [],
+      },
+    })
+
+    const { GET } = await import("@/app/api/mobile/feed/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/feed"),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(payload.followingStories).toMatchObject([
+      {
+        id: "following-video",
+        mediaUrl:
+          "https://blob.example.com/stories/mobile-original/video.mp4?signed=1",
+        renditions: {
+          playback: {
+            mediaUrl:
+              "https://cdn.example.com/api/story-media/stories/mobile-original/video.mp4",
+          },
+          original: {
+            mediaUrl:
+              "https://blob.example.com/stories/mobile-original/video.mp4?signed=1",
+          },
+        },
+      },
+    ])
   })
 
   it("does not return a 304 mobile feed from stale client etags", async () => {
