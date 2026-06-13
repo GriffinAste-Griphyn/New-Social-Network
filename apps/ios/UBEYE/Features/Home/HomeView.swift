@@ -610,15 +610,6 @@ struct MyStoryHomeCard: View {
                         .frame(width: 132, height: 192)
                 }
 
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 30, height: 30)
-                    .foregroundStyle(.white)
-                    .background(Color.ubeyeInk, in: Circle())
-                    .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(9)
-
                 HStack(spacing: 7) {
                     Circle()
                         .fill(Color.ubeyeRed)
@@ -634,6 +625,12 @@ struct MyStoryHomeCard: View {
             .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(myStory.hasActiveStory ? "Play My Story" : "My Story")
+        .accessibilityHint(
+            myStory.hasActiveStory
+                ? "Opens your story playback."
+                : "No active story to play."
+        )
     }
 
 }
