@@ -253,6 +253,13 @@
       "when": 1781100000000,
       "tag": "0035_story_original_renditions",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781368800000,
+      "tag": "0036_story_video_uploads",
+      "breakpoints": true
     }
   ]
 }

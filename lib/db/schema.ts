@@ -39,6 +39,20 @@ export const mediaStorageProvider = pgEnum("media_storage_provider", [
   "vercel-blob",
   "cloudflare-stream",
 ])
+export const storyVideoUploadSurface = pgEnum("story_video_upload_surface", [
+  "web",
+  "mobile",
+])
+export const storyVideoUploadProtocol = pgEnum("story_video_upload_protocol", [
+  "tus",
+  "form",
+])
+export const storyVideoUploadStatus = pgEnum("story_video_upload_status", [
+  "pending",
+  "completing",
+  "completed",
+  "failed",
+])
 export const storyStatus = pgEnum("story_status", [
   "processing",
   "live",
@@ -761,6 +775,42 @@ export const stories = pgTable(
       table.storageKey,
       table.expiresAt,
     ),
+  ],
+)
+
+export const storyVideoUploads = pgTable(
+  "story_video_uploads",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => users.id),
+    uid: text("uid").notNull(),
+    surface: storyVideoUploadSurface("surface").notNull(),
+    uploadProtocol: storyVideoUploadProtocol("upload_protocol").notNull(),
+    maxSizeBytes: integer("max_size_bytes").notNull(),
+    maxDurationSeconds: integer("max_duration_seconds").notNull(),
+    status: storyVideoUploadStatus("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    storyId: text("story_id").references(() => stories.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("story_video_uploads_uid_idx").on(table.uid),
+    index("story_video_uploads_owner_status_idx").on(
+      table.ownerUserId,
+      table.status,
+      table.expiresAt,
+    ),
+    index("story_video_uploads_story_idx").on(table.storyId),
   ],
 )
 
