@@ -20,6 +20,13 @@ import {
   removeStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
+import {
+  claimStoryVideoUpload,
+  completeStoryVideoUpload,
+  failStoryVideoUpload,
+  registerStoryVideoUpload,
+  releaseStoryVideoUploadClaim,
+} from "@/lib/story-video-uploads"
 
 vi.mock("@/lib/auth", () => ({
   getCompleteMobileSession: vi.fn(),
@@ -65,6 +72,14 @@ vi.mock("@/lib/story-storage", async () => {
   }
 })
 
+vi.mock("@/lib/story-video-uploads", () => ({
+  claimStoryVideoUpload: vi.fn(),
+  completeStoryVideoUpload: vi.fn(),
+  failStoryVideoUpload: vi.fn(),
+  registerStoryVideoUpload: vi.fn(),
+  releaseStoryVideoUploadClaim: vi.fn(),
+}))
+
 const session = {
   id: "creator_123",
   email: "creator@example.com",
@@ -74,6 +89,7 @@ const session = {
   onboardingIntent: "create" as const,
   creatorStatus: "active" as const,
 }
+const maxMobileStoryVideoUploadBytes = 300 * 1024 * 1024
 
 function jsonRequest(body: unknown) {
   return new Request("https://app.example.com/api/mobile/stories/video-upload", {
@@ -213,6 +229,20 @@ describe("mobile Cloudflare video upload API", () => {
     )
     vi.mocked(removeStoryAsset).mockResolvedValue(undefined)
     vi.mocked(setCloudflareStreamThumbnailToLastFrame).mockResolvedValue(undefined)
+    vi.mocked(registerStoryVideoUpload).mockResolvedValue({
+      id: "upload_1",
+      uid: "11111111111111111111111111111111",
+    })
+    vi.mocked(claimStoryVideoUpload).mockResolvedValue({
+      id: "upload_1",
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      maxSizeBytes: maxMobileStoryVideoUploadBytes,
+      maxDurationSeconds: 120,
+    })
+    vi.mocked(completeStoryVideoUpload).mockResolvedValue(undefined)
+    vi.mocked(failStoryVideoUpload).mockResolvedValue(undefined)
+    vi.mocked(releaseStoryVideoUploadClaim).mockResolvedValue(undefined)
   })
 
   it("rejects oversized mobile video uploads before creating a provider upload", async () => {
@@ -255,10 +285,55 @@ describe("mobile Cloudflare video upload API", () => {
       uploadLengthBytes: 12 * 1024 * 1024,
       maxDurationSeconds: 120,
     })
+    expect(registerStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "mobile",
+      uploadProtocol: "tus",
+      maxSizeBytes: 12 * 1024 * 1024,
+      maxDurationSeconds: 120,
+    })
     expect(await responseJson(response)).toMatchObject({
       ok: true,
       uid: "11111111111111111111111111111111",
       uploadProtocol: "tus",
+    })
+  })
+
+  it("creates a Cloudflare form upload with the default mobile size cap", async () => {
+    vi.mocked(createCloudflareStreamDirectUpload).mockResolvedValue({
+      uid: "11111111111111111111111111111111",
+      uploadUrl: "https://upload.cloudflarestream.com/form/abc",
+      uploadProtocol: "form",
+    })
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(
+      jsonRequest({
+        fileName: "story.mov",
+        maxDurationSeconds: 60,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+    expect(createCloudflareStreamDirectUpload).toHaveBeenCalledWith({
+      fileName: "story.mov",
+      maxDurationSeconds: 60,
+      maxSizeBytes: maxMobileStoryVideoUploadBytes,
+    })
+    expect(registerStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "mobile",
+      uploadProtocol: "form",
+      maxSizeBytes: maxMobileStoryVideoUploadBytes,
+      maxDurationSeconds: 60,
+    })
+    expect(await responseJson(response)).toMatchObject({
+      ok: true,
+      uid: "11111111111111111111111111111111",
+      uploadProtocol: "form",
     })
   })
 
@@ -311,6 +386,11 @@ describe("mobile Cloudflare video upload API", () => {
     const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
+    expect(claimStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "mobile",
+    })
     expect(createCloudflareStreamClientThumbnailUrl).toHaveBeenCalledWith({
       pathname:
         "stories/mobile-cloudflare-thumbnails/creator_123/11111111111111111111111111111111-thumb.jpg",
@@ -366,6 +446,10 @@ describe("mobile Cloudflare video upload API", () => {
         }),
       ],
     })
+    expect(completeStoryVideoUpload).toHaveBeenCalledWith({
+      id: "upload_1",
+      storyId: "22222222-2222-4222-8222-222222222222",
+    })
   })
 
   it("completes a Cloudflare video story without a client thumbnail", async () => {
@@ -408,6 +492,45 @@ describe("mobile Cloudflare video upload API", () => {
     })
   })
 
+  it("rejects Cloudflare video completion when the UID was not issued to the mobile user", async () => {
+    vi.mocked(claimStoryVideoUpload).mockResolvedValueOnce(null)
+
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.30",
+        },
+        body: JSON.stringify({
+          uid: "11111111111111111111111111111111",
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+          durationMs: 7_200,
+          caption: "Unowned video",
+        }),
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(400)
+    expect(payload).toMatchObject({
+      error: "Could not verify the video upload.",
+    })
+    expect(claimStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "mobile",
+    })
+    expect(getCloudflareStreamVideoDetails).not.toHaveBeenCalled()
+    expect(setCloudflareStreamThumbnailToLastFrame).not.toHaveBeenCalled()
+    expect(createCloudflareStreamClientThumbnailUrl).not.toHaveBeenCalled()
+    expect(createCloudflareStreamStoredVideoAsset).not.toHaveBeenCalled()
+    expect(createStory).not.toHaveBeenCalled()
+    expect(removeStoryAsset).not.toHaveBeenCalled()
+  })
+
   it("reuses an existing Cloudflare video story when completion is retried", async () => {
     vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValueOnce({
       id: "existing-cloudflare-story",
@@ -444,6 +567,7 @@ describe("mobile Cloudflare video upload API", () => {
       storageKey: "11111111111111111111111111111111",
     })
     expect(getCloudflareStreamVideoDetails).not.toHaveBeenCalled()
+    expect(claimStoryVideoUpload).not.toHaveBeenCalled()
     expect(createCloudflareStreamClientThumbnailUrl).not.toHaveBeenCalled()
     expect(createStory).not.toHaveBeenCalled()
     expect(payload).toMatchObject({

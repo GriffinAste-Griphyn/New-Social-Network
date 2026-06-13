@@ -13,6 +13,13 @@ import {
   removeStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
+import {
+  claimStoryVideoUpload,
+  completeStoryVideoUpload,
+  failStoryVideoUpload,
+  registerStoryVideoUpload,
+  releaseStoryVideoUploadClaim,
+} from "@/lib/story-video-uploads"
 
 vi.mock("@vercel/blob/client", () => ({
   generateClientTokenFromReadWriteToken: vi.fn(),
@@ -65,6 +72,14 @@ vi.mock("@/lib/story-storage", async () => {
     setCloudflareStreamThumbnailToLastFrame: vi.fn(),
   }
 })
+
+vi.mock("@/lib/story-video-uploads", () => ({
+  claimStoryVideoUpload: vi.fn(),
+  completeStoryVideoUpload: vi.fn(),
+  failStoryVideoUpload: vi.fn(),
+  registerStoryVideoUpload: vi.fn(),
+  releaseStoryVideoUploadClaim: vi.fn(),
+}))
 
 const session = {
   id: "creator_123",
@@ -166,6 +181,20 @@ describe("web direct story upload API", () => {
       value && request ? new URL(value, request.url).toString() : value,
     )
     vi.mocked(removeStoryAsset).mockResolvedValue(undefined)
+    vi.mocked(registerStoryVideoUpload).mockResolvedValue({
+      id: "upload_1",
+      uid: "11111111111111111111111111111111",
+    })
+    vi.mocked(claimStoryVideoUpload).mockResolvedValue({
+      id: "upload_1",
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      maxSizeBytes: 150 * 1024 * 1024,
+      maxDurationSeconds: 120,
+    })
+    vi.mocked(completeStoryVideoUpload).mockResolvedValue(undefined)
+    vi.mocked(failStoryVideoUpload).mockResolvedValue(undefined)
+    vi.mocked(releaseStoryVideoUploadClaim).mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -235,6 +264,14 @@ describe("web direct story upload API", () => {
     expect(createCloudflareStreamTusUpload).toHaveBeenCalledWith({
       fileName: "story.mp4",
       uploadLengthBytes: 12 * 1024 * 1024,
+      maxDurationSeconds: 120,
+    })
+    expect(registerStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "web",
+      uploadProtocol: "tus",
+      maxSizeBytes: 150 * 1024 * 1024,
       maxDurationSeconds: 120,
     })
     expect(payload).toMatchObject({
@@ -328,5 +365,74 @@ describe("web direct story upload API", () => {
 
     expect(response.status).toBe(400)
     expect(removeStoryAsset).toHaveBeenCalledWith(imageAsset.mediaUrl)
+  })
+
+  it("rejects web video completion when the UID was not issued to the user", async () => {
+    vi.mocked(claimStoryVideoUpload).mockResolvedValueOnce(null)
+    const { POST } = await import("@/app/api/stories/complete/route")
+    const response = await POST(
+      jsonRequest("/api/stories/complete", {
+        assetKind: "video",
+        uid: "11111111111111111111111111111111",
+        contentType: "video/mp4",
+        byteSize: 12 * 1024 * 1024,
+        checksum: "a".repeat(64),
+        caption: "Unowned video",
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(400)
+    expect(payload).toMatchObject({
+      error: "Could not verify the video upload.",
+    })
+    expect(claimStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "web",
+    })
+    expect(getCloudflareStreamVideoDetails).not.toHaveBeenCalled()
+    expect(setCloudflareStreamThumbnailToLastFrame).not.toHaveBeenCalled()
+    expect(createCloudflareStreamStoredVideoAsset).not.toHaveBeenCalled()
+    expect(removeStoryAsset).not.toHaveBeenCalled()
+  })
+
+  it("completes web video only after claiming the issued UID", async () => {
+    const { POST } = await import("@/app/api/stories/complete/route")
+    const response = await POST(
+      jsonRequest("/api/stories/complete", {
+        assetKind: "video",
+        uid: "11111111111111111111111111111111",
+        contentType: "video/mp4",
+        byteSize: 12 * 1024 * 1024,
+        checksum: "a".repeat(64),
+        durationMs: 7_200,
+        caption: "Owned video",
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status, JSON.stringify(payload)).toBe(200)
+    expect(claimStoryVideoUpload).toHaveBeenCalledWith({
+      ownerUserId: "creator_123",
+      uid: "11111111111111111111111111111111",
+      surface: "web",
+    })
+    expect(getCloudflareStreamVideoDetails).toHaveBeenCalledWith(
+      "11111111111111111111111111111111",
+    )
+    expect(createStory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Owned video",
+        storedAsset: expect.objectContaining({
+          storageProvider: "cloudflare-stream",
+          storageKey: "11111111111111111111111111111111",
+        }),
+      }),
+    )
+    expect(completeStoryVideoUpload).toHaveBeenCalledWith({
+      id: "upload_1",
+      storyId: "33333333-3333-4333-8333-333333333333",
+    })
   })
 })
