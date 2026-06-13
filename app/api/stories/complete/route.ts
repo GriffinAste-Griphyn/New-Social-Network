@@ -21,6 +21,13 @@ import {
   requestIpSubject,
 } from "@/lib/request-security"
 import {
+  claimStoryVideoUpload,
+  completeStoryVideoUpload,
+  failStoryVideoUpload,
+  releaseStoryVideoUploadClaim,
+  type ClaimedStoryVideoUpload,
+} from "@/lib/story-video-uploads"
+import {
   parseBrandTags,
   parseStoryCaption,
   parseStoryElements,
@@ -96,6 +103,9 @@ export async function POST(request: Request) {
   }
 
   let storedAsset: StoredStoryAsset | undefined
+  let claimedVideoUpload: ClaimedStoryVideoUpload | null = null
+  let createdStoryId: string | null = null
+  let shouldFailClaim = false
 
   try {
     const session = await getSession()
@@ -144,11 +154,37 @@ export async function POST(request: Request) {
         height: parsed.data.height ?? null,
       })
     } else {
+      claimedVideoUpload = await claimStoryVideoUpload({
+        ownerUserId: session.id,
+        uid: parsed.data.uid,
+        surface: "web",
+      })
+
+      if (!claimedVideoUpload) {
+        return NextResponse.json(
+          { error: "Could not verify the video upload." },
+          { status: 400 },
+        )
+      }
+
+      if (
+        parsed.data.byteSize > claimedVideoUpload.maxSizeBytes ||
+        (parsed.data.durationMs &&
+          parsed.data.durationMs > claimedVideoUpload.maxDurationSeconds * 1000)
+      ) {
+        await failStoryVideoUpload(claimedVideoUpload.id).catch(() => undefined)
+        return NextResponse.json(
+          { error: "Could not verify the video upload." },
+          { status: 400 },
+        )
+      }
+
       const cloudflareDetails = await getCloudflareStreamVideoDetails(
         parsed.data.uid,
       ).catch(() => null)
 
       if (cloudflareDetails?.state === "error") {
+        shouldFailClaim = true
         throw new StoryUploadError(
           cloudflareDetails.errorReason ??
             "Cloudflare Stream could not process the video.",
@@ -188,6 +224,19 @@ export async function POST(request: Request) {
       moderationMediaUrl,
       moderationThumbnailUrl,
     })
+    createdStoryId = storyId
+    if (claimedVideoUpload) {
+      await completeStoryVideoUpload({
+        id: claimedVideoUpload.id,
+        storyId,
+      }).catch((error) => {
+        console.error("Could not mark web story video upload completed.", {
+          uploadId: claimedVideoUpload?.id,
+          storyId,
+          error,
+        })
+      })
+    }
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
 
     revalidatePath("/feed")
@@ -208,7 +257,20 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
-    if (storedAsset) {
+    if (claimedVideoUpload && createdStoryId) {
+      await completeStoryVideoUpload({
+        id: claimedVideoUpload.id,
+        storyId: createdStoryId,
+      }).catch(() => undefined)
+    } else if (claimedVideoUpload && shouldFailClaim) {
+      await failStoryVideoUpload(claimedVideoUpload.id).catch(() => undefined)
+    } else if (claimedVideoUpload) {
+      await releaseStoryVideoUploadClaim(claimedVideoUpload.id).catch(
+        () => undefined,
+      )
+    }
+
+    if (storedAsset && !createdStoryId) {
       await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
     }
 

@@ -23,6 +23,13 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import {
+  claimStoryVideoUpload,
+  completeStoryVideoUpload,
+  failStoryVideoUpload,
+  releaseStoryVideoUploadClaim,
+  type ClaimedStoryVideoUpload,
+} from "@/lib/story-video-uploads"
 
 export const runtime = "nodejs"
 
@@ -81,6 +88,16 @@ function logVideoCompleteEvent(
 export async function POST(request: Request) {
   let storedAsset: StoredStoryAsset | undefined
   let uploadedThumbnailUrl: string | null = null
+  let claimedVideoUpload: ClaimedStoryVideoUpload | null = null
+  let createdStoryId: string | null = null
+  let shouldFailClaim = false
+  let verifiedThumbnail:
+    | {
+        pathname: string
+        contentType: string
+        byteSize: number
+      }
+    | null = null
 
   try {
     const session = await getCompleteMobileSession(request)
@@ -150,30 +167,22 @@ export async function POST(request: Request) {
       return NextResponse.json(existingCompletion)
     }
 
-    const cloudflareDetails = await getCloudflareStreamVideoDetails(
-      parsed.data.uid,
-    ).catch(() => null)
-
-    if (cloudflareDetails?.state === "error") {
-      throw new StoryUploadError(
-        cloudflareDetails.errorReason ??
-          "Cloudflare Stream could not process the video.",
-      )
-    }
-
-    if (parsed.data.thumbnailPathname) {
+    const thumbnailPathname = parsed.data.thumbnailPathname ?? null
+    if (thumbnailPathname) {
       const expectedThumbnailPathname = createCloudflareStreamClientThumbnailPathname(
         session.id,
         parsed.data.uid,
       )
+      const thumbnailContentType = parsed.data.thumbnailContentType ?? null
+      const thumbnailByteSize = parsed.data.thumbnailByteSize ?? null
 
       if (
-        parsed.data.thumbnailPathname !== expectedThumbnailPathname ||
-        !parsed.data.thumbnailContentType ||
+        thumbnailPathname !== expectedThumbnailPathname ||
+        !thumbnailContentType ||
         !isAllowedOriginalQualityVideoThumbnailContentType(
-          parsed.data.thumbnailContentType,
+          thumbnailContentType,
         ) ||
-        !parsed.data.thumbnailByteSize ||
+        !thumbnailByteSize ||
         !parsed.data.thumbnailChecksum
       ) {
         return NextResponse.json(
@@ -182,10 +191,67 @@ export async function POST(request: Request) {
         )
       }
 
+      verifiedThumbnail = {
+        pathname: thumbnailPathname,
+        contentType: thumbnailContentType,
+        byteSize: thumbnailByteSize,
+      }
+    }
+
+    claimedVideoUpload = await claimStoryVideoUpload({
+      ownerUserId: session.id,
+      uid: parsed.data.uid,
+      surface: "mobile",
+    })
+
+    if (!claimedVideoUpload) {
+      logVideoCompleteEvent("complete_unowned_upload", {
+        userId: session.id,
+        uid: parsed.data.uid,
+      })
+      return NextResponse.json(
+        { error: "Could not verify the video upload." },
+        { status: 400 },
+      )
+    }
+
+    if (
+      parsed.data.byteSize > claimedVideoUpload.maxSizeBytes ||
+      (parsed.data.durationMs &&
+        parsed.data.durationMs > claimedVideoUpload.maxDurationSeconds * 1000)
+    ) {
+      logVideoCompleteEvent("complete_upload_limits_mismatch", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        byteSize: parsed.data.byteSize,
+        maxSizeBytes: claimedVideoUpload.maxSizeBytes,
+        durationMs: parsed.data.durationMs ?? null,
+        maxDurationMs: claimedVideoUpload.maxDurationSeconds * 1000,
+      })
+      await failStoryVideoUpload(claimedVideoUpload.id).catch(() => undefined)
+      return NextResponse.json(
+        { error: "Could not verify the video upload." },
+        { status: 400 },
+      )
+    }
+
+    const cloudflareDetails = await getCloudflareStreamVideoDetails(
+      parsed.data.uid,
+    ).catch(() => null)
+
+    if (cloudflareDetails?.state === "error") {
+      shouldFailClaim = true
+      throw new StoryUploadError(
+        cloudflareDetails.errorReason ??
+          "Cloudflare Stream could not process the video.",
+      )
+    }
+
+    if (verifiedThumbnail) {
       uploadedThumbnailUrl = await createCloudflareStreamClientThumbnailUrl({
-        pathname: parsed.data.thumbnailPathname,
-        contentType: parsed.data.thumbnailContentType,
-        byteSize: parsed.data.thumbnailByteSize,
+        pathname: verifiedThumbnail.pathname,
+        contentType: verifiedThumbnail.contentType,
+        byteSize: verifiedThumbnail.byteSize,
       })
     }
 
@@ -213,7 +279,22 @@ export async function POST(request: Request) {
       storedAsset,
       providerStatusFallback: cloudflareDetails?.state ?? null,
       providerErrorFallback: cloudflareDetails?.errorReason ?? null,
+      onStoryCreated: (storyId) => {
+        createdStoryId = storyId
+      },
     })
+    if (claimedVideoUpload) {
+      await completeStoryVideoUpload({
+        id: claimedVideoUpload.id,
+        storyId: completion.storyId,
+      }).catch((error) => {
+        console.error("Could not mark mobile story video upload completed.", {
+          uploadId: claimedVideoUpload?.id,
+          storyId: completion.storyId,
+          error,
+        })
+      })
+    }
 
     logVideoCompleteEvent("complete_succeeded", {
       userId: session.id,
@@ -234,7 +315,19 @@ export async function POST(request: Request) {
           ? error.message
           : "unknown",
     })
-    if (storedAsset) {
+    if (claimedVideoUpload && createdStoryId) {
+      await completeStoryVideoUpload({
+        id: claimedVideoUpload.id,
+        storyId: createdStoryId,
+      }).catch(() => undefined)
+    } else if (claimedVideoUpload && shouldFailClaim) {
+      await failStoryVideoUpload(claimedVideoUpload.id).catch(() => undefined)
+    } else if (claimedVideoUpload) {
+      await releaseStoryVideoUploadClaim(claimedVideoUpload.id).catch(
+        () => undefined,
+      )
+    }
+    if (storedAsset && !createdStoryId) {
       await removeStoryAsset(storedAsset.mediaUrl)
     }
     if (uploadedThumbnailUrl) {

@@ -16,6 +16,7 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import { registerStoryVideoUpload } from "@/lib/story-video-uploads"
 
 export const runtime = "nodejs"
 
@@ -143,6 +144,8 @@ export async function POST(request: Request) {
       maxDurationSeconds: parsed.data.maxDurationSeconds,
       protocol: parsed.data.byteSize ? "tus" : "form",
     })
+    const uploadMaxSizeBytes =
+      parsed.data.byteSize ?? parsed.data.maxSizeBytes ?? maxStoryVideoUploadBytes
     const upload = parsed.data.byteSize
       ? await createCloudflareStreamTusUpload({
           fileName: parsed.data.fileName,
@@ -152,8 +155,16 @@ export async function POST(request: Request) {
       : await createCloudflareStreamDirectUpload({
           fileName: parsed.data.fileName,
           maxDurationSeconds: parsed.data.maxDurationSeconds,
-          maxSizeBytes: parsed.data.maxSizeBytes,
+          maxSizeBytes: uploadMaxSizeBytes,
         })
+    await registerStoryVideoUpload({
+      ownerUserId: session.id,
+      uid: upload.uid,
+      surface: "mobile",
+      uploadProtocol: upload.uploadProtocol,
+      maxSizeBytes: uploadMaxSizeBytes,
+      maxDurationSeconds: parsed.data.maxDurationSeconds,
+    })
 
     const thumbnailUploadFields = await createThumbnailUploadFields({
       userId: session.id,

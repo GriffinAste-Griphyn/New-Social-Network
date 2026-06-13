@@ -15,6 +15,7 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import { registerStoryVideoUpload } from "@/lib/story-video-uploads"
 
 export const runtime = "nodejs"
 
@@ -133,6 +134,14 @@ export async function POST(request: Request) {
     const upload = await createCloudflareStreamTusUpload({
       fileName: parsed.data.fileName,
       uploadLengthBytes: parsed.data.byteSize,
+      maxDurationSeconds: maxWebStoryVideoDurationSeconds,
+    })
+    await registerStoryVideoUpload({
+      ownerUserId: session.id,
+      uid: upload.uid,
+      surface: "web",
+      uploadProtocol: upload.uploadProtocol,
+      maxSizeBytes: maxWebStoryVideoUploadBytes,
       maxDurationSeconds: maxWebStoryVideoDurationSeconds,
     })
 
