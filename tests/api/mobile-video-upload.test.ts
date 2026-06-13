@@ -89,7 +89,7 @@ const session = {
   onboardingIntent: "create" as const,
   creatorStatus: "active" as const,
 }
-const maxMobileStoryVideoUploadBytes = 300 * 1024 * 1024
+const maxMobileStoryVideoUploadBytes = 512 * 1024 * 1024
 
 function jsonRequest(body: unknown) {
   return new Request("https://app.example.com/api/mobile/stories/video-upload", {

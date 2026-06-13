@@ -145,7 +145,7 @@ export async function POST(request: Request) {
       protocol: parsed.data.byteSize ? "tus" : "form",
     })
     const uploadMaxSizeBytes =
-      parsed.data.byteSize ?? parsed.data.maxSizeBytes ?? maxMobileStoryVideoUploadBytes
+      parsed.data.byteSize ?? parsed.data.maxSizeBytes ?? maxStoryVideoUploadBytes
     const upload = parsed.data.byteSize
       ? await createCloudflareStreamTusUpload({
           fileName: parsed.data.fileName,
