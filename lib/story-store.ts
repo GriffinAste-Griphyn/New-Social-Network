@@ -42,6 +42,7 @@ import {
   writeMobileFeedSnapshot,
 } from "@/lib/feed-snapshot-store"
 import { listFollowingProfiles } from "@/lib/follow-store"
+import { isPubliclyHiddenProfile } from "@/lib/public-account-visibility"
 import { formatStoryPostedAt } from "@/lib/story-time"
 import {
   publicStoryMediaUrl,
@@ -69,6 +70,7 @@ const minFinalVideoSegmentSeconds = 2
 type FeedStoryRow = {
   id: string
   creatorId: string
+  creatorEmail: string
   creatorName: string
   creatorHandle: string
   creatorAvatarUrl: string | null
@@ -820,6 +822,7 @@ async function getLiveStoryRows() {
     .select({
       id: stories.id,
       creatorId: users.id,
+      creatorEmail: users.email,
       creatorName: users.displayName,
       creatorHandle: users.handle,
       creatorAvatarUrl: users.avatarUrl,
@@ -881,6 +884,7 @@ async function getLiveStoryRowsForCreator(
     .select({
       id: stories.id,
       creatorId: users.id,
+      creatorEmail: users.email,
       creatorName: users.displayName,
       creatorHandle: users.handle,
       creatorAvatarUrl: users.avatarUrl,
@@ -1107,7 +1111,13 @@ async function buildLiveFeedData(
     ])
   const storyRows = rawStoryRows.filter(
     (story) =>
-      story.creatorId === viewerId || !blockedPeerIds.has(story.creatorId),
+      story.creatorId === viewerId ||
+      (!blockedPeerIds.has(story.creatorId) &&
+        !isPubliclyHiddenProfile({
+          email: story.creatorEmail,
+          handle: story.creatorHandle,
+          displayName: story.creatorName,
+        })),
   )
 
   if (storyRows.length === 0) {
@@ -1246,13 +1256,16 @@ async function buildLiveFeedData(
 }
 
 export async function getStoryStackForStory(storyId: string, viewerId?: string) {
-
   const db = getDb()
   const [story] = await db
     .select({
       creatorId: stories.creatorId,
+      creatorEmail: users.email,
+      creatorName: users.displayName,
+      creatorHandle: users.handle,
     })
     .from(stories)
+    .innerJoin(users, eq(stories.creatorId, users.id))
     .where(
       and(
         eq(stories.id, storyId),
@@ -1264,6 +1277,17 @@ export async function getStoryStackForStory(storyId: string, viewerId?: string) 
     .limit(1)
 
   if (!story) {
+    return null
+  }
+
+  if (
+    story.creatorId !== viewerId &&
+    isPubliclyHiddenProfile({
+      email: story.creatorEmail,
+      handle: story.creatorHandle,
+      displayName: story.creatorName,
+    })
+  ) {
     return null
   }
 
@@ -1285,7 +1309,6 @@ export async function getMobileCreatorProfile(
   profileOrStoryId: string,
   viewerId?: string,
 ) {
-
   const db = getDb()
   const [directUser] = await db
     .select({ id: users.id })
@@ -1318,6 +1341,7 @@ export async function getMobileCreatorProfile(
       id: users.id,
       name: users.displayName,
       handle: users.handle,
+      email: users.email,
       avatarUrl: users.avatarUrl,
       category: creatorProfiles.category,
     })
@@ -1344,6 +1368,17 @@ export async function getMobileCreatorProfile(
     .limit(1)
 
   if (!profile?.name || !profile.handle) {
+    return null
+  }
+
+  if (
+    profile.id !== viewerId &&
+    isPubliclyHiddenProfile({
+      email: profile.email,
+      handle: profile.handle,
+      displayName: profile.name,
+    })
+  ) {
     return null
   }
 
