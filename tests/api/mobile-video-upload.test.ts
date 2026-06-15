@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
+  attachOriginalVideoToStoryForOwner,
   createStory,
   getStoryByStoredAssetForOwner,
   getStoryTextOverlaysForOwner,
@@ -14,6 +15,8 @@ import {
   createCloudflareStreamDirectUpload,
   createCloudflareStreamStoredVideoAsset,
   createCloudflareStreamTusUpload,
+  createOriginalQualityPlaybackStoryAsset,
+  createOriginalQualityVideoAttachment,
   createOriginalQualityVideoStoryAsset,
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
@@ -45,6 +48,7 @@ vi.mock("@/lib/request-security", async () => {
 })
 
 vi.mock("@/lib/story-store", () => ({
+  attachOriginalVideoToStoryForOwner: vi.fn(),
   createStory: vi.fn(),
   getStoryByStoredAssetForOwner: vi.fn(),
   getStoryTextOverlaysForOwner: vi.fn(),
@@ -64,6 +68,8 @@ vi.mock("@/lib/story-storage", async () => {
     createCloudflareStreamDirectUpload: vi.fn(),
     createCloudflareStreamStoredVideoAsset: vi.fn(),
     createCloudflareStreamTusUpload: vi.fn(),
+    createOriginalQualityPlaybackStoryAsset: vi.fn(),
+    createOriginalQualityVideoAttachment: vi.fn(),
     createOriginalQualityVideoStoryAsset: vi.fn(),
     getCloudflareStreamVideoDetails: vi.fn(),
     publicStoryMediaUrl: vi.fn(),
@@ -153,6 +159,50 @@ describe("mobile Cloudflare video upload API", () => {
       }),
     )
     vi.mocked(createCloudflareStreamTusUpload).mockReset()
+    vi.mocked(createOriginalQualityPlaybackStoryAsset).mockResolvedValue({
+      assetKind: "video",
+      mediaUrl:
+        "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+      thumbnailUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      storageProvider: "vercel-blob",
+      storageKey: "stories/mobile-playback/creator_123/story-playback.mp4",
+      contentType: "video/mp4",
+      byteSize: 4 * 1024 * 1024,
+      checksum: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      width: 1080,
+      height: 1920,
+      durationMs: 6_500,
+      processingStatus: "ready",
+      originalMediaUrl: null,
+      originalThumbnailUrl: null,
+      originalStorageProvider: null,
+      originalStorageKey: null,
+      originalContentType: null,
+      originalByteSize: null,
+      originalChecksum: null,
+      originalWidth: null,
+      originalHeight: null,
+      originalDurationMs: null,
+      playbackRenditions: [
+        {
+          quality: "1080p",
+          mediaUrl:
+            "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+          thumbnailUrl:
+            "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+          storageProvider: "vercel-blob",
+          storageKey: "stories/mobile-playback/creator_123/story-playback.mp4",
+          contentType: "video/mp4",
+          byteSize: 4 * 1024 * 1024,
+          checksum:
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          width: 1080,
+          height: 1920,
+          durationMs: 6_500,
+        },
+      ],
+    })
     vi.mocked(createOriginalQualityVideoStoryAsset).mockResolvedValue({
       assetKind: "video",
       mediaUrl:
@@ -214,6 +264,27 @@ describe("mobile Cloudflare video upload API", () => {
           durationMs: 6_500,
         },
       ],
+    })
+    vi.mocked(createOriginalQualityVideoAttachment).mockResolvedValue({
+      mediaUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      thumbnailUrl: null,
+      storageProvider: "vercel-blob",
+      storageKey: "stories/mobile-original/creator_123/story.mov",
+      contentType: "video/quicktime",
+      byteSize: 8 * 1024 * 1024,
+      checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      width: 2160,
+      height: 3840,
+      durationMs: 6_500,
+    })
+    vi.mocked(attachOriginalVideoToStoryForOwner).mockResolvedValue({
+      storyId: "22222222-2222-4222-8222-222222222222",
+      originalMediaUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story.mov",
+      originalThumbnailUrl:
+        "/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+      attachmentState: "attached",
     })
     vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValue({
       readyToStream: false,
@@ -582,6 +653,177 @@ describe("mobile Cloudflare video upload API", () => {
       },
       processingStatus: "processing",
       providerStatus: "processing",
+    })
+  })
+
+  it("publishes an original-quality mobile video after playback upload only", async () => {
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValueOnce({
+      id: "22222222-2222-4222-8222-222222222222",
+      status: "live",
+      processingStatus: "ready",
+      providerStatus: null,
+      providerError: null,
+      lastCheckedAt: null,
+      readyAt: "2026-06-08T16:00:00.000Z",
+      moderationStatus: "approved",
+      moderationReason: null,
+      isLive: true,
+    })
+    const { POST } = await import(
+      "@/app/api/mobile/stories/video-original-complete/route"
+    )
+    const response = await POST(
+      new Request(
+        "https://app.example.com/api/mobile/stories/video-original-complete",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.30",
+          },
+          body: JSON.stringify({
+            playbackPathname:
+              "stories/mobile-playback/creator_123/story-playback.mp4",
+            playbackContentType: "video/mp4",
+            playbackByteSize: 4 * 1024 * 1024,
+            playbackChecksum:
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            playbackDurationMs: 6_500,
+            playbackWidth: 1080,
+            playbackHeight: 1920,
+            playbackRenditions: [
+              {
+                quality: "1080p",
+                pathname: "stories/mobile-playback/creator_123/story-playback.mp4",
+                contentType: "video/mp4",
+                byteSize: 4 * 1024 * 1024,
+                checksum:
+                  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                durationMs: 6_500,
+                width: 1080,
+                height: 1920,
+              },
+            ],
+            thumbnailPathname:
+              "stories/mobile-original/creator_123/story-thumb.jpg",
+            thumbnailContentType: "image/jpeg",
+            thumbnailByteSize: 42_000,
+            thumbnailChecksum:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            durationMs: 6_500,
+            caption: "Playback first",
+            brandTags: "FastCo",
+            textOverlays: "Live fast",
+            textOverlayPositionX: "50.00",
+            textOverlayPositionY: "65.00",
+          }),
+        },
+      ),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(createOriginalQualityPlaybackStoryAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        playbackPathname: "stories/mobile-playback/creator_123/story-playback.mp4",
+        playbackContentType: "video/mp4",
+        playbackByteSize: 4 * 1024 * 1024,
+      }),
+    )
+    expect(createOriginalQualityVideoStoryAsset).not.toHaveBeenCalled()
+    expect(createStory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Playback first",
+        explicitBrandTags: ["fastco"],
+        moderationMediaUrl:
+          "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+        moderationThumbnailUrl:
+          "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+        storedAsset: expect.objectContaining({
+          mediaUrl:
+            "/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+          originalMediaUrl: null,
+        }),
+      }),
+    )
+    expect(payload).toMatchObject({
+      ok: true,
+      storyId: "22222222-2222-4222-8222-222222222222",
+      asset: {
+        mediaUrl:
+          "https://app.example.com/api/story-media/stories/mobile-playback/creator_123/story-playback.mp4",
+        renditions: {
+          original: null,
+        },
+      },
+      processingStatus: "ready",
+    })
+  })
+
+  it("attaches an original-quality video to an existing playback-first story", async () => {
+    const { POST } = await import(
+      "@/app/api/mobile/stories/[id]/original-video/route"
+    )
+    const response = await POST(
+      new Request(
+        "https://app.example.com/api/mobile/stories/22222222-2222-4222-8222-222222222222/original-video",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.30",
+          },
+          body: JSON.stringify({
+            pathname: "stories/mobile-original/creator_123/story.mov",
+            contentType: "video/quicktime",
+            byteSize: 8 * 1024 * 1024,
+            checksum:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            durationMs: 6_500,
+            width: 2160,
+            height: 3840,
+          }),
+        },
+      ),
+      {
+        params: Promise.resolve({
+          id: "22222222-2222-4222-8222-222222222222",
+        }),
+      },
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(createOriginalQualityVideoAttachment).toHaveBeenCalledWith({
+      pathname: "stories/mobile-original/creator_123/story.mov",
+      contentType: "video/quicktime",
+      byteSize: 8 * 1024 * 1024,
+      checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      durationMs: 6_500,
+      width: 2160,
+      height: 3840,
+    })
+    expect(attachOriginalVideoToStoryForOwner).toHaveBeenCalledWith({
+      ownerId: "creator_123",
+      storyId: "22222222-2222-4222-8222-222222222222",
+      original: expect.objectContaining({
+        storageKey: "stories/mobile-original/creator_123/story.mov",
+      }),
+    })
+    expect(payload).toMatchObject({
+      ok: true,
+      storyId: "22222222-2222-4222-8222-222222222222",
+      attachmentState: "attached",
+      asset: {
+        renditions: {
+          original: {
+            mediaUrl:
+              "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story.mov",
+            thumbnailUrl:
+              "https://app.example.com/api/story-media/stories/mobile-original/creator_123/story-thumb.jpg",
+          },
+        },
+      },
     })
   })
 
