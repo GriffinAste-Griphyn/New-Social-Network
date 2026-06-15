@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, or, sql } from "drizzle-orm
 
 import { getDb } from "@/lib/db"
 import { follows, stories, users } from "@/lib/db/schema"
+import { isPubliclyHiddenProfile } from "@/lib/public-account-visibility"
 import {
   assertUsersCanConnect,
   getBlockedPeerIds,
@@ -23,9 +24,10 @@ function mapProfile(row: {
   id: string
   displayName: string | null
   handle: string | null
+  email?: string | null
   avatarUrl: string | null
 }): FollowProfile | null {
-  if (!row.displayName || !row.handle) {
+  if (!row.displayName || !row.handle || isPubliclyHiddenProfile(row)) {
     return null
   }
 
@@ -48,7 +50,12 @@ function escapeLikePattern(value: string) {
 async function ensureTargetExists(targetUserId: string) {
   const db = getDb()
   const [target] = await db
-    .select({ id: users.id })
+    .select({
+      id: users.id,
+      displayName: users.displayName,
+      handle: users.handle,
+      email: users.email,
+    })
     .from(users)
     .where(
       and(
@@ -59,7 +66,7 @@ async function ensureTargetExists(targetUserId: string) {
     )
     .limit(1)
 
-  return Boolean(target)
+  return Boolean(target && !isPubliclyHiddenProfile(target))
 }
 
 export async function listFollowingProfiles(userId: string): Promise<FollowProfile[]> {
@@ -70,6 +77,7 @@ export async function listFollowingProfiles(userId: string): Promise<FollowProfi
       id: users.id,
       displayName: users.displayName,
       handle: users.handle,
+      email: users.email,
       avatarUrl: users.avatarUrl,
     })
     .from(follows)
@@ -102,6 +110,7 @@ export async function listFollowerProfiles(userId: string): Promise<FollowProfil
       id: users.id,
       displayName: users.displayName,
       handle: users.handle,
+      email: users.email,
       avatarUrl: users.avatarUrl,
     })
     .from(follows)
@@ -158,6 +167,7 @@ export async function searchDiscoverProfiles(input: {
       id: users.id,
       displayName: users.displayName,
       handle: users.handle,
+      email: users.email,
       avatarUrl: users.avatarUrl,
     })
     .from(users)

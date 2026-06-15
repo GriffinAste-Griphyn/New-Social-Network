@@ -478,8 +478,9 @@ struct StoryStackViewer: View {
                 CachedAsyncImage(url: item.mediaUrl) { image in
                     image
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                 } placeholder: {
                     storyImagePlaceholder(item)
                 }
@@ -517,8 +518,9 @@ struct StoryStackViewer: View {
             CachedAsyncImage(url: thumbnailUrl) { image in
                 image
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             } placeholder: {
                 Color.black
             }
@@ -2089,7 +2091,7 @@ struct AutoPlayVideoPlayer: View {
 
     var body: some View {
         ZStack {
-            AspectFitVideoPlayer(player: playback.player) {
+            AspectFillVideoPlayer(player: playback.player) {
                 playback.revealVideo(reason: "layer_ready")
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2098,8 +2100,9 @@ struct AutoPlayVideoPlayer: View {
                 CachedAsyncImage(url: thumbnailUrl) { image in
                     image
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                 } placeholder: {
                     Color.black
                 }
@@ -2673,19 +2676,19 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 }
 
-private struct AspectFitVideoPlayer: UIViewRepresentable {
+private struct AspectFillVideoPlayer: UIViewRepresentable {
     let player: AVPlayer?
     let onReadyForDisplay: () -> Void
 
-    func makeUIView(context: Context) -> AspectFitPlayerView {
-        AspectFitPlayerView()
+    func makeUIView(context: Context) -> AspectFillPlayerView {
+        AspectFillPlayerView()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func updateUIView(_ view: AspectFitPlayerView, context: Context) {
+    func updateUIView(_ view: AspectFillPlayerView, context: Context) {
         view.player = player
         context.coordinator.observeReadyForDisplay(
             playerLayer: view.playerLayer,
@@ -2723,7 +2726,7 @@ private struct AspectFitVideoPlayer: UIViewRepresentable {
     }
 }
 
-private final class AspectFitPlayerView: UIView {
+private final class AspectFillPlayerView: UIView {
     override static var layerClass: AnyClass {
         AVPlayerLayer.self
     }
@@ -2741,13 +2744,13 @@ private final class AspectFitPlayerView: UIView {
         super.init(frame: frame)
         backgroundColor = .black
         playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         backgroundColor = .black
         playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill
     }
 }
