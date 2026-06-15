@@ -140,7 +140,7 @@ final class StoryUploadNoticeStore: ObservableObject {
     var message: String {
         switch state {
         case .posting:
-            "Your story is visible locally while the upload finishes."
+            "Saved locally. Visible in My Story while upload finishes."
         case .processing:
             "Your video is visible in My Story and will play after processing finishes."
         case .posted:
