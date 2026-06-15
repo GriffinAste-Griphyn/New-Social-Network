@@ -157,12 +157,20 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
         case .queued:
             "Posting"
         case .uploading:
-            "Posting \(Int((displayProgress * 100).rounded()))%"
+            "Posting"
         case .completing:
             "Finishing"
         case .failed:
             "Failed"
         }
+    }
+
+    var progressPercentLabel: String {
+        "\(Int((displayProgress * 100).rounded()))%"
+    }
+
+    var showsUploadProgressPercent: Bool {
+        state == .uploading && !isFailed
     }
 }
 

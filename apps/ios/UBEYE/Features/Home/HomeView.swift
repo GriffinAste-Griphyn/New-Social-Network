@@ -428,6 +428,20 @@ struct HomeView: View {
                 }
 
                 Spacer(minLength: 8)
+
+                if let progressLabel = uploadNoticeProgressLabel {
+                    Text(progressLabel)
+                        .font(.system(size: 14, weight: .black))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.ubeyeRed)
+                        .frame(minWidth: 48, minHeight: 28)
+                        .background(.white, in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.ubeyeBorder.opacity(0.72), lineWidth: 1)
+                        )
+                        .accessibilityLabel("Upload progress \(progressLabel)")
+                }
             }
             .padding(12)
             .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -436,6 +450,16 @@ struct HomeView: View {
                     .stroke(Color.ubeyeBorder, lineWidth: 1)
             )
         }
+    }
+
+    private var uploadNoticeProgressLabel: String? {
+        guard case .posting = storyUploadNotice.state,
+              let upload = pendingStoryUploads.latestVisibleUpload,
+              upload.showsUploadProgressPercent else {
+            return nil
+        }
+
+        return upload.progressPercentLabel
     }
 
     private struct UploadNoticeIcon: View {
