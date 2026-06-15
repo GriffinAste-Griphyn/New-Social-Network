@@ -566,17 +566,26 @@ final class APIClient: ObservableObject {
         )
     }
 
-    func uploadOriginalQualityVideoFile(fileURL: URL, upload: OriginalVideoUploadResponse) async throws -> OriginalVideoBlobUploadResult {
+    func uploadOriginalQualityVideoFile(
+        fileURL: URL,
+        upload: OriginalVideoUploadResponse,
+        onProgress: ((Double) -> Void)? = nil
+    ) async throws -> OriginalVideoBlobUploadResult {
         return try await uploadOriginalQualityBlobFile(
             fileURL: fileURL,
             uploadUrl: upload.uploadUrl,
             clientToken: upload.clientToken,
             contentType: upload.contentType,
-            errorMessage: "Original video upload failed."
+            errorMessage: "Original video upload failed.",
+            onProgress: onProgress
         )
     }
 
-    func uploadOriginalQualityPlaybackVideoFile(fileURL: URL, upload: OriginalVideoUploadResponse) async throws -> OriginalVideoBlobUploadResult {
+    func uploadOriginalQualityPlaybackVideoFile(
+        fileURL: URL,
+        upload: OriginalVideoUploadResponse,
+        onProgress: ((Double) -> Void)? = nil
+    ) async throws -> OriginalVideoBlobUploadResult {
         guard let uploadUrl = upload.playbackUploadUrl,
               let clientToken = upload.playbackClientToken,
               let contentType = upload.playbackContentType,
@@ -594,13 +603,15 @@ final class APIClient: ObservableObject {
             uploadUrl: uploadUrl,
             clientToken: clientToken,
             contentType: contentType,
-            errorMessage: "Playback video upload failed."
+            errorMessage: "Playback video upload failed.",
+            onProgress: onProgress
         )
     }
 
     func uploadOriginalQualityPlaybackRenditionFile(
         fileURL: URL,
-        target: OriginalVideoPlaybackRenditionUpload
+        target: OriginalVideoPlaybackRenditionUpload,
+        onProgress: ((Double) -> Void)? = nil
     ) async throws -> OriginalVideoBlobUploadResult {
         let byteSize = try videoFileSize(fileURL)
         guard byteSize <= target.maxSizeBytes else {
@@ -612,7 +623,8 @@ final class APIClient: ObservableObject {
             uploadUrl: target.uploadUrl,
             clientToken: target.clientToken,
             contentType: target.contentType,
-            errorMessage: "Playback video upload failed."
+            errorMessage: "Playback video upload failed.",
+            onProgress: onProgress
         )
     }
 
@@ -621,9 +633,11 @@ final class APIClient: ObservableObject {
         uploadUrl: URL,
         clientToken: String,
         contentType: String,
-        errorMessage: String
+        errorMessage: String,
+        onProgress: ((Double) -> Void)? = nil
     ) async throws -> OriginalVideoBlobUploadResult {
         let byteSize = try videoFileSize(fileURL)
+        onProgress?(0)
         var request = URLRequest(url: uploadUrl)
         request.httpMethod = "PUT"
         request.timeoutInterval = Self.largeVideoUploadTimeout
@@ -643,6 +657,7 @@ final class APIClient: ObservableObject {
             throw APIClientError.server(detail ?? errorMessage, statusCode)
         }
 
+        onProgress?(1)
         return try decoder.decode(OriginalVideoBlobUploadResult.self, from: data)
     }
 
@@ -702,10 +717,16 @@ final class APIClient: ObservableObject {
     func uploadVideoFile(
         fileURL: URL,
         upload: VideoUploadResponse,
-        onRetry: ((String) -> Void)? = nil
+        onRetry: ((String) -> Void)? = nil,
+        onProgress: ((Double) -> Void)? = nil
     ) async throws {
         if upload.uploadProtocol == "tus" {
-            try await uploadTusVideoFile(fileURL: fileURL, uploadURL: upload.uploadUrl, onRetry: onRetry)
+            try await uploadTusVideoFile(
+                fileURL: fileURL,
+                uploadURL: upload.uploadUrl,
+                onRetry: onRetry,
+                onProgress: onProgress
+            )
             return
         }
 
@@ -726,6 +747,7 @@ final class APIClient: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
+        onProgress?(0)
         let (data, response) = try await session.upload(for: request, fromFile: bodyFileURL)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -736,24 +758,29 @@ final class APIClient: ObservableObject {
                 statusCode
             )
         }
+        onProgress?(1)
     }
 
     private func uploadTusVideoFile(
         fileURL: URL,
         uploadURL: URL,
-        onRetry: ((String) -> Void)?
+        onRetry: ((String) -> Void)?,
+        onProgress: ((Double) -> Void)?
     ) async throws {
         let totalBytes = try videoFileSize(fileURL)
         var offset: Int64 = 0
         var lastError: Error?
         let maxAttempts = 4
         let maxChunkBytes: Int64 = 50 * 1024 * 1024
+        onProgress?(0)
 
         while offset < totalBytes {
             for attempt in 1...maxAttempts {
                 if attempt > 1 {
                     offset = try await tusUploadOffset(uploadURL: uploadURL)
+                    onProgress?(Double(offset) / Double(totalBytes))
                     if offset >= totalBytes {
+                        onProgress?(1)
                         return
                     }
                     onRetry?("offset_\(offset)")
@@ -786,6 +813,7 @@ final class APIClient: ObservableObject {
                         throw APIClientError.server("Video upload did not advance.", http.statusCode)
                     }
                     offset = nextOffset
+                    onProgress?(Double(offset) / Double(totalBytes))
                     break
                 } catch {
                     try? FileManager.default.removeItem(at: uploadFileURL)
@@ -798,6 +826,7 @@ final class APIClient: ObservableObject {
                 }
             }
         }
+        onProgress?(1)
     }
 
     private func tusUploadOffset(uploadURL: URL) async throws -> Int64 {

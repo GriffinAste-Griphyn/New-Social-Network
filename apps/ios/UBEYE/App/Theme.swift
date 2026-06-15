@@ -807,6 +807,12 @@ final class MediaImageCache {
             return cached
         }
 
+        if url.isFileURL,
+           let image = await ImageDecodePipeline.decode(contentsOf: url, maxPixelDimension: maxDecodedPixelDimension) {
+            cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)
+            return image
+        }
+
         if let fileURL = await MediaFileDiskCache.shared.cachedFileURL(for: url),
            let image = await ImageDecodePipeline.decode(contentsOf: fileURL, maxPixelDimension: maxDecodedPixelDimension) {
             cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)

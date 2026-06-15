@@ -34,19 +34,37 @@ final class StoryStackStore: ObservableObject {
     private var impressionStartedAt = Date()
     private var lastImpressionStoryId: String?
 
-    func load(storyId: String, api: APIClient) async {
+    func load(
+        storyId: String,
+        api: APIClient,
+        pendingUploads: PendingStoryUploadStore? = nil,
+        account: MobileAccount? = nil
+    ) async {
         if stack == nil, let cached = await api.cachedStoryStackForDisplay(storyId: storyId) {
-            applyLoadedStack(cached.story)
+            let displayStack = pendingUploads?.storyStackByMergingPendingUploads(into: cached.story, account: account) ?? cached.story
+            applyLoadedStack(displayStack)
+        } else if stack == nil,
+                  storyId == "my-story",
+                  let pendingStack = pendingUploads?.storyStackByMergingPendingUploads(into: nil, account: account) {
+            applyLoadedStack(pendingStack)
         }
 
         isLoading = stack == nil
         error = nil
         do {
             let response = try await api.storyStack(storyId: storyId, refresh: true)
-            MediaPreheater.preheat(stack: response.story)
-            applyLoadedStack(response.story)
+            let displayStack = pendingUploads?.storyStackByMergingPendingUploads(into: response.story, account: account) ?? response.story
+            MediaPreheater.preheat(stack: displayStack)
+            applyLoadedStack(displayStack)
         } catch {
-            self.error = error.localizedDescription
+            if storyId == "my-story",
+               let pendingStack = pendingUploads?.storyStackByMergingPendingUploads(into: stack, account: account) {
+                MediaPreheater.preheat(stack: pendingStack)
+                applyLoadedStack(pendingStack)
+                self.error = nil
+            } else {
+                self.error = error.localizedDescription
+            }
         }
         isLoading = false
     }
@@ -55,6 +73,26 @@ final class StoryStackStore: ObservableObject {
         stack = nextStack
         impressionStartedAt = Date()
         lastImpressionStoryId = nextStack.items.first?.id
+    }
+
+    func applyPendingUploads(
+        pendingUploads: PendingStoryUploadStore,
+        account: MobileAccount?
+    ) -> StoryStack? {
+        guard stack != nil || !pendingUploads.visibleUploads.isEmpty else {
+            return nil
+        }
+        guard let mergedStack = pendingUploads.storyStackByMergingPendingUploads(into: stack, account: account) else {
+            return nil
+        }
+
+        stack = mergedStack
+        if lastImpressionStoryId == nil {
+            lastImpressionStoryId = mergedStack.items.first?.id
+            impressionStartedAt = Date()
+        }
+        MediaPreheater.preheat(stack: mergedStack)
+        return mergedStack
     }
 
     func loadFollows(api: APIClient) async {
@@ -74,6 +112,10 @@ final class StoryStackStore: ObservableObject {
     }
 
     func recordImpression(item: StoryStackItem, completed: Bool, api: APIClient) async {
+        guard !PendingStoryUploadStore.isPendingStoryId(item.id) else {
+            return
+        }
+
         let viewedMs = max(0, Int(Date().timeIntervalSince(impressionStartedAt) * 1000))
         try? await api.recordStoryImpression(storyId: item.id, viewedMs: viewedMs, completed: completed)
     }
@@ -184,6 +226,10 @@ final class StoryStackStore: ObservableObject {
     }
 
     func delete(item: StoryStackItem, api: APIClient) async -> Bool {
+        guard !PendingStoryUploadStore.isPendingStoryId(item.id) else {
+            return false
+        }
+
         isPerformingAction = true
         defer { isPerformingAction = false }
         do {
@@ -241,6 +287,7 @@ struct StoryStackViewer: View {
     let route: StoryRoute
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var auth: AuthStore
+    @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = StoryStackStore()
     @State private var index = 0
@@ -320,7 +367,12 @@ struct StoryStackViewer: View {
         }
         .simultaneousGesture(verticalStorySwipeGesture)
         .task {
-            await store.load(storyId: route.id, api: api)
+            await store.load(
+                storyId: route.id,
+                api: api,
+                pendingUploads: route.id == "my-story" ? pendingStoryUploads : nil,
+                account: auth.account
+            )
             MediaPerformance.measure("story_open id=\(route.id)", since: route.openedAt)
             if route.source != .ownStory {
                 await store.loadFollows(api: api)
@@ -338,6 +390,22 @@ struct StoryStackViewer: View {
         }
         .onReceive(storyTimer) { now in
             updateStoryProgress(now: now)
+        }
+        .onReceive(pendingStoryUploads.$uploads) { _ in
+            guard route.id == "my-story" else {
+                return
+            }
+
+            if let stack = store.applyPendingUploads(
+                pendingUploads: pendingStoryUploads,
+                account: auth.account
+            ) {
+                index = min(index, max(stack.items.count - 1, 0))
+                videoPlaybackPool.prepare(
+                    urls: adjacentVideoUrls(in: stack, around: index),
+                    activeURL: nil
+                )
+            }
         }
         .onChange(of: store.replyConfirmation) { _, confirmation in
             scheduleConfirmationDismiss(for: confirmation)
@@ -690,6 +758,7 @@ struct StoryStackViewer: View {
 
             StoryViewerActions(
                 isOwnStack: isOwnStack(stack),
+                canDeleteStory: !PendingStoryUploadStore.isPendingStoryId(item.id),
                 actionSize: storyActionSize,
                 isPerformingAction: store.isPerformingAction,
                 deleteStory: {
@@ -1758,6 +1827,7 @@ private struct ReportStoryReasonView: View {
 
 private struct StoryViewerActions: View {
     let isOwnStack: Bool
+    let canDeleteStory: Bool
     let actionSize: CGFloat
     let isPerformingAction: Bool
     let deleteStory: () -> Void
@@ -1772,13 +1842,15 @@ private struct StoryViewerActions: View {
     var body: some View {
         HStack(spacing: 16) {
             if isOwnStack {
-                Button(action: deleteStory) {
-                    StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
+                if canDeleteStory {
+                    Button(action: deleteStory) {
+                        StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPerformingAction)
+                    .opacity(isPerformingAction ? 0.55 : 1)
+                    .accessibilityLabel("Delete story")
                 }
-                .buttonStyle(.plain)
-                .disabled(isPerformingAction)
-                .opacity(isPerformingAction ? 0.55 : 1)
-                .accessibilityLabel("Delete story")
             } else {
                 Button {
                     isActionDialogPresented = true

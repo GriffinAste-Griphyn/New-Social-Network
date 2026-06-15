@@ -254,11 +254,13 @@ final class FeedStore: ObservableObject {
 
 struct HomeView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
     @Environment(\.scenePhase) private var scenePhase
     var uploadedStoryRegistrations: [StoryUploadResponse] = []
     var onSearchTap: () -> Void = {}
     var onDiscoverTap: () -> Void = {}
+    var onPendingUploadRetried: (StoryUploadResponse) -> Void = { _ in }
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
     @State private var selectedDiscoverCreator: DiscoverCreator?
@@ -278,9 +280,11 @@ struct HomeView: View {
                     }
 
                     if let feed = store.feed {
-                        followingStoriesSection(feed)
+                        let displayFeed = pendingStoryUploads.feedByMergingPendingUploads(into: feed)
 
-                        discoverSection(feed)
+                        followingStoriesSection(displayFeed)
+
+                        discoverSection(displayFeed)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -471,8 +475,13 @@ struct HomeView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    MyStoryHomeCard(myStory: feed.myStory) {
-                        if feed.myStory.hasActiveStory {
+                    MyStoryHomeCard(
+                        myStory: feed.myStory,
+                        pendingUpload: pendingStoryUploads.latestVisibleUpload
+                    ) {
+                        if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
+                            retryPendingUpload(pendingUpload)
+                        } else if feed.myStory.hasActiveStory {
                             store.warmStoryOpen(storyId: "my-story", in: feed, api: api)
                             selectedStory = StoryRoute(id: "my-story", source: .ownStory)
                         }
@@ -554,6 +563,18 @@ struct HomeView: View {
         }
     }
 
+    private func retryPendingUpload(_ upload: PendingStoryUpload) {
+        storyUploadNotice.showPosting()
+        Task {
+            do {
+                let response = try await pendingStoryUploads.retry(id: upload.id, api: api)
+                onPendingUploadRetried(response)
+            } catch {
+                MediaPerformance.mark("pending_story_upload_retry_failed id=\(upload.id)")
+            }
+        }
+    }
+
 }
 
 struct SectionHeader: View {
@@ -585,6 +606,7 @@ struct SectionHeader: View {
 
 struct MyStoryHomeCard: View {
     let myStory: MyStorySummary
+    var pendingUpload: PendingStoryUpload?
     let action: () -> Void
 
     var body: some View {
@@ -610,6 +632,12 @@ struct MyStoryHomeCard: View {
                         .frame(width: 132, height: 192)
                 }
 
+                if let pendingUpload {
+                    pendingStatus(upload: pendingUpload)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(9)
+                }
+
                 HStack(spacing: 7) {
                     Circle()
                         .fill(Color.ubeyeRed)
@@ -630,6 +658,40 @@ struct MyStoryHomeCard: View {
             myStory.hasActiveStory
                 ? "Opens your story playback."
                 : "No active story to play."
+        )
+    }
+
+    private func pendingStatus(upload: PendingStoryUpload) -> some View {
+        HStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .stroke(.white.opacity(0.24), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: upload.isFailed ? 1 : upload.displayProgress)
+                    .stroke(
+                        upload.isFailed ? Color.ubeyeRed : .white,
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+
+                Image(systemName: upload.isFailed ? "exclamationmark" : "arrow.up")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 18, height: 18)
+
+            Text(upload.statusLabel)
+                .font(.system(size: 10, weight: .black))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7)
+        .frame(height: 28)
+        .background(.black.opacity(0.54), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.16), lineWidth: 1)
         )
     }
 
