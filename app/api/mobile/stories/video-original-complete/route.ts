@@ -10,6 +10,7 @@ import {
 import { setStoryThumbnail } from "@/lib/story-store"
 import {
   createOriginalQualityVideoThumbnail,
+  createOriginalQualityPlaybackStoryAsset,
   createOriginalQualityVideoStoryAsset,
   isAllowedOriginalQualityVideoContentType,
   isAllowedOriginalQualityPlaybackVideoContentType,
@@ -46,10 +47,20 @@ const playbackRenditionCompleteSchema = z.object({
 })
 
 const completeOriginalVideoSchema = z.object({
-  pathname: z.string().trim().min(1).max(500),
-  contentType: z.string().trim().min(1).max(120),
-  byteSize: z.number().int().positive().max(maxOriginalStoryVideoUploadBytes),
-  checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+  pathname: z.string().trim().min(1).max(500).nullable().optional(),
+  contentType: z.string().trim().min(1).max(120).nullable().optional(),
+  byteSize: z
+    .number()
+    .int()
+    .positive()
+    .max(maxOriginalStoryVideoUploadBytes)
+    .nullable()
+    .optional(),
+  checksum: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i)
+    .nullable()
+    .optional(),
   playbackPathname: z.string().trim().min(1).max(500).nullable().optional(),
   playbackContentType: z.string().trim().min(1).max(120).nullable().optional(),
   playbackByteSize: z
@@ -98,6 +109,33 @@ const completeOriginalVideoSchema = z.object({
   quoteReplyId: z.string().default(""),
   quoteReplyPositionX: z.string().optional(),
   quoteReplyPositionY: z.string().optional(),
+}).superRefine((value, context) => {
+  const hasOriginalUpload = Boolean(value.pathname)
+  const hasPlaybackUpload = Boolean(value.playbackPathname)
+
+  if (hasOriginalUpload) {
+    if (!value.contentType || !value.byteSize || !value.checksum) {
+      context.addIssue({
+        code: "custom",
+        path: ["pathname"],
+        message: "Original upload metadata is incomplete.",
+      })
+    }
+    return
+  }
+
+  if (
+    !hasPlaybackUpload ||
+    !value.playbackContentType ||
+    !value.playbackByteSize ||
+    !value.playbackChecksum
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["playbackPathname"],
+      message: "Playback upload metadata is required.",
+    })
+  }
 })
 
 function originalVideoThumbnailPathname(pathname: string) {
@@ -127,6 +165,7 @@ function logOriginalVideoCompleteEvent(
 export async function POST(request: Request) {
   let uploadedPathname: string | undefined
   let uploadedPlaybackPathnames: string[] = []
+  let uploadedThumbnailPathname: string | undefined
   let storedAsset: StoredStoryAsset | undefined
 
   try {
@@ -172,11 +211,12 @@ export async function POST(request: Request) {
 
     logOriginalVideoCompleteEvent("complete_started", {
       userId: session.id,
-      pathname: parsed.data.pathname,
-      byteSize: parsed.data.byteSize,
+      pathname: parsed.data.pathname ?? null,
+      byteSize: parsed.data.byteSize ?? null,
       playbackByteSize: parsed.data.playbackByteSize ?? null,
       durationMs: parsed.data.durationMs ?? null,
       playbackDurationMs: parsed.data.playbackDurationMs ?? null,
+      playbackFirst: !parsed.data.pathname,
       hasPlaybackRendition: Boolean(parsed.data.playbackPathname),
       playbackRenditionCount: parsed.data.playbackRenditions.length,
       hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
@@ -184,13 +224,18 @@ export async function POST(request: Request) {
 
     const expectedPrefix = `stories/mobile-original/${session.id}/`
     const expectedPlaybackPrefix = `stories/mobile-playback/${session.id}/`
+    const hasOriginalUpload = Boolean(parsed.data.pathname)
     const hasThumbnailUpload = Boolean(parsed.data.thumbnailPathname)
     const hasPlaybackUpload = Boolean(parsed.data.playbackPathname)
 
     if (
-      !parsed.data.pathname.startsWith(expectedPrefix) ||
-      parsed.data.pathname.includes("..") ||
-      !isAllowedOriginalQualityVideoContentType(parsed.data.contentType)
+      hasOriginalUpload &&
+      (!parsed.data.pathname?.startsWith(expectedPrefix) ||
+        parsed.data.pathname.includes("..") ||
+        !parsed.data.contentType ||
+        !isAllowedOriginalQualityVideoContentType(parsed.data.contentType) ||
+        !parsed.data.byteSize ||
+        !parsed.data.checksum)
     ) {
       return NextResponse.json(
         { error: "Could not finish the original video upload." },
@@ -202,9 +247,10 @@ export async function POST(request: Request) {
       hasThumbnailUpload &&
       (!parsed.data.thumbnailPathname?.startsWith(expectedPrefix) ||
         parsed.data.thumbnailPathname.includes("..") ||
-        parsed.data.thumbnailPathname !==
-          originalVideoThumbnailPathname(parsed.data.pathname) ||
         !parsed.data.thumbnailPathname.endsWith("-thumb.jpg") ||
+        (hasOriginalUpload &&
+          parsed.data.thumbnailPathname !==
+            originalVideoThumbnailPathname(parsed.data.pathname!)) ||
         !parsed.data.thumbnailContentType ||
         !isAllowedOriginalQualityVideoThumbnailContentType(
           parsed.data.thumbnailContentType,
@@ -268,17 +314,20 @@ export async function POST(request: Request) {
       )
     }
 
+    const completionStorageKey = hasOriginalUpload
+      ? parsed.data.pathname!
+      : parsed.data.playbackPathname!
     const existingCompletion = await getExistingMobileVideoStoryCompletion({
       request,
       session,
       storageProvider: "vercel-blob",
-      storageKey: parsed.data.pathname,
+      storageKey: completionStorageKey,
     })
 
     if (existingCompletion) {
       logOriginalVideoCompleteEvent("complete_reused", {
         userId: session.id,
-        pathname: parsed.data.pathname,
+        pathname: completionStorageKey,
         storyId: existingCompletion.storyId,
         processingStatus: existingCompletion.processingStatus,
         moderationStatus: existingCompletion.moderationStatus ?? null,
@@ -287,7 +336,8 @@ export async function POST(request: Request) {
       return NextResponse.json(existingCompletion)
     }
 
-    uploadedPathname = parsed.data.pathname
+    uploadedPathname = parsed.data.pathname ?? undefined
+    uploadedThumbnailPathname = parsed.data.thumbnailPathname ?? undefined
     uploadedPlaybackPathnames = Array.from(
       new Set(
         [
@@ -296,34 +346,55 @@ export async function POST(request: Request) {
         ].filter((value): value is string => Boolean(value)),
       ),
     )
-    storedAsset = await createOriginalQualityVideoStoryAsset({
-      pathname: parsed.data.pathname,
-      contentType: parsed.data.contentType,
-      byteSize: parsed.data.byteSize,
-      checksum: parsed.data.checksum.toLowerCase(),
-      playbackPathname: parsed.data.playbackPathname ?? null,
-      playbackContentType: parsed.data.playbackContentType ?? null,
-      playbackByteSize: parsed.data.playbackByteSize ?? null,
-      playbackChecksum: parsed.data.playbackChecksum?.toLowerCase() ?? null,
-      playbackDurationMs: parsed.data.playbackDurationMs ?? null,
-      playbackWidth: parsed.data.playbackWidth ?? null,
-      playbackHeight: parsed.data.playbackHeight ?? null,
-      playbackRenditions: parsed.data.playbackRenditions.map((rendition) => ({
+    const normalizedPlaybackRenditions = parsed.data.playbackRenditions.map(
+      (rendition) => ({
         ...rendition,
         checksum: rendition.checksum.toLowerCase(),
         durationMs: rendition.durationMs ?? null,
         width: rendition.width ?? null,
         height: rendition.height ?? null,
-      })),
-      thumbnailPathname: parsed.data.thumbnailPathname ?? null,
-      thumbnailContentType: parsed.data.thumbnailContentType ?? null,
-      thumbnailByteSize: parsed.data.thumbnailByteSize ?? null,
-      thumbnailChecksum: parsed.data.thumbnailChecksum?.toLowerCase() ?? null,
-      durationMs: parsed.data.durationMs ?? null,
-      width: parsed.data.width ?? null,
-      height: parsed.data.height ?? null,
-    })
-    const thumbnailPathname = parsed.data.pathname
+      }),
+    )
+    storedAsset = hasOriginalUpload
+      ? await createOriginalQualityVideoStoryAsset({
+          pathname: parsed.data.pathname!,
+          contentType: parsed.data.contentType!,
+          byteSize: parsed.data.byteSize!,
+          checksum: parsed.data.checksum!.toLowerCase(),
+          playbackPathname: parsed.data.playbackPathname ?? null,
+          playbackContentType: parsed.data.playbackContentType ?? null,
+          playbackByteSize: parsed.data.playbackByteSize ?? null,
+          playbackChecksum: parsed.data.playbackChecksum?.toLowerCase() ?? null,
+          playbackDurationMs: parsed.data.playbackDurationMs ?? null,
+          playbackWidth: parsed.data.playbackWidth ?? null,
+          playbackHeight: parsed.data.playbackHeight ?? null,
+          playbackRenditions: normalizedPlaybackRenditions,
+          thumbnailPathname: parsed.data.thumbnailPathname ?? null,
+          thumbnailContentType: parsed.data.thumbnailContentType ?? null,
+          thumbnailByteSize: parsed.data.thumbnailByteSize ?? null,
+          thumbnailChecksum: parsed.data.thumbnailChecksum?.toLowerCase() ?? null,
+          durationMs: parsed.data.durationMs ?? null,
+          width: parsed.data.width ?? null,
+          height: parsed.data.height ?? null,
+        })
+      : await createOriginalQualityPlaybackStoryAsset({
+          playbackPathname: parsed.data.playbackPathname!,
+          playbackContentType: parsed.data.playbackContentType!,
+          playbackByteSize: parsed.data.playbackByteSize!,
+          playbackChecksum: parsed.data.playbackChecksum!.toLowerCase(),
+          playbackDurationMs: parsed.data.playbackDurationMs ?? null,
+          playbackWidth: parsed.data.playbackWidth ?? null,
+          playbackHeight: parsed.data.playbackHeight ?? null,
+          playbackRenditions: normalizedPlaybackRenditions,
+          thumbnailPathname: parsed.data.thumbnailPathname ?? null,
+          thumbnailContentType: parsed.data.thumbnailContentType ?? null,
+          thumbnailByteSize: parsed.data.thumbnailByteSize ?? null,
+          thumbnailChecksum: parsed.data.thumbnailChecksum?.toLowerCase() ?? null,
+          durationMs: parsed.data.durationMs ?? null,
+          width: parsed.data.width ?? null,
+          height: parsed.data.height ?? null,
+        })
+    const thumbnailPathname = parsed.data.pathname ?? parsed.data.playbackPathname!
     const completion = await completeMobileVideoStory({
       request,
       session,
@@ -353,6 +424,7 @@ export async function POST(request: Request) {
     const completedAsset = storedAsset
     uploadedPathname = undefined
     uploadedPlaybackPathnames = []
+    uploadedThumbnailPathname = undefined
     storedAsset = undefined
 
     logOriginalVideoCompleteEvent("complete_succeeded", {
@@ -390,13 +462,16 @@ export async function POST(request: Request) {
       await Promise.allSettled(
         mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)),
       )
-    } else if (uploadedPathname) {
+    } else if (uploadedPathname || uploadedPlaybackPathnames.length > 0) {
       const pathnames = Array.from(
         new Set(
           [
             uploadedPathname,
             ...uploadedPlaybackPathnames,
-            originalVideoThumbnailPathname(uploadedPathname),
+            uploadedPathname
+              ? originalVideoThumbnailPathname(uploadedPathname)
+              : undefined,
+            uploadedThumbnailPathname,
           ].filter((value): value is string => Boolean(value)),
         ),
       )

@@ -141,6 +141,8 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
     var progress: Double
     var retryCount: Int
     var errorMessage: String?
+    var publishedStoryId: String?
+    var originalUpload: OriginalVideoUploadResponse?
 
     var displayProgress: Double {
         min(max(progress, 0), 1)
@@ -173,6 +175,8 @@ final class PendingStoryUploadStore: ObservableObject {
     private let filesURL: URL
     private let manifestURL: URL
     private let maxVideoDurationSeconds = 120
+    private let maxOriginalAttachmentRetries = 5
+    private var originalAttachmentTasks: [String: Task<Void, Never>] = [:]
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -186,7 +190,9 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     var visibleUploads: [PendingStoryUpload] {
-        uploads.sorted { $0.createdAt < $1.createdAt }
+        uploads
+            .filter { $0.publishedStoryId == nil }
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     var latestVisibleUpload: PendingStoryUpload? {
@@ -222,7 +228,9 @@ final class PendingStoryUploadStore: ObservableObject {
             state: .queued,
             progress: 0.05,
             retryCount: 0,
-            errorMessage: nil
+            errorMessage: nil,
+            publishedStoryId: nil,
+            originalUpload: nil
         )
         upsert(pending)
         MediaImageCache.shared.preheat([mediaURL], limit: 1)
@@ -269,7 +277,9 @@ final class PendingStoryUploadStore: ObservableObject {
             state: .queued,
             progress: 0.08,
             retryCount: 0,
-            errorMessage: nil
+            errorMessage: nil,
+            publishedStoryId: nil,
+            originalUpload: nil
         )
         upsert(pending)
         MediaImageCache.shared.preheat([thumbnailURL].compactMap { $0 }, limit: 1)
@@ -298,7 +308,9 @@ final class PendingStoryUploadStore: ObservableObject {
             }
 
             await cacheUploadedMedia(upload, response: response)
-            reconcile(id: id)
+            if !shouldKeepOriginalAttachmentRecord(id: id) {
+                reconcile(id: id)
+            }
             return response
         } catch {
             markFailed(id: id, error: error)
@@ -311,11 +323,25 @@ final class PendingStoryUploadStore: ObservableObject {
         return try await performUpload(id: id, api: api)
     }
 
+    func resumeBackgroundOriginalAttachments(api: APIClient) {
+        let candidates = uploads.filter { upload in
+            upload.pipeline == .originalQualityVideo &&
+                upload.publishedStoryId != nil &&
+                upload.retryCount < maxOriginalAttachmentRetries
+        }
+
+        for upload in candidates {
+            scheduleOriginalAttachment(id: upload.id, api: api, preferredUpload: nil)
+        }
+    }
+
     func remove(id: String) {
         guard let upload = uploads.first(where: { $0.id == id }) else {
             return
         }
 
+        originalAttachmentTasks[id]?.cancel()
+        originalAttachmentTasks[id] = nil
         removeFiles(for: upload)
         uploads.removeAll { $0.id == id }
         persist()
@@ -484,6 +510,7 @@ final class PendingStoryUploadStore: ObservableObject {
             fileName: upload.fileName.isEmpty ? "story-video.mov" : upload.fileName,
             fileURL: upload.mediaFileURL
         )
+        markOriginalUploadPrepared(id: upload.id, upload: preparedUpload)
         update(id: upload.id, state: .uploading, progress: 0.2)
         let playbackTargets = preparedUpload.playbackRenditionUploads ?? []
         let playbackRenditions: [StoryVideoPlaybackRendition]
@@ -556,22 +583,9 @@ final class PendingStoryUploadStore: ObservableObject {
             )
         }
 
-        _ = try await api.uploadOriginalQualityVideoFile(
-            fileURL: upload.mediaFileURL,
-            upload: preparedUpload,
-            onProgress: { progress in
-                self.update(
-                    id: upload.id,
-                    state: .uploading,
-                    progress: 0.46 + min(max(progress, 0), 1) * 0.44
-                )
-            }
-        )
-
         update(id: upload.id, state: .completing, progress: 0.94)
-        let response = try await api.completeOriginalQualityVideoStory(
+        let response = try await api.completeOriginalQualityPlaybackStory(
             upload: preparedUpload,
-            fileURL: upload.mediaFileURL,
             playbackRendition: playbackRendition,
             playbackRenditions: playbackRenditions,
             caption: upload.draft.caption,
@@ -607,6 +621,8 @@ final class PendingStoryUploadStore: ObservableObject {
                 )
             }
         }
+        markPlaybackPublished(id: upload.id, storyId: response.storyId, upload: preparedUpload)
+        scheduleOriginalAttachment(id: upload.id, api: api, preferredUpload: preparedUpload)
         update(id: upload.id, state: .completing, progress: 1)
         return response
     }
@@ -648,15 +664,7 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     private func cacheUploadedMedia(_ upload: PendingStoryUpload, response: StoryUploadResponse) async {
-        if upload.pipeline == .originalQualityVideo {
-            if let originalUrl = response.asset.renditions?.original?.mediaUrl {
-                await MediaFileDiskCache.shared.storeLocalFile(
-                    sourceURL: upload.mediaFileURL,
-                    for: originalUrl,
-                    kind: .video
-                )
-            }
-        } else {
+        if upload.pipeline != .originalQualityVideo {
             let mediaUrl = response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl
             await MediaFileDiskCache.shared.storeLocalFile(
                 sourceURL: upload.mediaFileURL,
@@ -734,6 +742,201 @@ final class PendingStoryUploadStore: ObservableObject {
         persist()
     }
 
+    private func markOriginalUploadPrepared(id: String, upload: OriginalVideoUploadResponse) {
+        guard let index = uploads.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        uploads[index].originalUpload = upload
+        uploads[index].updatedAt = Date()
+        persist()
+    }
+
+    private func markPlaybackPublished(id: String, storyId: String, upload: OriginalVideoUploadResponse) {
+        guard let index = uploads.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        uploads[index].publishedStoryId = storyId
+        uploads[index].originalUpload = upload
+        uploads[index].state = .completing
+        uploads[index].progress = 1
+        uploads[index].errorMessage = nil
+        uploads[index].updatedAt = Date()
+        persist()
+    }
+
+    private func shouldKeepOriginalAttachmentRecord(id: String) -> Bool {
+        guard let upload = uploads.first(where: { $0.id == id }) else {
+            return false
+        }
+
+        return upload.pipeline == .originalQualityVideo && upload.publishedStoryId != nil
+    }
+
+    private func scheduleOriginalAttachment(
+        id: String,
+        api: APIClient,
+        preferredUpload: OriginalVideoUploadResponse?
+    ) {
+        guard originalAttachmentTasks[id] == nil,
+              let upload = uploads.first(where: { $0.id == id }),
+              upload.pipeline == .originalQualityVideo,
+              upload.publishedStoryId != nil else {
+            return
+        }
+
+        guard upload.retryCount < maxOriginalAttachmentRetries else {
+            MediaPerformance.mark("pending_story_original_attach_retry_exhausted id=\(id)")
+            return
+        }
+
+        originalAttachmentTasks[id] = Task { @MainActor [weak self, api] in
+            await self?.attachOriginalInBackground(
+                id: id,
+                api: api,
+                preferredUpload: preferredUpload
+            )
+        }
+    }
+
+    private func attachOriginalInBackground(
+        id: String,
+        api: APIClient,
+        preferredUpload: OriginalVideoUploadResponse?
+    ) async {
+        let backgroundTask = StoryUploadBackgroundTask(name: "story-original-attach-\(id)")
+        defer {
+            backgroundTask.end()
+            originalAttachmentTasks[id] = nil
+        }
+
+        guard let upload = uploads.first(where: { $0.id == id }),
+              upload.pipeline == .originalQualityVideo,
+              let storyId = upload.publishedStoryId else {
+            return
+        }
+
+        guard fileManager.fileExists(atPath: upload.mediaFileURL.path) else {
+            MediaPerformance.mark("pending_story_original_attach_missing_file id=\(id) storyId=\(storyId)")
+            reconcile(id: id)
+            return
+        }
+
+        do {
+            update(id: id, state: .completing, progress: 1, errorMessage: nil)
+            let attachment: OriginalVideoAttachResponse
+            if let existingAttachment = await attachPreparedOriginalIfAvailable(
+                id: id,
+                storyId: storyId,
+                upload: upload,
+                api: api,
+                preferredUpload: preferredUpload
+            ) {
+                attachment = existingAttachment
+            } else {
+                let uploadTarget = try await originalUploadTarget(
+                    for: upload,
+                    api: api,
+                    preferredUpload: preferredUpload
+                )
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                _ = try await api.uploadOriginalQualityVideoFile(
+                    fileURL: upload.mediaFileURL,
+                    upload: uploadTarget
+                )
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                attachment = try await api.attachOriginalQualityVideo(
+                    storyId: storyId,
+                    upload: uploadTarget,
+                    fileURL: upload.mediaFileURL,
+                    durationMs: upload.durationMs
+                )
+            }
+
+            if let originalUrl = attachment.asset?.renditions?.original?.mediaUrl {
+                await MediaFileDiskCache.shared.storeLocalFile(
+                    sourceURL: upload.mediaFileURL,
+                    for: originalUrl,
+                    kind: .video
+                )
+            }
+
+            MediaPerformance.mark("pending_story_original_attach_complete id=\(id) storyId=\(storyId)")
+            reconcile(id: id)
+        } catch {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            markOriginalAttachmentFailed(id: id, error: error)
+        }
+    }
+
+    private func attachPreparedOriginalIfAvailable(
+        id: String,
+        storyId: String,
+        upload: PendingStoryUpload,
+        api: APIClient,
+        preferredUpload: OriginalVideoUploadResponse?
+    ) async -> OriginalVideoAttachResponse? {
+        guard preferredUpload == nil,
+              let originalUpload = upload.originalUpload else {
+            return nil
+        }
+
+        do {
+            let attachment = try await api.attachOriginalQualityVideo(
+                storyId: storyId,
+                upload: originalUpload,
+                fileURL: upload.mediaFileURL,
+                durationMs: upload.durationMs
+            )
+            MediaPerformance.mark("pending_story_original_attach_reused_upload id=\(id) storyId=\(storyId)")
+            return attachment
+        } catch {
+            MediaPerformance.mark("pending_story_original_attach_reuse_miss id=\(id) storyId=\(storyId)")
+            return nil
+        }
+    }
+
+    private func originalUploadTarget(
+        for upload: PendingStoryUpload,
+        api: APIClient,
+        preferredUpload: OriginalVideoUploadResponse?
+    ) async throws -> OriginalVideoUploadResponse {
+        if let preferredUpload {
+            markOriginalUploadPrepared(id: upload.id, upload: preferredUpload)
+            return preferredUpload
+        }
+
+        let preparedUpload = try await api.prepareOriginalQualityVideoUpload(
+            fileName: upload.fileName.isEmpty ? "story-video.mov" : upload.fileName,
+            fileURL: upload.mediaFileURL
+        )
+        markOriginalUploadPrepared(id: upload.id, upload: preparedUpload)
+        return preparedUpload
+    }
+
+    private func markOriginalAttachmentFailed(id: String, error: Error) {
+        update(
+            id: id,
+            state: .failed,
+            progress: 1,
+            errorMessage: error.localizedDescription,
+            incrementsRetry: true
+        )
+        MediaPerformance.mark("pending_story_original_attach_failed id=\(id)")
+    }
+
     private func recordRetry(id: String, reason: String) {
         guard let index = uploads.firstIndex(where: { $0.id == id }) else {
             return
@@ -756,6 +959,8 @@ final class PendingStoryUploadStore: ObservableObject {
             return
         }
 
+        originalAttachmentTasks[id]?.cancel()
+        originalAttachmentTasks[id] = nil
         removeFiles(for: upload)
         uploads.removeAll { $0.id == id }
         persist()
@@ -780,7 +985,12 @@ final class PendingStoryUploadStore: ObservableObject {
             }
 
             var restoredUpload = upload
-            if restoredUpload.state != .failed {
+            if restoredUpload.publishedStoryId != nil {
+                restoredUpload.state = .completing
+                restoredUpload.progress = 1
+                restoredUpload.errorMessage = nil
+                restoredUpload.updatedAt = Date()
+            } else if restoredUpload.state != .failed {
                 restoredUpload.state = .failed
                 restoredUpload.errorMessage = "Upload interrupted. Tap to retry."
                 restoredUpload.updatedAt = Date()

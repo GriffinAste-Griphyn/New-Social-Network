@@ -39,6 +39,7 @@ struct UBEYEApp: App {
                 .task {
                     await auth.restoreSession(api: api)
                     if auth.account != nil {
+                        pendingStoryUploads.resumeBackgroundOriginalAttachments(api: api)
                         await push.registerIfAuthorizationAlreadyGranted(api: api)
                     }
                 }
@@ -48,6 +49,7 @@ struct UBEYEApp: App {
                     }
 
                     Task {
+                        pendingStoryUploads.resumeBackgroundOriginalAttachments(api: api)
                         await push.registerIfAuthorizationAlreadyGranted(api: api)
                     }
                 }

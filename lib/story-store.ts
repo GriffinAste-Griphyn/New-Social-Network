@@ -29,6 +29,7 @@ import type { ContentModerationResult } from "@/lib/safety/policy"
 import {
   creatorProfiles,
   creatorScores,
+  mediaAssets,
   stories,
   storyElements,
   storyInteractions,
@@ -45,6 +46,7 @@ import { formatStoryPostedAt } from "@/lib/story-time"
 import {
   publicStoryMediaUrl,
   StoryUploadError,
+  type StoredStoryOriginalVideo,
   type StoredStoryAsset,
   type StoredStoryPlaybackRendition,
 } from "@/lib/story-storage"
@@ -1611,6 +1613,88 @@ export async function getStoryByStoredAssetForOwner(input: {
     .limit(1)
 
   return story ?? null
+}
+
+export async function attachOriginalVideoToStoryForOwner(input: {
+  ownerId: string
+  storyId: string
+  original: StoredStoryOriginalVideo
+}) {
+  const db = getDb()
+  const [story] = await db
+    .select({
+      id: stories.id,
+      mediaAssetId: stories.mediaAssetId,
+      thumbnailUrl: stories.thumbnailUrl,
+      originalStorageKey: stories.originalStorageKey,
+      status: stories.status,
+    })
+    .from(stories)
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.creatorId, input.ownerId),
+        eq(stories.assetKind, "video"),
+      ),
+    )
+    .limit(1)
+
+  if (!story || story.status === "removed") {
+    throw new StoryUploadError("Story not found.")
+  }
+
+  if (
+    story.originalStorageKey &&
+    story.originalStorageKey !== input.original.storageKey
+  ) {
+    throw new StoryUploadError("This story already has an original video.")
+  }
+
+  if (story.originalStorageKey === input.original.storageKey) {
+    return {
+      storyId: story.id,
+      originalMediaUrl: input.original.mediaUrl,
+      originalThumbnailUrl: input.original.thumbnailUrl ?? story.thumbnailUrl,
+      attachmentState: "reused" as const,
+    }
+  }
+
+  const originalThumbnailUrl = input.original.thumbnailUrl ?? story.thumbnailUrl
+  const now = new Date()
+  const originalFields = {
+    originalMediaUrl: input.original.mediaUrl,
+    originalThumbnailUrl,
+    originalStorageProvider: input.original.storageProvider,
+    originalStorageKey: input.original.storageKey,
+    originalContentType: input.original.contentType,
+    originalByteSize: input.original.byteSize,
+    originalChecksum: input.original.checksum,
+    originalWidth: input.original.width,
+    originalHeight: input.original.height,
+    originalDurationMs: input.original.durationMs,
+  }
+
+  await Promise.all([
+    db.update(stories).set(originalFields).where(eq(stories.id, story.id)),
+    db
+      .update(mediaAssets)
+      .set({
+        ...originalFields,
+        updatedAt: now,
+      })
+      .where(eq(mediaAssets.id, story.mediaAssetId)),
+  ])
+
+  await invalidateMobileFeedSnapshotsForCreator(input.ownerId).catch(
+    () => undefined,
+  )
+
+  return {
+    storyId: story.id,
+    originalMediaUrl: input.original.mediaUrl,
+    originalThumbnailUrl,
+    attachmentState: "attached" as const,
+  }
 }
 
 export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {

@@ -402,6 +402,19 @@ type OriginalQualityPlaybackRenditionInput = {
   height?: number | null
 }
 
+export type StoredStoryOriginalVideo = {
+  mediaUrl: string
+  thumbnailUrl: string | null
+  storageProvider: "vercel-blob"
+  storageKey: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width: number | null
+  height: number | null
+  durationMs: number | null
+}
+
 function inferredPlaybackRenditionQuality(input: {
   pathname: string
   width?: number | null
@@ -461,6 +474,158 @@ async function verifyOriginalQualityPlaybackRendition(
   } satisfies StoredStoryPlaybackRendition
 }
 
+async function verifyOriginalQualityVideoThumbnail(input: {
+  thumbnailPathname?: string | null
+  thumbnailContentType?: string | null
+  thumbnailByteSize?: number | null
+  thumbnailChecksum?: string | null
+}) {
+  if (!input.thumbnailPathname) {
+    return null
+  }
+
+  if (
+    input.thumbnailPathname.includes("..") ||
+    !input.thumbnailPathname.startsWith("stories/mobile-original/") ||
+    !input.thumbnailPathname.endsWith("-thumb.jpg") ||
+    input.thumbnailContentType !== "image/jpeg" ||
+    !input.thumbnailByteSize ||
+    input.thumbnailByteSize > maxOriginalStoryVideoThumbnailUploadBytes ||
+    !input.thumbnailChecksum ||
+    !/^[a-f0-9]{64}$/i.test(input.thumbnailChecksum)
+  ) {
+    throw new StoryUploadError("Could not verify the original story thumbnail.")
+  }
+
+  const thumbnailMetadata = await head(input.thumbnailPathname).catch(() => null)
+
+  if (
+    !thumbnailMetadata ||
+    thumbnailMetadata.size !== input.thumbnailByteSize ||
+    thumbnailMetadata.contentType.toLowerCase() !== "image/jpeg"
+  ) {
+    throw new StoryUploadError("Could not verify the original story thumbnail.")
+  }
+
+  return buildStoryMediaRoute(input.thumbnailPathname)
+}
+
+export async function createOriginalQualityVideoAttachment(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  thumbnailUrl?: string | null
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+}): Promise<StoredStoryOriginalVideo> {
+  if (
+    input.pathname.includes("..") ||
+    !input.pathname.startsWith("stories/mobile-original/") ||
+    !isAllowedOriginalQualityVideoContentType(input.contentType) ||
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize <= 0 ||
+    input.byteSize > maxOriginalStoryVideoUploadBytes ||
+    !/^[a-f0-9]{64}$/i.test(input.checksum)
+  ) {
+    throw new StoryUploadError("Could not verify the original story video.")
+  }
+
+  const originalVideoMetadata = await head(input.pathname).catch(() => null)
+
+  if (
+    !originalVideoMetadata ||
+    originalVideoMetadata.size !== input.byteSize ||
+    originalVideoMetadata.contentType.toLowerCase() !==
+      input.contentType.toLowerCase()
+  ) {
+    throw new StoryUploadError("Could not verify the original story video.")
+  }
+
+  return {
+    mediaUrl: buildStoryMediaRoute(input.pathname),
+    thumbnailUrl: input.thumbnailUrl ?? null,
+    storageProvider: "vercel-blob",
+    storageKey: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum.toLowerCase(),
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+  }
+}
+
+async function verifyOriginalQualityPlaybackRenditionSet(input: {
+  playbackPathname?: string | null
+  playbackContentType?: string | null
+  playbackByteSize?: number | null
+  playbackChecksum?: string | null
+  playbackDurationMs?: number | null
+  playbackWidth?: number | null
+  playbackHeight?: number | null
+  playbackRenditions?: OriginalQualityPlaybackRenditionInput[] | null
+  fallbackDurationMs?: number | null
+  fallbackWidth?: number | null
+  fallbackHeight?: number | null
+  thumbnailUrl?: string | null
+}) {
+  const inputPlaybackRenditions = input.playbackRenditions ?? []
+  const playbackRenditionInputsByPathname = new Map<
+    string,
+    OriginalQualityPlaybackRenditionInput
+  >()
+
+  inputPlaybackRenditions.forEach((rendition) => {
+    playbackRenditionInputsByPathname.set(rendition.pathname, rendition)
+  })
+
+  if (input.playbackPathname) {
+    if (
+      !input.playbackContentType ||
+      !input.playbackByteSize ||
+      !input.playbackChecksum
+    ) {
+      throw new StoryUploadError("Could not verify the playback story video.")
+    }
+
+    playbackRenditionInputsByPathname.set(input.playbackPathname, {
+      quality: inferredPlaybackRenditionQuality({
+        pathname: input.playbackPathname,
+        width: input.playbackWidth,
+        height: input.playbackHeight,
+      }),
+      pathname: input.playbackPathname,
+      contentType: input.playbackContentType,
+      byteSize: input.playbackByteSize,
+      checksum: input.playbackChecksum,
+      durationMs: input.playbackDurationMs ?? input.fallbackDurationMs ?? null,
+      width: input.playbackWidth ?? input.fallbackWidth ?? null,
+      height: input.playbackHeight ?? input.fallbackHeight ?? null,
+    })
+  }
+
+  return (
+    await Promise.all(
+      Array.from(playbackRenditionInputsByPathname.values()).map((rendition) =>
+        verifyOriginalQualityPlaybackRendition(rendition),
+      ),
+    )
+  )
+    .sort((left, right) => {
+      const leftHeight = left.height ?? Number(left.quality.match(/\d+/)?.[0] ?? 0)
+      const rightHeight =
+        right.height ?? Number(right.quality.match(/\d+/)?.[0] ?? 0)
+
+      return rightHeight - leftHeight
+    })
+    .map((rendition) => ({
+      ...rendition,
+      thumbnailUrl: input.thumbnailUrl ?? null,
+    }))
+}
+
 export async function createOriginalQualityVideoStoryAsset(input: {
   pathname: string
   contentType: string
@@ -482,134 +647,31 @@ export async function createOriginalQualityVideoStoryAsset(input: {
   width?: number | null
   height?: number | null
 }): Promise<StoredStoryAsset> {
-  if (
-    input.pathname.includes("..") ||
-    !input.pathname.startsWith("stories/mobile-original/") ||
-    !isAllowedOriginalQualityVideoContentType(input.contentType) ||
-    !Number.isSafeInteger(input.byteSize) ||
-    input.byteSize <= 0 ||
-    input.byteSize > maxOriginalStoryVideoUploadBytes
-  ) {
-    throw new StoryUploadError("Could not verify the original story video.")
-  }
-
-  const originalVideoMetadata = await head(input.pathname).catch(() => null)
-
-  if (
-    !originalVideoMetadata ||
-    originalVideoMetadata.size !== input.byteSize ||
-    originalVideoMetadata.contentType.toLowerCase() !==
-      input.contentType.toLowerCase()
-  ) {
-    throw new StoryUploadError("Could not verify the original story video.")
-  }
-
-  let thumbnailUrl: string | null = null
-
-  if (input.thumbnailPathname) {
-    if (
-      input.thumbnailPathname.includes("..") ||
-      !input.thumbnailPathname.startsWith("stories/mobile-original/") ||
-      !input.thumbnailPathname.endsWith("-thumb.jpg") ||
-      input.thumbnailContentType !== "image/jpeg" ||
-      !input.thumbnailByteSize ||
-      input.thumbnailByteSize > maxOriginalStoryVideoThumbnailUploadBytes
-    ) {
-      throw new StoryUploadError("Could not verify the original story thumbnail.")
-    }
-
-    const thumbnailMetadata = await head(input.thumbnailPathname).catch(() => null)
-
-    if (
-      !thumbnailMetadata ||
-      thumbnailMetadata.size !== input.thumbnailByteSize ||
-      thumbnailMetadata.contentType.toLowerCase() !== "image/jpeg"
-    ) {
-      throw new StoryUploadError("Could not verify the original story thumbnail.")
-    }
-
-    thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
-  }
-
-  const hasPlaybackRendition = Boolean(input.playbackPathname)
-
-  if (
-    hasPlaybackRendition &&
-    (!input.playbackPathname ||
-      input.playbackPathname.includes("..") ||
-      !input.playbackPathname.startsWith("stories/mobile-playback/") ||
-      !input.playbackContentType ||
-      !isAllowedOriginalQualityPlaybackVideoContentType(
-        input.playbackContentType,
-      ) ||
-      !input.playbackByteSize ||
-      !Number.isSafeInteger(input.playbackByteSize) ||
-      input.playbackByteSize <= 0 ||
-      input.playbackByteSize > maxOriginalStoryVideoPlaybackUploadBytes ||
-      !input.playbackChecksum)
-  ) {
-    throw new StoryUploadError("Could not verify the playback story video.")
-  }
-
-  if (input.playbackPathname) {
-    await verifyOriginalQualityPlaybackRendition({
-      quality: inferredPlaybackRenditionQuality({
-        pathname: input.playbackPathname,
-        width: input.playbackWidth,
-        height: input.playbackHeight,
-      }),
-      pathname: input.playbackPathname,
-      contentType: input.playbackContentType!,
-      byteSize: input.playbackByteSize!,
-      checksum: input.playbackChecksum!,
-      durationMs: input.playbackDurationMs ?? input.durationMs ?? null,
-      width: input.playbackWidth ?? input.width ?? null,
-      height: input.playbackHeight ?? input.height ?? null,
-    })
-  }
-
-  const inputPlaybackRenditions = input.playbackRenditions ?? []
-  const playbackRenditionInputsByPathname = new Map<
-    string,
-    OriginalQualityPlaybackRenditionInput
-  >()
-
-  inputPlaybackRenditions.forEach((rendition) => {
-    playbackRenditionInputsByPathname.set(rendition.pathname, rendition)
-  })
-
-  if (input.playbackPathname) {
-    playbackRenditionInputsByPathname.set(input.playbackPathname, {
-      quality: inferredPlaybackRenditionQuality({
-        pathname: input.playbackPathname,
-        width: input.playbackWidth,
-        height: input.playbackHeight,
-      }),
-      pathname: input.playbackPathname,
-      contentType: input.playbackContentType!,
-      byteSize: input.playbackByteSize!,
-      checksum: input.playbackChecksum!,
-      durationMs: input.playbackDurationMs ?? input.durationMs ?? null,
-      width: input.playbackWidth ?? input.width ?? null,
-      height: input.playbackHeight ?? input.height ?? null,
-    })
-  }
-
-  const playbackRenditions = (
-    await Promise.all(
-      Array.from(playbackRenditionInputsByPathname.values()).map((rendition) =>
-        verifyOriginalQualityPlaybackRendition(rendition),
-      ),
-    )
-  ).sort((left, right) => {
-    const leftHeight = left.height ?? Number(left.quality.match(/\d+/)?.[0] ?? 0)
-    const rightHeight = right.height ?? Number(right.quality.match(/\d+/)?.[0] ?? 0)
-
-    return rightHeight - leftHeight
-  }).map((rendition) => ({
-    ...rendition,
+  const thumbnailUrl = await verifyOriginalQualityVideoThumbnail(input)
+  const originalVideo = await createOriginalQualityVideoAttachment({
+    pathname: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum,
     thumbnailUrl,
-  }))
+    durationMs: input.durationMs ?? null,
+    width: input.width ?? null,
+    height: input.height ?? null,
+  })
+  const playbackRenditions = await verifyOriginalQualityPlaybackRenditionSet({
+    playbackPathname: input.playbackPathname,
+    playbackContentType: input.playbackContentType,
+    playbackByteSize: input.playbackByteSize,
+    playbackChecksum: input.playbackChecksum,
+    playbackDurationMs: input.playbackDurationMs,
+    playbackWidth: input.playbackWidth,
+    playbackHeight: input.playbackHeight,
+    playbackRenditions: input.playbackRenditions,
+    fallbackDurationMs: input.durationMs,
+    fallbackWidth: input.width,
+    fallbackHeight: input.height,
+    thumbnailUrl,
+  })
 
   const mediaPathname = input.playbackPathname
     ? input.playbackPathname
@@ -641,19 +703,87 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     durationMs: mediaDurationMs,
     processingStatus: "ready",
     originalMediaUrl: input.playbackPathname
-      ? buildStoryMediaRoute(input.pathname)
+      ? originalVideo.mediaUrl
       : null,
     originalThumbnailUrl: input.playbackPathname ? thumbnailUrl : null,
     originalStorageProvider: input.playbackPathname ? "vercel-blob" : null,
-    originalStorageKey: input.playbackPathname ? input.pathname : null,
-    originalContentType: input.playbackPathname ? input.contentType : null,
-    originalByteSize: input.playbackPathname ? input.byteSize : null,
-    originalChecksum: input.playbackPathname ? input.checksum : null,
-    originalWidth: input.playbackPathname ? input.width ?? null : null,
-    originalHeight: input.playbackPathname ? input.height ?? null : null,
+    originalStorageKey: input.playbackPathname ? originalVideo.storageKey : null,
+    originalContentType: input.playbackPathname ? originalVideo.contentType : null,
+    originalByteSize: input.playbackPathname ? originalVideo.byteSize : null,
+    originalChecksum: input.playbackPathname ? originalVideo.checksum : null,
+    originalWidth: input.playbackPathname ? originalVideo.width : null,
+    originalHeight: input.playbackPathname ? originalVideo.height : null,
     originalDurationMs: input.playbackPathname
-      ? input.durationMs ?? null
+      ? originalVideo.durationMs
       : null,
+    playbackRenditions: playbackRenditions.length > 0 ? playbackRenditions : null,
+  }
+}
+
+export async function createOriginalQualityPlaybackStoryAsset(input: {
+  playbackPathname: string
+  playbackContentType: string
+  playbackByteSize: number
+  playbackChecksum: string
+  playbackDurationMs?: number | null
+  playbackWidth?: number | null
+  playbackHeight?: number | null
+  playbackRenditions?: OriginalQualityPlaybackRenditionInput[] | null
+  thumbnailPathname?: string | null
+  thumbnailContentType?: string | null
+  thumbnailByteSize?: number | null
+  thumbnailChecksum?: string | null
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+}): Promise<StoredStoryAsset> {
+  const thumbnailUrl = await verifyOriginalQualityVideoThumbnail(input)
+  const playbackRenditions = await verifyOriginalQualityPlaybackRenditionSet({
+    playbackPathname: input.playbackPathname,
+    playbackContentType: input.playbackContentType,
+    playbackByteSize: input.playbackByteSize,
+    playbackChecksum: input.playbackChecksum,
+    playbackDurationMs: input.playbackDurationMs,
+    playbackWidth: input.playbackWidth,
+    playbackHeight: input.playbackHeight,
+    playbackRenditions: input.playbackRenditions,
+    fallbackDurationMs: input.durationMs,
+    fallbackWidth: input.width,
+    fallbackHeight: input.height,
+    thumbnailUrl,
+  })
+  const primaryPlayback =
+    playbackRenditions.find(
+      (rendition) => rendition.storageKey === input.playbackPathname,
+    ) ?? playbackRenditions[0]
+
+  if (!primaryPlayback) {
+    throw new StoryUploadError("Could not verify the playback story video.")
+  }
+
+  return {
+    assetKind: "video",
+    mediaUrl: primaryPlayback.mediaUrl,
+    thumbnailUrl,
+    storageProvider: "vercel-blob",
+    storageKey: primaryPlayback.storageKey,
+    contentType: primaryPlayback.contentType,
+    byteSize: primaryPlayback.byteSize,
+    checksum: primaryPlayback.checksum,
+    width: primaryPlayback.width,
+    height: primaryPlayback.height,
+    durationMs: primaryPlayback.durationMs,
+    processingStatus: "ready",
+    originalMediaUrl: null,
+    originalThumbnailUrl: null,
+    originalStorageProvider: null,
+    originalStorageKey: null,
+    originalContentType: null,
+    originalByteSize: null,
+    originalChecksum: null,
+    originalWidth: null,
+    originalHeight: null,
+    originalDurationMs: null,
     playbackRenditions: playbackRenditions.length > 0 ? playbackRenditions : null,
   }
 }

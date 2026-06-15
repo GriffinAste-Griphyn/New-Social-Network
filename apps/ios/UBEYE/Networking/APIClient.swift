@@ -1047,6 +1047,150 @@ final class APIClient: ObservableObject {
         )
     }
 
+    func completeOriginalQualityPlaybackStory(
+        upload: OriginalVideoUploadResponse,
+        playbackRendition: StoryVideoPlaybackRendition?,
+        playbackRenditions: [StoryVideoPlaybackRendition] = [],
+        caption: String,
+        brandTags: String,
+        textOverlay: String,
+        textOverlayPositionX: Double,
+        textOverlayPositionY: Double,
+        linkLabel: String,
+        linkUrl: String,
+        linkOverlayPositionX: Double,
+        linkOverlayPositionY: Double,
+        quoteReplyId: String,
+        quoteReplyPositionX: Double,
+        quoteReplyPositionY: Double,
+        durationMs: Int?,
+        thumbnailData: Data?
+    ) async throws -> StoryUploadResponse {
+        struct PlaybackRenditionBody: Encodable {
+            let quality: String
+            let pathname: String
+            let contentType: String
+            let byteSize: Int64
+            let checksum: String
+            let durationMs: Int?
+            let width: Int?
+            let height: Int?
+        }
+
+        struct Body: Encodable {
+            let playbackPathname: String
+            let playbackContentType: String
+            let playbackByteSize: Int64
+            let playbackChecksum: String
+            let playbackDurationMs: Int?
+            let playbackWidth: Int?
+            let playbackHeight: Int?
+            let playbackRenditions: [PlaybackRenditionBody]
+            let thumbnailPathname: String?
+            let thumbnailContentType: String?
+            let thumbnailByteSize: Int?
+            let thumbnailChecksum: String?
+            let durationMs: Int?
+            let caption: String
+            let brandTags: String
+            let stickers: String
+            let textOverlays: String
+            let textOverlayPositionX: String
+            let textOverlayPositionY: String
+            let linkLabel: String
+            let linkUrl: String
+            let linkOverlayPositionX: String
+            let linkOverlayPositionY: String
+            let quoteReplyId: String
+            let quoteReplyPositionX: String
+            let quoteReplyPositionY: String
+        }
+
+        guard let playbackRendition,
+              let playbackPathname = upload.playbackPathname,
+              let playbackContentType = upload.playbackContentType else {
+            throw APIClientError.invalidResponse
+        }
+
+        let targetsByQuality = Dictionary(
+            uniqueKeysWithValues: (upload.playbackRenditionUploads ?? []).map { ($0.quality, $0) }
+        )
+        let playbackRenditionPayloads = try playbackRenditions.compactMap { rendition -> PlaybackRenditionBody? in
+            guard let target = targetsByQuality[rendition.quality] else {
+                return nil
+            }
+
+            return PlaybackRenditionBody(
+                quality: rendition.quality,
+                pathname: target.pathname,
+                contentType: target.contentType,
+                byteSize: try videoFileSize(rendition.url),
+                checksum: try fileSHA256Hex(rendition.url),
+                durationMs: rendition.durationMs,
+                width: rendition.width,
+                height: rendition.height
+            )
+        }
+
+        return try await post(
+            "/api/mobile/stories/video-original-complete",
+            body: Body(
+                playbackPathname: playbackPathname,
+                playbackContentType: playbackContentType,
+                playbackByteSize: try videoFileSize(playbackRendition.url),
+                playbackChecksum: try fileSHA256Hex(playbackRendition.url),
+                playbackDurationMs: playbackRendition.durationMs,
+                playbackWidth: playbackRendition.width,
+                playbackHeight: playbackRendition.height,
+                playbackRenditions: playbackRenditionPayloads,
+                thumbnailPathname: thumbnailData == nil ? nil : upload.thumbnailPathname,
+                thumbnailContentType: thumbnailData == nil ? nil : upload.thumbnailContentType,
+                thumbnailByteSize: thumbnailData?.count,
+                thumbnailChecksum: thumbnailData.map(dataSHA256Hex),
+                durationMs: durationMs,
+                caption: caption,
+                brandTags: brandTags,
+                stickers: "",
+                textOverlays: textOverlay,
+                textOverlayPositionX: String(format: "%.2f", textOverlayPositionX),
+                textOverlayPositionY: String(format: "%.2f", textOverlayPositionY),
+                linkLabel: linkLabel,
+                linkUrl: linkUrl,
+                linkOverlayPositionX: String(format: "%.2f", linkOverlayPositionX),
+                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY),
+                quoteReplyId: quoteReplyId,
+                quoteReplyPositionX: String(format: "%.2f", quoteReplyPositionX),
+                quoteReplyPositionY: String(format: "%.2f", quoteReplyPositionY)
+            )
+        )
+    }
+
+    func attachOriginalQualityVideo(
+        storyId: String,
+        upload: OriginalVideoUploadResponse,
+        fileURL: URL,
+        durationMs: Int?
+    ) async throws -> OriginalVideoAttachResponse {
+        struct Body: Encodable {
+            let pathname: String
+            let contentType: String
+            let byteSize: Int64
+            let checksum: String
+            let durationMs: Int?
+        }
+
+        return try await post(
+            "/api/mobile/stories/\(storyId)/original-video",
+            body: Body(
+                pathname: upload.pathname,
+                contentType: videoMimeType(for: fileURL),
+                byteSize: try videoFileSize(fileURL),
+                checksum: try fileSHA256Hex(fileURL),
+                durationMs: durationMs
+            )
+        )
+    }
+
     func completeVideoStory(
         upload: VideoUploadResponse,
         fileURL: URL,

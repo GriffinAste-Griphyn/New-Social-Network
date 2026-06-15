@@ -702,7 +702,7 @@ struct OriginalVideoPlaybackRenditionUpload: Codable, Hashable {
     let maxSizeBytes: Int64
 }
 
-struct OriginalVideoUploadResponse: Codable {
+struct OriginalVideoUploadResponse: Codable, Hashable {
     let ok: Bool
     let pathname: String
     let uploadUrl: URL
@@ -729,6 +729,21 @@ struct OriginalVideoBlobUploadResult: Codable {
     let contentType: String?
     let contentDisposition: String?
     let etag: String?
+}
+
+struct OriginalVideoAttachResponse: Codable {
+    struct Asset: Codable {
+        struct Renditions: Codable {
+            let original: StoryMediaRendition?
+        }
+
+        let renditions: Renditions?
+    }
+
+    let ok: Bool
+    let storyId: String
+    let attachmentState: String?
+    let asset: Asset?
 }
 
 struct StoryStatusResponse: Codable {
