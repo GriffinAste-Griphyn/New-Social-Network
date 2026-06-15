@@ -6,6 +6,7 @@ struct UBEYEApp: App {
 
     @StateObject private var api: APIClient
     @StateObject private var auth: AuthStore
+    @StateObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var push: PushNotificationStore
 
     init() {
@@ -13,6 +14,7 @@ struct UBEYEApp: App {
         let push = PushNotificationStore()
         _api = StateObject(wrappedValue: api)
         _auth = StateObject(wrappedValue: AuthStore())
+        _pendingStoryUploads = StateObject(wrappedValue: PendingStoryUploadStore())
         _push = StateObject(wrappedValue: push)
 
         AppDelegate.onDeviceToken = { deviceToken in
@@ -32,6 +34,7 @@ struct UBEYEApp: App {
             RootView()
                 .environmentObject(api)
                 .environmentObject(auth)
+                .environmentObject(pendingStoryUploads)
                 .environmentObject(push)
                 .task {
                     await auth.restoreSession(api: api)
