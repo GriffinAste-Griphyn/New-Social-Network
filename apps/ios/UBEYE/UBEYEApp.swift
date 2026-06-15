@@ -7,6 +7,7 @@ struct UBEYEApp: App {
     @StateObject private var api: APIClient
     @StateObject private var auth: AuthStore
     @StateObject private var mediaEngine: MediaEngine
+    @StateObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var push: PushNotificationStore
 
     init() {
@@ -15,6 +16,7 @@ struct UBEYEApp: App {
         _api = StateObject(wrappedValue: api)
         _auth = StateObject(wrappedValue: AuthStore())
         _mediaEngine = StateObject(wrappedValue: MediaEngine())
+        _pendingStoryUploads = StateObject(wrappedValue: PendingStoryUploadStore())
         _push = StateObject(wrappedValue: push)
 
         AppDelegate.onDeviceToken = { deviceToken in
@@ -35,6 +37,7 @@ struct UBEYEApp: App {
                 .environmentObject(api)
                 .environmentObject(auth)
                 .environmentObject(mediaEngine)
+                .environmentObject(pendingStoryUploads)
                 .environmentObject(push)
                 .task {
                     await auth.restoreSession(api: api)

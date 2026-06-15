@@ -52,6 +52,13 @@ struct MainTabView: View {
                     },
                     onDiscoverTap: {
                         selectedTab = .discover
+                    },
+                    onPendingUploadRetried: { response in
+                        storyUploadCoordinator.register(
+                            response,
+                            api: api,
+                            notice: storyUploadNotice
+                        )
                     }
                 )
             case .following:
@@ -61,6 +68,11 @@ struct MainTabView: View {
                     quotedReply: pendingQuotedReply,
                     clearQuotedReply: {
                         pendingQuotedReply = nil
+                    },
+                    onPendingUploadStarted: {
+                        pendingQuotedReply = nil
+                        selectedTab = .home
+                        storyUploadNotice.showPosting()
                     },
                     onUploadRegistered: { response in
                         pendingQuotedReply = nil
@@ -101,6 +113,7 @@ struct MainTabView: View {
 @MainActor
 final class StoryUploadNoticeStore: ObservableObject {
     enum State: Equatable {
+        case posting
         case processing
         case posted
         case review(String?)
@@ -111,6 +124,8 @@ final class StoryUploadNoticeStore: ObservableObject {
 
     var title: String {
         switch state {
+        case .posting:
+            "Posting to your story"
         case .processing:
             "Added to your story"
         case .posted:
@@ -124,6 +139,8 @@ final class StoryUploadNoticeStore: ObservableObject {
 
     var message: String {
         switch state {
+        case .posting:
+            "Your story is visible locally while the upload finishes."
         case .processing:
             "Your video is visible in My Story and will play after processing finishes."
         case .posted:
@@ -137,6 +154,8 @@ final class StoryUploadNoticeStore: ObservableObject {
 
     var systemImage: String {
         switch state {
+        case .posting:
+            "arrow.up.circle.fill"
         case .processing:
             "arrow.triangle.2.circlepath"
         case .posted:
@@ -149,7 +168,12 @@ final class StoryUploadNoticeStore: ObservableObject {
     }
 
     var isProcessing: Bool {
-        state == .processing
+        state == .posting || state == .processing
+    }
+
+    func showPosting() {
+        dismissTask?.cancel()
+        state = .posting
     }
 
     func showProcessing() {

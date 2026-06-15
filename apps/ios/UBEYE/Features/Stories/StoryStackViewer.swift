@@ -35,20 +35,40 @@ final class StoryStackStore: ObservableObject {
     private var impressionStartedAt = Date()
     private var lastImpressionStoryId: String?
 
-    func load(storyId: String, api: APIClient, mediaEngine: MediaEngine) async {
+    func load(
+        storyId: String,
+        api: APIClient,
+        mediaEngine: MediaEngine,
+        pendingUploads: PendingStoryUploadStore? = nil,
+        account: MobileAccount? = nil
+    ) async {
         if stack == nil, let cached = await api.cachedStoryStackForDisplay(storyId: storyId) {
-            applyLoadedStack(cached.story)
-            mediaEngine.prepare(stack: cached.story, around: 0, activeURL: nil)
+            let displayStack = pendingUploads?.storyStackByMergingPendingUploads(into: cached.story, account: account) ?? cached.story
+            applyLoadedStack(displayStack)
+            mediaEngine.prepare(stack: displayStack, around: 0, activeURL: nil)
+        } else if stack == nil,
+                  storyId == "my-story",
+                  let pendingStack = pendingUploads?.storyStackByMergingPendingUploads(into: nil, account: account) {
+            applyLoadedStack(pendingStack)
+            mediaEngine.prepare(stack: pendingStack, around: 0, activeURL: nil)
         }
 
         isLoading = stack == nil
         error = nil
         do {
             let response = try await api.storyStack(storyId: storyId, refresh: true)
-            applyLoadedStack(response.story)
-            mediaEngine.prepare(stack: response.story, around: 0, activeURL: nil)
+            let displayStack = pendingUploads?.storyStackByMergingPendingUploads(into: response.story, account: account) ?? response.story
+            applyLoadedStack(displayStack)
+            mediaEngine.prepare(stack: displayStack, around: 0, activeURL: nil)
         } catch {
-            self.error = error.localizedDescription
+            if storyId == "my-story",
+               let pendingStack = pendingUploads?.storyStackByMergingPendingUploads(into: stack, account: account) {
+                applyLoadedStack(pendingStack)
+                mediaEngine.prepare(stack: pendingStack, around: 0, activeURL: nil)
+                self.error = nil
+            } else {
+                self.error = error.localizedDescription
+            }
         }
         isLoading = false
     }
@@ -57,6 +77,27 @@ final class StoryStackStore: ObservableObject {
         stack = nextStack
         impressionStartedAt = Date()
         lastImpressionStoryId = nextStack.items.first?.id
+    }
+
+    func applyPendingUploads(
+        pendingUploads: PendingStoryUploadStore,
+        account: MobileAccount?,
+        mediaEngine: MediaEngine,
+        around index: Int
+    ) {
+        guard stack != nil || !pendingUploads.visibleUploads.isEmpty else {
+            return
+        }
+        guard let mergedStack = pendingUploads.storyStackByMergingPendingUploads(into: stack, account: account) else {
+            return
+        }
+
+        stack = mergedStack
+        if lastImpressionStoryId == nil {
+            lastImpressionStoryId = mergedStack.items.first?.id
+            impressionStartedAt = Date()
+        }
+        mediaEngine.prepare(stack: mergedStack, around: index, activeURL: nil)
     }
 
     func loadFollows(api: APIClient) async {
@@ -76,6 +117,10 @@ final class StoryStackStore: ObservableObject {
     }
 
     func recordImpression(item: StoryStackItem, completed: Bool, api: APIClient) async {
+        guard !PendingStoryUploadStore.isPendingStoryId(item.id) else {
+            return
+        }
+
         let viewedMs = max(0, Int(Date().timeIntervalSince(impressionStartedAt) * 1000))
         try? await api.recordStoryImpression(storyId: item.id, viewedMs: viewedMs, completed: completed)
     }
@@ -186,6 +231,10 @@ final class StoryStackStore: ObservableObject {
     }
 
     func delete(item: StoryStackItem, api: APIClient) async -> Bool {
+        guard !PendingStoryUploadStore.isPendingStoryId(item.id) else {
+            return false
+        }
+
         isPerformingAction = true
         defer { isPerformingAction = false }
         do {
@@ -244,6 +293,7 @@ struct StoryStackViewer: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var mediaEngine: MediaEngine
+    @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = StoryStackStore()
     @State private var index = 0
@@ -326,7 +376,13 @@ struct StoryStackViewer: View {
             mediaEngine.storyViewerDidAppear()
             let storyOpenMetadata = "id=\(route.id) source=\(String(describing: route.source))"
             let stackLoadInterval = MediaPerformance.beginInterval("story_open phase=stack_load \(storyOpenMetadata)")
-            await store.load(storyId: route.id, api: api, mediaEngine: mediaEngine)
+            await store.load(
+                storyId: route.id,
+                api: api,
+                mediaEngine: mediaEngine,
+                pendingUploads: route.id == "my-story" ? pendingStoryUploads : nil,
+                account: auth.account
+            )
             MediaPerformance.endInterval(
                 stackLoadInterval,
                 event: "story_open phase=stack_load \(storyOpenMetadata)",
@@ -337,7 +393,7 @@ struct StoryStackViewer: View {
                 await store.loadFollows(api: api)
             }
             if let item = store.stack?.items[safe: index] {
-                resetStoryTimer(for: item)
+                startStoryTimerIfNeeded(for: item)
             }
             if let stack = store.stack {
                 mediaEngine.prepare(stack: stack, around: index, activeURL: nil)
@@ -345,6 +401,19 @@ struct StoryStackViewer: View {
         }
         .onReceive(storyTimer) { now in
             updateStoryProgress(now: now)
+        }
+        .onReceive(pendingStoryUploads.$uploads) { _ in
+            guard route.id == "my-story" else {
+                return
+            }
+
+            store.applyPendingUploads(
+                pendingUploads: pendingStoryUploads,
+                account: auth.account,
+                mediaEngine: mediaEngine,
+                around: index
+            )
+            index = min(index, max((store.stack?.items.count ?? 1) - 1, 0))
         }
         .onChange(of: store.replyConfirmation) { _, confirmation in
             scheduleConfirmationDismiss(for: confirmation)
@@ -396,6 +465,7 @@ struct StoryStackViewer: View {
                     url: item.playbackMediaUrl,
                     highQualityUrl: MediaPlaybackQuality.highQualityCandidate(for: item),
                     thumbnailUrl: item.playbackThumbnailUrl,
+                    expectedDuration: displayDuration(for: item),
                     preloadUrls: adjacentVideoUrls(for: item),
                     playerPool: mediaEngine.storyVideoPlaybackPool,
                     showsThumbnailWhileLoading: true,
@@ -405,6 +475,9 @@ struct StoryStackViewer: View {
                             return
                         }
                         videoReadyItemId = item.id
+                        storyStartedAt = Date()
+                        storyProgress = 0
+                        storyProgressResetToken += 1
                     },
                     onProgress: { progress in
                         updateVideoStoryProgress(progress, item: item)
@@ -468,6 +541,9 @@ struct StoryStackViewer: View {
 
     private func storyChrome(stack: StoryStack, item: StoryStackItem) -> some View {
         ZStack {
+            storyChromeScrim(stack: stack)
+                .allowsHitTesting(false)
+
             storyTopChrome(stack: stack, item: item)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
@@ -507,6 +583,35 @@ struct StoryStackViewer: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
+    }
+
+    private func storyChromeScrim(stack: StoryStack) -> some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.56), location: 0),
+                    .init(color: .black.opacity(0.32), location: 0.52),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 148)
+
+            Spacer(minLength: 0)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.48), location: 0.5),
+                    .init(color: .black.opacity(0.76), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: isOwnStack(stack) || route.source == .discover ? 190 : 230)
+        }
+        .ignoresSafeArea()
     }
 
     private func storyTopChrome(stack: StoryStack, item: StoryStackItem) -> some View {
@@ -697,6 +802,7 @@ struct StoryStackViewer: View {
 
             StoryViewerActions(
                 isOwnStack: isOwnStack(stack),
+                canDeleteStory: !PendingStoryUploadStore.isPendingStoryId(item.id),
                 actionSize: storyActionSize,
                 isPerformingAction: store.isPerformingAction,
                 deleteStory: {
@@ -1032,6 +1138,7 @@ struct StoryStackViewer: View {
         startStoryTimerIfNeeded(for: item)
 
         if item.assetKind == .video {
+            updateVideoStoryTimer(now: now, item: item)
             return
         }
 
@@ -1060,6 +1167,35 @@ struct StoryStackViewer: View {
         finishCurrentItem(item)
     }
 
+    private func updateVideoStoryTimer(now: Date, item: StoryStackItem) {
+        guard videoReadyItemId == item.id else {
+            storyStartedAt = now
+            return
+        }
+
+        let duration = displayDuration(for: item)
+
+        if shouldPauseVideoPlayback {
+            storyStartedAt = now.addingTimeInterval(-storyProgress * duration)
+            return
+        }
+
+        let elapsedProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
+        let nextProgress = max(storyProgress, elapsedProgress)
+
+        if nextProgress >= 1 {
+            storyProgress = 1
+        } else if abs(nextProgress - storyProgress) >= 0.012 {
+            storyProgress = nextProgress
+        }
+
+        guard nextProgress >= 1, !didFinishCurrentItem else {
+            return
+        }
+
+        finishCurrentItem(item)
+    }
+
     private func updateVideoStoryProgress(_ progress: Double, item: StoryStackItem) {
         guard timedStoryId == item.id,
               videoReadyItemId == item.id,
@@ -1067,12 +1203,13 @@ struct StoryStackViewer: View {
             return
         }
 
-        let nextProgress = min(max(progress, 0), 1)
+        let nextProgress = max(storyProgress, min(max(progress, 0), 1))
         guard nextProgress >= 1 || abs(nextProgress - storyProgress) >= 0.012 else {
             return
         }
 
         storyProgress = nextProgress
+        storyStartedAt = Date().addingTimeInterval(-nextProgress * displayDuration(for: item))
     }
 
     private func finishVideoStory(_ item: StoryStackItem) {
@@ -1216,7 +1353,6 @@ private final class StoryTimelineProgressUIView: UIView {
     }
 
     private let segmentSpacing: CGFloat = 5
-    private let correctionThreshold: CGFloat = 0.045
     private var segments: [Segment] = []
     private var configuration = Configuration()
     private var didConfigure = false
@@ -1276,37 +1412,21 @@ private final class StoryTimelineProgressUIView: UIView {
 
         if needsHardReset {
             applyStaticProgress(activeProgress: next.activeProgress)
-            if !next.isPaused {
-                startActiveAnimation(from: next.activeProgress)
-            }
             didConfigure = true
             return
         }
 
         applyPassiveSegmentProgress()
 
-        if previous.isPaused != next.isPaused {
-            if next.isPaused {
-                freezeActiveAnimation()
-            } else {
-                startActiveAnimation(from: activePresentationProgress())
-            }
-            return
-        }
-
-        guard !next.isPaused else {
-            return
-        }
-
         if next.activeProgress >= 0.995 {
             setActiveProgress(1)
             return
         }
 
-        let presentationProgress = activePresentationProgress()
-        if abs(next.activeProgress - presentationProgress) > correctionThreshold ||
+        if previous.activeProgress != next.activeProgress ||
+            previous.isPaused != next.isPaused ||
             previous.activeDuration != next.activeDuration {
-            startActiveAnimation(from: next.activeProgress)
+            setActiveProgress(next.activeProgress)
         }
     }
 
@@ -1315,7 +1435,7 @@ private final class StoryTimelineProgressUIView: UIView {
         segments = (0..<count).map { _ in
             let segment = Segment()
             segment.container.masksToBounds = true
-            segment.background.backgroundColor = UIColor.white.withAlphaComponent(0.32).cgColor
+            segment.background.backgroundColor = UIColor.black.withAlphaComponent(0.3).cgColor
             segment.fill.backgroundColor = UIColor.white.cgColor
             segment.fill.anchorPoint = CGPoint(x: 0, y: 0.5)
             segment.container.addSublayer(segment.background)
@@ -1388,62 +1508,6 @@ private final class StoryTimelineProgressUIView: UIView {
         CATransaction.commit()
     }
 
-    private func activePresentationProgress() -> CGFloat {
-        guard segments.indices.contains(configuration.activeIndex) else {
-            return 0
-        }
-
-        let fill = segments[configuration.activeIndex].fill
-        let transform = fill.presentation()?.transform ?? fill.transform
-        return min(max(CGFloat(transform.m11), 0), 1)
-    }
-
-    private func startActiveAnimation(from rawProgress: CGFloat) {
-        guard segments.indices.contains(configuration.activeIndex) else {
-            return
-        }
-
-        let progress = min(max(rawProgress, 0), 1)
-        let fill = segments[configuration.activeIndex].fill
-        fill.removeAllAnimations()
-
-        if progress >= 0.995 {
-            setActiveProgress(1)
-            return
-        }
-
-        let duration = max(0.001, configuration.activeDuration * TimeInterval(1 - progress))
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        fill.transform = CATransform3DMakeScale(1, 1, 1)
-        CATransaction.commit()
-
-        let animation = CABasicAnimation(keyPath: "transform.scale.x")
-        animation.fromValue = progress
-        animation.toValue = 1
-        animation.duration = duration
-        animation.timingFunction = CAMediaTimingFunction(name: .linear)
-        animation.fillMode = .forwards
-        animation.isRemovedOnCompletion = false
-        fill.add(animation, forKey: "story-progress-fill")
-    }
-
-    private func freezeActiveAnimation() {
-        guard segments.indices.contains(configuration.activeIndex) else {
-            return
-        }
-
-        let progress = activePresentationProgress()
-        let fill = segments[configuration.activeIndex].fill
-        fill.removeAllAnimations()
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        fill.transform = CATransform3DMakeScale(progress, 1, 1)
-        CATransaction.commit()
-    }
-
     private func setActiveProgress(_ rawProgress: CGFloat) {
         guard segments.indices.contains(configuration.activeIndex) else {
             return
@@ -1454,7 +1518,9 @@ private final class StoryTimelineProgressUIView: UIView {
         fill.removeAllAnimations()
 
         CATransaction.begin()
-        CATransaction.setDisableActions(true)
+        CATransaction.setDisableActions(false)
+        CATransaction.setAnimationDuration(0.12)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .linear))
         fill.transform = CATransform3DMakeScale(progress, 1, 1)
         CATransaction.commit()
     }
@@ -2007,6 +2073,7 @@ private struct ReportStoryReasonView: View {
 
 private struct StoryViewerActions: View {
     let isOwnStack: Bool
+    let canDeleteStory: Bool
     let actionSize: CGFloat
     let isPerformingAction: Bool
     let deleteStory: () -> Void
@@ -2021,13 +2088,15 @@ private struct StoryViewerActions: View {
     var body: some View {
         HStack(spacing: 16) {
             if isOwnStack {
-                Button(action: deleteStory) {
-                    StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
+                if canDeleteStory {
+                    Button(action: deleteStory) {
+                        StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPerformingAction)
+                    .opacity(isPerformingAction ? 0.55 : 1)
+                    .accessibilityLabel("Delete story")
                 }
-                .buttonStyle(.plain)
-                .disabled(isPerformingAction)
-                .opacity(isPerformingAction ? 0.55 : 1)
-                .accessibilityLabel("Delete story")
             } else {
                 Button {
                     isActionDialogPresented = true
@@ -2087,6 +2156,7 @@ struct AutoPlayVideoPlayer: View {
     let url: URL
     let highQualityUrl: URL?
     let thumbnailUrl: URL?
+    let expectedDuration: TimeInterval?
     let preloadUrls: [URL]
     let playerPool: StoryVideoPlaybackPool?
     let showsThumbnailWhileLoading: Bool
@@ -2100,6 +2170,7 @@ struct AutoPlayVideoPlayer: View {
         url: URL,
         highQualityUrl: URL? = nil,
         thumbnailUrl: URL? = nil,
+        expectedDuration: TimeInterval? = nil,
         preloadUrls: [URL] = [],
         playerPool: StoryVideoPlaybackPool? = nil,
         showsThumbnailWhileLoading: Bool = true,
@@ -2111,6 +2182,7 @@ struct AutoPlayVideoPlayer: View {
         self.url = url
         self.highQualityUrl = highQualityUrl
         self.thumbnailUrl = thumbnailUrl
+        self.expectedDuration = expectedDuration
         self.preloadUrls = preloadUrls
         self.playerPool = playerPool
         self.showsThumbnailWhileLoading = showsThumbnailWhileLoading
@@ -2147,6 +2219,7 @@ struct AutoPlayVideoPlayer: View {
             playback.play(
                 url: url,
                 highQualityUrl: highQualityUrl,
+                expectedDuration: expectedDuration,
                 playerPool: playerPool,
                 isPaused: isPaused,
                 onReadyForPlayback: onReadyForPlayback,
@@ -2159,6 +2232,7 @@ struct AutoPlayVideoPlayer: View {
             playback.play(
                 url: nextURL,
                 highQualityUrl: highQualityUrl,
+                expectedDuration: expectedDuration,
                 playerPool: playerPool,
                 isPaused: isPaused,
                 onReadyForPlayback: onReadyForPlayback,
@@ -2171,6 +2245,7 @@ struct AutoPlayVideoPlayer: View {
             playback.play(
                 url: url,
                 highQualityUrl: nextURL,
+                expectedDuration: expectedDuration,
                 playerPool: playerPool,
                 isPaused: isPaused,
                 onReadyForPlayback: onReadyForPlayback,
@@ -2198,6 +2273,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var activeURL: URL?
     private var activeHighQualityURL: URL?
     private var activePlaybackURL: URL?
+    private var expectedDurationSeconds: TimeInterval?
     private var isPaused = false
     private var didFinishPlayback = false
     private var lastPublishedProgress = 0.0
@@ -2222,6 +2298,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     func play(
         url: URL,
         highQualityUrl: URL?,
+        expectedDuration: TimeInterval?,
         playerPool: StoryVideoPlaybackPool?,
         isPaused: Bool,
         onReadyForPlayback: @escaping () -> Void,
@@ -2232,6 +2309,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         self.onProgress = onProgress
         self.onFinished = onFinished
         self.isPaused = isPaused
+        expectedDurationSeconds = expectedDuration.map { max(0.001, $0) }
 
         if activeURL == url, activeHighQualityURL == highQualityUrl, player != nil {
             setPaused(isPaused)
@@ -2368,6 +2446,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTask?.cancel()
         revealTask = Task { @MainActor in
             var didLogItemReady = false
+            var itemReadySince: Date?
 
             for _ in 0..<300 {
                 guard self.player === player else {
@@ -2377,9 +2456,15 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 if player.currentItem?.status == .readyToPlay {
                     if !didLogItemReady {
                         didLogItemReady = true
+                        itemReadySince = Date()
                         MediaPerformance.measure("video_item_ready url=\(url.lastPathComponent)", since: startedAt)
                     }
                     attemptRevealVideo(reason: "item_ready")
+                    if !isReadyForPlayback,
+                       let itemReadySince,
+                       Date().timeIntervalSince(itemReadySince) >= 0.5 {
+                        attemptRevealVideo(reason: "item_ready_fallback", requiresDisplayLayer: false)
+                    }
                 } else if player.currentItem?.status == .failed {
                     handlePlaybackFailure(player: player, url: url, reason: "item_failed")
                     return
@@ -2401,12 +2486,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         attemptRevealVideo(reason: reason)
     }
 
-    private func attemptRevealVideo(reason: String) {
+    private func attemptRevealVideo(reason: String, requiresDisplayLayer: Bool = true) {
         guard !isReadyForPlayback else {
             return
         }
 
-        guard layerReadyForDisplay, isPlayerReadyToReveal else {
+        if requiresDisplayLayer, !layerReadyForDisplay {
+            return
+        }
+
+        guard isPlayerReadyToReveal else {
             return
         }
 
@@ -2564,14 +2653,17 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
     private func publishProgress(currentTime: CMTime, player: AVPlayer) {
         guard !didFinishPlayback,
-              let durationSeconds = finiteSeconds(player.currentItem?.duration),
+              let durationSeconds = finiteSeconds(player.currentItem?.duration) ?? expectedDurationSeconds,
               durationSeconds > 0 else {
             return
         }
 
-        let currentSeconds = max(0, currentTime.seconds)
+        let currentSeconds = currentTime.seconds.isFinite ? max(0, currentTime.seconds) : 0
         let progress = min(max(currentSeconds / durationSeconds, 0), 1)
-        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.012 else {
+        if !isReadyForPlayback && currentSeconds >= 0.05 {
+            attemptRevealVideo(reason: "progress", requiresDisplayLayer: false)
+        }
+        guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.004 else {
             return
         }
 
@@ -2673,6 +2765,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playbackStartedAt = nil
         activeHighQualityURL = nil
         activePlaybackURL = nil
+        expectedDurationSeconds = nil
         startupMetadata = ""
     }
 

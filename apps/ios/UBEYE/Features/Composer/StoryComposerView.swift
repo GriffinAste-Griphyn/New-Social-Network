@@ -206,7 +206,88 @@ final class StoryComposerStore: ObservableObject {
         return overlays
     }
 
-    func upload(api: APIClient) async -> StoryUploadResponse? {
+    private var pendingUploadDraft: PendingStoryUploadDraft {
+        PendingStoryUploadDraft(
+            caption: caption,
+            brandTags: brandTags,
+            textOverlay: textOverlay,
+            textOverlayPositionX: textOverlayPositionX,
+            textOverlayPositionY: textOverlayPositionY,
+            linkLabel: linkLabel,
+            linkUrl: normalizedLinkUrl,
+            linkOverlayPositionX: linkOverlayPositionX,
+            linkOverlayPositionY: linkOverlayPositionY,
+            quoteReplyId: quotedReply?.id ?? "",
+            quoteReplyPositionX: quoteReplyPositionX,
+            quoteReplyPositionY: quoteReplyPositionY
+        )
+    }
+
+    private var pendingTextOverlays: [StoryTextOverlay] {
+        var overlays: [StoryTextOverlay] = []
+        let trimmedText = textOverlay.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            overlays.append(
+                StoryTextOverlay(
+                    id: "pending-text-\(UUID().uuidString.lowercased())",
+                    label: trimmedText,
+                    positionX: textOverlayPositionX,
+                    positionY: textOverlayPositionY,
+                    kind: "text",
+                    href: nil,
+                    sourceInteractionId: nil,
+                    sourceActorName: nil,
+                    sourceActorHandle: nil,
+                    sourceActorAvatarUrl: nil
+                )
+            )
+        }
+
+        if let quotedReply {
+            overlays.append(
+                StoryTextOverlay(
+                    id: "pending-quote-\(quotedReply.id)",
+                    label: quotedReply.message,
+                    positionX: quoteReplyPositionX,
+                    positionY: quoteReplyPositionY,
+                    kind: "quote_reply",
+                    href: nil,
+                    sourceInteractionId: quotedReply.id,
+                    sourceActorName: quotedReply.actorName,
+                    sourceActorHandle: quotedReply.actorHandle,
+                    sourceActorAvatarUrl: quotedReply.actorAvatarUrl
+                )
+            )
+        }
+
+        let trimmedLinkLabel = linkLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLinkLabel.isEmpty,
+           !normalizedLinkUrl.isEmpty,
+           let url = URL(string: normalizedLinkUrl) {
+            overlays.append(
+                StoryTextOverlay(
+                    id: "pending-link-\(UUID().uuidString.lowercased())",
+                    label: trimmedLinkLabel,
+                    positionX: linkOverlayPositionX,
+                    positionY: linkOverlayPositionY,
+                    kind: "link",
+                    href: url,
+                    sourceInteractionId: nil,
+                    sourceActorName: nil,
+                    sourceActorHandle: nil,
+                    sourceActorAvatarUrl: nil
+                )
+            )
+        }
+
+        return overlays
+    }
+
+    func upload(
+        api: APIClient,
+        pendingUploads: PendingStoryUploadStore,
+        onPendingUploadStarted: (PendingStoryUpload) -> Void
+    ) async -> StoryUploadResponse? {
         guard let selectedMedia else {
             error = "Capture or choose story media first."
             return nil
@@ -218,46 +299,44 @@ final class StoryComposerStore: ObservableObject {
         normalizeLinkDraft()
         uploadStatus = "Preparing upload"
         var uploadResponse: StoryUploadResponse?
+        var didCreatePendingUpload = false
 
         do {
             switch selectedMedia {
             case .image(let upload):
-                uploadStatus = "Uploading image"
-                uploadResponse = try await api.uploadImageStory(
+                uploadStatus = "Posting"
+                let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
-                    caption: caption,
-                    brandTags: brandTags,
-                    textOverlay: textOverlay,
-                    textOverlayPositionX: textOverlayPositionX,
-                    textOverlayPositionY: textOverlayPositionY,
-                    linkLabel: linkLabel,
-                    linkUrl: normalizedLinkUrl,
-                    linkOverlayPositionX: linkOverlayPositionX,
-                    linkOverlayPositionY: linkOverlayPositionY,
-                    quoteReplyId: quotedReply?.id ?? "",
-                    quoteReplyPositionX: quoteReplyPositionX,
-                    quoteReplyPositionY: quoteReplyPositionY
+                    draft: pendingUploadDraft,
+                    textOverlays: pendingTextOverlays
                 )
+                didCreatePendingUpload = true
+                onPendingUploadStarted(pendingUpload)
+                clearUploadedDraft()
+                uploadResponse = try await pendingUploads.performUpload(id: pendingUpload.id, api: api)
             case .video(let video):
-                uploadResponse = try await uploadVideoStory(video: video, api: api)
+                uploadResponse = try await uploadVideoStory(
+                    video: video,
+                    api: api,
+                    pendingUploads: pendingUploads,
+                    onPendingUploadStarted: { pendingUpload in
+                        didCreatePendingUpload = true
+                        onPendingUploadStarted(pendingUpload)
+                    }
+                )
             }
 
             uploadStatus = uploadResponse?.processingStatus == "ready" ? "Story posted" : "Upload complete"
             api.invalidateMobileFeedCache()
             api.invalidateStoryStacks(ids: ["my-story"])
-            caption = ""
-            brandTags = ""
-            textOverlay = ""
-            textOverlayPositionX = 50
-            textOverlayPositionY = 68
-            linkUrl = ""
-            linkLabel = ""
-            linkOverlayPositionX = 50
-            linkOverlayPositionY = 78
-            clearQuotedReply()
-            self.selectedMedia = nil
+            clearUploadedDraft()
         } catch {
-            self.error = error.localizedDescription
+            if didCreatePendingUpload {
+                self.error = nil
+                uploadStatus = nil
+            } else {
+                self.error = error.localizedDescription
+            }
             if let lastUploadReport {
                 MediaPerformance.mark("video_upload_failed report=\(lastUploadReport)")
             }
@@ -267,7 +346,12 @@ final class StoryComposerStore: ObservableObject {
         return uploadResponse
     }
 
-    private func uploadVideoStory(video: StoryVideoUpload, api: APIClient) async throws -> StoryUploadResponse {
+    private func uploadVideoStory(
+        video: StoryVideoUpload,
+        api: APIClient,
+        pendingUploads: PendingStoryUploadStore,
+        onPendingUploadStarted: (PendingStoryUpload) -> Void
+    ) async throws -> StoryUploadResponse {
         var attempt = StoryVideoUploadAttempt()
 
         do {
@@ -298,111 +382,26 @@ final class StoryComposerStore: ObservableObject {
 
             attempt.begin(.prepareUpload)
             uploadStatus = attempt.phase.statusLabel
-            if preparedVideo.shouldUploadOriginalQuality {
-                let upload = try await api.prepareOriginalQualityVideoUpload(
-                    fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mov" : preparedVideo.url.lastPathComponent,
-                    fileURL: preparedVideo.url
-                )
-                let uploadedThumbnailData = await uploadOriginalQualityVideoThumbnailIfPossible(
-                    thumbnailData,
-                    upload: upload,
-                    api: api
-                )
-
-                attempt.begin(.videoUpload)
-                uploadStatus = attempt.phase.statusLabel
-                _ = try await api.uploadOriginalQualityVideoFile(
-                    fileURL: preparedVideo.url,
-                    upload: upload
-                )
-
-                attempt.begin(.completeStory)
-                uploadStatus = attempt.phase.statusLabel
-                let response = try await api.completeOriginalQualityVideoStory(
-                    upload: upload,
-                    fileURL: preparedVideo.url,
-                    caption: caption,
-                    brandTags: brandTags,
-                    textOverlay: textOverlay,
-                    textOverlayPositionX: textOverlayPositionX,
-                    textOverlayPositionY: textOverlayPositionY,
-                    linkLabel: linkLabel,
-                    linkUrl: normalizedLinkUrl,
-                    linkOverlayPositionX: linkOverlayPositionX,
-                    linkOverlayPositionY: linkOverlayPositionY,
-                    quoteReplyId: quotedReply?.id ?? "",
-                    quoteReplyPositionX: quoteReplyPositionX,
-                    quoteReplyPositionY: quoteReplyPositionY,
-                    durationMs: preparedVideo.durationMs,
-                    thumbnailData: uploadedThumbnailData
-                )
-
-                attempt.begin(.processing)
-                attempt.recordSuccess(processingStatus: response.processingStatus)
-                lastUploadReport = attempt.report
-                await MediaFileDiskCache.shared.storeLocalFile(
-                    sourceURL: preparedVideo.url,
-                    for: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
-                    kind: .video
-                )
-                return response
-            }
-
-            let upload = try await api.prepareVideoUpload(
-                fileName: preparedVideo.url.lastPathComponent.isEmpty ? "story-video.mp4" : preparedVideo.url.lastPathComponent,
-                byteSize: preparedVideo.byteSize,
-                maxDurationSeconds: maxVideoDurationSeconds
+            let pendingUpload = try pendingUploads.createVideoUpload(
+                sourceURL: preparedVideo.url,
+                thumbnailData: thumbnailData,
+                durationMs: preparedVideo.durationMs,
+                pipeline: preparedVideo.shouldUploadOriginalQuality ? .originalQualityVideo : .videoTus,
+                draft: pendingUploadDraft,
+                textOverlays: pendingTextOverlays
             )
-            attempt.attach(upload: upload)
-            lastUploadReport = attempt.report
+            onPendingUploadStarted(pendingUpload)
+            clearUploadedDraft()
 
-            attempt.begin(.thumbnailUpload)
-            uploadStatus = attempt.phase.statusLabel
-            let uploadedThumbnailData = await uploadVideoThumbnailIfPossible(
-                thumbnailData,
-                upload: upload,
-                api: api
-            )
             attempt.begin(.videoUpload)
             uploadStatus = attempt.phase.statusLabel
-            try await api.uploadVideoFile(
-                fileURL: preparedVideo.url,
-                upload: upload,
-                onRetry: { reason in
-                    attempt.recordRetry(reason)
-                    self.lastUploadReport = attempt.report
-                }
-            )
+            let response = try await pendingUploads.performUpload(id: pendingUpload.id, api: api)
 
             attempt.begin(.completeStory)
             uploadStatus = attempt.phase.statusLabel
-            let response = try await api.completeVideoStory(
-                upload: upload,
-                fileURL: preparedVideo.url,
-                caption: caption,
-                brandTags: brandTags,
-                textOverlay: textOverlay,
-                textOverlayPositionX: textOverlayPositionX,
-                textOverlayPositionY: textOverlayPositionY,
-                linkLabel: linkLabel,
-                linkUrl: normalizedLinkUrl,
-                linkOverlayPositionX: linkOverlayPositionX,
-                linkOverlayPositionY: linkOverlayPositionY,
-                quoteReplyId: quotedReply?.id ?? "",
-                quoteReplyPositionX: quoteReplyPositionX,
-                quoteReplyPositionY: quoteReplyPositionY,
-                durationMs: preparedVideo.durationMs,
-                thumbnailData: uploadedThumbnailData
-            )
-
             attempt.begin(.processing)
             attempt.recordSuccess(processingStatus: response.processingStatus)
             lastUploadReport = attempt.report
-            await MediaFileDiskCache.shared.storeLocalFile(
-                sourceURL: preparedVideo.url,
-                for: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
-                kind: .video
-            )
             startOriginalRenditionUploadIfNeeded(
                 preparedVideo: preparedVideo,
                 response: response,
@@ -913,6 +912,20 @@ final class StoryComposerStore: ObservableObject {
         quoteReplyPositionY = 58
     }
 
+    private func clearUploadedDraft() {
+        caption = ""
+        brandTags = ""
+        textOverlay = ""
+        textOverlayPositionX = 50
+        textOverlayPositionY = 68
+        linkUrl = ""
+        linkLabel = ""
+        linkOverlayPositionX = 50
+        linkOverlayPositionY = 78
+        clearQuotedReply()
+        selectedMedia = nil
+    }
+
     private func normalizedUrlString(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -939,6 +952,7 @@ final class StoryComposerStore: ObservableObject {
 
 struct StoryComposerView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var camera = CameraController()
     @StateObject private var store = StoryComposerStore()
     @State private var photoPickerItem: PhotosPickerItem?
@@ -950,6 +964,7 @@ struct StoryComposerView: View {
     @FocusState private var isOverlayInputFocused: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
+    var onPendingUploadStarted: () -> Void = {}
     var onUploadRegistered: (StoryUploadResponse) -> Void = { _ in }
 
     private let maxVideoSegments = 6
@@ -1554,7 +1569,14 @@ struct StoryComposerView: View {
             return
         }
 
-        if let response = await store.upload(api: api) {
+        if let response = await store.upload(
+            api: api,
+            pendingUploads: pendingStoryUploads,
+            onPendingUploadStarted: { _ in
+                stagedMedia = nil
+                onPendingUploadStarted()
+            }
+        ) {
             stagedMedia = nil
             onUploadRegistered(response)
         }
