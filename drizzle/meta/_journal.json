@@ -253,6 +253,13 @@
       "when": 1781100000000,
       "tag": "0035_story_original_renditions",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781650474906,
+      "tag": "0036_the_daily",
+      "breakpoints": true
     }
   ]
 }

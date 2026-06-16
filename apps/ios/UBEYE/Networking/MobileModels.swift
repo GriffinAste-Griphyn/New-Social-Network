@@ -97,6 +97,66 @@ struct NotificationPreferencesResponse: Codable {
     let preferences: [NotificationPreference]
 }
 
+struct DailySummary: Codable, Equatable {
+    let poolDate: String
+    let status: String
+    let adsRequired: Int
+    let winnerCount: Int
+    let poolSharePercent: Int
+    let estimatedPoolCents: Int
+    let periodStartsAt: String
+    let periodEndsAt: String
+    let drawAt: String
+    let timeZone: String
+    let rolloverLabel: String
+    let drawLabel: String
+    let officialRulesUrl: String
+    let appleDisclaimer: String
+}
+
+struct DailyAd: Codable, Identifiable, Equatable {
+    let campaignId: String
+    let position: Int
+    let brandName: String
+    let videoUrl: URL
+    let thumbnailUrl: URL?
+    let destinationUrl: URL
+    let ctaText: String
+    let viewStatus: String?
+    let lastPositionMs: Int?
+    let durationMs: Int?
+
+    var id: String { "\(campaignId)-\(position)" }
+}
+
+struct DailySession: Codable, Equatable, Identifiable {
+    let id: String
+    let poolDate: String
+    let status: String
+    let currentAdIndex: Int
+    let currentPositionMs: Int
+    let ads: [DailyAd]
+}
+
+struct DailyEntry: Codable, Equatable {
+    let id: String
+    let poolDate: String
+    let status: String
+    let createdAt: String
+}
+
+struct DailyStatusResponse: Codable, Equatable {
+    let ok: Bool
+    let daily: DailySummary
+    let activeSession: DailySession?
+    let entry: DailyEntry?
+}
+
+struct DailyClickResponse: Codable {
+    let ok: Bool
+    let destinationUrl: URL
+}
+
 struct SessionPreview: Codable {
     let displayName: String
     let handle: String
@@ -272,6 +332,24 @@ struct CreatorStatsResponse: Codable {
 
     struct Stats: Codable {
         struct Story: Codable, Identifiable, Hashable {
+            struct Comment: Codable, Identifiable, Hashable {
+                struct Actor: Codable, Hashable {
+                    let id: String
+                    let name: String
+                    let handle: String
+                    let imageUrl: URL?
+                }
+
+                let id: String
+                let storyId: String
+                let actor: Actor
+                let body: String?
+                let mediaUrl: URL?
+                let mediaThumbnailUrl: URL?
+                let mediaAssetKind: SocialAssetKind?
+                let createdAt: String
+            }
+
             let id: String
             let assetKind: SocialAssetKind
             let mediaUrl: URL
@@ -290,6 +368,53 @@ struct CreatorStatsResponse: Codable {
             let earningsCents: Int
             let pendingEarningsCents: Int
             let paidEarningsCents: Int
+            let commentItems: [Comment]
+
+            private enum CodingKeys: String, CodingKey {
+                case id
+                case assetKind
+                case mediaUrl
+                case thumbnailUrl
+                case caption
+                case status
+                case createdAt
+                case expiresAt
+                case views
+                case uniqueViewers
+                case completedViews
+                case completionRate
+                case averageViewedSeconds
+                case comments
+                case replies
+                case earningsCents
+                case pendingEarningsCents
+                case paidEarningsCents
+                case commentItems
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+
+                id = try container.decode(String.self, forKey: .id)
+                assetKind = try container.decode(SocialAssetKind.self, forKey: .assetKind)
+                mediaUrl = try container.decode(URL.self, forKey: .mediaUrl)
+                thumbnailUrl = try container.decodeIfPresent(URL.self, forKey: .thumbnailUrl)
+                caption = try container.decodeIfPresent(String.self, forKey: .caption)
+                status = try container.decode(String.self, forKey: .status)
+                createdAt = try container.decode(String.self, forKey: .createdAt)
+                expiresAt = try container.decode(String.self, forKey: .expiresAt)
+                views = try container.decode(Int.self, forKey: .views)
+                uniqueViewers = try container.decode(Int.self, forKey: .uniqueViewers)
+                completedViews = try container.decode(Int.self, forKey: .completedViews)
+                completionRate = try container.decode(Int.self, forKey: .completionRate)
+                averageViewedSeconds = try container.decode(Double.self, forKey: .averageViewedSeconds)
+                comments = try container.decode(Int.self, forKey: .comments)
+                replies = try container.decode(Int.self, forKey: .replies)
+                earningsCents = try container.decode(Int.self, forKey: .earningsCents)
+                pendingEarningsCents = try container.decode(Int.self, forKey: .pendingEarningsCents)
+                paidEarningsCents = try container.decode(Int.self, forKey: .paidEarningsCents)
+                commentItems = try container.decodeIfPresent([Comment].self, forKey: .commentItems) ?? []
+            }
         }
 
         let followerCount: Int

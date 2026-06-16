@@ -183,6 +183,9 @@ struct ProfileView: View {
                 .padding(.bottom, 8)
             Divider().padding(.horizontal, 16)
 
+            NavigationLink(destination: DailyView()) {
+                accountRow(icon: "play.rectangle.on.rectangle", title: "The Daily", subtitle: "Watch 5 sponsor videos for today's pool")
+            }
             NavigationLink(destination: CreatorStatsDashboardView()) {
                 accountRow(icon: "chart.bar.xaxis", title: "Creator stats", subtitle: "Views, comments, and earnings")
             }

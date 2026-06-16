@@ -11,6 +11,7 @@ import {
   brandMatchEvents,
   brandFundingProfiles,
   brandFundingTargets,
+  dailyCampaigns,
   stories,
   users,
 } from "@/lib/db/schema"
@@ -24,6 +25,7 @@ export type AdvertiserPaymentMethod =
   typeof advertiserPaymentMethods.$inferSelect
 export type AdvertiserWalletTransaction =
   typeof advertiserWalletTransactions.$inferSelect
+export type DailyCampaign = typeof dailyCampaigns.$inferSelect
 export type AdvertiserPayoutReport = {
   id: string
   creatorId: string
@@ -46,6 +48,7 @@ export type AdvertiserWorkspace = {
   paymentMethod: AdvertiserPaymentMethod | null
   transactions: AdvertiserWalletTransaction[]
   payoutReports: AdvertiserPayoutReport[]
+  dailyCampaigns: DailyCampaign[]
 }
 
 function toNumber(value: DbNumber) {
@@ -106,7 +109,14 @@ export async function getAdvertiserWorkspaceForUser(
       ),
     )
 
-  const [paidTotal, paymentMethod, targets, transactions, payoutReports] =
+  const [
+    paidTotal,
+    paymentMethod,
+    targets,
+    transactions,
+    payoutReports,
+    dailyCampaignRows,
+  ] =
     await Promise.all([
       db
         .select({
@@ -169,6 +179,12 @@ export async function getAdvertiserWorkspaceForUser(
         .where(eq(brandMatchEvents.advertiserAccountId, advertiserAccount.id))
         .orderBy(desc(brandMatchEvents.createdAt))
         .limit(12),
+      db
+        .select()
+        .from(dailyCampaigns)
+        .where(eq(dailyCampaigns.advertiserAccountId, advertiserAccount.id))
+        .orderBy(desc(dailyCampaigns.createdAt))
+        .limit(20),
     ])
 
   return {
@@ -180,6 +196,7 @@ export async function getAdvertiserWorkspaceForUser(
     totalPaidCents: toNumber(paidTotal[0]?.amountCents),
     paymentMethod: paymentMethod[0] ?? null,
     transactions,
+    dailyCampaigns: dailyCampaignRows,
     payoutReports: payoutReports.map((report) => ({
       ...report,
       amountCents:
