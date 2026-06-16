@@ -34,6 +34,7 @@
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
+		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
 		E7288E47377376D238B7C1CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1427E7CB5130FC83F36A8F19 /* Assets.xcassets */; };
 		EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */; };
 		ED73DCACD198363C47B0C2E3 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B74604130A946A9568F391B /* CameraController.swift */; };
@@ -66,6 +67,7 @@
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3B406ECDBADF19D651536B10 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		40C1081F0804D1398CE2B1AE /* UBEYETests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UBEYETests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		534A0877FD4FC81764C849C9 /* DailyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyView.swift; sourceTree = "<group>"; };
 		5CEB3E2F66807A7319AD96A0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		647BEC924990E8681DB0CA40 /* StoryUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryUploadCoordinator.swift; sourceTree = "<group>"; };
 		6C41C9A89DCD2F208021A68A /* AuthStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthStore.swift; sourceTree = "<group>"; };
@@ -154,6 +156,7 @@
 			isa = PBXGroup;
 			children = (
 				21255BE86F573D35C67EFC00 /* CreatorScreens.swift */,
+				534A0877FD4FC81764C849C9 /* DailyView.swift */,
 				CEFA619704F081F3123B00D7 /* ProfileView.swift */,
 			);
 			path = Profile;
@@ -327,6 +330,7 @@
 				209C07B0805239729E7550C9 /* AuthView.swift in Sources */,
 				ED73DCACD198363C47B0C2E3 /* CameraController.swift in Sources */,
 				8EEF12AD65B7A84BDFA8DB66 /* CreatorScreens.swift in Sources */,
+				E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */,
 				456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */,
 				C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */,
 				41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */,

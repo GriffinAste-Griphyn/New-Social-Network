@@ -97,6 +97,66 @@ struct NotificationPreferencesResponse: Codable {
     let preferences: [NotificationPreference]
 }
 
+struct DailySummary: Codable, Equatable {
+    let poolDate: String
+    let status: String
+    let adsRequired: Int
+    let winnerCount: Int
+    let poolSharePercent: Int
+    let estimatedPoolCents: Int
+    let periodStartsAt: String
+    let periodEndsAt: String
+    let drawAt: String
+    let timeZone: String
+    let rolloverLabel: String
+    let drawLabel: String
+    let officialRulesUrl: String
+    let appleDisclaimer: String
+}
+
+struct DailyAd: Codable, Identifiable, Equatable {
+    let campaignId: String
+    let position: Int
+    let brandName: String
+    let videoUrl: URL
+    let thumbnailUrl: URL?
+    let destinationUrl: URL
+    let ctaText: String
+    let viewStatus: String?
+    let lastPositionMs: Int?
+    let durationMs: Int?
+
+    var id: String { "\(campaignId)-\(position)" }
+}
+
+struct DailySession: Codable, Equatable, Identifiable {
+    let id: String
+    let poolDate: String
+    let status: String
+    let currentAdIndex: Int
+    let currentPositionMs: Int
+    let ads: [DailyAd]
+}
+
+struct DailyEntry: Codable, Equatable {
+    let id: String
+    let poolDate: String
+    let status: String
+    let createdAt: String
+}
+
+struct DailyStatusResponse: Codable, Equatable {
+    let ok: Bool
+    let daily: DailySummary
+    let activeSession: DailySession?
+    let entry: DailyEntry?
+}
+
+struct DailyClickResponse: Codable {
+    let ok: Bool
+    let destinationUrl: URL
+}
+
 struct SessionPreview: Codable {
     let displayName: String
     let handle: String

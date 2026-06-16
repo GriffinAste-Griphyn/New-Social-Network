@@ -267,6 +267,13 @@
       "when": 1781368800000,
       "tag": "0037_story_video_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781650474906,
+      "tag": "0036_the_daily",
+      "breakpoints": true
     }
   ]
 }

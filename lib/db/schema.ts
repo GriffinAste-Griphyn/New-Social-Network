@@ -227,6 +227,44 @@ export const brandMatchEventStatus = pgEnum("brand_match_event_status", [
   "charged",
   "paid",
 ])
+export const dailyCampaignStatus = pgEnum("daily_campaign_status", [
+  "draft",
+  "pending_review",
+  "active",
+  "paused",
+  "completed",
+  "rejected",
+])
+export const dailySessionStatus = pgEnum("daily_session_status", [
+  "started",
+  "paused",
+  "completed",
+  "abandoned",
+])
+export const dailyAdViewStatus = pgEnum("daily_ad_view_status", [
+  "pending",
+  "started",
+  "completed",
+  "skipped",
+])
+export const dailyPoolStatus = pgEnum("daily_pool_status", [
+  "open",
+  "drawing",
+  "drawn",
+  "cancelled",
+])
+export const dailyEntryStatus = pgEnum("daily_entry_status", [
+  "eligible",
+  "held",
+  "void",
+])
+export const dailyWinnerStatus = pgEnum("daily_winner_status", [
+  "pending",
+  "approved",
+  "paid",
+  "held",
+  "void",
+])
 
 export const users = pgTable(
   "users",
@@ -1340,3 +1378,228 @@ export const earningsLedger = pgTable("earnings_ledger", {
   ),
   uniqueIndex("earnings_ledger_stripe_transfer_idx").on(table.stripeTransferId),
 ])
+
+export const dailyCampaigns = pgTable(
+  "daily_campaigns",
+  {
+    id: text("id").primaryKey(),
+    advertiserAccountId: text("advertiser_account_id")
+      .notNull()
+      .references(() => advertiserAccounts.id),
+    name: text("name").notNull(),
+    brandName: text("brand_name").notNull(),
+    status: dailyCampaignStatus("status").notNull().default("draft"),
+    videoUrl: text("video_url").notNull(),
+    thumbnailUrl: text("thumbnail_url"),
+    destinationUrl: text("destination_url").notNull(),
+    ctaText: text("cta_text").notNull().default("Learn more"),
+    targetingSummary: text("targeting_summary"),
+    dailyBudgetCents: integer("daily_budget_cents").notNull(),
+    totalBudgetCents: integer("total_budget_cents"),
+    maxDailyImpressions: integer("max_daily_impressions"),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    reviewNotes: text("review_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("daily_campaigns_account_idx").on(
+      table.advertiserAccountId,
+      table.createdAt,
+    ),
+    index("daily_campaigns_active_idx").on(
+      table.status,
+      table.startsAt,
+      table.endsAt,
+    ),
+  ],
+)
+
+export const dailySessions = pgTable(
+  "daily_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    poolDate: text("pool_date").notNull(),
+    status: dailySessionStatus("status").notNull().default("started"),
+    currentAdIndex: integer("current_ad_index").notNull().default(0),
+    currentPositionMs: integer("current_position_ms").notNull().default(0),
+    eligibilityAcceptedAt: timestamp("eligibility_accepted_at", {
+      withTimezone: true,
+    }),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_sessions_user_pool_date_idx").on(
+      table.userId,
+      table.poolDate,
+    ),
+    index("daily_sessions_pool_date_idx").on(table.poolDate, table.status),
+  ],
+)
+
+export const dailySessionAds = pgTable(
+  "daily_session_ads",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => dailySessions.id),
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => dailyCampaigns.id),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_session_ads_position_idx").on(
+      table.sessionId,
+      table.position,
+    ),
+    index("daily_session_ads_campaign_idx").on(table.campaignId),
+  ],
+)
+
+export const dailyAdViews = pgTable(
+  "daily_ad_views",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => dailySessions.id),
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => dailyCampaigns.id),
+    position: integer("position").notNull(),
+    status: dailyAdViewStatus("status").notNull().default("pending"),
+    lastPositionMs: integer("last_position_ms").notNull().default(0),
+    durationMs: integer("duration_ms"),
+    quartiles: jsonb("quartiles").notNull().default({}),
+    clickCount: integer("click_count").notNull().default(0),
+    clickedAt: timestamp("clicked_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_ad_views_position_idx").on(
+      table.sessionId,
+      table.position,
+    ),
+    index("daily_ad_views_campaign_created_idx").on(
+      table.campaignId,
+      table.createdAt,
+    ),
+  ],
+)
+
+export const dailyPools = pgTable(
+  "daily_pools",
+  {
+    id: text("id").primaryKey(),
+    poolDate: text("pool_date").notNull(),
+    status: dailyPoolStatus("status").notNull().default("open"),
+    fundsCents: integer("funds_cents").notNull().default(0),
+    payoutPoolCents: integer("payout_pool_cents").notNull().default(0),
+    winnerCount: integer("winner_count").notNull().default(5),
+    periodStartsAt: timestamp("period_starts_at", {
+      withTimezone: true,
+    }).notNull(),
+    periodEndsAt: timestamp("period_ends_at", { withTimezone: true }).notNull(),
+    drawAt: timestamp("draw_at", { withTimezone: true }).notNull(),
+    drawnAt: timestamp("drawn_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_pools_pool_date_idx").on(table.poolDate),
+    index("daily_pools_draw_idx").on(table.status, table.drawAt),
+  ],
+)
+
+export const dailyPoolEntries = pgTable(
+  "daily_pool_entries",
+  {
+    id: text("id").primaryKey(),
+    poolDate: text("pool_date").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => dailySessions.id),
+    status: dailyEntryStatus("status").notNull().default("eligible"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_pool_entries_user_pool_date_idx").on(
+      table.userId,
+      table.poolDate,
+    ),
+    uniqueIndex("daily_pool_entries_session_idx").on(table.sessionId),
+    index("daily_pool_entries_pool_date_idx").on(table.poolDate, table.status),
+  ],
+)
+
+export const dailyWinners = pgTable(
+  "daily_winners",
+  {
+    id: text("id").primaryKey(),
+    poolId: text("pool_id")
+      .notNull()
+      .references(() => dailyPools.id),
+    poolDate: text("pool_date").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    entryId: text("entry_id")
+      .notNull()
+      .references(() => dailyPoolEntries.id),
+    amountCents: integer("amount_cents").notNull(),
+    status: dailyWinnerStatus("status").notNull().default("approved"),
+    earningsLedgerId: text("earnings_ledger_id").references(
+      () => earningsLedger.id,
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("daily_winners_pool_user_idx").on(table.poolId, table.userId),
+    uniqueIndex("daily_winners_entry_idx").on(table.entryId),
+    index("daily_winners_user_created_idx").on(table.userId, table.createdAt),
+  ],
+)

@@ -10,6 +10,7 @@ const envSchema = z.object({
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  DAILY_DRAW_SECRET: z.string().min(16).optional(),
   APNS_KEY_ID: z.string().min(1).optional(),
   APNS_TEAM_ID: z.string().min(1).optional(),
   APNS_BUNDLE_ID: z.string().min(1).optional(),

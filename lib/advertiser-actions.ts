@@ -13,6 +13,7 @@ import {
   updateAdvertiserStripeCustomer,
   updateBrandFundingProfile,
 } from "@/lib/advertiser-store"
+import { createDailyCampaign } from "@/lib/daily"
 import { env } from "@/lib/env"
 import {
   assertSameOriginAction,
@@ -58,6 +59,37 @@ const fundingSchema = z.object({
   amountDollars: z.coerce.number().min(25).max(250_000),
 })
 
+const dailyCampaignSchema = z
+  .object({
+    name: z.string().trim().min(2).max(120),
+    brandName: z.string().trim().min(2).max(120),
+    status: z.enum(["draft", "pending_review", "active", "paused"]),
+    videoUrl: z.string().trim().pipe(z.url()),
+    thumbnailUrl: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value || null)
+      .pipe(z.url().nullable()),
+    destinationUrl: z.string().trim().pipe(z.url()),
+    ctaText: z.string().trim().min(2).max(40).default("Learn more"),
+    targetingSummary: z
+      .string()
+      .trim()
+      .max(1_000)
+      .optional()
+      .transform((value) => value || null),
+    dailyBudgetDollars: z.coerce.number().min(25).max(250_000),
+    totalBudgetDollars: z.coerce.number().min(0).max(10_000_000).optional(),
+    maxDailyImpressions: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    startsAt: z.string().trim().min(1),
+    endsAt: z.string().trim().min(1),
+  })
+  .refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
+    message: "End date must be after start date.",
+    path: ["endsAt"],
+  })
+
 function buildErrorUrl(message: string) {
   return `/advertiser?error=${encodeURIComponent(message)}`
 }
@@ -98,6 +130,26 @@ function dollarsToCents(value: number | undefined) {
   }
 
   return Math.round(value * 100)
+}
+
+function requiredDollarsToCents(value: number) {
+  return Math.round(value * 100)
+}
+
+function optionalPositiveDollarsToCents(value: number | undefined) {
+  if (!value || value <= 0) {
+    return null
+  }
+
+  return Math.round(value * 100)
+}
+
+function optionalPositiveInteger(value: number | undefined) {
+  if (!value || value <= 0) {
+    return null
+  }
+
+  return value
 }
 
 function splitList(value: string | null | undefined) {
@@ -284,6 +336,64 @@ export async function saveBrandFundingProfileAction(formData: FormData) {
 
   revalidatePath("/advertiser")
   redirect("/advertiser?tab=rules&saved=preferences")
+}
+
+export async function createDailyCampaignAction(formData: FormData) {
+  await enforceAdvertiserOrigin()
+  const session = await requireSession()
+  await enforceAdvertiserRateLimit("web:advertiser:create-daily-campaign", session.id)
+  const workspace = await getAdvertiserWorkspaceForUser(session.id)
+
+  if (!workspace) {
+    redirect(buildErrorUrl("Create an advertiser account before adding Daily campaigns."))
+  }
+
+  const parsed = dailyCampaignSchema.safeParse({
+    name: formData.get("name"),
+    brandName: formData.get("brandName"),
+    status: formData.get("status"),
+    videoUrl: formData.get("videoUrl"),
+    thumbnailUrl: formData.get("thumbnailUrl"),
+    destinationUrl: formData.get("destinationUrl"),
+    ctaText: formData.get("ctaText"),
+    targetingSummary: formData.get("targetingSummary"),
+    dailyBudgetDollars: formData.get("dailyBudgetDollars"),
+    totalBudgetDollars: formData.get("totalBudgetDollars"),
+    maxDailyImpressions: formData.get("maxDailyImpressions"),
+    startsAt: formData.get("startsAt"),
+    endsAt: formData.get("endsAt"),
+  })
+
+  if (!parsed.success) {
+    const message =
+      parsed.error.issues[0]?.message ?? "Check the Daily campaign details."
+
+    redirect(buildErrorUrl(message))
+  }
+
+  await createDailyCampaign({
+    advertiserAccountId: workspace.account.id,
+    name: parsed.data.name,
+    brandName: parsed.data.brandName,
+    status: parsed.data.status,
+    videoUrl: parsed.data.videoUrl,
+    thumbnailUrl: parsed.data.thumbnailUrl,
+    destinationUrl: parsed.data.destinationUrl,
+    ctaText: parsed.data.ctaText,
+    targetingSummary: parsed.data.targetingSummary,
+    dailyBudgetCents: requiredDollarsToCents(parsed.data.dailyBudgetDollars),
+    totalBudgetCents: optionalPositiveDollarsToCents(
+      parsed.data.totalBudgetDollars,
+    ),
+    maxDailyImpressions: optionalPositiveInteger(
+      parsed.data.maxDailyImpressions,
+    ),
+    startsAt: new Date(parsed.data.startsAt),
+    endsAt: new Date(parsed.data.endsAt),
+  })
+
+  revalidatePath("/advertiser")
+  redirect("/advertiser?tab=daily&saved=daily")
 }
 
 async function ensureStripeCustomer() {

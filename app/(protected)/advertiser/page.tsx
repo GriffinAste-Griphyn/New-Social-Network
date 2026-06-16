@@ -6,13 +6,17 @@ import {
   ArrowUpRight,
   Ban,
   Building2,
+  CalendarClock,
   CheckCircle2,
   CreditCard,
   FileText,
+  Film,
   Gauge,
   Hash,
   Landmark,
   LogOut,
+  MousePointerClick,
+  Percent,
   ReceiptText,
   Save,
   ShieldCheck,
@@ -30,6 +34,7 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import {
   createAdvertiserAccountAction,
+  createDailyCampaignAction,
   saveAdvertiserAccountAction,
   saveBrandFundingProfileAction,
   startAdvertiserFundingAction,
@@ -42,6 +47,7 @@ import type {
   AdvertiserWalletTransaction,
   BrandFundingProfile,
   BrandFundingTarget,
+  DailyCampaign,
 } from "@/lib/advertiser-store"
 import { getAdvertiserWorkspaceForUser } from "@/lib/advertiser-store"
 import { requireSession } from "@/lib/auth"
@@ -56,13 +62,20 @@ type AdvertiserPageProps = {
   }>
 }
 
-type AdvertiserTab = "overview" | "account" | "rules" | "wallet" | "activity"
+type AdvertiserTab =
+  | "overview"
+  | "daily"
+  | "account"
+  | "rules"
+  | "wallet"
+  | "activity"
 
 const fundingPresets = [250, 1000, 5000]
 
 function resolveAdvertiserTab(value: string | undefined): AdvertiserTab {
   if (
     value === "account" ||
+    value === "daily" ||
     value === "rules" ||
     value === "wallet" ||
     value === "activity"
@@ -106,6 +119,16 @@ function formatDateTime(date: Date | null | undefined) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date)
+}
+
+function dateTimeInputValue(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0")
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + `T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function targetValues(
@@ -200,12 +223,14 @@ function Flash({
       : funding === "cancelled"
         ? "Funding was cancelled."
         : paymentMethod === "success"
-          ? "Payment method setup completed. It can take a moment to appear."
-          : paymentMethod === "cancelled"
-            ? "Payment method setup was cancelled."
-          : saved === "preferences"
-            ? "Funding rules saved."
-            : saved === "account"
+            ? "Payment method setup completed. It can take a moment to appear."
+            : paymentMethod === "cancelled"
+              ? "Payment method setup was cancelled."
+              : saved === "daily"
+                ? "The Daily campaign saved."
+              : saved === "preferences"
+                ? "Funding rules saved."
+                : saved === "account"
               ? "Account details saved."
               : null)
 
@@ -385,6 +410,7 @@ export default async function AdvertiserPage({
   const {
     account,
     balanceCents,
+    dailyCampaigns,
     pendingCents,
     paymentMethod,
     profile,
@@ -470,6 +496,13 @@ export default async function AdvertiserPage({
                 hasFundingRules={hasFundingRules}
                 pendingCents={pendingCents}
                 profile={profile}
+              />
+            ) : null}
+
+            {activeTab === "daily" ? (
+              <DailyCampaignsConsole
+                balanceCents={balanceCents}
+                campaigns={dailyCampaigns}
               />
             ) : null}
 
@@ -622,6 +655,316 @@ function OverviewConsole({
   )
 }
 
+function DailyCampaignsConsole({
+  balanceCents,
+  campaigns,
+}: {
+  balanceCents: number
+  campaigns: DailyCampaign[]
+}) {
+  const now = new Date()
+  const defaultStart = dateTimeInputValue(now)
+  const defaultEnd = dateTimeInputValue(
+    new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+  )
+  const activeCampaigns = campaigns.filter((campaign) => campaign.status === "active")
+  const dailyBudgetCents = activeCampaigns.reduce(
+    (total, campaign) => total + campaign.dailyBudgetCents,
+    0,
+  )
+
+  return (
+    <div className="mt-6 grid items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_26rem]">
+      <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+              <Film className="size-4" />
+              The Daily
+            </div>
+            <h2 className="mt-2 text-xl font-[350] tracking-tight">
+              Daily video campaigns
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#71717a]">
+              These campaigns serve only in the native iOS Daily flow. Users
+              opt in to watch five full-screen sponsor videos for one entry
+              into that Daily pool.
+            </p>
+          </div>
+          <Badge
+            variant="outline"
+            className="h-8 rounded-[8px] border-[#bfdbfe] bg-[#eff6ff] px-3 text-[#1d4ed8]"
+          >
+            iOS only
+          </Badge>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <DailyMetric
+            icon={CalendarClock}
+            label="Daily window"
+            value="9 PM ET"
+            detail="Drawing at 9:10 PM ET"
+          />
+          <DailyMetric
+            icon={Percent}
+            label="User pool"
+            value="75%"
+            detail="5 winners split equally"
+          />
+          <DailyMetric
+            icon={Wallet}
+            label="Active daily budget"
+            value={formatMoney(dailyBudgetCents)}
+            detail={`${formatMoney(balanceCents)} wallet balance`}
+          />
+        </div>
+
+        <Separator className="my-6 bg-[#e4e4e7]" />
+
+        <form action={createDailyCampaignAction} className="grid gap-5">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Field label="Campaign name" htmlFor="daily-name">
+              <Input
+                id="daily-name"
+                name="name"
+                required
+                placeholder="June launch Daily flight"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Brand shown to users" htmlFor="daily-brand-name">
+              <Input
+                id="daily-brand-name"
+                name="brandName"
+                required
+                placeholder="Acme"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Video creative URL" htmlFor="daily-video-url">
+              <Input
+                id="daily-video-url"
+                name="videoUrl"
+                required
+                type="url"
+                placeholder="https://cdn.example.com/daily-video.mp4"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Poster image URL" htmlFor="daily-thumbnail-url">
+              <Input
+                id="daily-thumbnail-url"
+                name="thumbnailUrl"
+                type="url"
+                placeholder="https://cdn.example.com/poster.jpg"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Advertiser clickthrough URL" htmlFor="daily-destination-url">
+              <Input
+                id="daily-destination-url"
+                name="destinationUrl"
+                required
+                type="url"
+                placeholder="https://example.com/offer"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="CTA text" htmlFor="daily-cta-text">
+              <Input
+                id="daily-cta-text"
+                name="ctaText"
+                defaultValue="Learn more"
+                required
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Daily budget" htmlFor="daily-budget">
+              <Input
+                id="daily-budget"
+                name="dailyBudgetDollars"
+                min="25"
+                step="1"
+                type="number"
+                required
+                placeholder="500"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Total budget" htmlFor="daily-total-budget">
+              <Input
+                id="daily-total-budget"
+                name="totalBudgetDollars"
+                min="0"
+                step="1"
+                type="number"
+                placeholder="5000"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Max daily impressions" htmlFor="daily-max-impressions">
+              <Input
+                id="daily-max-impressions"
+                name="maxDailyImpressions"
+                min="1"
+                step="1"
+                type="number"
+                placeholder="10000"
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Status" htmlFor="daily-status">
+              <select
+                id="daily-status"
+                name="status"
+                defaultValue="pending_review"
+                className="h-11 w-full rounded-[8px] border border-input bg-transparent px-3 text-sm"
+              >
+                <option value="pending_review">Pending review</option>
+                <option value="draft">Draft</option>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+              </select>
+            </Field>
+            <Field label="Starts at" htmlFor="daily-starts-at">
+              <Input
+                id="daily-starts-at"
+                name="startsAt"
+                type="datetime-local"
+                defaultValue={defaultStart}
+                required
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+            <Field label="Ends at" htmlFor="daily-ends-at">
+              <Input
+                id="daily-ends-at"
+                name="endsAt"
+                type="datetime-local"
+                defaultValue={defaultEnd}
+                required
+                className="h-11 rounded-[8px]"
+              />
+            </Field>
+          </div>
+
+          <Field label="Targeting summary" htmlFor="daily-targeting">
+            <Textarea
+              id="daily-targeting"
+              name="targetingSummary"
+              rows={4}
+              placeholder="US, 18+, selected interest groups, exclusions, or direct-sold audience notes."
+              className="rounded-[8px]"
+            />
+          </Field>
+
+          <div className="rounded-[8px] border border-[#fde68a] bg-[#fffbeb] p-4 text-sm leading-6 text-[#92400e]">
+            Daily campaigns are direct-sold inventory. Do not use ad-network
+            rewarded inventory for real-cash Daily payouts. Creatives should be
+            reviewed before activation.
+          </div>
+
+          <div>
+            <AuthSubmitButton
+              idleLabel="Create Daily campaign"
+              pendingLabel="Creating campaign..."
+            />
+          </div>
+        </form>
+      </section>
+
+      <aside className="grid gap-4 2xl:sticky 2xl:top-6">
+        <section className="rounded-[8px] border border-[#e4e4e7] bg-white p-5 shadow-sm">
+          <h3 className="text-base font-semibold">Campaigns</h3>
+          <p className="mt-2 text-sm leading-6 text-[#71717a]">
+            The mobile app pulls five active Daily campaigns for each eligible
+            user session and resumes the sequence when the user returns.
+          </p>
+          <div className="mt-5 grid gap-3">
+            {campaigns.length > 0 ? (
+              campaigns.map((campaign) => (
+                <DailyCampaignCard key={campaign.id} campaign={campaign} />
+              ))
+            ) : (
+              <div className="rounded-[8px] border border-dashed border-[#d4d4d8] px-4 py-8 text-sm text-[#71717a]">
+                No Daily campaigns yet.
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] p-5 text-sm leading-6 text-[#1d4ed8]">
+          <ShieldCheck className="mb-3 size-5" />
+          The Daily requires clear opt-in, one entry per eligible user per day,
+          US-only 18+ eligibility, and official rules. Apple is not a sponsor
+          or participant in entries, drawings, or payouts.
+        </section>
+      </aside>
+    </div>
+  )
+}
+
+function DailyMetric({
+  detail,
+  icon: Icon,
+  label,
+  value,
+}: {
+  detail: string
+  icon: ComponentType<{ className?: string }>
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-[8px] border border-[#e4e4e7] bg-[#fafafa] p-4">
+      <div className="flex items-center gap-2 text-sm font-medium text-[#71717a]">
+        <Icon className="size-4" />
+        {label}
+      </div>
+      <p className="mt-3 text-2xl font-medium tracking-tight">{value}</p>
+      <p className="mt-1 text-sm text-[#71717a]">{detail}</p>
+    </div>
+  )
+}
+
+function DailyCampaignCard({ campaign }: { campaign: DailyCampaign }) {
+  return (
+    <div className="rounded-[8px] border border-[#e4e4e7] bg-[#fafafa] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-medium">{campaign.name}</p>
+          <p className="mt-1 text-sm text-[#71717a]">{campaign.brandName}</p>
+        </div>
+        <Badge
+          variant="outline"
+          className={`shrink-0 rounded-[8px] capitalize ${statusTone(campaign.status)}`}
+        >
+          {campaign.status.replace("_", " ")}
+        </Badge>
+      </div>
+      <div className="mt-4 grid gap-2 text-sm text-[#52525b]">
+        <div className="flex items-center justify-between gap-3">
+          <span>Daily budget</span>
+          <span className="font-medium text-[#18181b]">
+            {formatMoney(campaign.dailyBudgetCents)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span>Runs</span>
+          <span className="text-right font-medium text-[#18181b]">
+            {formatDate(campaign.startsAt)} - {formatDate(campaign.endsAt)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 pt-1 text-[#71717a]">
+          <MousePointerClick className="size-4" />
+          <span className="truncate">{campaign.destinationUrl}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FundingRail({
   accountName,
   activeTab,
@@ -646,6 +989,12 @@ function FundingRail({
     value: AdvertiserTab
   }> = [
     { href: "/advertiser", icon: Activity, label: "Overview", value: "overview" },
+    {
+      href: "/advertiser?tab=daily",
+      icon: Film,
+      label: "The Daily",
+      value: "daily",
+    },
     {
       href: "/advertiser?tab=rules",
       icon: SlidersHorizontal,

@@ -371,6 +371,69 @@ final class APIClient: ObservableObject {
         )
     }
 
+    func dailyStatus() async throws -> DailyStatusResponse {
+        try await get("/api/mobile/daily")
+    }
+
+    func startDaily() async throws -> DailyStatusResponse {
+        struct Body: Encodable {
+            let eligibilityAccepted: Bool
+        }
+
+        return try await post(
+            "/api/mobile/daily/start",
+            body: Body(eligibilityAccepted: true)
+        )
+    }
+
+    func recordDailyProgress(
+        sessionId: String,
+        position: Int,
+        positionMs: Int,
+        durationMs: Int?,
+        event: String
+    ) async throws -> DailyStatusResponse {
+        struct Body: Encodable {
+            let sessionId: String
+            let position: Int
+            let positionMs: Int
+            let durationMs: Int?
+            let event: String
+        }
+
+        return try await post(
+            "/api/mobile/daily/progress",
+            body: Body(
+                sessionId: sessionId,
+                position: position,
+                positionMs: positionMs,
+                durationMs: durationMs,
+                event: event
+            )
+        )
+    }
+
+    func recordDailyClick(
+        sessionId: String,
+        position: Int,
+        positionMs: Int
+    ) async throws -> DailyClickResponse {
+        struct Body: Encodable {
+            let sessionId: String
+            let position: Int
+            let positionMs: Int
+        }
+
+        return try await post(
+            "/api/mobile/daily/click",
+            body: Body(
+                sessionId: sessionId,
+                position: position,
+                positionMs: positionMs
+            )
+        )
+    }
+
     func uploadImageStory(
         upload: StoryImageUpload,
         caption: String,
@@ -1425,7 +1488,7 @@ final class APIClient: ObservableObject {
 
         if !(200..<300).contains(http.statusCode) {
             let envelope = try? decoder.decode(APIErrorEnvelope.self, from: data)
-            throw APIClientError.server(envelope?.error ?? "The server did not respond.", http.statusCode)
+            throw APIClientError.server(envelope?.error ?? "The server returned HTTP \(http.statusCode).", http.statusCode)
         }
 
         return try decoder.decode(T.self, from: data)
@@ -1457,11 +1520,8 @@ final class APIClient: ObservableObject {
 
     private static func usableBaseURL(from storedBaseURL: String?) -> String {
         let trimmed = storedBaseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lowercased = trimmed.lowercased()
 
-        if trimmed.isEmpty ||
-            lowercased == "http://127.0.0.1:3000" ||
-            lowercased == "http://localhost:3000" {
+        if trimmed.isEmpty {
             return productionBaseURL
         }
 
