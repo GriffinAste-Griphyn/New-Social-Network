@@ -452,3 +452,9 @@ export async function logoutAction() {
   await clearSession()
   redirect("/")
 }
+
+export async function logoutToAdvertiserLoginAction() {
+  await assertSameOriginAction()
+  await clearSession()
+  redirect("/login?next=%2Fadvertiser")
+}

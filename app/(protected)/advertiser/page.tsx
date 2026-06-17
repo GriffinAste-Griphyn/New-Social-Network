@@ -41,7 +41,10 @@ import {
   startAdvertiserFundingAction,
   startAdvertiserPaymentMethodAction,
 } from "@/lib/advertiser-actions"
-import { logoutAction } from "@/lib/auth-actions"
+import {
+  logoutAction,
+  logoutToAdvertiserLoginAction,
+} from "@/lib/auth-actions"
 import type {
   AdvertiserPaymentMethod,
   AdvertiserPayoutReport,
@@ -334,10 +337,7 @@ function EmptyAdvertiserState({
             </div>
           </section>
 
-          <form
-            action={createAdvertiserAccountAction}
-            className="self-start rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm"
-          >
+          <section className="self-start rounded-[8px] border border-[#e4e4e7] bg-white p-6 shadow-sm">
             {error ? (
               <div className="mb-5 rounded-[8px] border border-[#fecdd3] bg-[#fff1f2] px-4 py-3 text-sm text-[#be123c]">
                 {error}
@@ -358,38 +358,61 @@ function EmptyAdvertiserState({
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4">
-              <Field label="Company or brand name" htmlFor="name">
-                <Input id="name" name="name" required className="h-11 rounded-[8px]" />
-              </Field>
-              <Field label="Website" htmlFor="websiteUrl">
-                <Input
-                  id="websiteUrl"
-                  name="websiteUrl"
-                  type="url"
-                  placeholder="https://example.com"
-                  className="h-11 rounded-[8px]"
-                />
-              </Field>
-              <Field label="Billing email" htmlFor="billingEmail">
-                <Input
-                  id="billingEmail"
-                  name="billingEmail"
-                  type="email"
-                  defaultValue={email}
-                  required
-                  className="h-11 rounded-[8px]"
-                />
-              </Field>
+            <div className="mt-5 rounded-[8px] border border-[#e4e4e7] bg-[#fafafa] px-4 py-3 text-sm leading-6 text-[#52525b]">
+              You are signed in as <span className="font-medium">{email}</span>.
+              Create an advertiser workspace for this login, or use a different
+              account to sign in with another email and password.
             </div>
 
-            <div className="mt-6">
-              <AuthSubmitButton
-                idleLabel="Create advertiser account"
-                pendingLabel="Creating account..."
-              />
-            </div>
-          </form>
+            <form action={createAdvertiserAccountAction}>
+              <div className="mt-6 grid gap-4">
+                <Field label="Company or brand name" htmlFor="name">
+                  <Input
+                    id="name"
+                    name="name"
+                    required
+                    className="h-11 rounded-[8px]"
+                  />
+                </Field>
+                <Field label="Website" htmlFor="websiteUrl">
+                  <Input
+                    id="websiteUrl"
+                    name="websiteUrl"
+                    type="url"
+                    placeholder="https://example.com"
+                    className="h-11 rounded-[8px]"
+                  />
+                </Field>
+                <Field label="Billing email" htmlFor="billingEmail">
+                  <Input
+                    id="billingEmail"
+                    name="billingEmail"
+                    type="email"
+                    defaultValue={email}
+                    required
+                    className="h-11 rounded-[8px]"
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-6">
+                <AuthSubmitButton
+                  idleLabel="Create advertiser account"
+                  pendingLabel="Creating account..."
+                />
+              </div>
+            </form>
+
+            <form action={logoutToAdvertiserLoginAction} className="mt-3">
+              <Button
+                type="submit"
+                variant="outline"
+                className="h-11 w-full rounded-[8px] bg-white"
+              >
+                Use a different account
+              </Button>
+            </form>
+          </section>
         </div>
       </main>
     </DesktopShell>
