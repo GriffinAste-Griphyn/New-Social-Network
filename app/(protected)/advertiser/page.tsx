@@ -727,8 +727,8 @@ function DailyCampaignsConsole({
           <DailyMetric
             icon={CalendarClock}
             label="Daily window"
-            value="9 PM ET"
-            detail="Drawing at 9:10 PM ET"
+            value="12 AM ET"
+            detail="Drawing at 12:10 AM ET"
           />
           <DailyMetric
             icon={Percent}
