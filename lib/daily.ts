@@ -47,6 +47,9 @@ type EasternParts = {
 
 type DailyCampaignRow = typeof dailyCampaigns.$inferSelect
 type DailySessionRow = typeof dailySessions.$inferSelect
+type DailyProgressEvent = "started" | "heartbeat" | "completed" | "exited"
+type DailySessionStatus = typeof dailySessions.$inferSelect.status
+type DailyAdViewStatus = typeof dailyAdViews.$inferSelect.status
 
 export class DailyError extends Error {
   status: number
@@ -64,6 +67,49 @@ function toNumber(value: DbNumber) {
   if (typeof value === "string") return Number(value)
 
   return 0
+}
+
+export function resolveDailySessionProgressState(input: {
+  event: DailyProgressEvent
+  position: number
+  positionMs: number
+  sessionCurrentAdIndex: number
+  sessionCurrentPositionMs: number
+  sessionStatus: DailySessionStatus
+  viewStatus: DailyAdViewStatus
+}): {
+  status: DailySessionStatus
+  currentAdIndex: number
+  currentPositionMs: number
+} {
+  const completedViewIndex =
+    input.viewStatus === "completed"
+      ? Math.min(input.position + 1, dailyAdsRequired)
+      : input.position
+  const currentAdIndex =
+    input.event === "completed"
+      ? Math.min(input.position + 1, dailyAdsRequired)
+      : Math.max(input.sessionCurrentAdIndex, completedViewIndex)
+  const isStaleSessionProgress =
+    input.event !== "completed" && currentAdIndex > input.position
+  const currentPositionMs =
+    input.event === "completed"
+      ? 0
+      : isStaleSessionProgress
+        ? input.sessionCurrentPositionMs
+        : input.positionMs
+  const status: DailySessionStatus =
+    input.event === "exited" && !isStaleSessionProgress
+      ? "paused"
+      : input.sessionStatus === "completed"
+        ? "completed"
+        : "started"
+
+  return {
+    status,
+    currentAdIndex,
+    currentPositionMs,
+  }
 }
 
 function easternParts(date: Date): EasternParts {
@@ -588,10 +634,15 @@ export async function recordDailyProgress(input: {
             ? "started"
             : view.status
           : "started"
-  const nextAdIndex =
-    input.event === "completed"
-      ? Math.min(input.position + 1, dailyAdsRequired)
-      : input.position
+  const nextSession = resolveDailySessionProgressState({
+    event: input.event,
+    position: input.position,
+    positionMs: input.positionMs,
+    sessionCurrentAdIndex: session.currentAdIndex,
+    sessionCurrentPositionMs: session.currentPositionMs,
+    sessionStatus: session.status,
+    viewStatus: view.status,
+  })
 
   await getDb()
     .update(dailyAdViews)
@@ -609,9 +660,9 @@ export async function recordDailyProgress(input: {
   await getDb()
     .update(dailySessions)
     .set({
-      status: input.event === "exited" ? "paused" : "started",
-      currentAdIndex: nextAdIndex,
-      currentPositionMs: input.event === "completed" ? 0 : input.positionMs,
+      status: nextSession.status,
+      currentAdIndex: nextSession.currentAdIndex,
+      currentPositionMs: nextSession.currentPositionMs,
       lastHeartbeatAt: now,
       updatedAt: now,
     })
