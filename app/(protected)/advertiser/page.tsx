@@ -27,6 +27,7 @@ import {
 
 import { AuthSubmitButton } from "@/components/app/auth-submit-button"
 import { ChipInputField } from "@/components/app/chip-input-field"
+import { DailyCreativeUploadField } from "@/components/app/daily-creative-upload-field"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -742,25 +743,6 @@ function DailyCampaignsConsole({
                 className="h-11 rounded-[8px]"
               />
             </Field>
-            <Field label="Video creative URL" htmlFor="daily-video-url">
-              <Input
-                id="daily-video-url"
-                name="videoUrl"
-                required
-                type="url"
-                placeholder="https://cdn.example.com/daily-video.mp4"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Poster image URL" htmlFor="daily-thumbnail-url">
-              <Input
-                id="daily-thumbnail-url"
-                name="thumbnailUrl"
-                type="url"
-                placeholder="https://cdn.example.com/poster.jpg"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
             <Field label="Advertiser clickthrough URL" htmlFor="daily-destination-url">
               <Input
                 id="daily-destination-url"
@@ -780,6 +762,11 @@ function DailyCampaignsConsole({
                 className="h-11 rounded-[8px]"
               />
             </Field>
+          </div>
+
+          <DailyCreativeUploadField />
+
+          <div className="grid gap-4 xl:grid-cols-2">
             <Field label="Daily budget" htmlFor="daily-budget">
               <Input
                 id="daily-budget"
@@ -800,17 +787,6 @@ function DailyCampaignsConsole({
                 step="1"
                 type="number"
                 placeholder="5000"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Max daily impressions" htmlFor="daily-max-impressions">
-              <Input
-                id="daily-max-impressions"
-                name="maxDailyImpressions"
-                min="1"
-                step="1"
-                type="number"
-                placeholder="10000"
                 className="h-11 rounded-[8px]"
               />
             </Field>

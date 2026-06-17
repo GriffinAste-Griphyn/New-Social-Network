@@ -81,7 +81,6 @@ const dailyCampaignSchema = z
       .transform((value) => value || null),
     dailyBudgetDollars: z.coerce.number().min(25).max(250_000),
     totalBudgetDollars: z.coerce.number().min(0).max(10_000_000).optional(),
-    maxDailyImpressions: z.coerce.number().int().min(1).max(1_000_000).optional(),
     startsAt: z.string().trim().min(1),
     endsAt: z.string().trim().min(1),
   })
@@ -142,14 +141,6 @@ function optionalPositiveDollarsToCents(value: number | undefined) {
   }
 
   return Math.round(value * 100)
-}
-
-function optionalPositiveInteger(value: number | undefined) {
-  if (!value || value <= 0) {
-    return null
-  }
-
-  return value
 }
 
 function splitList(value: string | null | undefined) {
@@ -359,7 +350,6 @@ export async function createDailyCampaignAction(formData: FormData) {
     targetingSummary: formData.get("targetingSummary"),
     dailyBudgetDollars: formData.get("dailyBudgetDollars"),
     totalBudgetDollars: formData.get("totalBudgetDollars"),
-    maxDailyImpressions: formData.get("maxDailyImpressions"),
     startsAt: formData.get("startsAt"),
     endsAt: formData.get("endsAt"),
   })
@@ -385,9 +375,7 @@ export async function createDailyCampaignAction(formData: FormData) {
     totalBudgetCents: optionalPositiveDollarsToCents(
       parsed.data.totalBudgetDollars,
     ),
-    maxDailyImpressions: optionalPositiveInteger(
-      parsed.data.maxDailyImpressions,
-    ),
+    maxDailyImpressions: null,
     startsAt: new Date(parsed.data.startsAt),
     endsAt: new Date(parsed.data.endsAt),
   })
