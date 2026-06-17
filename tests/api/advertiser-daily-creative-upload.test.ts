@@ -117,7 +117,7 @@ describe("advertiser Daily creative upload API", () => {
     )
   })
 
-  it("prepares an optional Daily poster upload", async () => {
+  it("rejects Daily poster uploads", async () => {
     const { POST } = await import(
       "@/app/api/advertiser/daily/creative-upload/route"
     )
@@ -131,16 +131,9 @@ describe("advertiser Daily creative upload API", () => {
     )
     const payload = await responseJson(response)
 
-    expect(response.status).toBe(200)
-    expect(generateClientTokenFromReadWriteToken).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedContentTypes: ["image/jpeg", "image/png", "image/webp"],
-        maximumSizeInBytes: 5 * 1024 * 1024,
-      }),
-    )
-    expect(String(payload.pathname)).toMatch(
-      /^advertisers\/daily\/posters\/advertiser_123\/.+-poster\.png$/,
-    )
+    expect(response.status).toBe(400)
+    expect(payload.error).toBe("Could not prepare the Daily creative upload.")
+    expect(generateClientTokenFromReadWriteToken).not.toHaveBeenCalled()
   })
 
   it("rejects unsupported Daily video creative types", async () => {

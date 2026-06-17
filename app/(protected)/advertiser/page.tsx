@@ -724,116 +724,135 @@ function DailyCampaignsConsole({
         <Separator className="my-6 bg-[#e4e4e7]" />
 
         <form action={createDailyCampaignAction} className="grid gap-5">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Field label="Campaign name" htmlFor="daily-name">
-              <Input
-                id="daily-name"
-                name="name"
-                required
-                placeholder="June launch Daily flight"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Brand shown to users" htmlFor="daily-brand-name">
-              <Input
-                id="daily-brand-name"
-                name="brandName"
-                required
-                placeholder="Acme"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Advertiser clickthrough URL" htmlFor="daily-destination-url">
-              <Input
-                id="daily-destination-url"
-                name="destinationUrl"
-                required
-                type="url"
-                placeholder="https://example.com/offer"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="CTA text" htmlFor="daily-cta-text">
-              <Input
-                id="daily-cta-text"
-                name="ctaText"
-                defaultValue="Learn more"
-                required
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-          </div>
+          <DailyFormSection title="Campaign">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Field label="Campaign name" htmlFor="daily-name">
+                <Input
+                  id="daily-name"
+                  name="name"
+                  required
+                  placeholder="June launch Daily flight"
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+              <Field label="Status" htmlFor="daily-status">
+                <select
+                  id="daily-status"
+                  name="status"
+                  defaultValue="pending_review"
+                  className="h-11 w-full rounded-[8px] border border-input bg-transparent px-3 text-sm"
+                >
+                  <option value="pending_review">Pending review</option>
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                </select>
+              </Field>
+            </div>
+          </DailyFormSection>
 
-          <DailyCreativeUploadField />
+          <DailyFormSection title="Budget">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Field label="Daily budget" htmlFor="daily-budget">
+                <Input
+                  id="daily-budget"
+                  name="dailyBudgetDollars"
+                  min="25"
+                  step="1"
+                  type="number"
+                  required
+                  placeholder="500"
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+              <Field label="Total budget" htmlFor="daily-total-budget">
+                <Input
+                  id="daily-total-budget"
+                  name="totalBudgetDollars"
+                  min="0"
+                  step="1"
+                  type="number"
+                  placeholder="5000"
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+            </div>
+          </DailyFormSection>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Field label="Daily budget" htmlFor="daily-budget">
-              <Input
-                id="daily-budget"
-                name="dailyBudgetDollars"
-                min="25"
-                step="1"
-                type="number"
-                required
-                placeholder="500"
-                className="h-11 rounded-[8px]"
+          <DailyFormSection title="Flight dates">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Field label="Starts at" htmlFor="daily-starts-at">
+                <Input
+                  id="daily-starts-at"
+                  name="startsAt"
+                  type="datetime-local"
+                  defaultValue={defaultStart}
+                  required
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+              <Field label="Ends at" htmlFor="daily-ends-at">
+                <Input
+                  id="daily-ends-at"
+                  name="endsAt"
+                  type="datetime-local"
+                  defaultValue={defaultEnd}
+                  required
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+            </div>
+          </DailyFormSection>
+
+          <DailyFormSection title="Targeting parameters">
+            <Field label="Targeting summary" htmlFor="daily-targeting">
+              <Textarea
+                id="daily-targeting"
+                name="targetingSummary"
+                rows={4}
+                placeholder="US, 18+, selected interest groups, exclusions, or direct-sold audience notes."
+                className="rounded-[8px]"
               />
             </Field>
-            <Field label="Total budget" htmlFor="daily-total-budget">
-              <Input
-                id="daily-total-budget"
-                name="totalBudgetDollars"
-                min="0"
-                step="1"
-                type="number"
-                placeholder="5000"
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Status" htmlFor="daily-status">
-              <select
-                id="daily-status"
-                name="status"
-                defaultValue="pending_review"
-                className="h-11 w-full rounded-[8px] border border-input bg-transparent px-3 text-sm"
+          </DailyFormSection>
+
+          <DailyFormSection title="Upload creative">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Field label="Brand shown to users" htmlFor="daily-brand-name">
+                <Input
+                  id="daily-brand-name"
+                  name="brandName"
+                  required
+                  placeholder="Acme"
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+              <Field
+                label="Advertiser clickthrough URL"
+                htmlFor="daily-destination-url"
               >
-                <option value="pending_review">Pending review</option>
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="paused">Paused</option>
-              </select>
-            </Field>
-            <Field label="Starts at" htmlFor="daily-starts-at">
-              <Input
-                id="daily-starts-at"
-                name="startsAt"
-                type="datetime-local"
-                defaultValue={defaultStart}
-                required
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-            <Field label="Ends at" htmlFor="daily-ends-at">
-              <Input
-                id="daily-ends-at"
-                name="endsAt"
-                type="datetime-local"
-                defaultValue={defaultEnd}
-                required
-                className="h-11 rounded-[8px]"
-              />
-            </Field>
-          </div>
+                <Input
+                  id="daily-destination-url"
+                  name="destinationUrl"
+                  required
+                  type="url"
+                  placeholder="https://example.com/offer"
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+              <Field label="CTA text" htmlFor="daily-cta-text">
+                <Input
+                  id="daily-cta-text"
+                  name="ctaText"
+                  defaultValue="Learn more"
+                  required
+                  className="h-11 rounded-[8px]"
+                />
+              </Field>
+            </div>
 
-          <Field label="Targeting summary" htmlFor="daily-targeting">
-            <Textarea
-              id="daily-targeting"
-              name="targetingSummary"
-              rows={4}
-              placeholder="US, 18+, selected interest groups, exclusions, or direct-sold audience notes."
-              className="rounded-[8px]"
-            />
-          </Field>
+            <DailyCreativeUploadField />
+          </DailyFormSection>
 
           <div className="rounded-[8px] border border-[#fde68a] bg-[#fffbeb] p-4 text-sm leading-6 text-[#92400e]">
             Daily campaigns are direct-sold inventory. Do not use ad-network
@@ -1735,6 +1754,21 @@ function Field({
       <label htmlFor={htmlFor} className="text-sm font-medium">
         {label}
       </label>
+      {children}
+    </div>
+  )
+}
+
+function DailyFormSection({
+  children,
+  title,
+}: {
+  children: ReactNode
+  title: string
+}) {
+  return (
+    <div className="grid gap-4 border-t border-[#e4e4e7] pt-5 first:border-t-0 first:pt-0">
+      <h3 className="text-sm font-semibold text-[#18181b]">{title}</h3>
       {children}
     </div>
   )

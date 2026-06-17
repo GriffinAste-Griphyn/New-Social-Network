@@ -15,20 +15,14 @@ import {
 export const runtime = "nodejs"
 
 const maxDailyCreativeVideoBytes = 150 * 1024 * 1024
-const maxDailyCreativePosterBytes = 5 * 1024 * 1024
 const allowedDailyVideoContentTypes = [
   "video/mp4",
   "video/quicktime",
   "video/x-m4v",
 ] as const
-const allowedDailyPosterContentTypes = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-] as const
 
 const uploadSchema = z.object({
-  assetKind: z.enum(["video", "poster"]),
+  assetKind: z.literal("video"),
   fileName: z.string().trim().min(1).max(180),
   contentType: z.string().trim().min(1).max(120),
   byteSize: z.number().int().positive(),
@@ -46,15 +40,9 @@ function safeUploadFileName(fileName: string) {
 
 function dailyCreativePathname(input: {
   advertiserAccountId: string
-  assetKind: "video" | "poster"
   fileName: string
 }) {
-  const directory =
-    input.assetKind === "video"
-      ? "advertisers/daily/videos"
-      : "advertisers/daily/posters"
-
-  return `${directory}/${input.advertiserAccountId}/${randomUUID()}-${safeUploadFileName(input.fileName)}`
+  return `advertisers/daily/videos/${input.advertiserAccountId}/${randomUUID()}-${safeUploadFileName(input.fileName)}`
 }
 
 export async function POST(request: Request) {
@@ -103,24 +91,13 @@ export async function POST(request: Request) {
     )
   }
 
-  const { assetKind, byteSize, contentType, fileName } = parsed.data
-  const allowedContentTypes: string[] =
-    assetKind === "video"
-      ? [...allowedDailyVideoContentTypes]
-      : [...allowedDailyPosterContentTypes]
-  const maxSizeBytes =
-    assetKind === "video"
-      ? maxDailyCreativeVideoBytes
-      : maxDailyCreativePosterBytes
+  const { byteSize, contentType, fileName } = parsed.data
+  const allowedContentTypes: string[] = [...allowedDailyVideoContentTypes]
+  const maxSizeBytes = maxDailyCreativeVideoBytes
 
   if (!allowedContentTypes.includes(contentType) || byteSize > maxSizeBytes) {
     return NextResponse.json(
-      {
-        error:
-          assetKind === "video"
-            ? "Choose an MP4, MOV, or M4V video up to 150 MB."
-            : "Choose a JPG, PNG, or WEBP poster up to 5 MB.",
-      },
+      { error: "Choose an MP4, MOV, or M4V video up to 150 MB." },
       { status: 400 },
     )
   }
@@ -134,7 +111,6 @@ export async function POST(request: Request) {
 
   const pathname = dailyCreativePathname({
     advertiserAccountId: workspace.account.id,
-    assetKind,
     fileName,
   })
   const clientToken = await generateClientTokenFromReadWriteToken({
@@ -149,7 +125,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    assetKind,
+    assetKind: "video",
     pathname,
     clientToken,
     contentType,

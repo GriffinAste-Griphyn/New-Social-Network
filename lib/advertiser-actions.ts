@@ -65,12 +65,6 @@ const dailyCampaignSchema = z
     brandName: z.string().trim().min(2).max(120),
     status: z.enum(["draft", "pending_review", "active", "paused"]),
     videoUrl: z.string().trim().pipe(z.url()),
-    thumbnailUrl: z
-      .string()
-      .trim()
-      .optional()
-      .transform((value) => value || null)
-      .pipe(z.url().nullable()),
     destinationUrl: z.string().trim().pipe(z.url()),
     ctaText: z.string().trim().min(2).max(40).default("Learn more"),
     targetingSummary: z
@@ -344,7 +338,6 @@ export async function createDailyCampaignAction(formData: FormData) {
     brandName: formData.get("brandName"),
     status: formData.get("status"),
     videoUrl: formData.get("videoUrl"),
-    thumbnailUrl: formData.get("thumbnailUrl"),
     destinationUrl: formData.get("destinationUrl"),
     ctaText: formData.get("ctaText"),
     targetingSummary: formData.get("targetingSummary"),
@@ -367,7 +360,7 @@ export async function createDailyCampaignAction(formData: FormData) {
     brandName: parsed.data.brandName,
     status: parsed.data.status,
     videoUrl: parsed.data.videoUrl,
-    thumbnailUrl: parsed.data.thumbnailUrl,
+    thumbnailUrl: null,
     destinationUrl: parsed.data.destinationUrl,
     ctaText: parsed.data.ctaText,
     targetingSummary: parsed.data.targetingSummary,
