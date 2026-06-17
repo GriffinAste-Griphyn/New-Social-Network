@@ -331,7 +331,9 @@ private struct DailyAdPlayerView: View {
                 bottomChrome
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.top, 6)
+            .padding(.bottom, 14)
+            .ignoresSafeArea(edges: .top)
         }
         .statusBarHidden()
         .onAppear {
