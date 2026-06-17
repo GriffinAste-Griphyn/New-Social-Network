@@ -735,19 +735,17 @@ function DailyCampaignsConsole({
                   className="h-11 rounded-[8px]"
                 />
               </Field>
-              <Field label="Status" htmlFor="daily-status">
-                <select
-                  id="daily-status"
-                  name="status"
-                  defaultValue="pending_review"
-                  className="h-11 w-full rounded-[8px] border border-input bg-transparent px-3 text-sm"
-                >
-                  <option value="pending_review">Pending review</option>
-                  <option value="draft">Draft</option>
-                  <option value="active">Active</option>
-                  <option value="paused">Paused</option>
-                </select>
-              </Field>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Status</p>
+                <div className="flex h-11 items-center rounded-[8px] border border-[#e4e4e7] bg-[#fafafa] px-3">
+                  <Badge
+                    variant="outline"
+                    className="border-[#facc15] bg-[#fefce8] text-[#854d0e]"
+                  >
+                    Pending review
+                  </Badge>
+                </div>
+              </div>
             </div>
           </DailyFormSection>
 

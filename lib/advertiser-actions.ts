@@ -63,7 +63,6 @@ const dailyCampaignSchema = z
   .object({
     name: z.string().trim().min(2).max(120),
     brandName: z.string().trim().min(2).max(120),
-    status: z.enum(["draft", "pending_review", "active", "paused"]),
     videoUrl: z.string().trim().pipe(z.url()),
     destinationUrl: z.string().trim().pipe(z.url()),
     ctaText: z.string().trim().min(2).max(40).default("Learn more"),
@@ -336,7 +335,6 @@ export async function createDailyCampaignAction(formData: FormData) {
   const parsed = dailyCampaignSchema.safeParse({
     name: formData.get("name"),
     brandName: formData.get("brandName"),
-    status: formData.get("status"),
     videoUrl: formData.get("videoUrl"),
     destinationUrl: formData.get("destinationUrl"),
     ctaText: formData.get("ctaText"),
@@ -358,7 +356,7 @@ export async function createDailyCampaignAction(formData: FormData) {
     advertiserAccountId: workspace.account.id,
     name: parsed.data.name,
     brandName: parsed.data.brandName,
-    status: parsed.data.status,
+    status: "pending_review",
     videoUrl: parsed.data.videoUrl,
     thumbnailUrl: null,
     destinationUrl: parsed.data.destinationUrl,
