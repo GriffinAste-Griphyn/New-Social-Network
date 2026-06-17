@@ -75,7 +75,12 @@ struct DailyView: View {
         .refreshable {
             await store.load(api: api)
         }
-        .fullScreenCover(item: $playerSession) { session in
+        .fullScreenCover(
+            item: $playerSession,
+            onDismiss: {
+                Task { await store.load(api: api) }
+            }
+        ) { session in
             DailyAdPlayerView(session: session) { response in
                 store.apply(response)
             }
@@ -270,6 +275,10 @@ struct DailyView: View {
     }
 
     private func startOrResume() async {
+        if store.daily?.status == "in_progress" {
+            await store.load(api: api)
+        }
+
         if let session = store.activeSession {
             playerSession = session
             return
@@ -293,6 +302,7 @@ private struct DailyAdPlayerView: View {
     @State private var positionMs: Int
     @State private var durationMs: Int?
     @State private var isAdvancing = false
+    @State private var didFinishSequence = false
     @State private var error: String?
     let onFinished: (DailyStatusResponse) -> Void
 
@@ -330,6 +340,9 @@ private struct DailyAdPlayerView: View {
         .onDisappear {
             removeTimeObserver()
             player?.pause()
+            if !didFinishSequence {
+                Task { await persist(event: "exited") }
+            }
         }
         .onChange(of: currentIndex) { _, _ in
             loadCurrentAd()
@@ -488,10 +501,35 @@ private struct DailyAdPlayerView: View {
                 durationMs = Int(seconds * 1000)
             }
 
-            if positionMs > 0, positionMs % 3000 < 600 {
+            if shouldCompleteFromTimeObserver {
+                Task { await completeCurrentAd() }
+                return
+            }
+
+            if shouldSendHeartbeat {
                 Task { await persist(event: "heartbeat") }
             }
         }
+    }
+
+    private var shouldCompleteFromTimeObserver: Bool {
+        guard let durationMs, durationMs > 0, !isAdvancing else {
+            return false
+        }
+
+        return positionMs >= max(durationMs - 300, 0)
+    }
+
+    private var shouldSendHeartbeat: Bool {
+        guard positionMs > 0 else {
+            return false
+        }
+
+        if let durationMs, durationMs > 0, positionMs >= max(durationMs - 750, 0) {
+            return false
+        }
+
+        return positionMs % 3000 < 600
     }
 
     private func removeTimeObserver() {
@@ -541,6 +579,7 @@ private struct DailyAdPlayerView: View {
             )
 
             if response.entry != nil || response.activeSession?.status == "completed" {
+                didFinishSequence = true
                 onFinished(response)
                 dismiss()
                 return
@@ -548,9 +587,13 @@ private struct DailyAdPlayerView: View {
 
             if let updatedSession = response.activeSession {
                 session = updatedSession
+                currentIndex = min(
+                    max(updatedSession.currentAdIndex, 0),
+                    max(updatedSession.ads.count - 1, 0)
+                )
+            } else {
+                currentIndex = min(currentIndex + 1, max(session.ads.count - 1, 0))
             }
-
-            currentIndex = min(currentIndex + 1, max(session.ads.count - 1, 0))
             positionMs = 0
         } catch {
             self.error = error.localizedDescription
