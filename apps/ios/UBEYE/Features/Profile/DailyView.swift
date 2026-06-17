@@ -111,7 +111,7 @@ struct DailyView: View {
             HStack(spacing: 10) {
                 dailyMetric("Pool", ubeyeCurrency(store.daily?.estimatedPoolCents), "75% share")
                 dailyMetric("Winners", "\(store.daily?.winnerCount ?? 5)", "equal split")
-                dailyMetric("Draw", store.daily?.drawLabel ?? "9:10 PM ET", "daily")
+                dailyMetric("Draw", store.daily?.drawLabel ?? "12:10 AM ET", "daily")
             }
         }
         .padding(16)
@@ -152,7 +152,7 @@ struct DailyView: View {
 
             if store.entry != nil {
                 InlineNotice(
-                    message: "You are entered into today's Daily pool. Winners are drawn at 9:10 PM ET.",
+                    message: "You are entered into today's Daily pool. Winners are drawn at 12:10 AM ET.",
                     isError: false
                 )
             }
@@ -169,7 +169,7 @@ struct DailyView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ruleLine("US only and 18+ at launch.")
                 ruleLine("One entry per eligible user per Daily period.")
-                ruleLine("Daily period runs 9:00 PM ET to 9:00 PM ET.")
+                ruleLine("Daily period runs 12:00 AM ET to 12:00 AM ET.")
                 ruleLine("Apple is not a sponsor of, involved in, or responsible for The Daily, entries, drawings, or payouts.")
             }
 

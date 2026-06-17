@@ -21,8 +21,10 @@ export const dailyAdsRequired = 5
 export const dailyWinnerCount = 5
 export const dailyPoolSharePercent = 75
 export const dailyTimeZone = "America/New_York"
-export const dailyRolloverHour = 21
+export const dailyRolloverHour = 0
 export const dailyDrawDelayMinutes = 10
+export const dailyRolloverLabel = "12:00 AM ET"
+export const dailyDrawLabel = "12:10 AM ET"
 
 const oneDayMs = 24 * 60 * 60 * 1000
 const easternFormatter = new Intl.DateTimeFormat("en-US", {
@@ -150,6 +152,18 @@ function previousCalendarDay(parts: Pick<EasternParts, "year" | "month" | "day">
   }
 }
 
+function nextCalendarDay(parts: Pick<EasternParts, "year" | "month" | "day">) {
+  const next = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day) + oneDayMs,
+  )
+
+  return {
+    year: next.getUTCFullYear(),
+    month: next.getUTCMonth() + 1,
+    day: next.getUTCDate(),
+  }
+}
+
 function parsePoolDate(poolDate: string) {
   const [year, month, day] = poolDate.split("-").map(Number)
 
@@ -200,49 +214,51 @@ function zonedDateTimeToUtc(input: {
   return new Date(guess)
 }
 
+function buildDailyPeriod(startDate: Pick<EasternParts, "year" | "month" | "day">) {
+  const poolDate = calendarKey(startDate)
+  const endDate = nextCalendarDay(startDate)
+  const periodStartsAt = zonedDateTimeToUtc({
+    ...startDate,
+    hour: dailyRolloverHour,
+    minute: 0,
+  })
+  const periodEndsAt = zonedDateTimeToUtc({
+    ...endDate,
+    hour: dailyRolloverHour,
+    minute: 0,
+  })
+  const drawAt = new Date(periodEndsAt.getTime() + dailyDrawDelayMinutes * 60 * 1000)
+
+  return {
+    poolDate,
+    periodStartsAt,
+    periodEndsAt,
+    drawAt,
+    timeZone: dailyTimeZone,
+    rolloverLabel: dailyRolloverLabel,
+    drawLabel: dailyDrawLabel,
+  }
+}
+
 export function getDailyPeriod(now = new Date()) {
   const local = easternParts(now)
   const startDate =
     local.hour >= dailyRolloverHour ? local : previousCalendarDay(local)
-  const poolDate = calendarKey(startDate)
-  const periodStartsAt = zonedDateTimeToUtc({
-    ...startDate,
-    hour: dailyRolloverHour,
-    minute: 0,
-  })
-  const periodEndsAt = new Date(periodStartsAt.getTime() + oneDayMs)
-  const drawAt = new Date(periodEndsAt.getTime() + dailyDrawDelayMinutes * 60 * 1000)
 
-  return {
-    poolDate,
-    periodStartsAt,
-    periodEndsAt,
-    drawAt,
-    timeZone: dailyTimeZone,
-    rolloverLabel: "9:00 PM ET",
-    drawLabel: "9:10 PM ET",
-  }
+  return buildDailyPeriod(startDate)
 }
 
 export function getDailyPeriodForPoolDate(poolDate: string) {
-  const startDate = parsePoolDate(poolDate)
-  const periodStartsAt = zonedDateTimeToUtc({
-    ...startDate,
-    hour: dailyRolloverHour,
-    minute: 0,
-  })
-  const periodEndsAt = new Date(periodStartsAt.getTime() + oneDayMs)
-  const drawAt = new Date(periodEndsAt.getTime() + dailyDrawDelayMinutes * 60 * 1000)
+  return buildDailyPeriod(parsePoolDate(poolDate))
+}
 
-  return {
-    poolDate,
-    periodStartsAt,
-    periodEndsAt,
-    drawAt,
-    timeZone: dailyTimeZone,
-    rolloverLabel: "9:00 PM ET",
-    drawLabel: "9:10 PM ET",
-  }
+function getPreviousDailyPeriod(now: Date) {
+  const currentPeriod = getDailyPeriod(now)
+  const previousPoolDate = calendarKey(
+    previousCalendarDay(parsePoolDate(currentPeriod.poolDate)),
+  )
+
+  return getDailyPeriodForPoolDate(previousPoolDate)
 }
 
 async function campaignCompletedImpressionsForDate(
@@ -772,7 +788,7 @@ export async function drawDailyPool(input: {
   const now = input.now ?? new Date()
   const period = input.poolDate
     ? getDailyPeriodForPoolDate(input.poolDate)
-    : getDailyPeriod(new Date(now.getTime() - oneDayMs))
+    : getPreviousDailyPeriod(now)
   const db = getDb()
   const existing = await db
     .select()
