@@ -316,6 +316,7 @@ struct StoryStackViewer: View {
     private let replyComposerHeight: CGFloat = 46
     private let bottomChromeInset: CGFloat = 16
     private let captionBottomGap: CGFloat = 14
+    private let storyTopChromeTopInset: CGFloat = 44
     private let verticalSwipeMinimumDistance: CGFloat = 58
     private let verticalSwipeDominanceRatio: CGFloat = 1.15
 
@@ -585,7 +586,7 @@ struct StoryStackViewer: View {
             storyHeader(stack: stack, item: item)
         }
         .padding(.horizontal, UBEYEMetrics.screenInset)
-        .padding(.top, 18)
+        .padding(.top, storyTopChromeTopInset)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .top)
     }
