@@ -53,8 +53,8 @@ final class RepliesStore: ObservableObject {
 
 struct RepliesView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var storyPresenter: StoryPresentationCoordinator
     @StateObject private var store = RepliesStore()
-    @State private var selectedStory: StoryRoute?
     @State private var selectedSegment = "Received"
     var onQuoteReply: (QuotedStoryReply) -> Void = { _ in }
 
@@ -88,6 +88,10 @@ struct RepliesView: View {
                                     destination: ReplyThreadView(
                                         thread: thread,
                                         onQuote: onQuoteReply,
+                                        onWarmStory: { item in
+                                            warmStory(item.storyId)
+                                        },
+                                        onOpenStory: openStory,
                                         onDelete: { interactionId in
                                             await store.deleteReply(id: interactionId, api: api)
                                         }
@@ -124,9 +128,6 @@ struct RepliesView: View {
             }
             .refreshable {
                 await store.load(api: api)
-            }
-            .fullScreenCover(item: $selectedStory) { route in
-                StoryStackViewer(route: route)
             }
         }
     }
@@ -228,6 +229,21 @@ struct RepliesView: View {
 
         return []
     }
+
+    private func openStory(_ item: ReplyThreadItem) {
+        warmStory(item.storyId)
+        storyPresenter.present(
+            StoryOpeningContext(
+                route: StoryRoute(id: item.storyId, source: .replies),
+                thumbnailUrl: item.thumbnailUrl ?? item.mediaUrl,
+                transitionId: StoryTransitionIdentity.story(item.storyId)
+            )
+        )
+    }
+
+    private func warmStory(_ storyId: String) {
+        api.warmStoryOpening(storyId: storyId)
+    }
 }
 
 struct ExpoReplyRowData: Identifiable {
@@ -283,6 +299,7 @@ struct ReplyThreadData: Identifiable {
 
 struct ReplyThreadItem: Identifiable, Hashable {
     let id: String
+    let storyId: String
     let title: String
     let message: String
     let createdAt: String
@@ -293,6 +310,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
 
     init(
         id: String,
+        storyId: String,
         title: String,
         message: String,
         createdAt: String,
@@ -302,6 +320,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
         quotedReply: QuotedStoryReply?
     ) {
         self.id = id
+        self.storyId = storyId
         self.title = title
         self.message = message
         self.createdAt = createdAt
@@ -315,6 +334,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
         let message = interaction.body ?? interaction.reaction ?? "Sent a photo reply."
         self.init(
             id: interaction.id,
+            storyId: interaction.storyId,
             title: "\(interaction.actor.name) replied to your Story",
             message: message,
             createdAt: interaction.createdAt,
@@ -334,6 +354,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
     init(sent interaction: SentStoryInteractionEvent) {
         self.init(
             id: interaction.id,
+            storyId: interaction.storyId,
             title: "You replied to \(interaction.target.name)'s Story",
             message: interaction.body ?? interaction.reaction ?? "Sent a reply.",
             createdAt: interaction.createdAt,
@@ -349,6 +370,8 @@ struct ReplyThreadView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: ReplyThreadData
     let onQuote: (QuotedStoryReply) -> Void
+    let onWarmStory: (ReplyThreadItem) -> Void
+    let onOpenStory: (ReplyThreadItem) -> Void
     let onDelete: (String) async -> Void
     @State private var message = ""
     @State private var visibleItems: [ReplyThreadItem]
@@ -356,10 +379,14 @@ struct ReplyThreadView: View {
     init(
         thread: ReplyThreadData,
         onQuote: @escaping (QuotedStoryReply) -> Void,
+        onWarmStory: @escaping (ReplyThreadItem) -> Void,
+        onOpenStory: @escaping (ReplyThreadItem) -> Void,
         onDelete: @escaping (String) async -> Void
     ) {
         self.thread = thread
         self.onQuote = onQuote
+        self.onWarmStory = onWarmStory
+        self.onOpenStory = onOpenStory
         self.onDelete = onDelete
         _visibleItems = State(initialValue: thread.items)
     }
@@ -379,6 +406,7 @@ struct ReplyThreadView: View {
             items: [
                 ReplyThreadItem(
                     id: row.id,
+                    storyId: story?.id ?? row.id,
                     title: "\(creator.name) replied to your Story",
                     message: row.message,
                     createdAt: row.timestamp,
@@ -390,6 +418,8 @@ struct ReplyThreadView: View {
             ]
         )
         self.onQuote = { _ in }
+        self.onWarmStory = { _ in }
+        self.onOpenStory = { _ in }
         self.onDelete = { _ in }
         _visibleItems = State(initialValue: self.thread.items)
     }
@@ -427,6 +457,12 @@ struct ReplyThreadView: View {
                         ForEach(visibleItems) { item in
                             ReplyThreadStoryCard(
                                 item: item,
+                                onPressStart: {
+                                    onWarmStory(item)
+                                },
+                                onOpenStory: {
+                                    onOpenStory(item)
+                                },
                                 onQuote: {
                                     quote(item)
                                 },
@@ -522,8 +558,11 @@ struct ReplyThreadView: View {
 
 private struct ReplyThreadStoryCard: View {
     let item: ReplyThreadItem
+    let onPressStart: () -> Void
+    let onOpenStory: () -> Void
     let onQuote: () -> Void
     let onDelete: () -> Void
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -566,24 +605,30 @@ private struct ReplyThreadStoryCard: View {
             .padding(.top, 10)
 
             ZStack(alignment: .bottomLeading) {
-                ZStack(alignment: .bottom) {
-                    ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
-                        .frame(width: 218, height: 318)
+                InstantStoryButton(action: onOpenStory, onPressStart: onPressStart) {
+                    ZStack(alignment: .bottom) {
+                        ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
+                            .frame(width: 218, height: 318)
 
-                    LinearGradient(
-                        colors: [
-                            .black.opacity(0),
-                            .black.opacity(0.48),
-                            .black.opacity(0.70)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        LinearGradient(
+                            colors: [
+                                .black.opacity(0),
+                                .black.opacity(0.48),
+                                .black.opacity(0.70)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 145)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .frame(width: 218, height: 318)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .storyMatchedGeometry(
+                        id: StoryTransitionIdentity.story(item.storyId),
+                        namespace: storyTransitionNamespace
                     )
-                    .frame(height: 145)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                .frame(width: 218, height: 318)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 ReplyMessageOverlay(message: item.message)
                     .frame(width: 214, alignment: .leading)

@@ -256,13 +256,14 @@ struct HomeView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
+    @EnvironmentObject private var storyPresenter: StoryPresentationCoordinator
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
     @Environment(\.scenePhase) private var scenePhase
     var uploadedStoryRegistrations: [StoryUploadResponse] = []
     var onSearchTap: () -> Void = {}
     var onDiscoverTap: () -> Void = {}
     var onPendingUploadRetried: (StoryUploadResponse) -> Void = { _ in }
     @StateObject private var store = FeedStore()
-    @State private var selectedStory: StoryRoute?
     @State private var selectedDiscoverCreator: DiscoverCreator?
 
     var body: some View {
@@ -354,9 +355,6 @@ struct HomeView: View {
                 Task {
                     await store.refreshIfStale(api: api)
                 }
-            }
-            .fullScreenCover(item: $selectedStory) { route in
-                StoryStackViewer(route: route)
             }
             .fullScreenCover(item: $selectedDiscoverCreator) { creator in
                 DiscoverCreatorProfileView(
@@ -501,24 +499,46 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     MyStoryHomeCard(
                         myStory: feed.myStory,
-                        pendingUpload: pendingStoryUploads.latestVisibleUpload
+                        pendingUpload: pendingStoryUploads.latestVisibleUpload,
+                        transitionId: StoryTransitionIdentity.story("my-story"),
+                        onPressStart: {
+                            warmStory(id: "my-story", in: feed)
+                        }
                     ) {
                         if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
                             retryPendingUpload(pendingUpload)
                         } else if feed.myStory.hasActiveStory {
-                            store.warmStoryOpen(storyId: "my-story", in: feed, api: api)
-                            selectedStory = StoryRoute(id: "my-story", source: .ownStory)
+                            presentStory(
+                                id: "my-story",
+                                source: .ownStory,
+                                thumbnailUrl: feed.myStory.latestThumbnailUrl,
+                                in: feed
+                            )
                         }
                     }
 
                     ForEach(feed.followingStories) { story in
-                        StoryThumb(story: story)
+                        InstantStoryButton(
+                            action: {
+                                presentStory(
+                                    id: story.id,
+                                    source: .homeFollowing,
+                                    thumbnailUrl: story.playbackThumbnailUrl ?? story.playbackMediaUrl,
+                                    in: feed
+                                )
+                            },
+                            onPressStart: {
+                                warmStory(id: story.id, in: feed)
+                            }
+                        ) {
+                            StoryThumb(
+                                story: story,
+                                transitionId: StoryTransitionIdentity.story(story.id),
+                                namespace: storyTransitionNamespace
+                            )
+                        }
                             .onAppear {
                                 api.prefetchStoryStacks(ids: [story.id], limit: 1)
-                            }
-                            .onTapGesture {
-                                store.warmStoryOpen(storyId: story.id, in: feed, api: api)
-                                selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                             }
                     }
                 }
@@ -549,6 +569,9 @@ struct HomeView: View {
                 DiscoverGrid(
                     tiles: feed.discoverTiles,
                     onAppear: prefetchDiscoverTile,
+                    onPressStart: { tile in
+                        warmDiscoverTile(tile)
+                    },
                     onTap: openDiscoverTile
                 )
                 .zIndex(0)
@@ -560,12 +583,44 @@ struct HomeView: View {
         api.prefetchStoryStacks(ids: [tile.activeStoryId ?? tile.id], limit: 1)
     }
 
+    private func warmDiscoverTile(_ tile: DiscoverTile) {
+        guard let feed = store.feed else {
+            return
+        }
+
+        warmStory(id: tile.activeStoryId ?? tile.id, in: feed)
+    }
+
     private func openDiscoverTile(_ tile: DiscoverTile) {
         let storyId = tile.activeStoryId ?? tile.id
         if let feed = store.feed {
-            store.warmStoryOpen(storyId: storyId, in: feed, api: api)
+            presentStory(
+                id: storyId,
+                source: .discover,
+                thumbnailUrl: tile.thumbnailUrl ?? tile.imageUrl,
+                in: feed
+            )
         }
-        selectedStory = StoryRoute(id: storyId, source: .discover)
+    }
+
+    private func warmStory(id storyId: String, in feed: MobileFeedResponse) {
+        store.warmStoryOpen(storyId: storyId, in: feed, api: api)
+    }
+
+    private func presentStory(
+        id storyId: String,
+        source: StoryRouteSource,
+        thumbnailUrl: URL?,
+        in feed: MobileFeedResponse
+    ) {
+        warmStory(id: storyId, in: feed)
+        storyPresenter.present(
+            StoryOpeningContext(
+                route: StoryRoute(id: storyId, source: source),
+                thumbnailUrl: thumbnailUrl,
+                transitionId: StoryTransitionIdentity.story(storyId)
+            )
+        )
     }
 
     private func followDiscoverCreator(_ creator: DiscoverCreator) async -> Bool {
@@ -629,12 +684,15 @@ struct SectionHeader: View {
 }
 
 struct MyStoryHomeCard: View {
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
     let myStory: MyStorySummary
     var pendingUpload: PendingStoryUpload?
+    let transitionId: String
+    var onPressStart: () -> Void = {}
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        InstantStoryButton(action: action, onPressStart: onPressStart) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: myStory.latestThumbnailUrl) { image in
                     image.resizable().scaledToFill()
@@ -675,8 +733,8 @@ struct MyStoryHomeCard: View {
             }
             .frame(width: 132, height: 192)
             .ubeyeMediaCardChrome()
+            .storyMatchedGeometry(id: transitionId, namespace: storyTransitionNamespace)
         }
-        .buttonStyle(.plain)
         .accessibilityLabel(myStory.hasActiveStory ? "Play My Story" : "My Story")
         .accessibilityHint(
             myStory.hasActiveStory
@@ -751,6 +809,8 @@ private struct MyStoryCardSkeleton: View {
 
 struct StoryThumb: View {
     let story: StoryCard
+    let transitionId: String
+    let namespace: Namespace.ID?
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -785,12 +845,15 @@ struct StoryThumb: View {
         }
         .frame(width: 132, height: 192)
         .ubeyeMediaCardChrome()
+        .storyMatchedGeometry(id: transitionId, namespace: namespace)
     }
 }
 
 struct DiscoverGrid: View {
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
     let tiles: [DiscoverTile]
     var onAppear: (DiscoverTile) -> Void = { _ in }
+    var onPressStart: (DiscoverTile) -> Void = { _ in }
     let onTap: (DiscoverTile) -> Void
 
     private let columns = [
@@ -801,9 +864,14 @@ struct DiscoverGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 10) {
             ForEach(tiles) { tile in
-                Button {
-                    onTap(tile)
-                } label: {
+                InstantStoryButton(
+                    action: {
+                        onTap(tile)
+                    },
+                    onPressStart: {
+                        onPressStart(tile)
+                    }
+                ) {
                     ZStack(alignment: .bottomLeading) {
                         CachedAsyncImage(url: tile.thumbnailUrl ?? tile.imageUrl) { image in
                             image.resizable().scaledToFill()
@@ -830,8 +898,11 @@ struct DiscoverGrid: View {
                     }
                     .foregroundStyle(.white)
                     .ubeyeMediaCardChrome()
+                    .storyMatchedGeometry(
+                        id: StoryTransitionIdentity.story(tile.activeStoryId ?? tile.id),
+                        namespace: storyTransitionNamespace
+                    )
                 }
-                .buttonStyle(.plain)
                 .onAppear {
                     onAppear(tile)
                 }

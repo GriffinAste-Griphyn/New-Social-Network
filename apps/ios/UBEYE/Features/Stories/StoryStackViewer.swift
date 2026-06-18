@@ -285,6 +285,8 @@ private struct EmptyPayload: Encodable {}
 
 struct StoryStackViewer: View {
     let route: StoryRoute
+    var openingThumbnailUrl: URL?
+    var onDismiss: (() -> Void)?
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
@@ -378,7 +380,8 @@ struct StoryStackViewer: View {
                 await store.loadFollows(api: api)
             }
             if let item = store.stack?.items[safe: index] {
-                resetStoryTimer(for: item)
+                startStoryTimerIfNeeded(for: item)
+                MediaPerformance.mark("story_viewer_bound id=\(route.id) item=\(item.id)")
             }
             if let stack = store.stack {
                 MediaPreheater.preheat(stack: stack, around: index)
@@ -456,7 +459,7 @@ struct StoryStackViewer: View {
                 AutoPlayVideoPlayer(
                     url: item.startupMediaUrl,
                     highQualityUrl: item.highQualityMediaUrl,
-                    thumbnailUrl: item.playbackThumbnailUrl,
+                    thumbnailUrl: thumbnailUrl(for: item),
                     preloadUrls: adjacentVideoUrls(for: item),
                     playerPool: videoPlaybackPool,
                     showsThumbnailWhileLoading: true,
@@ -514,7 +517,7 @@ struct StoryStackViewer: View {
 
     @ViewBuilder
     private func storyImagePlaceholder(_ item: StoryStackItem) -> some View {
-        if let thumbnailUrl = item.thumbnailUrl {
+        if let thumbnailUrl = thumbnailUrl(for: item) {
             CachedAsyncImage(url: thumbnailUrl) { image in
                 image
                     .resizable()
@@ -527,6 +530,10 @@ struct StoryStackViewer: View {
         } else {
             ProgressView().tint(.white)
         }
+    }
+
+    private func thumbnailUrl(for item: StoryStackItem) -> URL? {
+        item.playbackThumbnailUrl ?? (index == 0 ? openingThumbnailUrl : nil)
     }
 
     private func storyChrome(stack: StoryStack, item: StoryStackItem) -> some View {
@@ -773,7 +780,7 @@ struct StoryStackViewer: View {
                 blockCreator: {
                     Task {
                         if await store.blockCreator(api: api) {
-                            dismiss()
+                            closeViewer()
                         }
                     }
                 },
@@ -783,7 +790,7 @@ struct StoryStackViewer: View {
                 },
                 close: {
                     Task { await store.recordImpression(item: item, completed: false, api: api) }
-                    dismiss()
+                    closeViewer()
                 }
             )
             .fixedSize()
@@ -793,7 +800,7 @@ struct StoryStackViewer: View {
 
     private func deleteStory(_ item: StoryStackItem) async {
         if await store.delete(item: item, api: api) {
-            dismiss()
+            closeViewer()
         }
     }
 
@@ -1025,7 +1032,7 @@ struct StoryStackViewer: View {
 
     private func dismissStoryFromSwipe(item: StoryStackItem) {
         Task { await store.recordImpression(item: item, completed: false, api: api) }
-        dismiss()
+        closeViewer()
     }
 
     private func canReplyFromSwipe(_ stack: StoryStack) -> Bool {
@@ -1038,6 +1045,7 @@ struct StoryStackViewer: View {
             return
         }
 
+        UBEYEHaptics.storyNavigation()
         Task { await store.recordImpression(item: item, completed: delta > 0, api: api) }
         repliesSheetItem = nil
         index = nextIndex
@@ -1168,6 +1176,14 @@ struct StoryStackViewer: View {
             move(1, item: item)
         } else {
             Task { await store.recordImpression(item: item, completed: true, api: api) }
+            closeViewer()
+        }
+    }
+
+    private func closeViewer() {
+        if let onDismiss {
+            onDismiss()
+        } else {
             dismiss()
         }
     }
