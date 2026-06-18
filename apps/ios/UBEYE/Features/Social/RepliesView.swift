@@ -76,9 +76,7 @@ struct RepliesView: View {
                     }
 
                     if store.isLoading && store.inbox == nil {
-                        ProgressView()
-                            .tint(.ubeyeRed)
-                            .frame(maxWidth: .infinity, minHeight: 160)
+                        RepliesLoadingSkeleton()
                     } else if displayedReplyThreads.isEmpty {
                         EmptyView()
                     } else {
@@ -227,6 +225,53 @@ struct RepliesView: View {
         }
 
         return []
+    }
+}
+
+private struct RepliesLoadingSkeleton: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ForEach(0..<4, id: \.self) { index in
+                ReplyCardLoadingSkeleton(messageWidth: messageWidth(for: index))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading replies")
+    }
+
+    private func messageWidth(for index: Int) -> CGFloat {
+        switch index {
+        case 0:
+            return 214
+        case 1:
+            return 176
+        case 2:
+            return 232
+        default:
+            return 196
+        }
+    }
+}
+
+private struct ReplyCardLoadingSkeleton: View {
+    let messageWidth: CGFloat
+
+    var body: some View {
+        HStack(spacing: 12) {
+            UBEYESkeletonCircle(size: 48)
+
+            VStack(alignment: .leading, spacing: 7) {
+                UBEYESkeletonLine(width: 126, height: 13)
+                UBEYESkeletonLine(width: 154, height: 9)
+                UBEYESkeletonLine(width: messageWidth, height: 11)
+            }
+
+            Spacer(minLength: 8)
+
+            UBEYESkeletonLine(width: 10, height: 15)
+        }
+        .padding(14)
+        .ubeyeCard()
     }
 }
 
@@ -642,8 +687,7 @@ private struct ReplyStoryMedia: View {
                     .resizable()
                     .scaledToFill()
             } placeholder: {
-                ProgressView()
-                    .tint(.ubeyeRed)
+                UBEYESkeletonBlock()
             }
 
             if assetKind == .video {

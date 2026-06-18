@@ -151,12 +151,8 @@ struct DiscoverView: View {
                 }
 
                 if store.isLoading && displayedCreators.isEmpty {
-                    ProgressView()
-                        .tint(.ubeyeRed)
-                        .frame(maxWidth: .infinity, minHeight: 140)
-                }
-
-                if displayedCreators.isEmpty && !store.isLoading {
+                    DiscoverSearchLoadingSkeleton()
+                } else if displayedCreators.isEmpty {
                     EmptyStateView(
                         title: store.query.isEmpty ? "No accounts yet" : "No accounts found",
                         message: store.query.isEmpty ? "" : "Try another name or handle.",
@@ -254,6 +250,52 @@ struct DiscoverView: View {
 
     private func open(_ creator: DiscoverCreator) {
         destination = .profile(creator)
+    }
+}
+
+private struct DiscoverSearchLoadingSkeleton: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ForEach(0..<4, id: \.self) { index in
+                DiscoverCreatorRowLoadingSkeleton(showsActionPill: index.isMultiple(of: 2))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading creators")
+    }
+}
+
+private struct DiscoverCreatorRowLoadingSkeleton: View {
+    var showsActionPill = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            UBEYESkeletonCircle(size: 46)
+
+            VStack(alignment: .leading, spacing: 8) {
+                UBEYESkeletonLine(width: 128, height: 13)
+                UBEYESkeletonLine(width: 86, height: 10)
+            }
+
+            Spacer(minLength: 12)
+
+            if showsActionPill {
+                UBEYESkeletonBlock(cornerRadius: 15)
+                    .frame(width: 78, height: 30)
+            }
+
+            UBEYESkeletonLine(width: 10, height: 14)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 74)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.ubeyeBorder, lineWidth: 1)
+        )
     }
 }
 

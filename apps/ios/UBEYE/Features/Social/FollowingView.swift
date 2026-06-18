@@ -14,9 +14,7 @@ struct FollowingView: View {
                     header
 
                     if store.isLoading && store.feed == nil {
-                        ProgressView()
-                            .tint(.ubeyeRed)
-                            .frame(maxWidth: .infinity, minHeight: 220)
+                        FollowingFeedLoadingSkeleton()
                     } else if let error = store.error, store.feed == nil {
                         EmptyStateView(
                             title: "Could not load following",
@@ -130,6 +128,41 @@ struct FollowingView: View {
     }
 }
 
+private struct FollowingFeedLoadingSkeleton: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ForEach(0..<3, id: \.self) { _ in
+                FollowingStoryLoadingCard()
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading following stories")
+    }
+}
+
+private struct FollowingStoryLoadingCard: View {
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            UBEYESkeletonBlock()
+                .frame(maxWidth: .infinity)
+                .frame(height: 238)
+
+            HStack(alignment: .bottom, spacing: 10) {
+                UBEYESkeletonCircle(size: 36)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    UBEYESkeletonLine(width: 128, height: 13)
+                    UBEYESkeletonLine(width: 82, height: 10)
+                }
+
+                Spacer(minLength: 12)
+            }
+            .padding(16)
+        }
+        .ubeyeMediaCardChrome()
+    }
+}
+
 private struct FollowingStoryFeedCard: View {
     let story: StoryCard
     let action: () -> Void
@@ -202,23 +235,11 @@ private struct FollowingStoryFeedCard: View {
 private struct FollowingStoryCardSkeleton: View {
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color.ubeyeSubtle,
-                    Color.ubeyeBorder.opacity(0.72),
-                    Color.ubeyeSubtle.opacity(0.92)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            UBEYESkeletonBlock()
 
             VStack(alignment: .leading, spacing: 9) {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.62))
-                    .frame(width: 112, height: 12)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.42))
-                    .frame(width: 72, height: 10)
+                UBEYESkeletonLine(width: 112, height: 12)
+                UBEYESkeletonLine(width: 72, height: 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .padding(16)
