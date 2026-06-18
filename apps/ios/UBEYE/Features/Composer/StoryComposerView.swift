@@ -1030,11 +1030,6 @@ struct StoryComposerView: View {
 
                     Spacer()
 
-                    if activeMedia == nil {
-                        captureSourceBar
-                            .padding(.bottom, 14)
-                    }
-
                     if let uploadStage = store.uploadStage {
                         StoryComposerUploadPanel(stage: uploadStage) {
                             cancelComposerUpload()
@@ -1115,7 +1110,14 @@ struct StoryComposerView: View {
             centerSlotSize: footerShutterSlotSize,
             rightSlotSize: footerSideControlSize
         ) {
-            StoryComposerFooterPlaceholder(size: footerSideControlSize)
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                LibraryPickerThumbnail(image: latestLibraryThumbnail)
+            }
+            .disabled(store.isUploading)
         } center: {
             StoryShutterButton(
                 isRecording: camera.isRecording,
@@ -1130,35 +1132,6 @@ struct StoryComposerView: View {
         } right: {
             StoryComposerFooterPlaceholder(size: footerSideControlSize)
         }
-    }
-
-    private var captureSourceBar: some View {
-        HStack(spacing: 6) {
-            Button {
-                resetCapture()
-            } label: {
-                ComposerSourcePill(
-                    title: "Camera",
-                    systemImage: "camera.fill",
-                    isSelected: true
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(store.isUploading)
-
-            PhotosPicker(
-                selection: $photoPickerItem,
-                matching: .any(of: [.images, .videos]),
-                preferredItemEncoding: .current
-            ) {
-                ComposerLibrarySourcePill(image: latestLibraryThumbnail)
-            }
-            .disabled(store.isUploading)
-        }
-        .padding(4)
-        .background(.black.opacity(0.34), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
-        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -1988,53 +1961,6 @@ private struct LibraryPickerThumbnail: View {
                 endPoint: .bottomTrailing
             )
         }
-    }
-}
-
-private struct ComposerSourcePill: View {
-    let title: String
-    let systemImage: String
-    var isSelected = false
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .bold))
-            Text(title)
-                .font(.system(size: 13, weight: .black))
-                .lineLimit(1)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .frame(height: 36)
-        .background(isSelected ? .white.opacity(0.2) : .white.opacity(0.08), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(isSelected ? 0.24 : 0.1), lineWidth: 1))
-        .contentShape(Capsule())
-    }
-}
-
-private struct ComposerLibrarySourcePill: View {
-    let image: UIImage?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            LibraryPickerThumbnail(image: image)
-                .frame(width: 30, height: 30)
-                .scaleEffect(30 / 58)
-                .frame(width: 30, height: 30)
-
-            Text("Camera Roll")
-                .font(.system(size: 13, weight: .black))
-                .lineLimit(1)
-        }
-        .foregroundStyle(.white)
-        .padding(.leading, 4)
-        .padding(.trailing, 12)
-        .frame(height: 36)
-        .background(.white.opacity(0.08), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.1), lineWidth: 1))
-        .contentShape(Capsule())
-        .accessibilityLabel("Choose from camera roll")
     }
 }
 
