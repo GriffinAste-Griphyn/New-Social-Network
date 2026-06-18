@@ -208,6 +208,11 @@ final class StoryUploadNoticeStore: ObservableObject {
         dismissTask?.cancel()
         state = .review(reason)
     }
+
+    func dismiss() {
+        dismissTask?.cancel()
+        state = nil
+    }
 }
 
 private struct FixedAccountAvatarOverlay: View {

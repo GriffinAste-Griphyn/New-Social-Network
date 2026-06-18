@@ -165,6 +165,19 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
         }
     }
 
+    var statusDetailLabel: String {
+        switch state {
+        case .queued:
+            "Queued"
+        case .uploading:
+            progressPercentLabel
+        case .completing:
+            "Visible locally"
+        case .failed:
+            "Tap to retry"
+        }
+    }
+
     var progressPercentLabel: String {
         "\(Int((displayProgress * 100).rounded()))%"
     }
@@ -177,6 +190,7 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
 @MainActor
 final class PendingStoryUploadStore: ObservableObject {
     @Published private(set) var uploads: [PendingStoryUpload] = []
+    @Published private(set) var activeUploadIds: Set<String> = []
 
     private let fileManager: FileManager
     private let rootURL: URL
@@ -184,6 +198,7 @@ final class PendingStoryUploadStore: ObservableObject {
     private let manifestURL: URL
     private let maxVideoDurationSeconds = 120
     private let maxOriginalAttachmentRetries = 5
+    private var uploadTasks: [String: Task<Void, Never>] = [:]
     private var originalAttachmentTasks: [String: Task<Void, Never>] = [:]
 
     init(fileManager: FileManager = .default) {
@@ -321,6 +336,10 @@ final class PendingStoryUploadStore: ObservableObject {
             }
             return response
         } catch {
+            if Self.isCancellation(error) {
+                remove(id: id)
+                throw CancellationError()
+            }
             markFailed(id: id, error: error)
             throw error
         }
@@ -329,6 +348,68 @@ final class PendingStoryUploadStore: ObservableObject {
     func retry(id: String, api: APIClient) async throws -> StoryUploadResponse {
         update(id: id, state: .queued, progress: 0.04, errorMessage: nil, incrementsRetry: true)
         return try await performUpload(id: id, api: api)
+    }
+
+    func startUpload(
+        id: String,
+        api: APIClient,
+        onCompleted: @escaping (StoryUploadResponse) -> Void,
+        onFailed: @escaping (String) -> Void = { _ in }
+    ) {
+        guard uploadTasks[id] == nil,
+              uploads.contains(where: { $0.id == id }) else {
+            return
+        }
+
+        activeUploadIds.insert(id)
+        uploadTasks[id] = Task { @MainActor [weak self, api] in
+            guard let self else {
+                return
+            }
+
+            defer {
+                self.activeUploadIds.remove(id)
+                self.uploadTasks[id] = nil
+            }
+
+            do {
+                let response = try await self.performUpload(id: id, api: api)
+                guard !Task.isCancelled else {
+                    return
+                }
+                onCompleted(response)
+            } catch {
+                guard !Self.isCancellation(error) else {
+                    return
+                }
+
+                let message = error.localizedDescription
+                if self.uploads.contains(where: { $0.id == id }) {
+                    onFailed(message)
+                }
+            }
+        }
+    }
+
+    func retryUpload(
+        id: String,
+        api: APIClient,
+        onCompleted: @escaping (StoryUploadResponse) -> Void,
+        onFailed: @escaping (String) -> Void = { _ in }
+    ) {
+        guard uploadTasks[id] == nil else {
+            return
+        }
+        update(id: id, state: .queued, progress: 0.04, errorMessage: nil, incrementsRetry: true)
+        startUpload(id: id, api: api, onCompleted: onCompleted, onFailed: onFailed)
+    }
+
+    func cancelUpload(id: String) {
+        uploadTasks[id]?.cancel()
+        uploadTasks[id] = nil
+        activeUploadIds.remove(id)
+        remove(id: id)
+        MediaPerformance.mark("pending_story_upload_cancelled id=\(id)")
     }
 
     func resumeBackgroundOriginalAttachments(api: APIClient) {
@@ -348,6 +429,9 @@ final class PendingStoryUploadStore: ObservableObject {
             return
         }
 
+        uploadTasks[id]?.cancel()
+        uploadTasks[id] = nil
+        activeUploadIds.remove(id)
         originalAttachmentTasks[id]?.cancel()
         originalAttachmentTasks[id] = nil
         removeFiles(for: upload)
@@ -1048,6 +1132,19 @@ final class PendingStoryUploadStore: ObservableObject {
 
     private static func makePendingId() -> String {
         "pending-story-\(UUID().uuidString.lowercased())"
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 }
 
