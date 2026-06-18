@@ -316,7 +316,8 @@ struct StoryStackViewer: View {
     private let replyComposerHeight: CGFloat = 46
     private let bottomChromeInset: CGFloat = 16
     private let captionBottomGap: CGFloat = 14
-    private let storyTopChromeTopInset: CGFloat = 44
+    private let storyTopChromeMinimumInset: CGFloat = 64
+    private let storyTopChromeSafeAreaGap: CGFloat = 8
     private let verticalSwipeMinimumDistance: CGFloat = 58
     private let verticalSwipeDominanceRatio: CGFloat = 1.15
 
@@ -347,7 +348,7 @@ struct StoryStackViewer: View {
                     tapNavigationOverlay(item: item)
                         .frame(width: proxy.size.width, height: proxy.size.height)
 
-                    storyChrome(stack: stack, item: item)
+                    storyChrome(stack: stack, item: item, safeAreaTop: proxy.safeAreaInsets.top)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .allowsHitTesting(true)
                         .zIndex(1)
@@ -537,9 +538,9 @@ struct StoryStackViewer: View {
         item.playbackThumbnailUrl ?? (index == 0 ? openingThumbnailUrl : nil)
     }
 
-    private func storyChrome(stack: StoryStack, item: StoryStackItem) -> some View {
+    private func storyChrome(stack: StoryStack, item: StoryStackItem, safeAreaTop: CGFloat) -> some View {
         ZStack {
-            storyTopChrome(stack: stack, item: item)
+            storyTopChrome(stack: stack, item: item, topInset: storyTopChromeTopInset(for: safeAreaTop))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             storyCaption(item)
@@ -580,15 +581,19 @@ struct StoryStackViewer: View {
         .foregroundStyle(.white)
     }
 
-    private func storyTopChrome(stack: StoryStack, item: StoryStackItem) -> some View {
+    private func storyTopChrome(stack: StoryStack, item: StoryStackItem, topInset: CGFloat) -> some View {
         VStack(spacing: 12) {
             storyProgressIndicator(stack: stack, item: item)
             storyHeader(stack: stack, item: item)
         }
         .padding(.horizontal, UBEYEMetrics.screenInset)
-        .padding(.top, storyTopChromeTopInset)
+        .padding(.top, topInset)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private func storyTopChromeTopInset(for safeAreaTop: CGFloat) -> CGFloat {
+        max(storyTopChromeMinimumInset, safeAreaTop + storyTopChromeSafeAreaGap)
     }
 
     @ViewBuilder
