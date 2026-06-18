@@ -423,6 +423,15 @@ struct HomeView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.ubeyeMuted)
                         .lineLimit(2)
+                    if let progress = uploadNoticeProgress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .tint(Color.ubeyeRed)
+                            .frame(height: 4)
+                            .padding(.top, 4)
+                            .accessibilityLabel("Story upload progress")
+                            .accessibilityValue(uploadNoticeProgressLabel ?? "")
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -451,13 +460,19 @@ struct HomeView: View {
     }
 
     private var uploadNoticeProgressLabel: String? {
+        uploadNoticeProgress.map {
+            "\(Int(($0 * 100).rounded()))%"
+        }
+    }
+
+    private var uploadNoticeProgress: Double? {
         guard case .posting = storyUploadNotice.state,
               let upload = pendingStoryUploads.latestVisibleUpload,
               upload.showsUploadProgressPercent else {
             return nil
         }
 
-        return upload.progressPercentLabel
+        return upload.displayProgress
     }
 
     private struct UploadNoticeIcon: View {
@@ -497,27 +512,46 @@ struct HomeView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    MyStoryHomeCard(
-                        myStory: feed.myStory,
-                        pendingUpload: pendingStoryUploads.latestVisibleUpload,
-                        transitionId: StoryTransitionIdentity.myStory(),
-                        onPressStart: {
-                            warmStory(id: "my-story", in: feed)
+                    ZStack(alignment: .topTrailing) {
+                        MyStoryHomeCard(
+                            myStory: feed.myStory,
+                            pendingUpload: pendingStoryUploads.latestVisibleUpload,
+                            transitionId: StoryTransitionIdentity.myStory(),
+                            onPressStart: {
+                                warmStory(id: "my-story", in: feed)
+                            }
+                        ) {
+                            if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
+                                retryPendingUpload(pendingUpload)
+                            } else if feed.myStory.hasActiveStory {
+                                presentStory(
+                                    id: "my-story",
+                                    source: .ownStory,
+                                    thumbnailUrl: feed.myStory.latestThumbnailUrl,
+                                    sourceId: "my-story",
+                                    sourceKind: .myStory,
+                                    in: feed
+                                )
+                            }
                         }
-                    ) {
-                        if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
-                            retryPendingUpload(pendingUpload)
-                        } else if feed.myStory.hasActiveStory {
-                            presentStory(
-                                id: "my-story",
-                                source: .ownStory,
-                                thumbnailUrl: feed.myStory.latestThumbnailUrl,
-                                sourceId: "my-story",
-                                sourceKind: .myStory,
-                                in: feed
-                            )
+
+                        if let pendingUpload = pendingStoryUploads.latestVisibleUpload {
+                            Button {
+                                cancelPendingUpload(pendingUpload)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10, weight: .black))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 26, height: 26)
+                                    .background(.black.opacity(0.58), in: Circle())
+                                    .overlay(Circle().stroke(.white.opacity(0.18), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(8)
+                            .accessibilityLabel(pendingUpload.isFailed ? "Remove failed upload" : "Cancel story upload")
                         }
                     }
+                    .frame(width: 132, height: 192)
 
                     ForEach(feed.followingStories) { story in
                         InstantStoryButton(
@@ -653,13 +687,22 @@ struct HomeView: View {
 
     private func retryPendingUpload(_ upload: PendingStoryUpload) {
         storyUploadNotice.showPosting()
-        Task {
-            do {
-                let response = try await pendingStoryUploads.retry(id: upload.id, api: api)
+        pendingStoryUploads.retryUpload(
+            id: upload.id,
+            api: api,
+            onCompleted: { response in
                 onPendingUploadRetried(response)
-            } catch {
+            },
+            onFailed: { _ in
                 MediaPerformance.mark("pending_story_upload_retry_failed id=\(upload.id)")
             }
+        )
+    }
+
+    private func cancelPendingUpload(_ upload: PendingStoryUpload) {
+        pendingStoryUploads.cancelUpload(id: upload.id)
+        if pendingStoryUploads.latestVisibleUpload == nil {
+            storyUploadNotice.dismiss()
         }
     }
 
@@ -771,15 +814,21 @@ struct MyStoryHomeCard: View {
             }
             .frame(width: 18, height: 18)
 
-            Text(upload.statusLabel)
-                .font(.system(size: 10, weight: .black))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(upload.statusLabel)
+                    .font(.system(size: 10, weight: .black))
+                    .lineLimit(1)
+                Text(upload.statusDetailLabel)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+            }
+            .minimumScaleFactor(0.72)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 7)
-        .frame(height: 28)
-        .background(.black.opacity(0.54), in: Capsule())
+        .frame(height: 34)
+        .background(.black.opacity(0.58), in: Capsule())
         .overlay(
             Capsule()
                 .stroke(.white.opacity(0.16), lineWidth: 1)

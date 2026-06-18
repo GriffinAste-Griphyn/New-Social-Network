@@ -698,7 +698,9 @@ struct StoryStackViewer: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: maxWidth)
-        .background(.black.opacity(0.42), in: Capsule())
+        .background(.black.opacity(overlay.kind == "link" ? 0.56 : 0.42), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
     }
 
     private func overlayPosition(_ percent: Double, dimension: CGFloat) -> CGFloat {

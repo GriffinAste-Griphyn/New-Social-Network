@@ -44,6 +44,113 @@ private enum ComposerOverlayInputMode: Identifiable {
     }
 }
 
+fileprivate enum StoryComposerUploadStage {
+    case preparing
+    case imageQueue
+    case video(StoryVideoUploadPhase)
+    case visibleLocally(SocialAssetKind)
+
+    var title: String {
+        switch self {
+        case .preparing:
+            "Preparing story"
+        case .imageQueue:
+            "Posting photo"
+        case .video(let phase):
+            phase.statusLabel
+        case .visibleLocally:
+            "Visible in My Story"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .preparing:
+            "Keeping the original media local while the upload starts."
+        case .imageQueue:
+            "Your photo will appear locally while it uploads."
+        case .video(let phase):
+            switch phase {
+            case .inspect:
+                "Checking video duration, audio, and format."
+            case .prepare:
+                "Optimizing playback without blocking the composer."
+            case .thumbnailGenerate:
+                "Building the poster frame shown in My Story."
+            case .prepareUpload:
+                "Creating a local story and starting the upload."
+            case .thumbnailUpload:
+                "Uploading the poster frame."
+            case .videoUpload:
+                "Your story is visible locally while this continues."
+            case .completeStory:
+                "Registering the story with your profile."
+            case .processing:
+                "Cloudflare will finish processing after it appears locally."
+            }
+        case .visibleLocally(let kind):
+            switch kind {
+            case .image:
+                "Upload continues in My Story."
+            case .video:
+                "Processing continues in My Story."
+            }
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .preparing:
+            "wand.and.stars"
+        case .imageQueue:
+            "photo"
+        case .video:
+            "video"
+        case .visibleLocally:
+            "checkmark.circle.fill"
+        }
+    }
+
+    var progress: Double? {
+        switch self {
+        case .preparing:
+            0.08
+        case .imageQueue:
+            0.28
+        case .video(let phase):
+            switch phase {
+            case .inspect:
+                0.12
+            case .prepare:
+                0.28
+            case .thumbnailGenerate:
+                0.46
+            case .prepareUpload:
+                0.68
+            case .thumbnailUpload:
+                0.76
+            case .videoUpload:
+                0.84
+            case .completeStory:
+                0.94
+            case .processing:
+                1
+            }
+        case .visibleLocally:
+            1
+        }
+    }
+
+    var allowsCancel: Bool {
+        switch self {
+        case .visibleLocally:
+            false
+        default:
+            true
+        }
+    }
+}
+
 @MainActor
 final class StoryComposerStore: ObservableObject {
     private let maxVideoDurationSeconds = 120
@@ -60,6 +167,7 @@ final class StoryComposerStore: ObservableObject {
     @Published var quotedReply: QuotedStoryReply?
     @Published var quoteReplyPositionX: Double = 50
     @Published var quoteReplyPositionY: Double = 58
+    @Published fileprivate var uploadStage: StoryComposerUploadStage?
     @Published var uploadStatus: String?
     @Published var error: String?
     @Published var lastUploadReport: String?
@@ -189,74 +297,87 @@ final class StoryComposerStore: ObservableObject {
         media: StoryReadyMedia,
         api: APIClient,
         pendingUploads: PendingStoryUploadStore,
-        onPendingUploadStarted: (PendingStoryUpload) -> Void
-    ) async -> StoryUploadResponse? {
+        onPendingUploadStarted: (PendingStoryUpload) -> Void,
+        onUploadCompleted: @escaping (StoryUploadResponse) -> Void
+    ) async -> Bool {
         isUploading = true
         error = nil
         lastUploadReport = nil
         normalizeLinkDraft()
-        uploadStatus = "Preparing upload"
-        var uploadResponse: StoryUploadResponse?
-        var didCreatePendingUpload = false
+        setUploadStage(.preparing)
+
+        defer {
+            isUploading = false
+        }
 
         do {
             switch media {
             case .image(let upload):
-                uploadStatus = "Posting"
+                setUploadStage(.imageQueue)
                 let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
                     draft: pendingUploadDraft,
                     textOverlays: pendingTextOverlays
                 )
-                didCreatePendingUpload = true
                 onPendingUploadStarted(pendingUpload)
+                pendingUploads.startUpload(
+                    id: pendingUpload.id,
+                    api: api,
+                    onCompleted: onUploadCompleted
+                )
+                setUploadStage(.visibleLocally(.image))
                 clearUploadedDraft()
-                uploadResponse = try await pendingUploads.performUpload(id: pendingUpload.id, api: api)
             case .video(let video):
-                uploadResponse = try await uploadVideoStory(
+                try await prepareVideoStory(
                     video: video,
                     api: api,
                     pendingUploads: pendingUploads,
-                    onPendingUploadStarted: { pendingUpload in
-                        didCreatePendingUpload = true
-                        onPendingUploadStarted(pendingUpload)
-                    }
+                    onPendingUploadStarted: onPendingUploadStarted,
+                    onUploadCompleted: onUploadCompleted
                 )
             }
 
-            uploadStatus = uploadResponse?.processingStatus == "ready" ? "Story posted" : "Upload complete"
             api.invalidateMobileFeedCache()
             api.invalidateStoryStacks(ids: ["my-story"])
-            clearUploadedDraft()
+            uploadStage = nil
+            uploadStatus = nil
+            return true
         } catch {
-            if didCreatePendingUpload {
+            if Self.isCancellation(error) {
                 self.error = nil
-                uploadStatus = nil
             } else {
                 self.error = error.localizedDescription
             }
             if let lastUploadReport {
                 MediaPerformance.mark("video_upload_failed report=\(lastUploadReport)")
             }
+            uploadStage = nil
+            uploadStatus = nil
+            return false
         }
-
-        isUploading = false
-        return uploadResponse
     }
 
-    private func uploadVideoStory(
+    func cancelUploadPreparation() {
+        isUploading = false
+        uploadStage = nil
+        uploadStatus = nil
+        error = nil
+    }
+
+    private func prepareVideoStory(
         video: StoryVideoUpload,
         api: APIClient,
         pendingUploads: PendingStoryUploadStore,
-        onPendingUploadStarted: (PendingStoryUpload) -> Void
-    ) async throws -> StoryUploadResponse {
+        onPendingUploadStarted: (PendingStoryUpload) -> Void,
+        onUploadCompleted: @escaping (StoryUploadResponse) -> Void
+    ) async throws {
         var attempt = StoryVideoUploadAttempt()
 
         do {
             attempt.begin(.inspect)
-            uploadStatus = attempt.phase.statusLabel
+            setUploadStage(.video(.inspect))
             attempt.begin(.prepare)
-            uploadStatus = attempt.phase.statusLabel
+            setUploadStage(.video(.prepare))
             let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
                 url: video.url,
                 source: video.source,
@@ -271,7 +392,7 @@ final class StoryComposerStore: ObservableObject {
             }
 
             attempt.begin(.thumbnailGenerate)
-            uploadStatus = attempt.phase.statusLabel
+            setUploadStage(.video(.thumbnailGenerate))
             let thumbnailData = await optionalVideoThumbnailData(
                 for: preparedVideo.url,
                 durationMs: preparedVideo.durationMs,
@@ -279,7 +400,7 @@ final class StoryComposerStore: ObservableObject {
             )
 
             attempt.begin(.prepareUpload)
-            uploadStatus = attempt.phase.statusLabel
+            setUploadStage(.video(.prepareUpload))
             let pendingUpload = try pendingUploads.createVideoUpload(
                 sourceURL: preparedVideo.url,
                 thumbnailData: thumbnailData,
@@ -291,16 +412,14 @@ final class StoryComposerStore: ObservableObject {
             onPendingUploadStarted(pendingUpload)
             clearUploadedDraft()
 
-            attempt.begin(.videoUpload)
-            uploadStatus = attempt.phase.statusLabel
-            let response = try await pendingUploads.performUpload(id: pendingUpload.id, api: api)
-
-            attempt.begin(.completeStory)
-            uploadStatus = attempt.phase.statusLabel
-            attempt.begin(.processing)
-            attempt.recordSuccess(processingStatus: response.processingStatus)
+            setUploadStage(.visibleLocally(.video))
+            pendingUploads.startUpload(
+                id: pendingUpload.id,
+                api: api,
+                onCompleted: onUploadCompleted
+            )
+            MediaPerformance.mark("video_upload_queued attempt=\(attempt.id) pendingId=\(pendingUpload.id)")
             lastUploadReport = attempt.report
-            return response
         } catch {
             attempt.recordFailure(error)
             lastUploadReport = attempt.report
@@ -583,9 +702,15 @@ final class StoryComposerStore: ObservableObject {
         )
 
         context.saveGState()
-        UIColor.black.withAlphaComponent(0.46).setFill()
-        UIBezierPath(roundedRect: chipRect, cornerRadius: chipRect.height / 2).fill()
+        context.setShadow(offset: CGSize(width: 0, height: 6 * scale), blur: 12 * scale, color: UIColor.black.withAlphaComponent(0.24).cgColor)
+        let chipPath = UIBezierPath(roundedRect: chipRect, cornerRadius: chipRect.height / 2)
+        UIColor.black.withAlphaComponent(overlay.isLink ? 0.56 : 0.42).setFill()
+        chipPath.fill()
         context.restoreGState()
+
+        UIColor.white.withAlphaComponent(0.2).setStroke()
+        chipPath.lineWidth = max(scale, 1)
+        chipPath.stroke()
 
         let labelRect = CGRect(
             x: chipRect.minX + horizontalPadding,
@@ -797,6 +922,24 @@ final class StoryComposerStore: ObservableObject {
 
         return host
     }
+
+    private func setUploadStage(_ stage: StoryComposerUploadStage) {
+        uploadStage = stage
+        uploadStatus = stage.title
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
 }
 
 struct StoryComposerView: View {
@@ -810,6 +953,7 @@ struct StoryComposerView: View {
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
     @State private var mode: StoryComposerMode = .capture
+    @State private var uploadTask: Task<Void, Never>?
     @FocusState private var isOverlayInputFocused: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
@@ -886,13 +1030,17 @@ struct StoryComposerView: View {
 
                     Spacer()
 
-                    if let uploadStatus = store.uploadStatus {
-                        Text(uploadStatus)
-                            .font(.system(size: 18, weight: .bold))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.black.opacity(0.45), in: Capsule())
-                            .padding(.bottom, 16)
+                    if activeMedia == nil {
+                        captureSourceBar
+                            .padding(.bottom, 14)
+                    }
+
+                    if let uploadStage = store.uploadStage {
+                        StoryComposerUploadPanel(stage: uploadStage) {
+                            cancelComposerUpload()
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 16)
                     } else if let error = store.error ?? (activeMedia == nil ? camera.error : nil) {
                         Text(error)
                             .font(.system(size: 16, weight: .bold))
@@ -967,14 +1115,7 @@ struct StoryComposerView: View {
             centerSlotSize: footerShutterSlotSize,
             rightSlotSize: footerSideControlSize
         ) {
-            PhotosPicker(
-                selection: $photoPickerItem,
-                matching: .any(of: [.images, .videos]),
-                preferredItemEncoding: .current
-            ) {
-                LibraryPickerThumbnail(image: latestLibraryThumbnail)
-            }
-            .disabled(store.isUploading)
+            StoryComposerFooterPlaceholder(size: footerSideControlSize)
         } center: {
             StoryShutterButton(
                 isRecording: camera.isRecording,
@@ -989,6 +1130,35 @@ struct StoryComposerView: View {
         } right: {
             StoryComposerFooterPlaceholder(size: footerSideControlSize)
         }
+    }
+
+    private var captureSourceBar: some View {
+        HStack(spacing: 6) {
+            Button {
+                resetCapture()
+            } label: {
+                ComposerSourcePill(
+                    title: "Camera",
+                    systemImage: "camera.fill",
+                    isSelected: true
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isUploading)
+
+            PhotosPicker(
+                selection: $photoPickerItem,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current
+            ) {
+                ComposerLibrarySourcePill(image: latestLibraryThumbnail)
+            }
+            .disabled(store.isUploading)
+        }
+        .padding(4)
+        .background(.black.opacity(0.34), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -1333,7 +1503,7 @@ struct StoryComposerView: View {
     }
 
     private func uploadSelectedMedia() async {
-        guard !store.isUploading else {
+        guard !store.isUploading, uploadTask == nil else {
             return
         }
 
@@ -1342,27 +1512,38 @@ struct StoryComposerView: View {
             return
         }
 
-        if let response = await store.upload(
-            media: media,
-            api: api,
-            pendingUploads: pendingStoryUploads,
-            onPendingUploadStarted: { _ in
-                mode = .capture
-                camera.capturedPhoto = nil
-                camera.capturedVideoURL = nil
-                onPendingUploadStarted()
-            }
-        ) {
-            mode = .capture
-            camera.capturedPhoto = nil
-            camera.capturedVideoURL = nil
-            onUploadRegistered(response)
+        uploadTask = Task { @MainActor in
+            _ = await store.upload(
+                media: media,
+                api: api,
+                pendingUploads: pendingStoryUploads,
+                onPendingUploadStarted: { _ in
+                    mode = .capture
+                    camera.capturedPhoto = nil
+                    camera.capturedVideoURL = nil
+                    onPendingUploadStarted()
+                },
+                onUploadCompleted: { response in
+                    onUploadRegistered(response)
+                }
+            )
+            uploadTask = nil
         }
     }
 
+    private func cancelComposerUpload() {
+        uploadTask?.cancel()
+        uploadTask = nil
+        store.cancelUploadPreparation()
+    }
+
     private func resetCapture(clearQuote: Bool = false) {
+        if store.isUploading {
+            cancelComposerUpload()
+        }
         mode = .capture
         store.error = nil
+        store.uploadStatus = nil
         store.textOverlay = ""
         store.textOverlayPositionX = 50
         store.textOverlayPositionY = 68
@@ -1480,7 +1661,7 @@ private struct EditableStoryOverlayChip: View {
     private var chip: some View {
         let maxChipWidth = max(size.width - 32, 70)
 
-        return HStack(alignment: .bottom, spacing: 7) {
+        return HStack(alignment: .center, spacing: 7) {
             if isEditing {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -1521,9 +1702,14 @@ private struct EditableStoryOverlayChip: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
         .frame(maxWidth: maxChipWidth)
-        .background(.black.opacity(0.46), in: Capsule())
+        .background(.black.opacity(systemImage == nil ? 0.42 : 0.56), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
     }
 
     private var sanitizedTextBinding: Binding<String> {
@@ -1802,6 +1988,114 @@ private struct LibraryPickerThumbnail: View {
                 endPoint: .bottomTrailing
             )
         }
+    }
+}
+
+private struct ComposerSourcePill: View {
+    let title: String
+    let systemImage: String
+    var isSelected = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+            Text(title)
+                .font(.system(size: 13, weight: .black))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(isSelected ? .white.opacity(0.2) : .white.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(isSelected ? 0.24 : 0.1), lineWidth: 1))
+        .contentShape(Capsule())
+    }
+}
+
+private struct ComposerLibrarySourcePill: View {
+    let image: UIImage?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            LibraryPickerThumbnail(image: image)
+                .frame(width: 30, height: 30)
+                .scaleEffect(30 / 58)
+                .frame(width: 30, height: 30)
+
+            Text("Camera Roll")
+                .font(.system(size: 13, weight: .black))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.leading, 4)
+        .padding(.trailing, 12)
+        .frame(height: 36)
+        .background(.white.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.1), lineWidth: 1))
+        .contentShape(Capsule())
+        .accessibilityLabel("Choose from camera roll")
+    }
+}
+
+private struct StoryComposerUploadPanel: View {
+    let stage: StoryComposerUploadStage
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.ubeyeRed)
+                    Image(systemName: stage.systemImage)
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(stage.title)
+                        .font(.system(size: 15, weight: .black))
+                    Text(stage.subtitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+
+                if stage.allowsCancel {
+                    Button(action: cancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .black))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel upload")
+                }
+            }
+
+            if let progress = stage.progress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(.white)
+            } else {
+                ProgressView()
+                    .tint(.white)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+        .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.16), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
     }
 }
 

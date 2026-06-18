@@ -52,7 +52,9 @@ struct StoryThumbnailOverlayView: View {
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, verticalPadding)
         .frame(maxWidth: maxWidth)
-        .background(.black.opacity(0.46), in: Capsule())
+        .background(.black.opacity(overlay.kind == "link" ? 0.56 : 0.42), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 0.7))
+        .shadow(color: .black.opacity(0.22), radius: 7, y: 3)
     }
 
     private func quoteReplyCard(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
@@ -84,11 +86,12 @@ struct StoryThumbnailOverlayView: View {
         .padding(.horizontal, horizontalPadding + 1)
         .padding(.vertical, verticalPadding + 2)
         .frame(width: min(maxWidth, 118), alignment: .leading)
-        .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(.white.opacity(0.18), lineWidth: 0.7)
         )
+        .shadow(color: .black.opacity(0.22), radius: 7, y: 3)
     }
 
     private func quoteAvatar(_ overlay: StoryTextOverlay) -> some View {
