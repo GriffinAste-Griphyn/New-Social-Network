@@ -85,6 +85,8 @@ private enum DiscoverDestination: Identifiable {
 
 struct DiscoverView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var storyPresenter: StoryPresentationCoordinator
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
     @Environment(\.dismiss) private var dismiss
     var searchFocusRequest = 0
     var embedsInNavigationStack = true
@@ -163,7 +165,11 @@ struct DiscoverView: View {
                         systemImage: "person.crop.circle.badge.questionmark"
                     )
                 } else {
-                    DiscoverCreatorList(creators: displayedCreators) { creator in
+                    DiscoverCreatorList(
+                        creators: displayedCreators,
+                        namespace: storyTransitionNamespace,
+                        onPressStart: warmIfNeeded
+                    ) { creator in
                         open(creator)
                     }
                 }
@@ -253,23 +259,57 @@ struct DiscoverView: View {
     }
 
     private func open(_ creator: DiscoverCreator) {
-        destination = .profile(creator)
+        guard let storyId = creator.activeStoryId else {
+            destination = .profile(creator)
+            return
+        }
+
+        warmStory(storyId)
+        storyPresenter.present(
+            StoryOpeningContext(
+                route: StoryRoute(id: storyId, source: .discover),
+                thumbnailUrl: creator.imageUrl,
+                transitionId: StoryTransitionIdentity.story(storyId)
+            )
+        )
+    }
+
+    private func warmIfNeeded(_ creator: DiscoverCreator) {
+        guard let storyId = creator.activeStoryId else {
+            return
+        }
+
+        warmStory(storyId)
+    }
+
+    private func warmStory(_ storyId: String) {
+        api.warmStoryOpening(storyId: storyId)
     }
 }
 
 private struct DiscoverCreatorList: View {
     let creators: [DiscoverCreator]
+    let namespace: Namespace.ID?
+    var onPressStart: (DiscoverCreator) -> Void = { _ in }
     let onTap: (DiscoverCreator) -> Void
 
     var body: some View {
         VStack(spacing: 10) {
             ForEach(creators) { creator in
-                Button {
-                    onTap(creator)
-                } label: {
-                    DiscoverCreatorRow(creator: creator)
+                InstantStoryButton(
+                    action: {
+                        onTap(creator)
+                    },
+                    onPressStart: {
+                        onPressStart(creator)
+                    }
+                ) {
+                    DiscoverCreatorRow(
+                        creator: creator,
+                        transitionId: creator.activeStoryId.map(StoryTransitionIdentity.story),
+                        namespace: namespace
+                    )
                 }
-                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity)
@@ -278,6 +318,8 @@ private struct DiscoverCreatorList: View {
 
 private struct DiscoverCreatorRow: View {
     let creator: DiscoverCreator
+    let transitionId: String?
+    let namespace: Namespace.ID?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -320,6 +362,7 @@ private struct DiscoverCreatorRow: View {
                 .stroke(Color.ubeyeBorder, lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .storyMatchedGeometry(id: transitionId ?? "discover-row-\(creator.id)", namespace: transitionId == nil ? nil : namespace)
     }
 }
 

@@ -33,79 +33,91 @@ private struct SessionRestoreView: View {
 
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var storyPresenter: StoryPresentationCoordinator
     @StateObject private var storyUploadNotice = StoryUploadNoticeStore()
     @StateObject private var storyUploadCoordinator = StoryUploadCoordinator()
     @State private var selectedTab: AppTab = .home
     @State private var discoverSearchFocusRequest = 0
     @State private var isShowingProfile = false
     @State private var pendingQuotedReply: QuotedStoryReply?
+    @Namespace private var storyTransitionNamespace
 
     var body: some View {
         ZStack {
-            switch selectedTab {
-            case .home:
-                HomeView(
-                    uploadedStoryRegistrations: storyUploadCoordinator.registrations,
-                    onSearchTap: {
-                        discoverSearchFocusRequest += 1
-                        selectedTab = .discover
-                    },
-                    onDiscoverTap: {
-                        selectedTab = .discover
-                    },
-                    onPendingUploadRetried: { response in
-                        storyUploadCoordinator.register(
-                            response,
-                            api: api,
-                            notice: storyUploadNotice
-                        )
-                    }
-                )
-            case .following:
-                FollowingView()
-            case .post:
-                StoryComposerView(
-                    quotedReply: pendingQuotedReply,
-                    clearQuotedReply: {
-                        pendingQuotedReply = nil
-                    },
-                    onPendingUploadStarted: {
-                        pendingQuotedReply = nil
-                        selectedTab = .home
-                        storyUploadNotice.showPosting()
-                    },
-                    onUploadRegistered: { response in
-                        pendingQuotedReply = nil
-                        selectedTab = .home
-                        storyUploadCoordinator.register(
-                            response,
-                            api: api,
-                            notice: storyUploadNotice
-                        )
-                    }
-                )
-            case .discover:
-                DiscoverView(searchFocusRequest: discoverSearchFocusRequest)
-            case .replies:
-                RepliesView { quote in
-                    pendingQuotedReply = quote
-                    selectedTab = .post
+            tabContent
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    AppBottomBar(selectedTab: $selectedTab)
                 }
-            }
+                .overlay(alignment: .topTrailing) {
+                    FixedAccountAvatarOverlay {
+                        isShowingProfile = true
+                    }
+                    .padding(.horizontal, UBEYEMetrics.screenInset)
+                    .padding(.top, UBEYEMetrics.topAvatarTopInset)
+                }
+
+            StoryPresentationOverlay(namespace: storyTransitionNamespace)
+                .zIndex(200)
+                .allowsHitTesting(storyPresenter.isPresenting)
         }
+        .environment(\.storyTransitionNamespace, storyTransitionNamespace)
         .environmentObject(storyUploadNotice)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            AppBottomBar(selectedTab: $selectedTab)
-        }
-        .overlay(alignment: .topTrailing) {
-            FixedAccountAvatarOverlay {
-                isShowingProfile = true
-            }
-            .padding(.horizontal, UBEYEMetrics.screenInset)
-            .padding(.top, UBEYEMetrics.topAvatarTopInset)
-        }
         .sheet(isPresented: $isShowingProfile) {
             ProfileView()
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .home:
+            HomeView(
+                uploadedStoryRegistrations: storyUploadCoordinator.registrations,
+                onSearchTap: {
+                    discoverSearchFocusRequest += 1
+                    selectedTab = .discover
+                },
+                onDiscoverTap: {
+                    selectedTab = .discover
+                },
+                onPendingUploadRetried: { response in
+                    storyUploadCoordinator.register(
+                        response,
+                        api: api,
+                        notice: storyUploadNotice
+                    )
+                }
+            )
+        case .following:
+            FollowingView()
+        case .post:
+            StoryComposerView(
+                quotedReply: pendingQuotedReply,
+                clearQuotedReply: {
+                    pendingQuotedReply = nil
+                },
+                onPendingUploadStarted: {
+                    pendingQuotedReply = nil
+                    selectedTab = .home
+                    storyUploadNotice.showPosting()
+                },
+                onUploadRegistered: { response in
+                    pendingQuotedReply = nil
+                    selectedTab = .home
+                    storyUploadCoordinator.register(
+                        response,
+                        api: api,
+                        notice: storyUploadNotice
+                    )
+                }
+            )
+        case .discover:
+            DiscoverView(searchFocusRequest: discoverSearchFocusRequest)
+        case .replies:
+            RepliesView { quote in
+                pendingQuotedReply = quote
+                selectedTab = .post
+            }
         }
     }
 }

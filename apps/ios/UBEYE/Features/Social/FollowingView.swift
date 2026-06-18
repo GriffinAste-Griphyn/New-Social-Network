@@ -2,9 +2,10 @@ import SwiftUI
 
 struct FollowingView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var storyPresenter: StoryPresentationCoordinator
+    @Environment(\.storyTransitionNamespace) private var storyTransitionNamespace
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = FeedStore()
-    @State private var selectedStory: StoryRoute?
 
     var body: some View {
         NavigationStack {
@@ -39,10 +40,18 @@ struct FollowingView: View {
                             .padding(.top, 24)
                         } else {
                             ForEach(stories) { story in
-                                FollowingStoryFeedCard(story: story) {
-                                    selectedStory = StoryRoute(
-                                        id: story.id,
-                                        source: .followingFeed
+                                InstantStoryButton(
+                                    action: {
+                                        presentStory(story, in: feed)
+                                    },
+                                    onPressStart: {
+                                        warmStory(story.id, in: feed)
+                                    }
+                                ) {
+                                    FollowingStoryFeedCard(
+                                        story: story,
+                                        transitionId: StoryTransitionIdentity.story(story.id),
+                                        namespace: storyTransitionNamespace
                                     )
                                 }
                                 .onAppear {
@@ -96,10 +105,22 @@ struct FollowingView: View {
                     await store.load(api: api, showsLoading: false, useDiskCache: false)
                 }
             }
-            .fullScreenCover(item: $selectedStory) { route in
-                StoryStackViewer(route: route)
-            }
         }
+    }
+
+    private func warmStory(_ storyId: String, in feed: MobileFeedResponse) {
+        store.warmStoryOpen(storyId: storyId, in: feed, api: api)
+    }
+
+    private func presentStory(_ story: StoryCard, in feed: MobileFeedResponse) {
+        warmStory(story.id, in: feed)
+        storyPresenter.present(
+            StoryOpeningContext(
+                route: StoryRoute(id: story.id, source: .followingFeed),
+                thumbnailUrl: story.playbackThumbnailUrl ?? story.playbackMediaUrl,
+                transitionId: StoryTransitionIdentity.story(story.id)
+            )
+        )
     }
 
     private var header: some View {
@@ -126,69 +147,68 @@ struct FollowingView: View {
 
 private struct FollowingStoryFeedCard: View {
     let story: StoryCard
-    let action: () -> Void
+    let transitionId: String
+    let namespace: Namespace.ID?
 
     var body: some View {
-        Button(action: action) {
-            ZStack(alignment: .bottomLeading) {
-                CachedAsyncImage(url: story.thumbnailUrl ?? story.mediaUrl) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    FollowingStoryCardSkeleton()
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 238)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.12), .black.opacity(0.82)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if let overlays = story.textOverlays, !overlays.isEmpty {
-                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 11, horizontalPadding: 8, verticalPadding: 5)
-                }
-
-                HStack(alignment: .bottom, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(story.creator)
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-
-                        HStack(spacing: 6) {
-                            Text(story.handle)
-                            if let postedLabel = story.relativePostedLabel {
-                                Circle()
-                                    .fill(.white.opacity(0.58))
-                                    .frame(width: 3, height: 3)
-                                Text(postedLabel)
-                            }
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    if story.assetKind == .video {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(.white.opacity(0.18), in: Circle())
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        ZStack(alignment: .bottomLeading) {
+            CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                FollowingStoryCardSkeleton()
             }
-            .ubeyeMediaCardChrome()
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(maxWidth: .infinity)
+            .frame(height: 238)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.12), .black.opacity(0.82)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            if let overlays = story.textOverlays, !overlays.isEmpty {
+                StoryThumbnailOverlayView(overlays: overlays, fontSize: 11, horizontalPadding: 8, verticalPadding: 5)
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(story.creator)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+
+                    HStack(spacing: 6) {
+                        Text(story.handle)
+                        if let postedLabel = story.relativePostedLabel {
+                            Circle()
+                                .fill(.white.opacity(0.58))
+                                .frame(width: 3, height: 3)
+                            Text(postedLabel)
+                        }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                }
+
+                Spacer(minLength: 12)
+
+                if story.assetKind == .video {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(.white.opacity(0.18), in: Circle())
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
-        .buttonStyle(.plain)
+        .ubeyeMediaCardChrome()
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .storyMatchedGeometry(id: transitionId, namespace: namespace)
         .accessibilityLabel("\(story.creator)'s story")
     }
 }

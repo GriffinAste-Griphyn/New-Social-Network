@@ -6,6 +6,7 @@ struct UBEYEApp: App {
 
     @StateObject private var api: APIClient
     @StateObject private var auth: AuthStore
+    @StateObject private var storyPresenter: StoryPresentationCoordinator
     @StateObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var push: PushNotificationStore
 
@@ -14,6 +15,7 @@ struct UBEYEApp: App {
         let push = PushNotificationStore()
         _api = StateObject(wrappedValue: api)
         _auth = StateObject(wrappedValue: AuthStore())
+        _storyPresenter = StateObject(wrappedValue: StoryPresentationCoordinator())
         _pendingStoryUploads = StateObject(wrappedValue: PendingStoryUploadStore())
         _push = StateObject(wrappedValue: push)
 
@@ -34,6 +36,7 @@ struct UBEYEApp: App {
             RootView()
                 .environmentObject(api)
                 .environmentObject(auth)
+                .environmentObject(storyPresenter)
                 .environmentObject(pendingStoryUploads)
                 .environmentObject(push)
                 .task {
