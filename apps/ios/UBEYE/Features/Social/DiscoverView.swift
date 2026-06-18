@@ -268,8 +268,9 @@ struct DiscoverView: View {
         storyPresenter.present(
             StoryOpeningContext(
                 route: StoryRoute(id: storyId, source: .discover),
-                thumbnailUrl: creator.imageUrl,
-                transitionId: StoryTransitionIdentity.story(storyId)
+                sourceThumbnailUrl: creator.imageUrl,
+                sourceId: creator.id,
+                sourceKind: .discoverCreator
             )
         )
     }
@@ -306,7 +307,9 @@ private struct DiscoverCreatorList: View {
                 ) {
                     DiscoverCreatorRow(
                         creator: creator,
-                        transitionId: creator.activeStoryId.map(StoryTransitionIdentity.story),
+                        transitionId: creator.activeStoryId.map { _ in
+                            StoryTransitionIdentity.discoverCreator(creator.id)
+                        },
                         namespace: namespace
                     )
                 }

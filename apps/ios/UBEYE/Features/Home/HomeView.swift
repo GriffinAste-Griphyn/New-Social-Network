@@ -500,7 +500,7 @@ struct HomeView: View {
                     MyStoryHomeCard(
                         myStory: feed.myStory,
                         pendingUpload: pendingStoryUploads.latestVisibleUpload,
-                        transitionId: StoryTransitionIdentity.story("my-story"),
+                        transitionId: StoryTransitionIdentity.myStory(),
                         onPressStart: {
                             warmStory(id: "my-story", in: feed)
                         }
@@ -512,6 +512,8 @@ struct HomeView: View {
                                 id: "my-story",
                                 source: .ownStory,
                                 thumbnailUrl: feed.myStory.latestThumbnailUrl,
+                                sourceId: "my-story",
+                                sourceKind: .myStory,
                                 in: feed
                             )
                         }
@@ -524,6 +526,8 @@ struct HomeView: View {
                                     id: story.id,
                                     source: .homeFollowing,
                                     thumbnailUrl: story.playbackThumbnailUrl ?? story.playbackMediaUrl,
+                                    sourceId: story.id,
+                                    sourceKind: .followingStory,
                                     in: feed
                                 )
                             },
@@ -533,7 +537,7 @@ struct HomeView: View {
                         ) {
                             StoryThumb(
                                 story: story,
-                                transitionId: StoryTransitionIdentity.story(story.id),
+                                transitionId: StoryTransitionIdentity.followingStory(story.id),
                                 namespace: storyTransitionNamespace
                             )
                         }
@@ -598,6 +602,8 @@ struct HomeView: View {
                 id: storyId,
                 source: .discover,
                 thumbnailUrl: tile.thumbnailUrl ?? tile.imageUrl,
+                sourceId: tile.id,
+                sourceKind: .discoverTile,
                 in: feed
             )
         }
@@ -611,14 +617,17 @@ struct HomeView: View {
         id storyId: String,
         source: StoryRouteSource,
         thumbnailUrl: URL?,
+        sourceId: String,
+        sourceKind: StoryOpeningSourceKind,
         in feed: MobileFeedResponse
     ) {
         warmStory(id: storyId, in: feed)
         storyPresenter.present(
             StoryOpeningContext(
                 route: StoryRoute(id: storyId, source: source),
-                thumbnailUrl: thumbnailUrl,
-                transitionId: StoryTransitionIdentity.story(storyId)
+                sourceThumbnailUrl: thumbnailUrl,
+                sourceId: sourceId,
+                sourceKind: sourceKind
             )
         )
     }
@@ -899,7 +908,7 @@ struct DiscoverGrid: View {
                     .foregroundStyle(.white)
                     .ubeyeMediaCardChrome()
                     .storyMatchedGeometry(
-                        id: StoryTransitionIdentity.story(tile.activeStoryId ?? tile.id),
+                        id: StoryTransitionIdentity.discoverTile(tile.id),
                         namespace: storyTransitionNamespace
                     )
                 }

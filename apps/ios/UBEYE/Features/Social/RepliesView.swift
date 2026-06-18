@@ -235,8 +235,9 @@ struct RepliesView: View {
         storyPresenter.present(
             StoryOpeningContext(
                 route: StoryRoute(id: item.storyId, source: .replies),
-                thumbnailUrl: item.thumbnailUrl ?? item.mediaUrl,
-                transitionId: StoryTransitionIdentity.story(item.storyId)
+                sourceThumbnailUrl: item.thumbnailUrl ?? item.mediaUrl,
+                sourceId: item.id,
+                sourceKind: .replyStory
             )
         )
     }
@@ -625,7 +626,7 @@ private struct ReplyThreadStoryCard: View {
                     .frame(width: 218, height: 318)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .storyMatchedGeometry(
-                        id: StoryTransitionIdentity.story(item.storyId),
+                        id: StoryTransitionIdentity.replyStory(item.id),
                         namespace: storyTransitionNamespace
                     )
                 }

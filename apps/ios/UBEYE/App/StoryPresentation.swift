@@ -16,23 +16,21 @@ final class StoryPresentationCoordinator: ObservableObject {
 
     func present(_ context: StoryOpeningContext) {
         transitionTask?.cancel()
-        activeContext = context
         isExpanded = false
         showsViewer = false
         showsOpeningBridge = true
         UBEYEHaptics.storyOpen()
-        MediaPerformance.mark("story_transition_begin id=\(context.route.id) source=\(String(describing: context.route.source))")
+
+        withAnimation(Self.openingAnimation) {
+            activeContext = context
+            isExpanded = true
+        }
+
+        MediaPerformance.mark(
+            "story_transition_begin id=\(context.route.id) source=\(context.sourceKind.rawValue) sourceId=\(context.sourceId)"
+        )
 
         transitionTask = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled else {
-                return
-            }
-
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-                self.isExpanded = true
-            }
-
             try? await Task.sleep(for: .milliseconds(90))
             guard !Task.isCancelled else {
                 return
@@ -62,41 +60,89 @@ final class StoryPresentationCoordinator: ObservableObject {
         UBEYEHaptics.storyDismiss()
         MediaPerformance.mark("story_transition_dismiss_begin id=\(context.route.id)")
 
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            isExpanded = false
-            showsViewer = false
-            showsOpeningBridge = true
-        }
+        showsViewer = false
+        showsOpeningBridge = true
 
         transitionTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else {
+                return
+            }
+
+            withAnimation(Self.dismissAnimation) {
+                self.isExpanded = false
+                self.activeContext = nil
+            }
+
             try? await Task.sleep(for: .milliseconds(240))
             guard !Task.isCancelled else {
                 return
             }
 
-            self.activeContext = nil
             self.showsOpeningBridge = false
             MediaPerformance.mark("story_transition_dismiss_complete id=\(context.route.id)")
         }
     }
+
+    private static let openingAnimation = Animation.spring(response: 0.34, dampingFraction: 0.88)
+    private static let dismissAnimation = Animation.spring(response: 0.28, dampingFraction: 0.9)
+}
+
+enum StoryOpeningSourceKind: String, Hashable {
+    case myStory = "my_story"
+    case followingStory = "following_story"
+    case discoverTile = "discover_tile"
+    case discoverCreator = "discover_creator"
+    case replyStory = "reply_story"
 }
 
 struct StoryOpeningContext: Identifiable, Equatable {
     let id = UUID()
     let route: StoryRoute
-    let thumbnailUrl: URL?
-    let transitionId: String
+    let sourceThumbnailUrl: URL?
+    let sourceId: String
+    let sourceKind: StoryOpeningSourceKind
 
-    init(route: StoryRoute, thumbnailUrl: URL?, transitionId: String) {
+    var transitionId: String {
+        StoryTransitionIdentity.source(kind: sourceKind, id: sourceId)
+    }
+
+    init(
+        route: StoryRoute,
+        sourceThumbnailUrl: URL?,
+        sourceId: String,
+        sourceKind: StoryOpeningSourceKind
+    ) {
         self.route = route
-        self.thumbnailUrl = thumbnailUrl
-        self.transitionId = transitionId
+        self.sourceThumbnailUrl = sourceThumbnailUrl
+        self.sourceId = sourceId
+        self.sourceKind = sourceKind
     }
 }
 
 enum StoryTransitionIdentity {
-    static func story(_ id: String) -> String {
-        "story-transition-\(id)"
+    static func source(kind: StoryOpeningSourceKind, id: String) -> String {
+        "story-transition-\(kind.rawValue)-\(id)"
+    }
+
+    static func myStory() -> String {
+        source(kind: .myStory, id: "my-story")
+    }
+
+    static func followingStory(_ id: String) -> String {
+        source(kind: .followingStory, id: id)
+    }
+
+    static func discoverTile(_ id: String) -> String {
+        source(kind: .discoverTile, id: id)
+    }
+
+    static func discoverCreator(_ id: String) -> String {
+        source(kind: .discoverCreator, id: id)
+    }
+
+    static func replyStory(_ id: String) -> String {
+        source(kind: .replyStory, id: id)
     }
 }
 
@@ -139,9 +185,19 @@ extension EnvironmentValues {
 
 extension View {
     @ViewBuilder
-    func storyMatchedGeometry(id: String, namespace: Namespace.ID?) -> some View {
+    func storyMatchedGeometry(
+        id: String,
+        namespace: Namespace.ID?,
+        isSource: Bool = true
+    ) -> some View {
         if let namespace {
-            matchedGeometryEffect(id: id, in: namespace)
+            matchedGeometryEffect(
+                id: id,
+                in: namespace,
+                properties: .frame,
+                anchor: .center,
+                isSource: isSource
+            )
         } else {
             self
         }
@@ -200,7 +256,7 @@ struct StoryPresentationOverlay: View {
                     if presenter.showsViewer {
                         StoryStackViewer(
                             route: context.route,
-                            openingThumbnailUrl: context.thumbnailUrl,
+                            openingThumbnailUrl: context.sourceThumbnailUrl,
                             onDismiss: {
                                 presenter.dismiss()
                             }
@@ -210,10 +266,14 @@ struct StoryPresentationOverlay: View {
                     }
 
                     if presenter.showsOpeningBridge {
-                        StoryOpeningBridge(thumbnailUrl: context.thumbnailUrl)
+                        StoryOpeningBridge(thumbnailUrl: context.sourceThumbnailUrl)
                             .frame(width: proxy.size.width, height: proxy.size.height)
                             .clipShape(RoundedRectangle(cornerRadius: presenter.isExpanded ? 0 : 8, style: .continuous))
-                            .storyMatchedGeometry(id: context.transitionId, namespace: namespace)
+                            .storyMatchedGeometry(
+                                id: context.transitionId,
+                                namespace: namespace,
+                                isSource: false
+                            )
                             .ignoresSafeArea()
                             .allowsHitTesting(false)
                     }

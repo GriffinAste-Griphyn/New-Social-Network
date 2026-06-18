@@ -50,7 +50,7 @@ struct FollowingView: View {
                                 ) {
                                     FollowingStoryFeedCard(
                                         story: story,
-                                        transitionId: StoryTransitionIdentity.story(story.id),
+                                        transitionId: StoryTransitionIdentity.followingStory(story.id),
                                         namespace: storyTransitionNamespace
                                     )
                                 }
@@ -117,8 +117,9 @@ struct FollowingView: View {
         storyPresenter.present(
             StoryOpeningContext(
                 route: StoryRoute(id: story.id, source: .followingFeed),
-                thumbnailUrl: story.playbackThumbnailUrl ?? story.playbackMediaUrl,
-                transitionId: StoryTransitionIdentity.story(story.id)
+                sourceThumbnailUrl: story.playbackThumbnailUrl ?? story.playbackMediaUrl,
+                sourceId: story.id,
+                sourceKind: .followingStory
             )
         )
     }
