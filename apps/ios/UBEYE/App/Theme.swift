@@ -83,6 +83,63 @@ struct EmptyStateView: View {
     }
 }
 
+struct UBEYESkeletonBlock: View {
+    var cornerRadius: CGFloat = 8
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.ubeyeSubtle,
+                        Color.ubeyeBorder.opacity(0.74),
+                        Color.ubeyeRed.opacity(0.045),
+                        Color.ubeyeSubtle.opacity(0.96)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.64), lineWidth: 1)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+struct UBEYESkeletonLine: View {
+    let width: CGFloat
+    var height: CGFloat = 10
+
+    var body: some View {
+        UBEYESkeletonBlock(cornerRadius: height / 2)
+            .frame(width: width, height: height)
+    }
+}
+
+struct UBEYESkeletonCircle: View {
+    let size: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.ubeyeSubtle,
+                        Color.ubeyeBorder.opacity(0.78),
+                        Color.ubeyeSubtle.opacity(0.94)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(Circle().stroke(Color.white.opacity(0.7), lineWidth: 1))
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
 struct PrimaryButton: View {
     let title: String
     var isLoading = false
