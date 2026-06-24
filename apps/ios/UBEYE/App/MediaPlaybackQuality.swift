@@ -3,20 +3,16 @@ import CoreGraphics
 import Foundation
 
 enum MediaPlaybackQuality {
-    private static let maxAdaptiveOriginalBytes = 90 * 1024 * 1024
+    private static let maxDirectOriginalBytes = 512 * 1024 * 1024
 
     @MainActor
     static var preferredStreamingPeakBitRate: Double {
-        NetworkQualityMonitor.shared.isConstrained || NetworkQualityMonitor.shared.isCellular
-            ? 4_000_000
-            : 16_000_000
+        0
     }
 
     @MainActor
     static var preferredStreamingMaximumResolution: CGSize {
-        NetworkQualityMonitor.shared.isConstrained || NetworkQualityMonitor.shared.isCellular
-            ? CGSize(width: 1920, height: 1920)
-            : CGSize(width: 2160, height: 2160)
+        .zero
     }
 
     @MainActor
@@ -61,8 +57,7 @@ enum MediaPlaybackQuality {
         highQualityURL: URL?,
         playerPool: StoryVideoPlaybackPool?
     ) async -> (url: URL, quality: String) {
-        guard shouldConsiderHighQualityPlayback,
-              let highQualityURL else {
+        guard let highQualityURL else {
             return (defaultURL, "playback")
         }
 
@@ -74,18 +69,12 @@ enum MediaPlaybackQuality {
             return (highQualityURL, "original_cached")
         }
 
-        return (defaultURL, "playback")
-    }
-
-    @MainActor
-    private static var shouldConsiderHighQualityPlayback: Bool {
-        !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
+        return (defaultURL, "playback_original_deferred")
     }
 
     @MainActor
     private static func highQualityCandidate(from renditions: StoryMediaRenditions?) -> URL? {
-        guard shouldConsiderHighQualityPlayback,
-              let original = renditions?.original,
+        guard let original = renditions?.original,
               isDirectPlayableOriginal(original) else {
             return nil
         }
@@ -99,7 +88,7 @@ enum MediaPlaybackQuality {
         }
 
         if let byteSize = rendition.byteSize,
-           byteSize > maxAdaptiveOriginalBytes {
+           byteSize > maxDirectOriginalBytes {
             return false
         }
 
@@ -108,12 +97,12 @@ enum MediaPlaybackQuality {
         }
 
         let contentType = rendition.contentType?.lowercased()
-        if contentType == "video/mp4" || contentType == "video/x-m4v" {
+        if contentType == "video/mp4" || contentType == "video/x-m4v" || contentType == "video/quicktime" {
             return true
         }
 
         switch rendition.mediaUrl.pathExtension.lowercased() {
-        case "mp4", "m4v":
+        case "mp4", "m4v", "mov":
             return true
         default:
             return false

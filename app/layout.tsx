@@ -9,8 +9,24 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "UBEYE",
-  description: "a social experiment in wealth redistribution",
+  metadataBase: new URL("https://www.ubeye.ai"),
+  title: "UBEYE | The post-work income platform",
+  description: "UBEYE | The post-work income platform",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    title: "UBEYE | The post-work income platform",
+    description: "UBEYE | The post-work income platform",
+    url: "/",
+    siteName: "UBEYE",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "UBEYE | The post-work income platform",
+    description: "UBEYE | The post-work income platform",
+  },
 };
 
 export default function RootLayout({

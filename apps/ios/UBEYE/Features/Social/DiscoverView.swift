@@ -85,12 +85,14 @@ private enum DiscoverDestination: Identifiable {
 
 struct DiscoverView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var mediaEngine: MediaEngine
     @Environment(\.dismiss) private var dismiss
     var searchFocusRequest = 0
     var embedsInNavigationStack = true
     var showsBackButton = false
     @StateObject private var store = DiscoverStore()
     @State private var destination: DiscoverDestination?
+    @State private var selectedStory: StoryRoute?
     @State private var handledSearchFocusRequest = 0
     @FocusState private var isSearchFocused: Bool
 
@@ -151,12 +153,8 @@ struct DiscoverView: View {
                 }
 
                 if store.isLoading && displayedCreators.isEmpty {
-                    ProgressView()
-                        .tint(.ubeyeRed)
-                        .frame(maxWidth: .infinity, minHeight: 140)
-                }
-
-                if displayedCreators.isEmpty && !store.isLoading {
+                    DiscoverSearchLoadingSkeleton()
+                } else if displayedCreators.isEmpty {
                     EmptyStateView(
                         title: store.query.isEmpty ? "No accounts yet" : "No accounts found",
                         message: store.query.isEmpty ? "" : "Try another name or handle.",
@@ -185,6 +183,9 @@ struct DiscoverView: View {
             Task {
                 await store.loadFollows(api: api)
             }
+        }
+        .fullScreenCover(item: $selectedStory) { route in
+            StoryStackViewer(route: route)
         }
         .fullScreenCover(item: $destination) { destination in
             switch destination {
@@ -253,7 +254,63 @@ struct DiscoverView: View {
     }
 
     private func open(_ creator: DiscoverCreator) {
-        destination = .profile(creator)
+        guard let storyId = creator.activeStoryId else {
+            destination = .profile(creator)
+            return
+        }
+
+        warmStory(storyId)
+        selectedStory = StoryRoute(id: storyId, source: .discover)
+    }
+
+    private func warmStory(_ storyId: String) {
+        mediaEngine.warmStoryOpen(storyId: storyId, adjacentIds: [], api: api)
+    }
+}
+
+private struct DiscoverSearchLoadingSkeleton: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ForEach(0..<4, id: \.self) { index in
+                DiscoverCreatorRowLoadingSkeleton(showsActionPill: index.isMultiple(of: 2))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading creators")
+    }
+}
+
+private struct DiscoverCreatorRowLoadingSkeleton: View {
+    var showsActionPill = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            UBEYESkeletonCircle(size: 46)
+
+            VStack(alignment: .leading, spacing: 8) {
+                UBEYESkeletonLine(width: 128, height: 13)
+                UBEYESkeletonLine(width: 86, height: 10)
+            }
+
+            Spacer(minLength: 12)
+
+            if showsActionPill {
+                UBEYESkeletonBlock(cornerRadius: 15)
+                    .frame(width: 78, height: 30)
+            }
+
+            UBEYESkeletonLine(width: 10, height: 14)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 74)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.ubeyeBorder, lineWidth: 1)
+        )
     }
 }
 

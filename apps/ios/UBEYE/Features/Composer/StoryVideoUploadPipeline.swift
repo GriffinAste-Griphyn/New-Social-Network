@@ -197,8 +197,8 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
-    private static let maxUploadBytes: Int64 = 300 * 1024 * 1024
-    private static let maxOriginalFastPathBytes: Int64 = 110 * 1024 * 1024
+    private static let maxUploadBytes: Int64 = 512 * 1024 * 1024
+    private static let maxOriginalFastPathBytes: Int64 = maxUploadBytes
 
     static func prepare(
         url: URL,
@@ -244,7 +244,7 @@ enum StoryVideoUploadNormalizer {
             let byteSize = try videoFileSize(for: normalizedURL)
 
             if byteSize > maxUploadBytes {
-                throw APIClientError.server("Story videos are capped at 300 MB.", 0)
+                throw APIClientError.server("Story videos are capped at 512 MB.", 0)
             }
 
             if let durationMs, durationMs > maxDurationSeconds * 1_000 {

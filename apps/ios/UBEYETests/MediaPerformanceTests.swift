@@ -36,7 +36,7 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(parsed?.metadata.values.first?.count, 500)
     }
 
-    func testDirectPlayableOriginalRequiresSafeReadyMp4UnderCap() {
+    func testDirectPlayableOriginalAcceptsReadyVideoUnderUploadCap() {
         XCTAssertTrue(
             MediaPlaybackQuality.isDirectPlayableOriginal(
                 rendition(
@@ -48,7 +48,7 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
 
-        XCTAssertFalse(
+        XCTAssertTrue(
             MediaPlaybackQuality.isDirectPlayableOriginal(
                 rendition(
                     url: URL(string: "https://example.com/story.mov")!,
@@ -59,12 +59,23 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
 
+        XCTAssertTrue(
+            MediaPlaybackQuality.isDirectPlayableOriginal(
+                rendition(
+                    url: URL(string: "https://example.com/story.mp4")!,
+                    contentType: "video/mp4",
+                    byteSize: 512 * 1024 * 1024,
+                    processingStatus: "ready"
+                )
+            )
+        )
+
         XCTAssertFalse(
             MediaPlaybackQuality.isDirectPlayableOriginal(
                 rendition(
                     url: URL(string: "https://example.com/story.mp4")!,
                     contentType: "video/mp4",
-                    byteSize: 120 * 1024 * 1024,
+                    byteSize: 513 * 1024 * 1024,
                     processingStatus: "ready"
                 )
             )
@@ -80,6 +91,21 @@ final class MediaPerformanceTests: XCTestCase {
                 )
             )
         )
+    }
+
+    @MainActor
+    func testPreferredPlaybackDefersHighQualityOriginalBeforeCacheWarmup() async {
+        let defaultURL = URL(string: "https://example.com/playback/video.m3u8")!
+        let highQualityURL = URL(string: "https://example.com/original/\(UUID().uuidString).mp4")!
+
+        let selected = await MediaPlaybackQuality.preferredPlaybackURL(
+            defaultURL: defaultURL,
+            highQualityURL: highQualityURL,
+            playerPool: nil
+        )
+
+        XCTAssertEqual(selected.url, defaultURL)
+        XCTAssertEqual(selected.quality, "playback_original_deferred")
     }
 
     private func rendition(

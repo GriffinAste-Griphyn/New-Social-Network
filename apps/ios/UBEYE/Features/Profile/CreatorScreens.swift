@@ -549,7 +549,13 @@ final class MyStoryStatsStore: ObservableObject {
         isLoading = true
         error = nil
         do {
-            let response: CreatorStatsResponse = try await api.get("/api/mobile/creator/stats")
+            let response: CreatorStatsResponse = try await api.get(
+                "/api/mobile/creator/stats",
+                queryItems: [
+                    URLQueryItem(name: "stories", value: "active"),
+                    URLQueryItem(name: "includeStoryComments", value: "true")
+                ]
+            )
             stats = response.stats
         } catch {
             self.error = error.localizedDescription
@@ -586,8 +592,8 @@ struct MyStoryStatsView: View {
                         .padding(.vertical, 36)
                 } else if let stats = store.stats, stats.stories.isEmpty {
                     EmptyStateView(
-                        title: "No stories yet",
-                        message: "Post a story and this screen will show its views, completion, replies, and earnings.",
+                        title: "No active stories",
+                        message: "Post a story and this screen will show active story views, completion, replies, comments, and earnings.",
                         systemImage: "photo.stack"
                     )
                     .padding(.vertical, 36)
@@ -620,6 +626,7 @@ struct MyStoryStatsView: View {
             storyPager(stories)
             storySummary(story: selectedStory, stats: stats)
             individualStats(story: selectedStory)
+            storyComments(story: selectedStory)
         }
     }
 
@@ -788,6 +795,55 @@ struct MyStoryStatsView: View {
         .ubeyeCard()
     }
 
+    private func storyComments(story: CreatorStatsResponse.Stats.Story) -> some View {
+        let comments = story.commentItems
+        let commentCount = max(story.comments + story.replies, comments.count)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Story comments")
+                    .font(.system(size: 20, weight: .bold))
+                Spacer()
+                Text(formattedNumber(commentCount))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.ubeyeMuted)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.ubeyeSubtle, in: Capsule())
+            }
+
+            if comments.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 15, weight: .bold))
+                        .frame(width: 34, height: 34)
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .background(Color.ubeyeSubtle, in: Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("No comments yet")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(Color.ubeyeInk)
+                        Text("Comments for this story will appear here.")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.ubeyeMuted)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(comments) { comment in
+                        MyStoryStatsCommentRow(comment: comment)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .ubeyeCard()
+    }
+
     private func formattedStoryDate(_ value: String) -> String {
         guard let date = ISO8601DateFormatter.ubeyeInternet.date(from: value) else {
             return value
@@ -948,6 +1004,67 @@ private struct MyStoryStatsSidePreview: View {
         .opacity(0.78)
         .offset(x: side == .left ? -164 : 164, y: 8)
     }
+}
+
+private struct MyStoryStatsCommentRow: View {
+    let comment: CreatorStatsResponse.Stats.Story.Comment
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            RemoteAvatar(url: comment.actor.imageUrl, size: 38, name: comment.actor.name)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(comment.actor.name)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Color.ubeyeInk)
+                        .lineLimit(1)
+                    Text("@\(comment.actor.handle)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(myStoryStatsCommentTime(comment.createdAt))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(1)
+                }
+
+                Text(commentText)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ubeyeInk)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let mediaUrl = comment.mediaThumbnailUrl ?? comment.mediaUrl {
+                    CachedAsyncImage(url: mediaUrl) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        Color.ubeyeSubtle
+                    }
+                    .frame(width: 76, height: 76)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.ubeyeSubtle.opacity(0.68), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var commentText: String {
+        let trimmed = comment.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        return trimmed.isEmpty ? "Comment" : trimmed
+    }
+}
+
+private func myStoryStatsCommentTime(_ value: String) -> String {
+    guard let date = ISO8601DateFormatter.ubeyeInternet.date(from: value) else {
+        return value
+    }
+
+    return date.formatted(.dateTime.hour().minute())
 }
 
 private extension ISO8601DateFormatter {

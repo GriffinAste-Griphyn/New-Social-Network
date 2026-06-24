@@ -12,20 +12,32 @@ const heroVideo = "/ubeye/hero-manhattan-loop-v2.mp4"
 export const metadata: Metadata = {
   title: "Advertise on UBEYE",
   description:
-    "Serve ads to targeted users on UBEYE with simple audience, budget, and safety controls.",
+    "Advertise on UBEYE by funding social attention, brand-relevant stories, and eligible value routed back to participants.",
 }
 
-const attentionPath = [
-  { label: "Choose audience", value: "Pick who should see your ads" },
-  { label: "Set budget", value: "Control daily and monthly spend" },
-  { label: "Serve ads", value: "Reach targeted users in the app" },
-  { label: "Measure", value: "Track delivery and performance" },
+const fundingPath = [
+  {
+    label: "Define signals",
+    value: "Names, handles, products, hashtags, and domains tell UBEYE what should qualify.",
+  },
+  {
+    label: "Fund attention",
+    value: "Wallets and spend caps keep advertiser dollars bounded before any match can debit.",
+  },
+  {
+    label: "Match stories",
+    value: "UBEYE evaluates creator tags and caption mentions against brand funding rules.",
+  },
+  {
+    label: "Route value",
+    value: "Qualified activity creates auditable payout events instead of hiding value inside the feed.",
+  },
 ]
 
 const heroMetrics = [
-  { label: "Format", value: "Ads" },
-  { label: "Targeting", value: "Users" },
-  { label: "Spend", value: "Capped" },
+  { label: "Define", value: "Brand signals" },
+  { label: "Limit", value: "Spend caps" },
+  { label: "Track", value: "Payout events" },
 ]
 
 function SiteHeader() {
@@ -59,28 +71,31 @@ function SiteHeader() {
 function FundingPath() {
   return (
     <div className="border border-white/12 bg-black/54 p-4 text-white shadow-[0_24px_80px_-56px_rgba(0,0,0,0.9)] backdrop-blur-md md:p-5">
-      <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <p className="text-xs uppercase text-white/42">Campaign path</p>
-          <p className="mt-1 text-sm font-medium text-white">Simple campaign setup</p>
-        </div>
-        <span className="inline-flex items-center gap-2 rounded-[8px] bg-[#e01616] px-2.5 py-1 text-xs font-medium text-white">
-          <span className="size-1.5 rounded-full bg-white" />
-          Ads
-        </span>
+      <div className="border-b border-white/10 pb-5">
+        <p className="text-xs font-medium uppercase text-[#ffb4a6]">
+          Advertiser console
+        </p>
+        <h2 className="mt-3 max-w-sm text-2xl font-[340] leading-tight text-white md:text-3xl">
+          Fund qualified social signals.
+        </h2>
+        <p className="mt-3 max-w-sm text-sm leading-6 text-white/58">
+          Set what your brand will fund before any wallet balance is debited.
+        </p>
       </div>
 
       <div className="grid grid-cols-3 divide-x divide-white/10 border-b border-white/10">
         {heroMetrics.map((metric) => (
           <div key={metric.label} className="px-3 py-4 first:pl-0 last:pr-0">
             <p className="text-[0.7rem] uppercase text-white/38">{metric.label}</p>
-            <p className="mt-1 text-xl font-medium text-white md:text-2xl">{metric.value}</p>
+            <p className="mt-1 text-base font-medium leading-tight text-white md:text-lg">
+              {metric.value}
+            </p>
           </div>
         ))}
       </div>
 
       <div className="divide-y divide-white/10">
-        {attentionPath.map((item, index) => (
+        {fundingPath.map((item, index) => (
           <div key={item.label} className="grid grid-cols-[1.35rem_1fr] gap-3 py-4">
             <div className="pt-1">
               <span className="flex size-5 items-center justify-center rounded-full border border-[#e01616]/50 bg-[#e01616]/16 text-[0.65rem] font-medium text-[#ffb4a6]">
@@ -104,7 +119,7 @@ export default function AdvertisePage() {
       <SiteHeader />
 
       <main className="overflow-hidden">
-        <section className="relative min-h-[100svh] pt-16">
+        <section className="relative min-h-svh border-b border-white/10 pt-16">
           <div
             className="absolute inset-0 bg-cover bg-center opacity-58 motion-reduce:block"
             style={{ backgroundImage: `url(${heroPoster})` }}
@@ -123,33 +138,34 @@ export default function AdvertisePage() {
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(6,6,6,0.96),rgba(6,6,6,0.72)_52%,rgba(6,6,6,0.38))]" />
           <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,6,6,0.2),rgba(6,6,6,0.44)_54%,rgba(6,6,6,1)_100%)]" />
 
-          <div className="relative mx-auto grid max-w-[1180px] gap-10 px-4 md:min-h-[calc(100svh-4rem)] md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
-            <div className="flex min-h-[calc(100svh-4rem)] max-w-4xl flex-col pb-8 pt-17 md:block md:min-h-0 md:py-0">
+          <div className="relative mx-auto grid min-h-[calc(100svh-4rem)] max-w-[1180px] gap-10 px-4 py-10 md:grid-cols-[minmax(0,1.08fr)_24rem] md:items-center md:py-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-14">
+            <div className="flex max-w-4xl flex-col md:block">
               <div>
                 <p className="inline-flex max-w-full items-center rounded-[8px] border border-white/14 bg-white/8 px-3 py-1.5 text-[0.68rem] font-medium uppercase leading-[1.2] text-white/78 backdrop-blur-sm">
-                  Advertise on UBEYE
+                  Advertiser-funded social value
                 </p>
                 <h1 className="mt-10 max-w-[15ch] text-[3.65rem] font-[350] leading-[0.92] text-white sm:text-[4.8rem] md:mt-7 md:text-[4.5rem] md:leading-[0.94] lg:text-[5.2rem]">
-                  Organic content monetized.
+                  Fund the attention people create.
                 </h1>
                 <p className="mt-9 max-w-2xl text-base leading-8 text-white/68 md:mt-6 md:text-lg md:leading-8">
                   <span className="md:hidden">
-                    Choose your audience, set your budget, and launch ads.
+                    Put brand dollars behind social attention and eligible creator activity.
                   </span>
                   <span className="hidden md:inline">
-                    UBEYE lets advertisers choose the users they want to reach,
-                    set a budget, and serve ads in the app.
+                    UBEYE lets brands put dollars behind the stories people post
+                    and watch, then routes eligible value back through auditable
+                    creator and participant activity.
                   </span>
                 </p>
               </div>
 
-              <div className="mt-auto flex flex-col gap-3 pt-10 sm:flex-row md:mt-6 md:pt-0">
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Button
                   asChild
                   className="h-12 justify-between rounded-[8px] bg-[#e01616] px-5 text-sm font-medium text-white hover:bg-[#c91414] sm:justify-center"
                 >
                   <Link href={signupHref}>
-                    Create advertiser account
+                    Start advertising
                     <ArrowRight className="size-4" />
                   </Link>
                 </Button>
@@ -158,7 +174,7 @@ export default function AdvertisePage() {
                   variant="outline"
                   className="h-12 justify-between rounded-[8px] border-white/16 bg-white/5 px-5 text-sm font-medium text-white hover:bg-white/10 sm:justify-center"
                 >
-                  <Link href={portalHref}>Open advertiser portal</Link>
+                  <Link href={portalHref}>Open funding console</Link>
                 </Button>
               </div>
             </div>

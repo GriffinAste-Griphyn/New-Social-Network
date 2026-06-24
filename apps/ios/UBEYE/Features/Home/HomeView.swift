@@ -305,9 +305,7 @@ struct HomeView: View {
                     header
 
                     if store.isLoading && store.feed == nil {
-                        ProgressView()
-                            .tint(.ubeyeRed)
-                            .frame(maxWidth: .infinity, minHeight: 160)
+                        HomeFeedLoadingSkeleton()
                     } else if let error = store.error, store.feed == nil {
                         EmptyStateView(title: "Could not load stories", message: error, systemImage: "wifi.exclamationmark")
                     }
@@ -636,6 +634,75 @@ struct HomeView: View {
 
 }
 
+private struct HomeFeedLoadingSkeleton: View {
+    private let discoverColumns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Following", actionTitle: nil, showsChevron: true)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(0..<4, id: \.self) { _ in
+                            HomeStoryCardLoadingSkeleton()
+                        }
+                    }
+                    .padding(.trailing, UBEYEMetrics.screenInset)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Discover", actionTitle: nil, showsChevron: true)
+
+                LazyVGrid(columns: discoverColumns, spacing: 10) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        HomeDiscoverCardLoadingSkeleton()
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading stories")
+    }
+}
+
+private struct HomeStoryCardLoadingSkeleton: View {
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            UBEYESkeletonBlock()
+
+            VStack(alignment: .leading, spacing: 8) {
+                UBEYESkeletonLine(width: 72, height: 10)
+                UBEYESkeletonLine(width: 48, height: 10)
+            }
+            .padding(12)
+        }
+        .frame(width: 132, height: 192)
+        .ubeyeMediaCardChrome()
+    }
+}
+
+private struct HomeDiscoverCardLoadingSkeleton: View {
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            UBEYESkeletonBlock()
+
+            VStack(alignment: .leading, spacing: 8) {
+                UBEYESkeletonLine(width: 86, height: 10)
+                UBEYESkeletonLine(width: 56, height: 10)
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 252)
+        .ubeyeMediaCardChrome()
+    }
+}
+
 struct SectionHeader: View {
     let title: String
     let actionTitle: String?
@@ -691,15 +758,6 @@ struct MyStoryHomeCard: View {
                         .frame(width: 132, height: 192)
                 }
 
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 30, height: 30)
-                    .foregroundStyle(.white)
-                    .background(Color.ubeyeInk, in: Circle())
-                    .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(9)
-
                 if let pendingUpload {
                     pendingStatus(upload: pendingUpload)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -721,6 +779,12 @@ struct MyStoryHomeCard: View {
             .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(myStory.hasActiveStory ? "Play My Story" : "My Story")
+        .accessibilityHint(
+            myStory.hasActiveStory
+                ? "Opens your story playback."
+                : "No active story to play."
+        )
     }
 
     private func pendingStatus(upload: PendingStoryUpload) -> some View {
@@ -762,23 +826,11 @@ struct MyStoryHomeCard: View {
 private struct MyStoryCardSkeleton: View {
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color.ubeyeSubtle,
-                    Color.ubeyeBorder.opacity(0.72),
-                    Color.ubeyeSubtle.opacity(0.92)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            UBEYESkeletonBlock()
 
             VStack(alignment: .leading, spacing: 8) {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.62))
-                    .frame(width: 72, height: 10)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.42))
-                    .frame(width: 48, height: 10)
+                UBEYESkeletonLine(width: 72, height: 10)
+                UBEYESkeletonLine(width: 48, height: 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .padding(12)
@@ -882,23 +934,11 @@ struct DiscoverGrid: View {
 private struct DiscoverCardSkeleton: View {
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color.ubeyeSubtle,
-                    Color.ubeyeBorder.opacity(0.72),
-                    Color.ubeyeSubtle.opacity(0.92)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            UBEYESkeletonBlock()
 
             VStack(alignment: .leading, spacing: 8) {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.62))
-                    .frame(width: 78, height: 10)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.white.opacity(0.42))
-                    .frame(width: 52, height: 10)
+                UBEYESkeletonLine(width: 78, height: 10)
+                UBEYESkeletonLine(width: 52, height: 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .padding(12)

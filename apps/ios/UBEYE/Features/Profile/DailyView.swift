@@ -53,14 +53,18 @@ struct DailyView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                headerCard
+                if store.isLoading && store.response == nil {
+                    DailyLoadingSkeleton()
+                } else {
+                    headerCard
 
-                if let error = store.error {
-                    InlineNotice(message: error, isError: true)
+                    if let error = store.error {
+                        InlineNotice(message: error, isError: true)
+                    }
+
+                    statusCard
+                    rulesCard
                 }
-
-                statusCard
-                rulesCard
             }
             .padding(16)
             .padding(.bottom, 24)
@@ -106,7 +110,7 @@ struct DailyView: View {
             HStack(spacing: 10) {
                 dailyMetric("Pool", ubeyeCurrency(store.daily?.estimatedPoolCents), "75% share")
                 dailyMetric("Winners", "\(store.daily?.winnerCount ?? 5)", "equal split")
-                dailyMetric("Draw", store.daily?.drawLabel ?? "9:10 PM ET", "daily")
+                dailyMetric("Draw", store.daily?.drawLabel ?? "12:10 AM ET", "daily")
             }
         }
         .padding(16)
@@ -127,8 +131,7 @@ struct DailyView: View {
                 Spacer()
 
                 if store.isLoading || store.isStarting {
-                    ProgressView()
-                        .controlSize(.small)
+                    DailyStatusActivitySkeleton()
                 }
             }
 
@@ -147,7 +150,7 @@ struct DailyView: View {
 
             if store.entry != nil {
                 InlineNotice(
-                    message: "You are entered into today's Daily pool. Winners are drawn at 9:10 PM ET.",
+                    message: "You are entered into today's Daily pool. Winners are drawn at 12:10 AM ET.",
                     isError: false
                 )
             }
@@ -164,7 +167,7 @@ struct DailyView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ruleLine("US only and 18+ at launch.")
                 ruleLine("One entry per eligible user per Daily period.")
-                ruleLine("Daily period runs 9:00 PM ET to 9:00 PM ET.")
+                ruleLine("Daily period runs 12:00 AM ET to 12:00 AM ET.")
                 ruleLine("Apple is not a sponsor of, involved in, or responsible for The Daily, entries, drawings, or payouts.")
             }
 
@@ -278,6 +281,147 @@ struct DailyView: View {
         if let session = await store.start(api: api) {
             playerSession = session
         }
+    }
+}
+
+private struct DailyLoadingSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            DailyHeaderLoadingCard()
+            DailyStatusLoadingCard()
+            DailyRulesLoadingCard()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading The Daily")
+    }
+}
+
+private struct DailyHeaderLoadingCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                UBEYESkeletonCircle(size: 44)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    UBEYESkeletonLine(width: 104, height: 16)
+                    UBEYESkeletonLine(width: 214, height: 10)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { index in
+                    DailyMetricLoadingTile(widths: metricWidths(for: index))
+                }
+            }
+        }
+        .padding(16)
+        .ubeyeCard()
+    }
+
+    private func metricWidths(for index: Int) -> DailyMetricLoadingTile.Widths {
+        switch index {
+        case 0:
+            return DailyMetricLoadingTile.Widths(title: 30, value: 62, subtitle: 54)
+        case 1:
+            return DailyMetricLoadingTile.Widths(title: 46, value: 24, subtitle: 58)
+        default:
+            return DailyMetricLoadingTile.Widths(title: 28, value: 72, subtitle: 34)
+        }
+    }
+}
+
+private struct DailyMetricLoadingTile: View {
+    struct Widths {
+        let title: CGFloat
+        let value: CGFloat
+        let subtitle: CGFloat
+    }
+
+    let widths: Widths
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            UBEYESkeletonLine(width: widths.title, height: 8)
+            UBEYESkeletonLine(width: widths.value, height: 13)
+            UBEYESkeletonLine(width: widths.subtitle, height: 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct DailyStatusLoadingCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 7) {
+                    UBEYESkeletonLine(width: 142, height: 15)
+                    UBEYESkeletonLine(width: 236, height: 10)
+                }
+
+                Spacer(minLength: 0)
+
+                DailyStatusActivitySkeleton()
+            }
+
+            UBEYESkeletonBlock(cornerRadius: 23)
+                .frame(height: 46)
+        }
+        .padding(16)
+        .ubeyeCard()
+    }
+}
+
+private struct DailyRulesLoadingCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                UBEYESkeletonCircle(size: 22)
+                UBEYESkeletonLine(width: 96, height: 14)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(0..<4, id: \.self) { index in
+                    HStack(alignment: .top, spacing: 8) {
+                        UBEYESkeletonCircle(size: 18)
+                        UBEYESkeletonLine(width: ruleWidth(for: index), height: 10)
+                    }
+                }
+            }
+
+            UBEYESkeletonBlock(cornerRadius: 21)
+                .frame(height: 42)
+        }
+        .padding(16)
+        .ubeyeCard()
+    }
+
+    private func ruleWidth(for index: Int) -> CGFloat {
+        switch index {
+        case 0:
+            return 176
+        case 1:
+            return 230
+        case 2:
+            return 206
+        default:
+            return 256
+        }
+    }
+}
+
+private struct DailyStatusActivitySkeleton: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color.ubeyeRed.opacity(0.74))
+                .frame(width: 6, height: 6)
+            UBEYESkeletonLine(width: 34, height: 7)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -585,7 +729,7 @@ private struct DailyPlayerLayer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
-        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.videoGravity = .resizeAspect
         view.playerLayer.backgroundColor = UIColor.black.cgColor
         return view
     }

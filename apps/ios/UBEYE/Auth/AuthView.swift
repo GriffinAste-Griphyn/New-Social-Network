@@ -259,12 +259,19 @@ private struct AuthTextField: View {
     var keyboard: UIKeyboardType = .default
 
     var body: some View {
-        TextField(title, text: $text)
-            .textInputAutocapitalization(.never)
-            .keyboardType(keyboard)
-            .autocorrectionDisabled()
+        ZStack(alignment: .leading) {
+            if text.isEmpty {
+                AuthInlinePlaceholder(title)
+            }
+
+            TextField("", text: $text)
+                .textInputAutocapitalization(.never)
+                .keyboardType(keyboard)
+                .autocorrectionDisabled()
+                .accessibilityLabel(title)
+        }
             .padding()
-            .frame(height: 50)
+            .frame(minHeight: 50)
             .background(Color.ubeyeSubtle)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .foregroundStyle(Color.ubeyeInk)
@@ -278,15 +285,20 @@ private struct AuthSecureField: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Group {
+            ZStack(alignment: .leading) {
+                if text.isEmpty {
+                    AuthInlinePlaceholder(title)
+                }
+
                 if isPasswordVisible {
-                    TextField(title, text: $text)
+                    TextField("", text: $text)
                 } else {
-                    SecureField(title, text: $text)
+                    SecureField("", text: $text)
                 }
             }
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
+            .accessibilityLabel(title)
 
             Button {
                 isPasswordVisible.toggle()
@@ -301,10 +313,28 @@ private struct AuthSecureField: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 8)
-        .frame(height: 50)
+        .frame(minHeight: 50)
         .background(Color.ubeyeSubtle)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .foregroundStyle(Color.ubeyeInk)
+    }
+}
+
+private struct AuthInlinePlaceholder: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(Color.ubeyeMuted.opacity(0.72))
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

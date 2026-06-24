@@ -83,6 +83,63 @@ struct EmptyStateView: View {
     }
 }
 
+struct UBEYESkeletonBlock: View {
+    var cornerRadius: CGFloat = 8
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.ubeyeSubtle,
+                        Color.ubeyeBorder.opacity(0.74),
+                        Color.ubeyeRed.opacity(0.045),
+                        Color.ubeyeSubtle.opacity(0.96)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.64), lineWidth: 1)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+struct UBEYESkeletonLine: View {
+    let width: CGFloat
+    var height: CGFloat = 10
+
+    var body: some View {
+        UBEYESkeletonBlock(cornerRadius: height / 2)
+            .frame(width: width, height: height)
+    }
+}
+
+struct UBEYESkeletonCircle: View {
+    let size: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.ubeyeSubtle,
+                        Color.ubeyeBorder.opacity(0.78),
+                        Color.ubeyeSubtle.opacity(0.94)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(Circle().stroke(Color.white.opacity(0.7), lineWidth: 1))
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
 struct PrimaryButton: View {
     let title: String
     var isLoading = false
@@ -1341,14 +1398,7 @@ enum MediaPreheater {
 
     @MainActor
     static func preheat(stack: StoryStack, around index: Int = 0) {
-        let lowerBound = max(index - 1, 0)
-        let upperBound = min(index + 2, max(stack.items.count - 1, 0))
-
-        guard lowerBound <= upperBound else {
-            return
-        }
-
-        let nearbyItems = Array(stack.items[lowerBound...upperBound])
+        let nearbyItems = orderedNearbyStoryItems(in: stack, around: index)
         let imageUrls = nearbyItems.flatMap { item -> [URL] in
             var urls: [URL] = []
             if let thumbnailUrl = item.playbackThumbnailUrl {
@@ -1364,8 +1414,9 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        let videoUrls = nearbyItems.flatMap { item in
-            MediaPlaybackQuality.preloadURLs(for: item)
+        let videoItems = nearbyItems.filter(\.isPlayableVideo)
+        let videoUrls = videoItems.map(\.playbackMediaUrl) + videoItems.compactMap { item in
+            MediaPlaybackQuality.highQualityCandidate(for: item)
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
         let videoLimit = allowsPersistentDownloads ? 3 : 1
@@ -1377,6 +1428,19 @@ enum MediaPreheater {
                 allowsPersistentDownloads: allowsPersistentDownloads
             )
         }
+    }
+
+    private static func orderedNearbyStoryItems(in stack: StoryStack, around index: Int) -> [StoryStackItem] {
+        guard stack.items.indices.contains(index) else {
+            return []
+        }
+
+        var seen = Set<Int>()
+        return [index, index + 1, index + 2, index - 1]
+            .filter { candidate in
+                stack.items.indices.contains(candidate) && seen.insert(candidate).inserted
+            }
+            .map { stack.items[$0] }
     }
 }
 

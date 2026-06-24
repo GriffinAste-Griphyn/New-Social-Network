@@ -174,7 +174,7 @@ describe("mobile Cloudflare video upload API", () => {
     const response = await POST(
       jsonRequest({
         fileName: "large.mov",
-        byteSize: 301 * 1024 * 1024,
+        byteSize: 513 * 1024 * 1024,
         maxDurationSeconds: 120,
       }),
     )

@@ -296,10 +296,8 @@ struct StoryStackViewer: View {
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = StoryStackStore()
+    @StateObject private var storyTimerState = StoryTimerState()
     @State private var index = 0
-    @State private var storyStartedAt = Date()
-    @State private var storyProgress = 0.0
-    @State private var storyProgressResetToken = 0
     @State private var timedStoryId: String?
     @State private var videoReadyItemId: String?
     @State private var didFinishCurrentItem = false
@@ -309,6 +307,9 @@ struct StoryStackViewer: View {
     @State private var repliesSheetItem: StoryStackItem?
     @State private var confirmationDismissTask: Task<Void, Never>?
     @State private var reportConfirmationDismissTask: Task<Void, Never>?
+    @State private var completionDismissTask: Task<Void, Never>?
+    @State private var isClearingCompletedStory = false
+    @State private var keyboardHeight: CGFloat = 0
     @FocusState private var isReplyFieldFocused: Bool
 
     private let defaultStoryDurationSeconds: TimeInterval = 10
@@ -319,16 +320,24 @@ struct StoryStackViewer: View {
     private let ownerStatsHeight: CGFloat = 64
     private let replyComposerHeight: CGFloat = 46
     private let bottomChromeInset: CGFloat = 16
+    private let bottomChromeScreenGap: CGFloat = 20
+    private let keyboardComposerGap: CGFloat = 8
     private let captionBottomGap: CGFloat = 14
+    private let topChromeGap: CGFloat = 10
+    private let topChromeMinimumInset: CGFloat = 58
     private let verticalSwipeMinimumDistance: CGFloat = 58
     private let verticalSwipeDominanceRatio: CGFloat = 1.15
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                Color.black.ignoresSafeArea()
+            let safeAreaInsets = resolvedSafeAreaInsets(proxy.safeAreaInsets)
 
-                if store.isLoading && store.stack == nil {
+            ZStack {
+                Color.black
+
+                if isClearingCompletedStory {
+                    Color.black
+                } else if store.isLoading && store.stack == nil {
                     ProgressView()
                         .tint(.white)
                 } else if let error = store.error, store.stack == nil {
@@ -338,7 +347,6 @@ struct StoryStackViewer: View {
                     media(item)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .ignoresSafeArea()
                         .onAppear {
                             store.markActiveItem(item)
                             startStoryTimerIfNeeded(for: item)
@@ -350,10 +358,24 @@ struct StoryStackViewer: View {
                     tapNavigationOverlay(item: item)
                         .frame(width: proxy.size.width, height: proxy.size.height)
 
-                    storyChrome(stack: stack, item: item)
+                    storyChromeScrim(stack: stack)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .allowsHitTesting(false)
+
+                    storyChrome(stack: stack, item: item, safeAreaInsets: safeAreaInsets)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .allowsHitTesting(true)
                         .zIndex(1)
+
+                    if !isClearingCompletedStory {
+                        storyBottomOverlayChrome(
+                            stack: stack,
+                            item: item,
+                            safeAreaBottom: safeAreaInsets.bottom
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .zIndex(2)
+                    }
 
                     if let repliesSheetItem {
                         Color.black.opacity(0.001)
@@ -370,7 +392,10 @@ struct StoryStackViewer: View {
                     }
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        .ignoresSafeArea(.container, edges: .all)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .simultaneousGesture(verticalStorySwipeGesture)
         .task {
             mediaEngine.storyViewerDidAppear()
@@ -421,9 +446,16 @@ struct StoryStackViewer: View {
         .onChange(of: store.reportConfirmation) { _, confirmation in
             scheduleReportConfirmationDismiss(for: confirmation)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateKeyboardHeight(from: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            setKeyboardHeight(0)
+        }
         .onDisappear {
             confirmationDismissTask?.cancel()
             reportConfirmationDismissTask?.cancel()
+            completionDismissTask?.cancel()
             mediaEngine.storyViewerDidDisappear()
         }
         .fullScreenCover(item: $reportingItem) { item in
@@ -471,13 +503,11 @@ struct StoryStackViewer: View {
                     showsThumbnailWhileLoading: true,
                     isPaused: shouldPauseVideoPlayback,
                     onReadyForPlayback: {
-                        guard timedStoryId == item.id else {
+                        guard timedStoryId == item.id, videoReadyItemId != item.id else {
                             return
                         }
                         videoReadyItemId = item.id
-                        storyStartedAt = Date()
-                        storyProgress = 0
-                        storyProgressResetToken += 1
+                        storyTimerState.reset()
                     },
                     onProgress: { progress in
                         updateVideoStoryProgress(progress, item: item)
@@ -490,7 +520,7 @@ struct StoryStackViewer: View {
                 CachedAsyncImage(url: item.playbackMediaUrl) { image in
                     image
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } placeholder: {
                     storyImagePlaceholder(item)
@@ -529,7 +559,7 @@ struct StoryStackViewer: View {
             CachedAsyncImage(url: thumbnailUrl) { image in
                 image
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } placeholder: {
                 Color.black
@@ -539,24 +569,21 @@ struct StoryStackViewer: View {
         }
     }
 
-    private func storyChrome(stack: StoryStack, item: StoryStackItem) -> some View {
+    private func storyChrome(stack: StoryStack, item: StoryStackItem, safeAreaInsets: EdgeInsets) -> some View {
         ZStack {
-            storyChromeScrim(stack: stack)
-                .allowsHitTesting(false)
-
-            storyTopChrome(stack: stack, item: item)
+            storyTopChrome(stack: stack, item: item, safeAreaTop: safeAreaInsets.top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             storyCaption(item)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.horizontal, UBEYEMetrics.screenInset)
-                .padding(.bottom, captionBottomInset(for: stack, item: item))
+                .padding(.bottom, captionBottomInset(for: stack, item: item, safeAreaBottom: safeAreaInsets.bottom))
 
             if let confirmation = store.replyConfirmation {
                 replyConfirmationToast(confirmation)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, UBEYEMetrics.screenInset)
-                    .padding(.bottom, replyConfirmationBottomInset(for: stack))
+                    .padding(.bottom, replyConfirmationBottomInset(for: stack, safeAreaBottom: safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -564,7 +591,7 @@ struct StoryStackViewer: View {
                 replyConfirmationToast(confirmation)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, UBEYEMetrics.screenInset)
-                    .padding(.bottom, replyConfirmationBottomInset(for: stack))
+                    .padding(.bottom, replyConfirmationBottomInset(for: stack, safeAreaBottom: safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -572,14 +599,10 @@ struct StoryStackViewer: View {
                 replyConfirmationToast(error)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, UBEYEMetrics.screenInset)
-                    .padding(.bottom, replyConfirmationBottomInset(for: stack))
+                    .padding(.bottom, replyConfirmationBottomInset(for: stack, safeAreaBottom: safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            storyBottomChrome(stack: stack, item: item)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.horizontal, bottomChromeInset)
-                .padding(.bottom, bottomChromeInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
@@ -614,13 +637,13 @@ struct StoryStackViewer: View {
         .ignoresSafeArea()
     }
 
-    private func storyTopChrome(stack: StoryStack, item: StoryStackItem) -> some View {
+    private func storyTopChrome(stack: StoryStack, item: StoryStackItem, safeAreaTop: CGFloat) -> some View {
         VStack(spacing: 12) {
             storyProgressIndicator(stack: stack)
             storyHeader(stack: stack, item: item)
         }
         .padding(.horizontal, UBEYEMetrics.screenInset)
-        .padding(.top, 18)
+        .padding(.top, max(safeAreaTop + topChromeGap, topChromeMinimumInset))
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .top)
     }
@@ -752,24 +775,60 @@ struct StoryStackViewer: View {
         }
     }
 
-    private func captionBottomInset(for stack: StoryStack, item: StoryStackItem) -> CGFloat {
+    @ViewBuilder
+    private func storyBottomOverlayChrome(stack: StoryStack, item: StoryStackItem, safeAreaBottom: CGFloat) -> some View {
+        if bottomChromeHeight(for: stack) > 0 {
+            storyBottomChrome(stack: stack, item: item)
+                .frame(height: bottomChromeHeight(for: stack))
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, bottomChromeInset)
+                .padding(.bottom, bottomChromeBottomPadding(safeAreaBottom: safeAreaBottom))
+                .foregroundStyle(.white)
+        }
+    }
+
+    private func bottomChromeBottomPadding(safeAreaBottom: CGFloat) -> CGFloat {
+        if keyboardHeight > 0 {
+            return keyboardHeight + keyboardComposerGap
+        }
+
+        return max(safeAreaBottom + 10, bottomChromeScreenGap)
+    }
+
+    private func bottomChromeHeight(for stack: StoryStack) -> CGFloat {
         if isOwnStack(stack) {
-            return bottomChromeInset + ownerStatsHeight + captionBottomGap
+            return ownerStatsHeight
         }
 
         if route.source != .discover {
-            return bottomChromeInset + replyComposerHeight + captionBottomGap
+            return replyComposerHeight
         }
 
-        return bottomChromeInset
+        return 0
     }
 
-    private func replyConfirmationBottomInset(for stack: StoryStack) -> CGFloat {
-        if isOwnStack(stack) || route.source == .discover {
-            return bottomChromeInset
+    private func captionBottomInset(for stack: StoryStack, item: StoryStackItem, safeAreaBottom: CGFloat) -> CGFloat {
+        let bottomPadding = bottomChromeBottomPadding(safeAreaBottom: safeAreaBottom)
+
+        if isOwnStack(stack) {
+            return bottomPadding + ownerStatsHeight + captionBottomGap
         }
 
-        return bottomChromeInset + replyComposerHeight + 10
+        if route.source != .discover {
+            return bottomPadding + replyComposerHeight + captionBottomGap
+        }
+
+        return bottomPadding
+    }
+
+    private func replyConfirmationBottomInset(for stack: StoryStack, safeAreaBottom: CGFloat) -> CGFloat {
+        let bottomPadding = bottomChromeBottomPadding(safeAreaBottom: safeAreaBottom)
+
+        if isOwnStack(stack) || route.source == .discover {
+            return bottomPadding
+        }
+
+        return bottomPadding + replyComposerHeight + 10
     }
 
     private func storyHeader(stack: StoryStack, item: StoryStackItem) -> some View {
@@ -863,14 +922,12 @@ struct StoryStackViewer: View {
         StoryTimelineProgressView(
             segmentCount: stack.items.count,
             activeIndex: index,
-            activeProgress: storyProgress,
             activeDuration: stack.items[safe: index].map { displayDuration(for: $0) } ?? defaultStoryDurationSeconds,
             isPaused: shouldPauseStoryProgress,
-            resetToken: storyProgressResetToken
+            timerState: storyTimerState
         )
         .frame(maxWidth: .infinity)
         .frame(height: 4)
-        .padding(.top, 2)
         .accessibilityLabel("Story \(index + 1) of \(stack.items.count)")
     }
 
@@ -892,30 +949,54 @@ struct StoryStackViewer: View {
     }
 
     private func replyComposer(_ item: StoryStackItem) -> some View {
-        HStack(spacing: 10) {
+        let fieldBackgroundOpacity = isReplyFieldFocused ? 0.62 : 0.48
+        let fieldBorderOpacity = isReplyFieldFocused ? 0.24 : 0.16
+
+        return HStack(spacing: 10) {
             TextField(
                 "",
                 text: $store.replyText,
-                prompt: Text("Reply").foregroundStyle(.white.opacity(0.62))
+                prompt: Text("Reply").foregroundStyle(.white.opacity(0.86))
             )
+                .textFieldStyle(.plain)
+                .font(.system(size: 16, weight: .semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 46)
-                .background(.white.opacity(0.14), in: Capsule())
+                .background(.black.opacity(fieldBackgroundOpacity), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(.white.opacity(fieldBorderOpacity), lineWidth: 1)
+                )
+                .foregroundColor(.white)
                 .foregroundStyle(.white)
                 .tint(.white)
                 .focused($isReplyFieldFocused)
+                .lineLimit(1)
                 .submitLabel(.send)
                 .onSubmit {
-                    Task { await store.sendReply(item: item, api: api) }
+                    submitReply(item)
                 }
             Button {
-                Task { await store.sendReply(item: item, api: api) }
+                submitReply(item)
             } label: {
                 Image(systemName: store.isSendingReply ? "hourglass" : "paperplane.fill")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
                     .frame(width: 46, height: 46)
                     .background(Color.ubeyeRed, in: Circle())
             }
+            .buttonStyle(.plain)
             .disabled(store.isSendingReply || store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send reply")
+        }
+    }
+
+    private func submitReply(_ item: StoryStackItem) {
+        Task {
+            await store.sendReply(item: item, api: api)
+            if store.replyConfirmation != nil || store.error != nil {
+                isReplyFieldFocused = false
+            }
         }
     }
 
@@ -1030,9 +1111,7 @@ struct StoryStackViewer: View {
 
     private func handleStorySwipeUp(stack: StoryStack, item: StoryStackItem) {
         if canReplyFromSwipe(stack) {
-            withAnimation(.easeOut(duration: 0.16)) {
-                isReplyFieldFocused = true
-            }
+            isReplyFieldFocused = true
             return
         }
 
@@ -1082,16 +1161,24 @@ struct StoryStackViewer: View {
     }
 
     private func adjacentVideoUrls(in stack: StoryStack, around itemIndex: Int) -> [URL] {
-        let lowerBound = max(itemIndex - 1, 0)
-        let upperBound = min(itemIndex + 2, max(stack.items.count - 1, 0))
+        let videoItems = orderedNearbyStoryItems(in: stack, around: itemIndex)
+            .filter(\.isPlayableVideo)
+        return videoItems.map(\.playbackMediaUrl) + videoItems.compactMap { item in
+            MediaPlaybackQuality.highQualityCandidate(for: item)
+        }
+    }
 
-        guard lowerBound <= upperBound else {
+    private func orderedNearbyStoryItems(in stack: StoryStack, around itemIndex: Int) -> [StoryStackItem] {
+        guard stack.items.indices.contains(itemIndex) else {
             return []
         }
 
-        return stack.items[lowerBound...upperBound].flatMap { item in
-            MediaPlaybackQuality.preloadURLs(for: item)
-        }
+        var seen = Set<Int>()
+        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex - 1]
+            .filter { index in
+                stack.items.indices.contains(index) && seen.insert(index).inserted
+            }
+            .map { stack.items[$0] }
     }
 
     private func isOwnStack(_ stack: StoryStack) -> Bool {
@@ -1124,9 +1211,7 @@ struct StoryStackViewer: View {
     private func resetStoryTimer(for item: StoryStackItem) {
         timedStoryId = item.id
         videoReadyItemId = item.assetKind == .video ? nil : item.id
-        storyStartedAt = Date()
-        storyProgress = 0
-        storyProgressResetToken += 1
+        storyTimerState.reset()
         didFinishCurrentItem = false
     }
 
@@ -1144,20 +1229,11 @@ struct StoryStackViewer: View {
 
         let duration = displayDuration(for: item)
 
-        let nextProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
+        let nextProgress = storyTimerState.progress(at: now, duration: duration)
 
         if shouldPauseStoryProgress {
-            if abs(nextProgress - storyProgress) >= 0.004 {
-                storyProgress = nextProgress
-            }
-            storyStartedAt = now.addingTimeInterval(-nextProgress * duration)
+            storyTimerState.align(progress: nextProgress, duration: duration, at: now)
             return
-        }
-
-        if nextProgress >= 1 {
-            storyProgress = 1
-        } else if abs(nextProgress - storyProgress) >= 0.012 {
-            storyProgress = nextProgress
         }
 
         guard nextProgress >= 1, !didFinishCurrentItem else {
@@ -1169,25 +1245,19 @@ struct StoryStackViewer: View {
 
     private func updateVideoStoryTimer(now: Date, item: StoryStackItem) {
         guard videoReadyItemId == item.id else {
-            storyStartedAt = now
+            storyTimerState.startedAt = now
             return
         }
 
         let duration = displayDuration(for: item)
 
         if shouldPauseVideoPlayback {
-            storyStartedAt = now.addingTimeInterval(-storyProgress * duration)
+            let pausedProgress = storyTimerState.progress(at: now, duration: duration)
+            storyTimerState.align(progress: pausedProgress, duration: duration, at: now)
             return
         }
 
-        let elapsedProgress = min(max(now.timeIntervalSince(storyStartedAt) / duration, 0), 1)
-        let nextProgress = max(storyProgress, elapsedProgress)
-
-        if nextProgress >= 1 {
-            storyProgress = 1
-        } else if abs(nextProgress - storyProgress) >= 0.012 {
-            storyProgress = nextProgress
-        }
+        let nextProgress = storyTimerState.progress(at: now, duration: duration)
 
         guard nextProgress >= 1, !didFinishCurrentItem else {
             return
@@ -1203,13 +1273,15 @@ struct StoryStackViewer: View {
             return
         }
 
-        let nextProgress = max(storyProgress, min(max(progress, 0), 1))
-        guard nextProgress >= 1 || abs(nextProgress - storyProgress) >= 0.012 else {
+        let duration = displayDuration(for: item)
+        let now = Date()
+        let currentProgress = storyTimerState.progress(at: now, duration: duration)
+        let nextProgress = max(currentProgress, min(max(progress, 0), 1))
+        guard nextProgress >= 1 || abs(nextProgress - currentProgress) >= 0.012 else {
             return
         }
 
-        storyProgress = nextProgress
-        storyStartedAt = Date().addingTimeInterval(-nextProgress * displayDuration(for: item))
+        storyTimerState.align(progress: nextProgress, duration: duration, at: now)
     }
 
     private func finishVideoStory(_ item: StoryStackItem) {
@@ -1226,12 +1298,27 @@ struct StoryStackViewer: View {
         }
 
         didFinishCurrentItem = true
-        storyProgress = 1
 
         if index < stack.items.count - 1 {
             move(1, item: item)
         } else {
             Task { await store.recordImpression(item: item, completed: true, api: api) }
+            dismissAfterClearingCompletedStory()
+        }
+    }
+
+    private func dismissAfterClearingCompletedStory() {
+        guard !isClearingCompletedStory else {
+            return
+        }
+
+        isClearingCompletedStory = true
+        completionDismissTask?.cancel()
+        completionDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(35))
+            guard !Task.isCancelled else {
+                return
+            }
             dismiss()
         }
     }
@@ -1249,6 +1336,41 @@ struct StoryStackViewer: View {
         DispatchQueue.main.async {
             reportingItem = item
         }
+    }
+
+    private func updateKeyboardHeight(from notification: Notification) {
+        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return
+        }
+
+        let height = max(0, UIScreen.main.bounds.maxY - endFrame.minY)
+        setKeyboardHeight(height > 1 ? height : 0)
+    }
+
+    private func setKeyboardHeight(_ height: CGFloat) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            keyboardHeight = height
+        }
+    }
+
+    private func resolvedSafeAreaInsets(_ insets: EdgeInsets) -> EdgeInsets {
+        let fallback = Self.activeWindowSafeAreaInsets
+
+        return EdgeInsets(
+            top: insets.top > 0 ? insets.top : fallback.top,
+            leading: insets.leading > 0 ? insets.leading : fallback.left,
+            bottom: insets.bottom > 0 ? insets.bottom : fallback.bottom,
+            trailing: insets.trailing > 0 ? insets.trailing : fallback.right
+        )
+    }
+
+    private static var activeWindowSafeAreaInsets: UIEdgeInsets {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let foregroundScene = scenes.first { $0.activationState == .foregroundActive }
+        let scene = foregroundScene ?? scenes.first
+        return scene?.windows.first(where: \.isKeyWindow)?.safeAreaInsets ?? .zero
     }
 
     private var shouldPauseStoryProgress: Bool {
@@ -1310,223 +1432,88 @@ struct StoryStackViewer: View {
     }
 }
 
-private struct StoryTimelineProgressView: UIViewRepresentable {
-    let segmentCount: Int
-    let activeIndex: Int
-    let activeProgress: Double
-    let activeDuration: TimeInterval
-    let isPaused: Bool
-    let resetToken: Int
+@MainActor
+private final class StoryTimerState: ObservableObject {
+    var startedAt = Date()
 
-    func makeUIView(context: Context) -> StoryTimelineProgressUIView {
-        let view = StoryTimelineProgressUIView()
-        view.isUserInteractionEnabled = false
-        return view
+    func reset(at date: Date = Date()) {
+        startedAt = date
     }
 
-    func updateUIView(_ uiView: StoryTimelineProgressUIView, context: Context) {
-        uiView.configure(
-            segmentCount: segmentCount,
-            activeIndex: activeIndex,
-            activeProgress: activeProgress,
-            activeDuration: activeDuration,
-            isPaused: isPaused,
-            resetToken: resetToken
-        )
-    }
-}
-
-private final class StoryTimelineProgressUIView: UIView {
-    private struct Configuration: Equatable {
-        var segmentCount = 0
-        var activeIndex = 0
-        var activeProgress: CGFloat = 0
-        var activeDuration: TimeInterval = 0
-        var isPaused = true
-        var resetToken = 0
-    }
-
-    private final class Segment {
-        let container = CALayer()
-        let background = CALayer()
-        let fill = CALayer()
-    }
-
-    private let segmentSpacing: CGFloat = 5
-    private var segments: [Segment] = []
-    private var configuration = Configuration()
-    private var didConfigure = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isOpaque = false
-        backgroundColor = .clear
-        layer.masksToBounds = false
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        isOpaque = false
-        backgroundColor = .clear
-        layer.masksToBounds = false
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        layoutSegmentLayers()
-    }
-
-    func configure(
-        segmentCount: Int,
-        activeIndex: Int,
-        activeProgress: Double,
-        activeDuration: TimeInterval,
-        isPaused: Bool,
-        resetToken: Int
-    ) {
-        let nextSegmentCount = max(0, segmentCount)
-        let nextActiveIndex = nextSegmentCount > 0
-            ? min(max(activeIndex, 0), nextSegmentCount - 1)
-            : 0
-        let next = Configuration(
-            segmentCount: nextSegmentCount,
-            activeIndex: nextActiveIndex,
-            activeProgress: CGFloat(Self.clamped(activeProgress)),
-            activeDuration: max(0.001, activeDuration),
-            isPaused: isPaused,
-            resetToken: resetToken
-        )
-
-        if next.segmentCount != segments.count {
-            rebuildSegments(count: next.segmentCount)
+    func progress(at date: Date, duration: TimeInterval) -> Double {
+        guard duration > 0 else {
+            return 1
         }
 
-        let previous = configuration
-        configuration = next
-        layoutSegmentLayers()
-
-        let needsHardReset = !didConfigure ||
-            previous.segmentCount != next.segmentCount ||
-            previous.activeIndex != next.activeIndex ||
-            previous.resetToken != next.resetToken
-
-        if needsHardReset {
-            applyStaticProgress(activeProgress: next.activeProgress)
-            didConfigure = true
-            return
-        }
-
-        applyPassiveSegmentProgress()
-
-        if next.activeProgress >= 0.995 {
-            setActiveProgress(1)
-            return
-        }
-
-        if previous.activeProgress != next.activeProgress ||
-            previous.isPaused != next.isPaused ||
-            previous.activeDuration != next.activeDuration {
-            setActiveProgress(next.activeProgress)
-        }
+        return Self.clamped(date.timeIntervalSince(startedAt) / duration)
     }
 
-    private func rebuildSegments(count: Int) {
-        segments.forEach { $0.container.removeFromSuperlayer() }
-        segments = (0..<count).map { _ in
-            let segment = Segment()
-            segment.container.masksToBounds = true
-            segment.background.backgroundColor = UIColor.black.withAlphaComponent(0.3).cgColor
-            segment.fill.backgroundColor = UIColor.white.cgColor
-            segment.fill.anchorPoint = CGPoint(x: 0, y: 0.5)
-            segment.container.addSublayer(segment.background)
-            segment.container.addSublayer(segment.fill)
-            layer.addSublayer(segment.container)
-            return segment
-        }
-    }
-
-    private func layoutSegmentLayers() {
-        guard !segments.isEmpty else {
-            return
-        }
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        let height = bounds.height
-        let totalSpacing = segmentSpacing * CGFloat(max(segments.count - 1, 0))
-        let segmentWidth = max(0, (bounds.width - totalSpacing) / CGFloat(segments.count))
-        let cornerRadius = height / 2
-
-        for (index, segment) in segments.enumerated() {
-            let originX = CGFloat(index) * (segmentWidth + segmentSpacing)
-            let frame = CGRect(x: originX, y: 0, width: segmentWidth, height: height)
-            segment.container.frame = frame
-            segment.container.cornerRadius = cornerRadius
-            segment.background.frame = segment.container.bounds
-            segment.background.cornerRadius = cornerRadius
-            segment.fill.bounds = segment.container.bounds
-            segment.fill.position = CGPoint(x: 0, y: height / 2)
-            segment.fill.cornerRadius = cornerRadius
-            segment.fill.contentsScale = UIScreen.main.scale
-            segment.background.contentsScale = UIScreen.main.scale
-        }
-
-        CATransaction.commit()
-    }
-
-    private func applyStaticProgress(activeProgress: CGFloat) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        for (index, segment) in segments.enumerated() {
-            segment.fill.removeAllAnimations()
-            let progress: CGFloat
-            if index < configuration.activeIndex {
-                progress = 1
-            } else if index == configuration.activeIndex {
-                progress = activeProgress
-            } else {
-                progress = 0
-            }
-            segment.fill.transform = CATransform3DMakeScale(progress, 1, 1)
-        }
-
-        CATransaction.commit()
-    }
-
-    private func applyPassiveSegmentProgress() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        for (index, segment) in segments.enumerated() where index != configuration.activeIndex {
-            segment.fill.removeAllAnimations()
-            let progress: CGFloat = index < configuration.activeIndex ? 1 : 0
-            segment.fill.transform = CATransform3DMakeScale(progress, 1, 1)
-        }
-
-        CATransaction.commit()
-    }
-
-    private func setActiveProgress(_ rawProgress: CGFloat) {
-        guard segments.indices.contains(configuration.activeIndex) else {
-            return
-        }
-
-        let progress = min(max(rawProgress, 0), 1)
-        let fill = segments[configuration.activeIndex].fill
-        fill.removeAllAnimations()
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(false)
-        CATransaction.setAnimationDuration(0.12)
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .linear))
-        fill.transform = CATransform3DMakeScale(progress, 1, 1)
-        CATransaction.commit()
+    func align(progress: Double, duration: TimeInterval, at date: Date) {
+        startedAt = date.addingTimeInterval(-Self.clamped(progress) * max(duration, 0.001))
     }
 
     private static func clamped(_ value: Double) -> Double {
         min(max(value, 0), 1)
+    }
+}
+
+private struct StoryTimelineProgressView: View {
+    let segmentCount: Int
+    let activeIndex: Int
+    let activeDuration: TimeInterval
+    let isPaused: Bool
+    let timerState: StoryTimerState
+
+    private let segmentSpacing: CGFloat = 5
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: isPaused || segmentCount <= 0)) { timeline in
+            Canvas { context, size in
+                drawProgress(in: context, size: size, at: timeline.date)
+            }
+        }
+    }
+
+    private func drawProgress(in context: GraphicsContext, size: CGSize, at date: Date) {
+        let count = max(segmentCount, 0)
+        guard count > 0, size.width > 0, size.height > 0 else {
+            return
+        }
+
+        let safeActiveIndex = min(max(activeIndex, 0), count - 1)
+        let totalSpacing = segmentSpacing * CGFloat(max(count - 1, 0))
+        let segmentWidth = max(0, (size.width - totalSpacing) / CGFloat(count))
+        let cornerRadius = size.height / 2
+        let activeProgress = timerState.progress(at: date, duration: max(activeDuration, 0.001))
+
+        for index in 0..<count {
+            let originX = CGFloat(index) * (segmentWidth + segmentSpacing)
+            let frame = CGRect(x: originX, y: 0, width: segmentWidth, height: size.height)
+            let backgroundPath = Path(roundedRect: frame, cornerRadius: cornerRadius)
+            context.fill(backgroundPath, with: .color(.black.opacity(0.3)))
+
+            let fillProgress: Double
+            if index < safeActiveIndex {
+                fillProgress = 1
+            } else if index == safeActiveIndex {
+                fillProgress = activeProgress
+            } else {
+                fillProgress = 0
+            }
+
+            guard fillProgress > 0 else {
+                continue
+            }
+
+            let fillFrame = CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: frame.width * CGFloat(min(max(fillProgress, 0), 1)),
+                height: frame.height
+            )
+            let fillPath = Path(roundedRect: fillFrame, cornerRadius: cornerRadius)
+            context.fill(fillPath, with: .color(.white))
+        }
     }
 }
 
@@ -2194,7 +2181,7 @@ struct AutoPlayVideoPlayer: View {
 
     var body: some View {
         ZStack {
-            AspectFitVideoPlayer(player: playback.player) {
+            FullBleedVideoPlayer(player: playback.player) {
                 playback.revealVideo(reason: "layer_ready")
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2203,7 +2190,7 @@ struct AutoPlayVideoPlayer: View {
                 CachedAsyncImage(url: thumbnailUrl) { image in
                     image
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } placeholder: {
                     Color.black
@@ -2215,7 +2202,7 @@ struct AutoPlayVideoPlayer: View {
         .animation(.easeOut(duration: 0.12), value: playback.isReadyForPlayback)
         .background(Color.black)
         .onAppear {
-            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: nil)
+            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: url)
             playback.play(
                 url: url,
                 highQualityUrl: highQualityUrl,
@@ -2228,7 +2215,7 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: url) { _, nextURL in
-            playerPool?.prepare(urls: [nextURL] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: nil)
+            playerPool?.prepare(urls: [nextURL] + [highQualityUrl].compactMap { $0 } + preloadUrls, activeURL: nextURL)
             playback.play(
                 url: nextURL,
                 highQualityUrl: highQualityUrl,
@@ -2241,20 +2228,11 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: highQualityUrl) { _, nextURL in
-            playerPool?.prepare(urls: [url] + [nextURL].compactMap { $0 } + preloadUrls, activeURL: nil)
-            playback.play(
-                url: url,
-                highQualityUrl: nextURL,
-                expectedDuration: expectedDuration,
-                playerPool: playerPool,
-                isPaused: isPaused,
-                onReadyForPlayback: onReadyForPlayback,
-                onProgress: onProgress,
-                onFinished: onFinished
-            )
+            playback.updateHighQualityCandidate(nextURL)
+            playerPool?.prepare(urls: [url] + [nextURL].compactMap { $0 } + preloadUrls, activeURL: url)
         }
         .onChange(of: preloadUrls) { _, nextUrls in
-            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + nextUrls, activeURL: nil)
+            playerPool?.prepare(urls: [url] + [highQualityUrl].compactMap { $0 } + nextUrls, activeURL: url)
         }
         .onChange(of: isPaused) { _, nextValue in
             playback.setPaused(nextValue)
@@ -2311,7 +2289,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         self.isPaused = isPaused
         expectedDurationSeconds = expectedDuration.map { max(0.001, $0) }
 
-        if activeURL == url, activeHighQualityURL == highQualityUrl, player != nil {
+        if activeURL == url, player != nil {
+            activeHighQualityURL = highQualityUrl
             setPaused(isPaused)
             return
         }
@@ -2325,6 +2304,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         didFinishPlayback = false
         lastPublishedProgress = 0
         startPlayback(url: url, highQualityUrl: highQualityUrl, playerPool: playerPool)
+    }
+
+    func updateHighQualityCandidate(_ highQualityUrl: URL?) {
+        activeHighQualityURL = highQualityUrl
     }
 
     private func startPlayback(url: URL, highQualityUrl: URL?, playerPool: StoryVideoPlaybackPool?) {
@@ -2791,24 +2774,29 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 }
 
-private struct AspectFitVideoPlayer: UIViewRepresentable {
+private struct FullBleedVideoPlayer: UIViewRepresentable {
     let player: AVPlayer?
     let onReadyForDisplay: () -> Void
 
-    func makeUIView(context: Context) -> AspectFitPlayerView {
-        AspectFitPlayerView()
+    func makeUIView(context: Context) -> FullBleedPlayerView {
+        FullBleedPlayerView()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func updateUIView(_ view: AspectFitPlayerView, context: Context) {
+    func updateUIView(_ view: FullBleedPlayerView, context: Context) {
         view.player = player
         context.coordinator.observeReadyForDisplay(
             playerLayer: view.playerLayer,
             onReadyForDisplay: onReadyForDisplay
         )
+    }
+
+    static func dismantleUIView(_ view: FullBleedPlayerView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+        view.player = nil
     }
 
     final class Coordinator {
@@ -2838,10 +2826,15 @@ private struct AspectFitVideoPlayer: UIViewRepresentable {
                 }
             }
         }
+
+        func stopObserving() {
+            observation?.invalidate()
+            observation = nil
+        }
     }
 }
 
-private final class AspectFitPlayerView: UIView {
+private final class FullBleedPlayerView: UIView {
     override static var layerClass: AnyClass {
         AVPlayerLayer.self
     }
@@ -2859,13 +2852,13 @@ private final class AspectFitPlayerView: UIView {
         super.init(frame: frame)
         backgroundColor = .black
         playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         backgroundColor = .black
         playerLayer.backgroundColor = UIColor.black.cgColor
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill
     }
 }

@@ -11,7 +11,7 @@ const rules = [
   "The Daily is available only in the native UBEYE iOS app at launch.",
   "The Daily is intended for eligible U.S. users who are 18 years of age or older.",
   "Each eligible user may receive no more than one entry per Daily period.",
-  "A Daily period runs from 9:00 PM Eastern Time to the following 9:00 PM Eastern Time, with the drawing targeted for 9:10 PM Eastern Time.",
+  "A Daily period runs from 12:00 AM Eastern Time to the following 12:00 AM Eastern Time, with the drawing targeted for 12:10 AM Eastern Time.",
   "A user must complete the required Daily sponsor video sequence to receive an in-app entry unless official production rules provide an alternate entry method.",
   "Five winners are targeted for each Daily drawing when at least five eligible entries exist. Winners split 75% of recognized Daily advertiser funds equally, subject to fraud, identity, payment, tax, and compliance review.",
   "Payouts may be delayed, withheld, reversed, or voided for suspected fraud, ineligible accounts, chargebacks, payment processor issues, tax requirements, or legal compliance.",

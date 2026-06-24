@@ -34,21 +34,28 @@ function getStringFormValue(formData: FormData, key: string) {
   return typeof value === "string" ? value : undefined
 }
 
-export async function GET(request: Request) {
+export async function GET(
+  request: Request,
+  context: RouteContext<"/api/mobile/stories/[id]/interactions">,
+) {
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  const { id } = await context.params
+  const storyId = id === "inbox" ? undefined : id
   const [interactions, sentInteractions] = await Promise.all([
     listStoryInteractionsForCreator({
       creatorId: session.id,
+      storyId,
       kinds: ["reply", "comment"],
       limit: 100,
     }),
     listStoryInteractionsForActor({
       actorId: session.id,
+      storyId,
       kinds: ["reply", "comment"],
       limit: 100,
     }),

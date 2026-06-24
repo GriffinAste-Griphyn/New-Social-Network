@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm"
+import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import {
@@ -7,7 +7,9 @@ import {
   follows,
   stories,
   storyInteractions,
+  users,
 } from "@/lib/db/schema"
+import { getBlockedPeerIds } from "@/lib/social-safety"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 type DbNumber = bigint | number | string | null
@@ -31,6 +33,23 @@ export type CreatorStoryStats = {
   earningsCents: number
   pendingEarningsCents: number
   paidEarningsCents: number
+  commentItems: CreatorStoryComment[]
+}
+
+export type CreatorStoryComment = {
+  id: string
+  storyId: string
+  actor: {
+    id: string
+    name: string
+    handle: string
+    imageUrl: string | null
+  }
+  body: string | null
+  mediaUrl: string | null
+  mediaThumbnailUrl: string | null
+  mediaAssetKind: "image" | "video" | null
+  createdAt: string
 }
 
 export type CreatorEarningsStats = {
@@ -97,6 +116,82 @@ function calculateAverageSeconds(totalViewedMs: number, views: number) {
 export type CreatorStatsRange = {
   from?: Date
   to?: Date
+  storyScope?: "all" | "active"
+  includeStoryComments?: boolean
+  storyCommentLimit?: number
+}
+
+async function listCreatorStoryComments(input: {
+  creatorId: string
+  storyIds: string[]
+  limitPerStory: number
+}) {
+  if (input.storyIds.length === 0 || input.limitPerStory <= 0) {
+    return new Map<string, CreatorStoryComment[]>()
+  }
+
+  const db = getDb()
+  const blockedPeerIds = await getBlockedPeerIds(input.creatorId)
+  const limitPerStory = Math.min(Math.max(input.limitPerStory, 1), 50)
+  const rows = await db
+    .select({
+      id: storyInteractions.id,
+      storyId: storyInteractions.storyId,
+      actorId: storyInteractions.actorId,
+      displayName: users.displayName,
+      handle: users.handle,
+      avatarUrl: users.avatarUrl,
+      body: storyInteractions.body,
+      mediaUrl: storyInteractions.mediaUrl,
+      mediaThumbnailUrl: storyInteractions.mediaThumbnailUrl,
+      mediaAssetKind: storyInteractions.mediaAssetKind,
+      createdAt: storyInteractions.createdAt,
+    })
+    .from(storyInteractions)
+    .innerJoin(users, eq(users.id, storyInteractions.actorId))
+    .where(
+      and(
+        eq(storyInteractions.creatorId, input.creatorId),
+        inArray(storyInteractions.storyId, input.storyIds),
+        inArray(storyInteractions.kind, ["reply", "comment"]),
+        eq(storyInteractions.moderationStatus, "approved"),
+      ),
+    )
+    .orderBy(desc(storyInteractions.createdAt))
+    .limit(Math.min(input.storyIds.length * limitPerStory, 500))
+
+  const commentsByStory = new Map<string, CreatorStoryComment[]>()
+
+  rows.forEach((row) => {
+    if (!row.displayName || !row.handle || blockedPeerIds.has(row.actorId)) {
+      return
+    }
+
+    const storyComments = commentsByStory.get(row.storyId) ?? []
+
+    if (storyComments.length >= limitPerStory) {
+      return
+    }
+
+    storyComments.push({
+      id: row.id,
+      storyId: row.storyId,
+      actor: {
+        id: row.actorId,
+        name: row.displayName,
+        handle: row.handle,
+        imageUrl: row.avatarUrl,
+      },
+      body: row.body,
+      mediaUrl: row.mediaUrl,
+      mediaThumbnailUrl: row.mediaThumbnailUrl,
+      mediaAssetKind: row.mediaAssetKind,
+      createdAt: row.createdAt.toISOString(),
+    })
+    commentsByStory.set(row.storyId, storyComments)
+  })
+
+  return commentsByStory
 }
 
 export async function getCreatorStats(
@@ -104,8 +199,20 @@ export async function getCreatorStats(
   range: CreatorStatsRange = {},
 ): Promise<CreatorStats> {
   const db = getDb()
-  const storyFilters = [eq(stories.creatorId, creatorId)]
-  const impressionFilters = [eq(stories.creatorId, creatorId)]
+  const activeStoriesOnly = range.storyScope === "active"
+  const now = new Date()
+  const storyScopeFilters = activeStoriesOnly
+    ? [
+        eq(stories.status, "live"),
+        eq(stories.moderationStatus, "approved"),
+        gt(stories.expiresAt, now),
+      ]
+    : []
+  const storyFilters = [eq(stories.creatorId, creatorId), ...storyScopeFilters]
+  const impressionFilters = [
+    eq(stories.creatorId, creatorId),
+    ...storyScopeFilters,
+  ]
   const interactionFilters = [eq(storyInteractions.creatorId, creatorId)]
   const earningsFilters = [eq(earningsLedger.userId, creatorId)]
 
@@ -122,6 +229,69 @@ export async function getCreatorStats(
     interactionFilters.push(lte(storyInteractions.createdAt, range.to))
     earningsFilters.push(lte(earningsLedger.createdAt, range.to))
   }
+
+  const interactionRowsPromise = activeStoriesOnly
+    ? db
+        .select({
+          storyId: storyInteractions.storyId,
+          comments: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'comment' then 1 else 0 end), 0)::int`,
+          replies: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'reply' then 1 else 0 end), 0)::int`,
+        })
+        .from(storyInteractions)
+        .innerJoin(stories, eq(stories.id, storyInteractions.storyId))
+        .where(and(...interactionFilters, ...storyScopeFilters))
+        .groupBy(storyInteractions.storyId)
+    : db
+        .select({
+          storyId: storyInteractions.storyId,
+          comments: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'comment' then 1 else 0 end), 0)::int`,
+          replies: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'reply' then 1 else 0 end), 0)::int`,
+        })
+        .from(storyInteractions)
+        .where(and(...interactionFilters))
+        .groupBy(storyInteractions.storyId)
+  const earningsRowsPromise = activeStoriesOnly
+    ? db
+        .select({
+          status: earningsLedger.status,
+          amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+          nextAvailableAt: sql<Date | null>`min(${earningsLedger.availableAt}) filter (where ${earningsLedger.status} in ('pending', 'approved') and ${earningsLedger.availableAt} > now())`,
+        })
+        .from(earningsLedger)
+        .innerJoin(stories, eq(stories.id, earningsLedger.storyId))
+        .where(and(...earningsFilters, ...storyScopeFilters))
+        .groupBy(earningsLedger.status)
+    : db
+        .select({
+          status: earningsLedger.status,
+          amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+          nextAvailableAt: sql<Date | null>`min(${earningsLedger.availableAt}) filter (where ${earningsLedger.status} in ('pending', 'approved') and ${earningsLedger.availableAt} > now())`,
+        })
+        .from(earningsLedger)
+        .where(and(...earningsFilters))
+        .groupBy(earningsLedger.status)
+  const earningsByStoryRowsPromise = activeStoriesOnly
+    ? db
+        .select({
+          storyId: earningsLedger.storyId,
+          amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+          pendingCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'pending' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+          paidCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'paid' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+        })
+        .from(earningsLedger)
+        .innerJoin(stories, eq(stories.id, earningsLedger.storyId))
+        .where(and(...earningsFilters, ...storyScopeFilters))
+        .groupBy(earningsLedger.storyId)
+    : db
+        .select({
+          storyId: earningsLedger.storyId,
+          amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
+          pendingCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'pending' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+          paidCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'paid' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
+        })
+        .from(earningsLedger)
+        .where(and(...earningsFilters))
+        .groupBy(earningsLedger.storyId)
 
   const [
     followerCountRows,
@@ -167,34 +337,9 @@ export async function getCreatorStats(
       .innerJoin(stories, eq(stories.id, feedImpressions.storyId))
       .where(and(...impressionFilters))
       .groupBy(feedImpressions.storyId),
-    db
-      .select({
-        storyId: storyInteractions.storyId,
-        comments: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'comment' then 1 else 0 end), 0)::int`,
-        replies: sql<DbNumber>`coalesce(sum(case when ${storyInteractions.kind} = 'reply' then 1 else 0 end), 0)::int`,
-      })
-      .from(storyInteractions)
-      .where(and(...interactionFilters))
-      .groupBy(storyInteractions.storyId),
-    db
-      .select({
-        status: earningsLedger.status,
-        amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
-        nextAvailableAt: sql<Date | null>`min(${earningsLedger.availableAt}) filter (where ${earningsLedger.status} in ('pending', 'approved') and ${earningsLedger.availableAt} > now())`,
-      })
-      .from(earningsLedger)
-      .where(and(...earningsFilters))
-      .groupBy(earningsLedger.status),
-    db
-      .select({
-        storyId: earningsLedger.storyId,
-        amountCents: sql<DbNumber>`coalesce(sum(${earningsLedger.amountCents}), 0)::int`,
-        pendingCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'pending' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
-        paidCents: sql<DbNumber>`coalesce(sum(case when ${earningsLedger.status} = 'paid' then ${earningsLedger.amountCents} else 0 end), 0)::int`,
-      })
-      .from(earningsLedger)
-      .where(and(...earningsFilters))
-      .groupBy(earningsLedger.storyId),
+    interactionRowsPromise,
+    earningsRowsPromise,
+    earningsByStoryRowsPromise,
     db
       .select({
         uniqueViewers: sql<DbNumber>`count(distinct ${feedImpressions.viewerId})::int`,
@@ -259,6 +404,13 @@ export async function getCreatorStats(
   let totalViewedMs = 0
   let comments = 0
   let replies = 0
+  const storyCommentsByStory = range.includeStoryComments
+    ? await listCreatorStoryComments({
+        creatorId,
+        storyIds: storyRows.map((story) => story.id),
+        limitPerStory: range.storyCommentLimit ?? 20,
+      })
+    : new Map<string, CreatorStoryComment[]>()
 
   const storyStats = storyRows.map((story) => {
     const impressions = impressionsByStory.get(story.id) ?? {
@@ -305,6 +457,7 @@ export async function getCreatorStats(
       earningsCents: storyEarnings.amountCents,
       pendingEarningsCents: storyEarnings.pendingCents,
       paidEarningsCents: storyEarnings.paidCents,
+      commentItems: storyCommentsByStory.get(story.id) ?? [],
     }
   })
 

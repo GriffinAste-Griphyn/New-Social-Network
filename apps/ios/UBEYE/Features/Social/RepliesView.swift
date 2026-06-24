@@ -53,6 +53,7 @@ final class RepliesStore: ObservableObject {
 
 struct RepliesView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var mediaEngine: MediaEngine
     @StateObject private var store = RepliesStore()
     @State private var selectedStory: StoryRoute?
     @State private var selectedSegment = "Received"
@@ -76,9 +77,7 @@ struct RepliesView: View {
                     }
 
                     if store.isLoading && store.inbox == nil {
-                        ProgressView()
-                            .tint(.ubeyeRed)
-                            .frame(maxWidth: .infinity, minHeight: 160)
+                        RepliesLoadingSkeleton()
                     } else if displayedReplyThreads.isEmpty {
                         EmptyView()
                     } else {
@@ -88,6 +87,7 @@ struct RepliesView: View {
                                     destination: ReplyThreadView(
                                         thread: thread,
                                         onQuote: onQuoteReply,
+                                        onOpenStory: openStory,
                                         onDelete: { interactionId in
                                             await store.deleteReply(id: interactionId, api: api)
                                         }
@@ -228,6 +228,62 @@ struct RepliesView: View {
 
         return []
     }
+
+    private func openStory(_ item: ReplyThreadItem) {
+        warmStory(item.storyId)
+        selectedStory = StoryRoute(id: item.storyId, source: .replies)
+    }
+
+    private func warmStory(_ storyId: String) {
+        mediaEngine.warmStoryOpen(storyId: storyId, adjacentIds: [], api: api)
+    }
+}
+
+private struct RepliesLoadingSkeleton: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ForEach(0..<4, id: \.self) { index in
+                ReplyCardLoadingSkeleton(messageWidth: messageWidth(for: index))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading replies")
+    }
+
+    private func messageWidth(for index: Int) -> CGFloat {
+        switch index {
+        case 0:
+            return 214
+        case 1:
+            return 176
+        case 2:
+            return 232
+        default:
+            return 196
+        }
+    }
+}
+
+private struct ReplyCardLoadingSkeleton: View {
+    let messageWidth: CGFloat
+
+    var body: some View {
+        HStack(spacing: 12) {
+            UBEYESkeletonCircle(size: 48)
+
+            VStack(alignment: .leading, spacing: 7) {
+                UBEYESkeletonLine(width: 126, height: 13)
+                UBEYESkeletonLine(width: 154, height: 9)
+                UBEYESkeletonLine(width: messageWidth, height: 11)
+            }
+
+            Spacer(minLength: 8)
+
+            UBEYESkeletonLine(width: 10, height: 15)
+        }
+        .padding(14)
+        .ubeyeCard()
+    }
 }
 
 struct ExpoReplyRowData: Identifiable {
@@ -283,6 +339,7 @@ struct ReplyThreadData: Identifiable {
 
 struct ReplyThreadItem: Identifiable, Hashable {
     let id: String
+    let storyId: String
     let title: String
     let message: String
     let createdAt: String
@@ -293,6 +350,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
 
     init(
         id: String,
+        storyId: String,
         title: String,
         message: String,
         createdAt: String,
@@ -302,6 +360,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
         quotedReply: QuotedStoryReply?
     ) {
         self.id = id
+        self.storyId = storyId
         self.title = title
         self.message = message
         self.createdAt = createdAt
@@ -315,6 +374,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
         let message = interaction.body ?? interaction.reaction ?? "Sent a photo reply."
         self.init(
             id: interaction.id,
+            storyId: interaction.storyId,
             title: "\(interaction.actor.name) replied to your Story",
             message: message,
             createdAt: interaction.createdAt,
@@ -334,6 +394,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
     init(sent interaction: SentStoryInteractionEvent) {
         self.init(
             id: interaction.id,
+            storyId: interaction.storyId,
             title: "You replied to \(interaction.target.name)'s Story",
             message: interaction.body ?? interaction.reaction ?? "Sent a reply.",
             createdAt: interaction.createdAt,
@@ -349,6 +410,7 @@ struct ReplyThreadView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: ReplyThreadData
     let onQuote: (QuotedStoryReply) -> Void
+    let onOpenStory: (ReplyThreadItem) -> Void
     let onDelete: (String) async -> Void
     @State private var message = ""
     @State private var visibleItems: [ReplyThreadItem]
@@ -356,10 +418,12 @@ struct ReplyThreadView: View {
     init(
         thread: ReplyThreadData,
         onQuote: @escaping (QuotedStoryReply) -> Void,
+        onOpenStory: @escaping (ReplyThreadItem) -> Void,
         onDelete: @escaping (String) async -> Void
     ) {
         self.thread = thread
         self.onQuote = onQuote
+        self.onOpenStory = onOpenStory
         self.onDelete = onDelete
         _visibleItems = State(initialValue: thread.items)
     }
@@ -379,6 +443,7 @@ struct ReplyThreadView: View {
             items: [
                 ReplyThreadItem(
                     id: row.id,
+                    storyId: story?.id ?? row.id,
                     title: "\(creator.name) replied to your Story",
                     message: row.message,
                     createdAt: row.timestamp,
@@ -390,6 +455,7 @@ struct ReplyThreadView: View {
             ]
         )
         self.onQuote = { _ in }
+        self.onOpenStory = { _ in }
         self.onDelete = { _ in }
         _visibleItems = State(initialValue: self.thread.items)
     }
@@ -427,6 +493,9 @@ struct ReplyThreadView: View {
                         ForEach(visibleItems) { item in
                             ReplyThreadStoryCard(
                                 item: item,
+                                onOpenStory: {
+                                    onOpenStory(item)
+                                },
                                 onQuote: {
                                     quote(item)
                                 },
@@ -522,6 +591,7 @@ struct ReplyThreadView: View {
 
 private struct ReplyThreadStoryCard: View {
     let item: ReplyThreadItem
+    let onOpenStory: () -> Void
     let onQuote: () -> Void
     let onDelete: () -> Void
 
@@ -566,24 +636,27 @@ private struct ReplyThreadStoryCard: View {
             .padding(.top, 10)
 
             ZStack(alignment: .bottomLeading) {
-                ZStack(alignment: .bottom) {
-                    ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
-                        .frame(width: 218, height: 318)
+                Button(action: onOpenStory) {
+                    ZStack(alignment: .bottom) {
+                        ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
+                            .frame(width: 218, height: 318)
 
-                    LinearGradient(
-                        colors: [
-                            .black.opacity(0),
-                            .black.opacity(0.48),
-                            .black.opacity(0.70)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 145)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+                        LinearGradient(
+                            colors: [
+                                .black.opacity(0),
+                                .black.opacity(0.48),
+                                .black.opacity(0.70)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 145)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .frame(width: 218, height: 318)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .frame(width: 218, height: 318)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .buttonStyle(.plain)
 
                 ReplyMessageOverlay(message: item.message)
                     .frame(width: 214, alignment: .leading)
@@ -642,8 +715,7 @@ private struct ReplyStoryMedia: View {
                     .resizable()
                     .scaledToFill()
             } placeholder: {
-                ProgressView()
-                    .tint(.ubeyeRed)
+                UBEYESkeletonBlock()
             }
 
             if assetKind == .video {

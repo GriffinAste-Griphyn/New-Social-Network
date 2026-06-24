@@ -171,16 +171,24 @@ final class MediaEngine: ObservableObject {
     }
 
     private func adjacentVideoUrls(in stack: StoryStack, around itemIndex: Int) -> [URL] {
-        let lowerBound = max(itemIndex - 1, 0)
-        let upperBound = min(itemIndex + 2, max(stack.items.count - 1, 0))
+        let videoItems = orderedNearbyStoryItems(in: stack, around: itemIndex)
+            .filter(\.isPlayableVideo)
+        return videoItems.map(\.playbackMediaUrl) + videoItems.compactMap { item in
+            MediaPlaybackQuality.highQualityCandidate(for: item)
+        }
+    }
 
-        guard lowerBound <= upperBound else {
+    private func orderedNearbyStoryItems(in stack: StoryStack, around itemIndex: Int) -> [StoryStackItem] {
+        guard stack.items.indices.contains(itemIndex) else {
             return []
         }
 
-        return stack.items[lowerBound...upperBound].flatMap { item in
-            MediaPlaybackQuality.preloadURLs(for: item)
-        }
+        var seen = Set<Int>()
+        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex - 1]
+            .filter { index in
+                stack.items.indices.contains(index) && seen.insert(index).inserted
+            }
+            .map { stack.items[$0] }
     }
 
     private func uniqueNonEmptyIds(_ ids: [String]) -> [String] {
