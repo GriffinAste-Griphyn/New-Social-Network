@@ -361,6 +361,7 @@ export const mediaAssets = pgTable(
     scanStatus: mediaScanStatus("scan_status").notNull().default("pending"),
     scanReason: text("scan_reason"),
     providerStatus: text("provider_status"),
+    providerPctComplete: integer("provider_pct_complete"),
     providerError: text("provider_error"),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
     readyAt: timestamp("ready_at", { withTimezone: true }),
