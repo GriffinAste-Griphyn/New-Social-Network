@@ -15,6 +15,7 @@ const cloudflareStreamWebhookSchema = z
     status: z
       .object({
         state: z.string().nullable().optional(),
+        pctComplete: z.union([z.number(), z.string()]).nullable().optional(),
         errorReasonCode: z.string().nullable().optional(),
         errorReasonText: z.string().nullable().optional(),
         errReasonCode: z.string().nullable().optional(),
@@ -101,6 +102,20 @@ function verifyCloudflareStreamSignature(input: {
   return signaturesMatch(parsedSignature.signature, expectedSignature)
 }
 
+function parsePctComplete(value: number | string | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value)
+
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : null
+  }
+
+  return null
+}
+
 export async function POST(request: Request) {
   const body = await request.text()
 
@@ -151,6 +166,7 @@ export async function POST(request: Request) {
     details: {
       readyToStream: payload.readyToStream,
       state: payload.status?.state ?? null,
+      pctComplete: parsePctComplete(payload.status?.pctComplete),
       errorReason,
       byteSize:
         typeof payload.size === "number" && Number.isFinite(payload.size)

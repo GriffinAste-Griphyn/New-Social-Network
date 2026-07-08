@@ -1174,7 +1174,7 @@ struct StoryStackViewer: View {
         }
 
         var seen = Set<Int>()
-        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex - 1]
+        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex + 3, itemIndex - 1, itemIndex + 4, itemIndex - 2]
             .filter { index in
                 stack.items.indices.contains(index) && seen.insert(index).inserted
             }
@@ -2271,6 +2271,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var onFinished: () -> Void = {}
     private var playbackRetryCount = 0
     private var layerReadyForDisplay = false
+    private var didUploadAccessLog = false
     private let maxPlaybackRetries = 2
 
     func play(
@@ -2302,6 +2303,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         isReadyForPlayback = false
         layerReadyForDisplay = false
         didFinishPlayback = false
+        didUploadAccessLog = false
         lastPublishedProgress = 0
         startPlayback(url: url, highQualityUrl: highQualityUrl, playerPool: playerPool)
     }
@@ -2484,6 +2486,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         let startedAt = playbackStartedAt ?? Date()
         isReadyForPlayback = true
+        MediaPlaybackQuality.relaxStreamingHints(
+            for: player?.currentItem,
+            playbackURL: activePlaybackURL
+        )
         onReadyForPlayback()
         let metadata = startupMetadata.isEmpty
             ? "url=\(activeURL?.lastPathComponent ?? "unknown")"
@@ -2708,6 +2714,43 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         MediaPerformance.mark(event)
     }
 
+    private func logAccessLogIfNeeded(reason: String) {
+        guard !didUploadAccessLog,
+              MediaControlConfig.shared.shouldUploadAccessLog(),
+              let event = player?.currentItem?.accessLog()?.events.last else {
+            return
+        }
+
+        didUploadAccessLog = true
+        let sourceURL = activePlaybackURL ?? activeURL
+        let observedBitrate = Int(max(0, event.observedBitrate).rounded())
+        let indicatedBitrate = Int(max(0, event.indicatedBitrate).rounded())
+        let transferDurationMs = Int(max(0, event.transferDuration) * 1000)
+        let watchedMs = Int(max(0, event.durationWatched) * 1000)
+        let downloadedMs = Int(max(0, event.segmentsDownloadedDuration) * 1000)
+        let uri = accessLogURIIdentifier(event.uri)
+        let delivery = sourceURL.map(playbackDelivery(for:)) ?? "unknown"
+
+        MediaPerformance.mark(
+            "video_access_log reason=\(reason) delivery=\(delivery) observedBitrate=\(observedBitrate) indicatedBitrate=\(indicatedBitrate) stalls=\(event.numberOfStalls) transferDurationMs=\(transferDurationMs) watchedMs=\(watchedMs) downloadedMs=\(downloadedMs) bytes=\(event.numberOfBytesTransferred) uri=\(uri)"
+        )
+    }
+
+    private func accessLogURIIdentifier(_ uri: String?) -> String {
+        guard let uri, !uri.isEmpty else {
+            return "unknown"
+        }
+
+        if let url = URL(string: uri) {
+            let lastPathComponent = url.lastPathComponent
+            if !lastPathComponent.isEmpty {
+                return String(lastPathComponent.prefix(80))
+            }
+        }
+
+        return String(uri.prefix(80)).replacingOccurrences(of: " ", with: "_")
+    }
+
     private func cleanupCurrentPlayer(reason: String?) {
         playTask?.cancel()
         playTask = nil
@@ -2730,6 +2773,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         removeTimeObserver()
+
+        logAccessLogIfNeeded(reason: reason ?? "cleanup")
 
         if let reason, let activeURL {
             MediaPerformance.mark("video_dismissed reason=\(reason) url=\(activeURL.lastPathComponent)")

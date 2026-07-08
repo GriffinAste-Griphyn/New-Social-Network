@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
@@ -20,6 +21,10 @@ import {
   removeStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
+
+vi.mock("@vercel/blob/client", () => ({
+  generateClientTokenFromReadWriteToken: vi.fn(),
+}))
 
 vi.mock("@/lib/auth", () => ({
   getCompleteMobileSession: vi.fn(),
@@ -74,6 +79,7 @@ const session = {
   onboardingIntent: "create" as const,
   creatorStatus: "active" as const,
 }
+const originalEnv = { ...process.env }
 
 function jsonRequest(body: unknown) {
   return new Request("https://app.example.com/api/mobile/stories/video-upload", {
@@ -95,6 +101,9 @@ describe("mobile Cloudflare video upload API", () => {
     vi.clearAllMocks()
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
+    vi.mocked(generateClientTokenFromReadWriteToken).mockResolvedValue(
+      "mobile_blob_client_token",
+    )
     vi.mocked(createStory).mockResolvedValue(
       "22222222-2222-4222-8222-222222222222",
     )
@@ -167,6 +176,49 @@ describe("mobile Cloudflare video upload API", () => {
     )
     vi.mocked(removeStoryAsset).mockResolvedValue(undefined)
     vi.mocked(setCloudflareStreamThumbnailToLastFrame).mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  it("prepares a direct mobile Blob image upload", async () => {
+    process.env.BLOB_READ_WRITE_TOKEN = "blob_rw_token"
+    const { POST } = await import("@/app/api/mobile/stories/image-upload/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/image-upload", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.30",
+        },
+        body: JSON.stringify({
+          fileName: "story.jpg",
+          contentType: "image/jpeg",
+          byteSize: 1024,
+        }),
+      }),
+    )
+    const payload = await responseJson(response)
+
+    expect(response.status).toBe(200)
+    expect(generateClientTokenFromReadWriteToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedContentTypes: ["image/jpeg"],
+        maximumSizeInBytes: 25 * 1024 * 1024,
+        allowOverwrite: false,
+        cacheControlMaxAge: 60 * 60 * 24 * 30,
+      }),
+    )
+    expect(payload).toMatchObject({
+      ok: true,
+      clientToken: "mobile_blob_client_token",
+      contentType: "image/jpeg",
+      maxSizeBytes: 25 * 1024 * 1024,
+    })
+    expect(String(payload.pathname)).toMatch(
+      /^stories\/web-direct\/creator_123\/.+\.jpg$/,
+    )
   })
 
   it("rejects oversized mobile video uploads before creating a provider upload", async () => {

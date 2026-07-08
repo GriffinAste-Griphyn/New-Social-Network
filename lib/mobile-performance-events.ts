@@ -21,6 +21,14 @@ export const mobilePerformanceEventNames = [
   "media_file_cache_hit",
   "media_file_cache_skip",
   "media_file_cache_write",
+  "hls_asset_download_failed",
+  "hls_asset_download_finished",
+  "hls_asset_download_start",
+  "hls_asset_package_hit",
+  "media_qoe_config",
+  "image_derivatives_prepared",
+  "image_derivative_upload_failed",
+  "background_upload_resume",
   "story_open",
   "story_open_warm",
   "story_stack_cache_clear",
@@ -48,6 +56,7 @@ export const mobilePerformanceEventNames = [
   "video_first_frame",
   "video_item_ready",
   "video_stalled",
+  "video_access_log",
 ] as const
 
 export type MobilePerformanceEventName =

@@ -15,7 +15,7 @@ import {
 } from "@/lib/request-security"
 import {
   publicStoryMediaUrl,
-  removeStoryAsset,
+  removeStoredStoryAsset,
   saveStoryAsset,
   StoryUploadError,
 } from "@/lib/story-storage"
@@ -217,7 +217,7 @@ export async function POST(
     })
   } catch (error) {
     if (storedAsset) {
-      await removeStoryAsset(storedAsset.mediaUrl)
+      await removeStoredStoryAsset(storedAsset)
     }
 
     return NextResponse.json(

@@ -32,6 +32,7 @@ type MobileStoryStackItem = Omit<
 > & {
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl: string | null
   textOverlays: MobileStoryTextOverlay[]
   renditions?: {
     playback: StoryStack["items"][number]["renditions"] extends infer R
@@ -154,12 +155,17 @@ async function mobileStoryRenditions(
       await mobileStoryMediaUrl(source.playback.thumbnailUrl, request),
       version,
     ) ?? fallbackThumbnailUrl
+  const playbackPlaceholderUrl = versionMediaUrl(
+    await mobileStoryMediaUrl(source.playback.placeholderUrl ?? null, request),
+    version,
+  ) ?? fallbackThumbnailUrl
 
   return {
     playback: {
       ...source.playback,
       mediaUrl: playbackMediaUrl,
       thumbnailUrl: playbackThumbnailUrl,
+      placeholderUrl: playbackPlaceholderUrl,
     },
     original: source.original
       ? {
@@ -171,6 +177,10 @@ async function mobileStoryRenditions(
             ) ?? source.original.mediaUrl,
           thumbnailUrl: versionMediaUrl(
             await mobileStoryMediaUrl(source.original.thumbnailUrl, request),
+            version,
+          ),
+          placeholderUrl: versionMediaUrl(
+            await mobileStoryMediaUrl(source.original.placeholderUrl ?? null, request),
             version,
           ),
         }
@@ -202,6 +212,7 @@ async function getMobileMyStoryStack(userId: string): Promise<MobileStoryStack |
       assetKind: item.assetKind,
       mediaUrl: item.mediaUrl,
       thumbnailUrl: item.thumbnailUrl,
+      placeholderUrl: item.placeholderUrl ?? null,
       renditions: item.renditions,
       processingStatus: item.processingStatus,
       title: item.textOverlays?.[0]?.label.trim() || item.caption.trim(),
@@ -252,11 +263,16 @@ export async function getMobileStoryStackResponse(
         await mobileStoryMediaUrl(item.thumbnailUrl, request),
         item.id,
       )
+      const placeholderUrl = versionMediaUrl(
+        await mobileStoryMediaUrl(item.placeholderUrl, request),
+        item.id,
+      )
 
       return {
         ...item,
         mediaUrl,
         thumbnailUrl,
+        placeholderUrl,
         renditions: await mobileStoryRenditions(
           item.renditions,
           request,

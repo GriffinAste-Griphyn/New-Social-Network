@@ -9,7 +9,7 @@ import {
   createDirectBlobStoryImageAsset,
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
-  removeStoryAsset,
+  removeStoredStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
   StoryUploadError,
   type StoredStoryAsset,
@@ -167,6 +167,9 @@ export async function POST(request: Request) {
         width: parsed.data.width ?? cloudflareDetails?.width ?? null,
         height: parsed.data.height ?? cloudflareDetails?.height ?? null,
         processingStatus: cloudflareDetails?.readyToStream ? "ready" : "processing",
+        providerPctComplete:
+          cloudflareDetails?.pctComplete ??
+          (cloudflareDetails?.readyToStream ? 100 : null),
       })
     }
 
@@ -209,7 +212,7 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     if (storedAsset) {
-      await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
+      await removeStoredStoryAsset(storedAsset).catch(() => undefined)
     }
 
     return NextResponse.json(

@@ -38,14 +38,17 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 function absoluteStoryCardMedia<T extends {
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl?: string | null
   renditions?: {
     playback: {
       mediaUrl: string
       thumbnailUrl: string | null
+      placeholderUrl?: string | null
     }
     original: {
       mediaUrl: string
       thumbnailUrl: string | null
+      placeholderUrl?: string | null
     } | null
   }
 }>(story: T, request: Request) {
@@ -55,11 +58,15 @@ function absoluteStoryCardMedia<T extends {
   const thumbnailUrl = publicStoryMediaUrl(story.thumbnailUrl, request, {
     signed: true,
   })
+  const placeholderUrl = publicStoryMediaUrl(story.placeholderUrl ?? null, request, {
+    signed: true,
+  })
 
   return {
     ...story,
     mediaUrl,
     thumbnailUrl,
+    placeholderUrl,
     renditions: story.renditions
       ? {
           playback: {
@@ -70,6 +77,11 @@ function absoluteStoryCardMedia<T extends {
               }) ?? story.renditions.playback.mediaUrl,
             thumbnailUrl: publicStoryMediaUrl(
               story.renditions.playback.thumbnailUrl,
+              request,
+              { signed: true },
+            ),
+            placeholderUrl: publicStoryMediaUrl(
+              story.renditions.playback.placeholderUrl ?? null,
               request,
               { signed: true },
             ),
@@ -85,6 +97,11 @@ function absoluteStoryCardMedia<T extends {
                   ) ?? story.renditions.original.mediaUrl,
                 thumbnailUrl: publicStoryMediaUrl(
                   story.renditions.original.thumbnailUrl,
+                  request,
+                  { signed: true },
+                ),
+                placeholderUrl: publicStoryMediaUrl(
+                  story.renditions.original.placeholderUrl ?? null,
                   request,
                   { signed: true },
                 ),
@@ -120,9 +137,9 @@ function initialStoryStackIds(input: {
   const seen = new Set<string>()
   const ids = [
     ...(input.hasActiveMyStory ? ["my-story"] : []),
-    ...input.followingTimelineStories.slice(0, 4).map((story) => story.id),
-    ...input.followingStories.slice(0, 2).map((story) => story.id),
-    ...input.discoverStories.slice(0, 2).map((story) => story.id),
+    ...input.followingTimelineStories.slice(0, 6).map((story) => story.id),
+    ...input.followingStories.slice(0, 3).map((story) => story.id),
+    ...input.discoverStories.slice(0, 3).map((story) => story.id),
   ]
 
   return ids.filter((id) => {
@@ -188,7 +205,7 @@ async function feedResponse(
     }),
     viewerId: user.id,
     request,
-    limit: 4,
+    limit: 8,
   })
   const latestMyStoryItem =
     feed.myStory.items.length > 0

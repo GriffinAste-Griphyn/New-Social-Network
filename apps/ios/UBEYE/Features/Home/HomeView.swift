@@ -137,6 +137,7 @@ final class FeedStore: ObservableObject {
             assetKind: response.asset.assetKind,
             mediaUrl: response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl,
             thumbnailUrl: thumbnailUrl,
+            placeholderUrl: response.asset.renditions?.playback.placeholderUrl ?? response.asset.placeholderUrl ?? thumbnailUrl,
             renditions: response.asset.renditions,
             title: response.asset.assetKind == .video && response.processingStatus != "ready"
                 ? "Video processing"

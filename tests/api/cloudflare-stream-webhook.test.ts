@@ -80,6 +80,7 @@ describe("Cloudflare Stream webhook", () => {
       details: {
         readyToStream: true,
         state: "ready",
+        pctComplete: null,
         errorReason: null,
         byteSize: 123456,
         durationMs: 7200,

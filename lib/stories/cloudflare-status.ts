@@ -100,6 +100,7 @@ export async function refreshProcessingCloudflareStories(input: {
           .update(mediaAssets)
           .set({
             providerStatus: details.state ?? "processing",
+            providerPctComplete: details.pctComplete ?? undefined,
             lastCheckedAt: new Date(),
             updatedAt: new Date(),
           })
@@ -112,6 +113,7 @@ export async function refreshProcessingCloudflareStories(input: {
       const byteSize = details.byteSize ?? story.byteSize
       const width = details.width ?? story.width
       const height = details.height ?? story.height
+      const providerPctComplete = details.pctComplete ?? 100
       const thumbnailUrl =
         story.thumbnailUrl ??
         (story.storageKey
@@ -129,9 +131,11 @@ export async function refreshProcessingCloudflareStories(input: {
         .set({
           processingStatus: "ready",
           providerStatus: "ready",
+          providerPctComplete,
           providerError: null,
           byteSize: byteSize ?? undefined,
           thumbnailUrl,
+          placeholderUrl: thumbnailUrl,
           durationMs,
           width,
           height,
@@ -149,6 +153,7 @@ export async function refreshProcessingCloudflareStories(input: {
           durationMs,
           byteSize,
           thumbnailUrl,
+          placeholderUrl: thumbnailUrl,
           width,
           height,
         })
@@ -268,6 +273,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
       .update(mediaAssets)
       .set({
         providerStatus: details.state ?? "processing",
+        providerPctComplete: details.pctComplete ?? undefined,
         lastCheckedAt: new Date(),
         updatedAt: new Date(),
       })
@@ -281,6 +287,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
   const byteSize = details.byteSize ?? story.byteSize
   const width = details.width ?? story.width
   const height = details.height ?? story.height
+  const providerPctComplete = details.pctComplete ?? 100
   const thumbnailUrl =
     story.thumbnailUrl ??
     (story.storageKey ? createCloudflareStreamThumbnailMediaUrl(story.storageKey) : null)
@@ -296,9 +303,11 @@ export async function syncCloudflareStreamStoryStatus(input: {
     .set({
       processingStatus: "ready",
       providerStatus: "ready",
+      providerPctComplete,
       providerError: null,
       byteSize: byteSize ?? undefined,
       thumbnailUrl,
+      placeholderUrl: thumbnailUrl,
       durationMs,
       width,
       height,
@@ -315,6 +324,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
       status: "live",
       byteSize,
       thumbnailUrl,
+      placeholderUrl: thumbnailUrl,
       durationMs,
       width,
       height,
@@ -363,6 +373,7 @@ export async function getStoryUploadStatusForOwner(
         moderationStatus: stories.moderationStatus,
         moderationReason: stories.moderationReason,
         providerStatus: mediaAssets.providerStatus,
+        providerPctComplete: mediaAssets.providerPctComplete,
         providerError: mediaAssets.providerError,
         lastCheckedAt: mediaAssets.lastCheckedAt,
         readyAt: mediaAssets.readyAt,
@@ -405,6 +416,11 @@ export async function getStoryUploadStatusForOwner(
     moderationStatus: story.moderationStatus,
     moderationReason: story.moderationReason,
     providerStatus: story.providerStatus,
+    providerPctComplete: story.providerPctComplete,
+    fullQualityReady:
+      story.storageProvider === "cloudflare-stream"
+        ? (story.providerPctComplete ?? 0) >= 100
+        : story.processingStatus === "ready",
     providerError: story.providerError,
     lastCheckedAt: story.lastCheckedAt?.toISOString() ?? null,
     readyAt: story.readyAt?.toISOString() ?? null,

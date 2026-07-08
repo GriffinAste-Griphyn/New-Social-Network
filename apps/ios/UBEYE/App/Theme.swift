@@ -295,6 +295,10 @@ enum MediaPerformance {
         "hls_asset_download_finished",
         "hls_asset_download_start",
         "hls_asset_package_hit",
+        "media_qoe_config",
+        "image_derivatives_prepared",
+        "image_derivative_upload_failed",
+        "background_upload_resume",
         "story_open",
         "story_open_warm",
         "story_stack_cache_clear",
@@ -322,6 +326,7 @@ enum MediaPerformance {
         "video_first_frame",
         "video_item_ready",
         "video_stalled",
+        "video_access_log",
     ]
 
     struct Interval {
@@ -626,6 +631,106 @@ enum MediaDiagnostics {
     }
 }
 
+final class MediaControlConfig {
+    static let shared = MediaControlConfig()
+
+    private let lock = NSLock()
+    private var mediaConfig: MobileMediaConfigResponse.Media?
+
+    private init() {}
+
+    var imageDerivativeUploadEnabled: Bool {
+        read { $0?.imageDerivativeUploadEnabled ?? true }
+    }
+
+    var qoeAccessLogSampleRate: Double {
+        read { min(max($0?.qoeAccessLogSampleRate ?? 1, 0), 1) }
+    }
+
+    var uploadChunkBytes: Int {
+        read { $0?.uploadChunkBytes ?? 8 * 1024 * 1024 }
+    }
+
+    var mediaFileCacheMaxBytes: Int {
+        read { $0?.mediaFileCacheMaxBytes ?? 1024 * 1024 * 1024 }
+    }
+
+    func apply(_ config: MobileMediaConfigResponse.Media) {
+        lock.lock()
+        mediaConfig = config
+        lock.unlock()
+
+        MediaPerformance.mark("media_qoe_config version=\(config.version) cacheBytes=\(config.mediaFileCacheMaxBytes)")
+    }
+
+    func imagePreheatLimit(isLimited: Bool) -> Int {
+        readLimit(\.imagePreheatLimit, isLimited: isLimited, fallback: isLimited ? 18 : 64)
+    }
+
+    func stackPreheatLimit(isLimited: Bool) -> Int {
+        readLimit(\.stackPreheatLimit, isLimited: isLimited, fallback: isLimited ? 5 : 16)
+    }
+
+    func preparedPlayerLimit(isLimited: Bool) -> Int {
+        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 2 : 6)
+    }
+
+    func persistentVideoPreheatLimit(isLimited: Bool) -> Int {
+        readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 1 : 5)
+    }
+
+    func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
+        read {
+            guard let pair = $0?.startupStreamingPeakBitRate else {
+                return isLimited ? 2_400_000 : 5_500_000
+            }
+
+            return isLimited ? pair.constrained : pair.standard
+        }
+    }
+
+    func startupStreamingMaximumResolution(isLimited: Bool) -> CGSize {
+        read {
+            guard let pair = $0?.startupStreamingMaximumResolution else {
+                return isLimited ? CGSize(width: 720, height: 1280) : CGSize(width: 1080, height: 1920)
+            }
+
+            let resolution = isLimited ? pair.constrained : pair.standard
+            return CGSize(width: resolution.width, height: resolution.height)
+        }
+    }
+
+    func shouldUploadAccessLog() -> Bool {
+        let sampleRate = qoeAccessLogSampleRate
+        guard sampleRate > 0 else {
+            return false
+        }
+
+        return sampleRate >= 1 || Double.random(in: 0..<1) <= sampleRate
+    }
+
+    private func read<T>(_ block: (MobileMediaConfigResponse.Media?) -> T) -> T {
+        lock.lock()
+        let config = mediaConfig
+        lock.unlock()
+        return block(config)
+    }
+
+    private func readLimit(
+        _ keyPath: KeyPath<MobileMediaConfigResponse.Media, MobileMediaConfigResponse.Media.LimitPair>,
+        isLimited: Bool,
+        fallback: Int
+    ) -> Int {
+        read {
+            guard let pair = $0?[keyPath: keyPath] else {
+                return fallback
+            }
+
+            return isLimited ? pair.constrained : pair.standard
+        }
+    }
+}
+
 @MainActor
 final class NetworkQualityMonitor {
     static let shared = NetworkQualityMonitor()
@@ -635,12 +740,32 @@ final class NetworkQualityMonitor {
     private(set) var isConstrained = false
     private(set) var isCellular = false
 
+    private var isLimited: Bool {
+        isConstrained || isCellular
+    }
+
     var imagePreheatLimit: Int {
-        isConstrained || isCellular ? 12 : 32
+        MediaControlConfig.shared.imagePreheatLimit(isLimited: isLimited)
     }
 
     var stackPreheatLimit: Int {
-        isConstrained || isCellular ? 4 : 10
+        MediaControlConfig.shared.stackPreheatLimit(isLimited: isLimited)
+    }
+
+    var preparedPlayerLimit: Int {
+        MediaControlConfig.shared.preparedPlayerLimit(isLimited: isLimited)
+    }
+
+    var persistentVideoPreheatLimit: Int {
+        MediaControlConfig.shared.persistentVideoPreheatLimit(isLimited: isLimited)
+    }
+
+    var startupStreamingPeakBitRate: Double {
+        MediaControlConfig.shared.startupStreamingPeakBitRate(isLimited: isLimited)
+    }
+
+    var startupStreamingMaximumResolution: CGSize {
+        MediaControlConfig.shared.startupStreamingMaximumResolution(isLimited: isLimited)
     }
 
     private init() {
@@ -668,7 +793,9 @@ actor MediaFileDiskCache {
 
     private let rootURL: URL
     private let fileManager = FileManager.default
-    private let maxCacheBytes = 512 * 1024 * 1024
+    private var maxCacheBytes: Int {
+        MediaControlConfig.shared.mediaFileCacheMaxBytes
+    }
 
     private init() {
         rootURL = fileManager
@@ -1419,7 +1546,7 @@ enum MediaPreheater {
             MediaPlaybackQuality.highQualityCandidate(for: item)
         }
         let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
-        let videoLimit = allowsPersistentDownloads ? 3 : 1
+        let videoLimit = NetworkQualityMonitor.shared.persistentVideoPreheatLimit
 
         Task {
             await MediaVideoPreheater.shared.preheat(
@@ -1436,7 +1563,7 @@ enum MediaPreheater {
         }
 
         var seen = Set<Int>()
-        return [index, index + 1, index + 2, index - 1]
+        return [index, index + 1, index + 2, index + 3, index - 1, index + 4, index - 2]
             .filter { candidate in
                 stack.items.indices.contains(candidate) && seen.insert(candidate).inserted
             }

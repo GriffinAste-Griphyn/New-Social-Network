@@ -11,6 +11,7 @@ import {
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
   removeStoryAsset,
+  removeStoredStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
 
@@ -62,6 +63,7 @@ vi.mock("@/lib/story-storage", async () => {
     getCloudflareStreamVideoDetails: vi.fn(),
     publicStoryMediaUrl: vi.fn(),
     removeStoryAsset: vi.fn(),
+    removeStoredStoryAsset: vi.fn(),
     setCloudflareStreamThumbnailToLastFrame: vi.fn(),
   }
 })
@@ -167,6 +169,7 @@ describe("web direct story upload API", () => {
       value && request ? new URL(value, request.url).toString() : value,
     )
     vi.mocked(removeStoryAsset).mockResolvedValue(undefined)
+    vi.mocked(removeStoredStoryAsset).mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -328,6 +331,6 @@ describe("web direct story upload API", () => {
     )
 
     expect(response.status).toBe(400)
-    expect(removeStoryAsset).toHaveBeenCalledWith(imageAsset.mediaUrl)
+    expect(removeStoredStoryAsset).toHaveBeenCalledWith(imageAsset)
   })
 })

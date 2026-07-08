@@ -13,7 +13,7 @@ import {
   createOriginalQualityVideoStoryAsset,
   isAllowedOriginalQualityVideoContentType,
   maxOriginalStoryVideoUploadBytes,
-  removeStoryAsset,
+  removeStoredStoryAsset,
   StoryUploadError,
   type StoredStoryAsset,
 } from "@/lib/story-storage"
@@ -153,7 +153,7 @@ export async function POST(
           : "unknown",
     })
     if (storedAsset) {
-      await removeStoryAsset(storedAsset.mediaUrl).catch(() => undefined)
+      await removeStoredStoryAsset(storedAsset).catch(() => undefined)
     } else if (uploadedPathname) {
       await del(uploadedPathname).catch(() => undefined)
       await del(originalVideoThumbnailPathname(uploadedPathname)).catch(

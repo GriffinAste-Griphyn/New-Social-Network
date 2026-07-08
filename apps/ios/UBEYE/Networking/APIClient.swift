@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import UIKit
 
 enum APIClientError: LocalizedError {
@@ -61,7 +62,7 @@ final class APIClient: ObservableObject {
 
     private static let baseURLKey = "ubeye.ios.apiBaseUrl"
     private static let deviceIdKey = "ubeye.ios.deviceId"
-    private static let productionBaseURL = "https://new-social-network-nine.vercel.app"
+    private static let productionBaseURL = "https://www.ubeye.ai"
     private static let vercelBlobApiVersion = "12"
     private static let largeVideoUploadTimeout: TimeInterval = 10 * 60
     private let session: URLSession
@@ -74,6 +75,8 @@ final class APIClient: ObservableObject {
     private let feedDiskCacheMaxAge: TimeInterval = 30 * 60
     private let storyStackDiskCacheMaxAge: TimeInterval = 30 * 60
     private let storyStackRefreshCooldown: TimeInterval = 60
+    private let mediaConfigRefreshCooldown: TimeInterval = 5 * 60
+    private var mediaConfigRefreshedAt: Date?
 
     init(session: URLSession = .shared) {
         MediaPreheater.configureURLCache()
@@ -148,11 +151,28 @@ final class APIClient: ObservableObject {
     }
 
     func mobileFeed() async throws -> MobileFeedResponse {
+        await refreshMediaConfigIfNeeded()
         let response: MobileFeedResponse = try await get("/api/mobile/feed")
         cacheInitialStoryStacks(response.initialStoryStacks, source: "feed_network")
         await saveFeedToDisk(response)
         await saveInitialStoryStacksToDisk(response.initialStoryStacks)
         return response
+    }
+
+    func refreshMediaConfigIfNeeded(force: Bool = false) async {
+        if !force,
+           let mediaConfigRefreshedAt,
+           Date().timeIntervalSince(mediaConfigRefreshedAt) < mediaConfigRefreshCooldown {
+            return
+        }
+
+        do {
+            let response: MobileMediaConfigResponse = try await get("/api/mobile/media-config")
+            MediaControlConfig.shared.apply(response.media)
+            mediaConfigRefreshedAt = Date()
+        } catch {
+            mediaConfigRefreshedAt = Date()
+        }
     }
 
     func deleteStoryInteraction(id: String) async throws {
@@ -483,6 +503,141 @@ final class APIClient: ObservableObject {
         return try await send(request)
     }
 
+    func prepareImageStoryUpload(fileName: String, contentType: String, byteSize: Int64) async throws -> ImageUploadResponse {
+        struct Body: Encodable {
+            let fileName: String
+            let contentType: String
+            let byteSize: Int64
+        }
+
+        return try await post(
+            "/api/mobile/stories/image-upload",
+            body: Body(fileName: fileName, contentType: contentType, byteSize: byteSize)
+        )
+    }
+
+    func uploadImageFile(fileURL: URL, upload: ImageUploadResponse) async throws -> OriginalVideoBlobUploadResult {
+        let byteSize = try fileSize(fileURL)
+        var request = URLRequest(url: upload.originalPart.uploadUrl)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(upload.originalPart.clientToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(upload.originalPart.access ?? "private", forHTTPHeaderField: "x-vercel-blob-access")
+        request.setValue(upload.originalPart.contentType, forHTTPHeaderField: "x-content-type")
+        request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
+        request.setValue(blobRequestId(clientToken: upload.originalPart.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+        request.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
+        request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
+
+        let (data, response) = try await session.upload(for: request, fromFile: fileURL)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let envelope = try? decoder.decode(BlobUploadErrorEnvelope.self, from: data)
+            let detail = envelope?.error?.message ?? envelope?.error?.code
+            throw APIClientError.server(detail ?? "Image upload failed.", statusCode)
+        }
+
+        return try decoder.decode(OriginalVideoBlobUploadResult.self, from: data)
+    }
+
+    @discardableResult
+    func uploadImageData(_ data: Data, part: ImageUploadPart) async throws -> OriginalVideoBlobUploadResult {
+        var request = URLRequest(url: part.uploadUrl)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(part.clientToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(part.access ?? "public", forHTTPHeaderField: "x-vercel-blob-access")
+        request.setValue(part.contentType, forHTTPHeaderField: "x-content-type")
+        request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
+        request.setValue(blobRequestId(clientToken: part.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+        request.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
+        request.setValue(String(data.count), forHTTPHeaderField: "x-content-length")
+
+        let (responseData, response) = try await session.upload(for: request, from: data)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let envelope = try? decoder.decode(BlobUploadErrorEnvelope.self, from: responseData)
+            let detail = envelope?.error?.message ?? envelope?.error?.code
+            throw APIClientError.server(detail ?? "Image derivative upload failed.", statusCode)
+        }
+
+        return try decoder.decode(OriginalVideoBlobUploadResult.self, from: responseData)
+    }
+
+    func completeImageStory(
+        upload: ImageUploadResponse,
+        fileURL: URL,
+        displayDerivative: PreparedImageDerivativeUpload?,
+        thumbnailDerivative: PreparedImageDerivativeUpload?,
+        placeholderDerivative: PreparedImageDerivativeUpload?,
+        caption: String,
+        brandTags: String,
+        textOverlay: String,
+        textOverlayPositionX: Double,
+        textOverlayPositionY: Double,
+        linkLabel: String,
+        linkUrl: String,
+        linkOverlayPositionX: Double,
+        linkOverlayPositionY: Double,
+        quoteReplyId: String,
+        quoteReplyPositionX: Double,
+        quoteReplyPositionY: Double
+    ) async throws -> StoryUploadResponse {
+        struct Body: Encodable {
+            let pathname: String
+            let contentType: String
+            let byteSize: Int64
+            let checksum: String
+            let width: Int?
+            let height: Int?
+            let displayDerivative: PreparedImageDerivativeUpload?
+            let thumbnailDerivative: PreparedImageDerivativeUpload?
+            let placeholderDerivative: PreparedImageDerivativeUpload?
+            let caption: String
+            let brandTags: String
+            let stickers: String
+            let textOverlays: String
+            let textOverlayPositionX: String
+            let textOverlayPositionY: String
+            let linkLabel: String
+            let linkUrl: String
+            let linkOverlayPositionX: String
+            let linkOverlayPositionY: String
+            let quoteReplyId: String
+            let quoteReplyPositionX: String
+            let quoteReplyPositionY: String
+        }
+
+        let byteSize = try fileSize(fileURL)
+        let dimensions = imagePixelDimensions(fileURL)
+
+        return try await post(
+            "/api/mobile/stories/image-complete",
+            body: Body(
+                pathname: upload.pathname,
+                contentType: upload.contentType,
+                byteSize: byteSize,
+                checksum: try fileSHA256Hex(fileURL),
+                width: dimensions?.width,
+                height: dimensions?.height,
+                displayDerivative: displayDerivative,
+                thumbnailDerivative: thumbnailDerivative,
+                placeholderDerivative: placeholderDerivative,
+                caption: caption,
+                brandTags: brandTags,
+                stickers: "",
+                textOverlays: textOverlay,
+                textOverlayPositionX: String(format: "%.2f", textOverlayPositionX),
+                textOverlayPositionY: String(format: "%.2f", textOverlayPositionY),
+                linkLabel: linkLabel,
+                linkUrl: linkUrl,
+                linkOverlayPositionX: String(format: "%.2f", linkOverlayPositionX),
+                linkOverlayPositionY: String(format: "%.2f", linkOverlayPositionY),
+                quoteReplyId: quoteReplyId,
+                quoteReplyPositionX: String(format: "%.2f", quoteReplyPositionX),
+                quoteReplyPositionY: String(format: "%.2f", quoteReplyPositionY)
+            )
+        )
+    }
+
     func uploadAvatar(image: UIImage) async throws -> AvatarUploadResponse {
         guard let imageData = image.jpegData(compressionQuality: 0.9) else {
             throw APIClientError.invalidResponse
@@ -604,16 +759,27 @@ final class APIClient: ObservableObject {
         let _: BasicOkResponse = try await delete("/api/mobile/account", body: Empty())
     }
 
-    func prepareVideoUpload(fileName: String, byteSize: Int64?, maxDurationSeconds: Int) async throws -> VideoUploadResponse {
+    func prepareVideoUpload(
+        fileName: String,
+        byteSize: Int64?,
+        maxDurationSeconds: Int,
+        maxSizeBytes: Int64? = nil
+    ) async throws -> VideoUploadResponse {
         struct Body: Encodable {
             let fileName: String
             let byteSize: Int64?
             let maxDurationSeconds: Int
+            let maxSizeBytes: Int64?
         }
 
         return try await post(
             "/api/mobile/stories/video-upload",
-            body: Body(fileName: fileName, byteSize: byteSize, maxDurationSeconds: maxDurationSeconds)
+            body: Body(
+                fileName: fileName,
+                byteSize: byteSize,
+                maxDurationSeconds: maxDurationSeconds,
+                maxSizeBytes: maxSizeBytes
+            )
         )
     }
 
@@ -719,6 +885,7 @@ final class APIClient: ObservableObject {
         fileURL: URL,
         upload: VideoUploadResponse,
         onRetry: ((String) -> Void)? = nil,
+        maxChunkBytes: Int64 = 50 * 1024 * 1024,
         onProgress: ((Double) -> Void)? = nil
     ) async throws {
         if upload.uploadProtocol == "tus" {
@@ -726,6 +893,7 @@ final class APIClient: ObservableObject {
                 fileURL: fileURL,
                 uploadURL: upload.uploadUrl,
                 onRetry: onRetry,
+                maxChunkBytes: maxChunkBytes,
                 onProgress: onProgress
             )
             return
@@ -766,13 +934,14 @@ final class APIClient: ObservableObject {
         fileURL: URL,
         uploadURL: URL,
         onRetry: ((String) -> Void)?,
+        maxChunkBytes: Int64,
         onProgress: ((Double) -> Void)?
     ) async throws {
         let totalBytes = try videoFileSize(fileURL)
         var offset: Int64 = 0
         var lastError: Error?
         let maxAttempts = 4
-        let maxChunkBytes: Int64 = 50 * 1024 * 1024
+        let resolvedMaxChunkBytes = max(5 * 1024 * 1024, maxChunkBytes)
         onProgress?(0)
 
         while offset < totalBytes {
@@ -787,8 +956,8 @@ final class APIClient: ObservableObject {
                     onRetry?("offset_\(offset)")
                 }
 
-                let chunkBytes = min(maxChunkBytes, totalBytes - offset)
-                let uploadFileURL = try makeFileSlice(
+                let chunkBytes = min(resolvedMaxChunkBytes, totalBytes - offset)
+                let chunkData = try fileChunkData(
                     fileURL: fileURL,
                     offset: offset,
                     length: chunkBytes
@@ -797,12 +966,12 @@ final class APIClient: ObservableObject {
                 do {
                     var request = URLRequest(url: uploadURL)
                     request.httpMethod = "PATCH"
+                    request.timeoutInterval = Self.largeVideoUploadTimeout
                     request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
                     request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
                     request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
 
-                    let (data, response) = try await session.upload(for: request, fromFile: uploadFileURL)
-                    try? FileManager.default.removeItem(at: uploadFileURL)
+                    let (data, response) = try await session.upload(for: request, from: chunkData)
 
                     guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                         throw uploadError(data: data, response: response)
@@ -817,7 +986,6 @@ final class APIClient: ObservableObject {
                     onProgress?(Double(offset) / Double(totalBytes))
                     break
                 } catch {
-                    try? FileManager.default.removeItem(at: uploadFileURL)
                     lastError = error
                     guard attempt < maxAttempts else {
                         throw lastError ?? APIClientError.server("Video upload failed.", 0)
@@ -833,6 +1001,7 @@ final class APIClient: ObservableObject {
     private func tusUploadOffset(uploadURL: URL) async throws -> Int64 {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "HEAD"
+        request.timeoutInterval = Self.largeVideoUploadTimeout
         request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
 
         let (_, response) = try await session.data(for: request)
@@ -843,33 +1012,30 @@ final class APIClient: ObservableObject {
         return Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "0") ?? 0
     }
 
-    private func makeFileSlice(fileURL: URL, offset: Int64, length: Int64) throws -> URL {
-        let sliceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ubeye-tus-slice-\(UUID().uuidString).body")
-        _ = FileManager.default.createFile(atPath: sliceURL.path, contents: nil)
-
+    private func fileChunkData(fileURL: URL, offset: Int64, length: Int64) throws -> Data {
         let input = try FileHandle(forReadingFrom: fileURL)
         defer {
             try? input.close()
         }
         try input.seek(toOffset: UInt64(offset))
 
-        let output = try FileHandle(forWritingTo: sliceURL)
-        defer {
-            try? output.close()
-        }
-
+        var data = Data()
+        data.reserveCapacity(Int(length))
         var remainingBytes = length
         while remainingBytes > 0 {
             let chunk = try input.read(upToCount: Int(min(1024 * 1024, remainingBytes))) ?? Data()
             if chunk.isEmpty {
                 break
             }
-            try output.write(contentsOf: chunk)
+            data.append(chunk)
             remainingBytes -= Int64(chunk.count)
         }
 
-        return sliceURL
+        guard data.count > 0 else {
+            throw APIClientError.invalidResponse
+        }
+
+        return data
     }
 
     private func uploadError(data: Data, response: URLResponse) -> APIClientError {
@@ -1136,12 +1302,32 @@ final class APIClient: ObservableObject {
     }
 
     private func videoFileSize(_ fileURL: URL) throws -> Int64 {
+        try fileSize(fileURL)
+    }
+
+    private func fileSize(_ fileURL: URL) throws -> Int64 {
         guard let size = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber,
               size.int64Value > 0 else {
             throw APIClientError.invalidResponse
         }
 
         return size.int64Value
+    }
+
+    private func imagePixelDimensions(_ fileURL: URL) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return nil
+        }
+
+        let width = properties[kCGImagePropertyPixelWidth] as? NSNumber
+        let height = properties[kCGImagePropertyPixelHeight] as? NSNumber
+
+        guard let width, let height, width.intValue > 0, height.intValue > 0 else {
+            return nil
+        }
+
+        return (width.intValue, height.intValue)
     }
 
     private func blobRequestId(clientToken: String) -> String {

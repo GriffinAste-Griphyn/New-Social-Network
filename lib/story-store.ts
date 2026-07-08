@@ -73,6 +73,7 @@ type FeedStoryRow = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl: string | null
   storageProvider: string | null
   storageKey: string | null
   contentType: string | null
@@ -133,6 +134,7 @@ type RankedStoryRow = FeedStoryRow & {
 type StoryMediaRendition = {
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl?: string | null
   storageProvider?: string | null
   storageKey?: string | null
   contentType?: string | null
@@ -175,6 +177,7 @@ function storyMediaRenditions(row: FeedStoryRow): StoryMediaRenditions {
     playback: {
       mediaUrl: playbackMediaUrl,
       thumbnailUrl: playbackThumbnailUrl,
+      placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
       storageProvider: row.storageProvider,
       storageKey: row.storageKey,
       contentType: row.contentType,
@@ -190,6 +193,7 @@ function storyMediaRenditions(row: FeedStoryRow): StoryMediaRenditions {
           mediaUrl:
             publicStoryMediaUrl(row.originalMediaUrl) ?? row.originalMediaUrl,
           thumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
+          placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
           storageProvider: row.originalStorageProvider,
           storageKey: row.originalStorageKey,
           contentType: row.originalContentType,
@@ -228,6 +232,7 @@ export type SuggestedAccount = {
 }
 
 export type FeedStoryCard = SocialStoryCard & {
+  placeholderUrl?: string | null
   processingStatus?: string
   renditions?: StoryMediaRenditions
 }
@@ -284,6 +289,7 @@ export type StoryStackItem = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl: string | null
   renditions?: StoryMediaRenditions
   processingStatus?: string
   title: string
@@ -343,6 +349,7 @@ type StoredAssetStory = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl?: string | null
   storageProvider?: string | null
   storageKey?: string | null
   contentType?: string | null
@@ -534,6 +541,7 @@ function buildFeedStoryCard(
     assetKind: row.assetKind,
     mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
     thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+    placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
     renditions: storyMediaRenditions(row),
     processingStatus: row.processingStatus,
     title:
@@ -786,6 +794,7 @@ function buildStoryStack(
       assetKind: row.assetKind,
       mediaUrl: publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl,
       thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl),
+      placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
       renditions: storyMediaRenditions(row),
       processingStatus: row.processingStatus,
       postedAt: formatStoryPostedAt(row.createdAt),
@@ -887,6 +896,7 @@ async function getLiveStoryRows() {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      placeholderUrl: stories.placeholderUrl,
       storageProvider: stories.storageProvider,
       storageKey: stories.storageKey,
       contentType: stories.contentType,
@@ -962,6 +972,7 @@ async function getLiveStoryRowsForCreator(
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      placeholderUrl: stories.placeholderUrl,
       storageProvider: stories.storageProvider,
       storageKey: stories.storageKey,
       contentType: stories.contentType,
@@ -1419,6 +1430,7 @@ export async function getMobileCreatorProfile(
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      placeholderUrl: stories.placeholderUrl,
     })
     .from(stories)
     .where(
@@ -1577,6 +1589,7 @@ export async function createStory(input: CreateStoryInput) {
     assetKind: input.storedAsset.assetKind,
     mediaUrl: input.storedAsset.mediaUrl,
     thumbnailUrl: input.storedAsset.thumbnailUrl,
+    placeholderUrl: input.storedAsset.placeholderUrl ?? null,
     storageProvider: input.storedAsset.storageProvider,
     storageKey: input.storedAsset.storageKey,
     originalMediaUrl: input.storedAsset.originalMediaUrl ?? null,
@@ -1675,6 +1688,7 @@ export async function getStoryByStoredAssetForOwner(input: {
       assetKind: stories.assetKind,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      placeholderUrl: stories.placeholderUrl,
       storageProvider: stories.storageProvider,
       storageKey: stories.storageKey,
       contentType: stories.contentType,
@@ -1789,7 +1803,7 @@ export async function attachOriginalStoryRenditionForOwner(input: {
 export async function setStoryThumbnail(storyId: string, thumbnailUrl: string | null) {
   await getDb()
     .update(stories)
-    .set({ thumbnailUrl })
+    .set({ thumbnailUrl, placeholderUrl: thumbnailUrl })
     .where(eq(stories.id, storyId))
 }
 
@@ -1917,6 +1931,9 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
       id: stories.id,
       mediaUrl: stories.mediaUrl,
       thumbnailUrl: stories.thumbnailUrl,
+      placeholderUrl: stories.placeholderUrl,
+      originalMediaUrl: stories.originalMediaUrl,
+      originalThumbnailUrl: stories.originalThumbnailUrl,
     })
     .from(stories)
     .where(and(eq(stories.id, storyId), eq(stories.creatorId, ownerId)))
@@ -1941,5 +1958,8 @@ export async function removeStoryForOwner(storyId: string, ownerId: string) {
   return {
     mediaUrl: story.mediaUrl,
     thumbnailUrl: story.thumbnailUrl,
+    placeholderUrl: story.placeholderUrl,
+    originalMediaUrl: story.originalMediaUrl,
+    originalThumbnailUrl: story.originalThumbnailUrl,
   }
 }

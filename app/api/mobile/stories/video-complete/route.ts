@@ -14,6 +14,7 @@ import {
   isAllowedOriginalQualityVideoThumbnailContentType,
   maxCloudflareStreamClientThumbnailUploadBytes,
   removeStoryAsset,
+  removeStoredStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
   StoryUploadError,
   type StoredStoryAsset,
@@ -201,6 +202,9 @@ export async function POST(request: Request) {
       width: parsed.data.width ?? cloudflareDetails?.width ?? null,
       height: parsed.data.height ?? cloudflareDetails?.height ?? null,
       processingStatus: cloudflareDetails?.readyToStream ? "ready" : "processing",
+      providerPctComplete:
+        cloudflareDetails?.pctComplete ??
+        (cloudflareDetails?.readyToStream ? 100 : null),
     })
     storedAsset = uploadedThumbnailUrl
       ? { ...storedAsset, thumbnailUrl: uploadedThumbnailUrl }
@@ -235,7 +239,7 @@ export async function POST(request: Request) {
           : "unknown",
     })
     if (storedAsset) {
-      await removeStoryAsset(storedAsset.mediaUrl)
+      await removeStoredStoryAsset(storedAsset)
     }
     if (uploadedThumbnailUrl) {
       await removeStoryAsset(uploadedThumbnailUrl).catch(() => undefined)

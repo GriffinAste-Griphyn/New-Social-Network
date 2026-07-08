@@ -10,7 +10,7 @@ import {
 } from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
-  removeStoryAsset,
+  removeStoredStoryAsset,
   saveStoryAsset,
   StoryUploadError,
 } from "@/lib/story-storage"
@@ -47,7 +47,7 @@ vi.mock("@/lib/story-storage", async () => {
   return {
     ...actual,
     publicStoryMediaUrl: vi.fn(),
-    removeStoryAsset: vi.fn(),
+    removeStoredStoryAsset: vi.fn(),
     saveStoryAsset: vi.fn(),
   }
 })
@@ -211,7 +211,7 @@ describe("story upload and mobile feed API", () => {
     expect(await responseJson(response)).toMatchObject({
       error: "Story upload failed. Try again.",
     })
-    expect(removeStoryAsset).toHaveBeenCalledWith(storedAsset.mediaUrl)
+    expect(removeStoredStoryAsset).toHaveBeenCalledWith(storedAsset)
   })
 
   it("surfaces upload validation errors to mobile clients", async () => {

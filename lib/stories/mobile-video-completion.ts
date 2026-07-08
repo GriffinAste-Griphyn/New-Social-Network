@@ -50,6 +50,7 @@ type MobileVideoStoryResponseInput = {
     assetKind: "image" | "video"
     mediaUrl: string
     thumbnailUrl: string | null
+    placeholderUrl?: string | null
     storageProvider?: string | null
     storageKey?: string | null
     contentType?: string | null
@@ -118,6 +119,9 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
       thumbnailUrl: publicStoryMediaUrl(input.asset.thumbnailUrl, input.request, {
         signed: true,
       }),
+      placeholderUrl: publicStoryMediaUrl(input.asset.placeholderUrl ?? null, input.request, {
+        signed: true,
+      }),
       renditions: {
         playback: {
           mediaUrl:
@@ -126,6 +130,11 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
             }) ?? input.asset.mediaUrl,
           thumbnailUrl: publicStoryMediaUrl(
             input.asset.thumbnailUrl,
+            input.request,
+            { signed: true },
+          ),
+          placeholderUrl: publicStoryMediaUrl(
+            input.asset.placeholderUrl ?? null,
             input.request,
             { signed: true },
           ),
@@ -169,6 +178,8 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
     processingStatus: storyStatus?.processingStatus ?? input.asset.processingStatus,
     providerStatus:
       storyStatus?.providerStatus ?? input.providerStatusFallback ?? null,
+    providerPctComplete: storyStatus?.providerPctComplete ?? null,
+    fullQualityReady: storyStatus?.fullQualityReady ?? false,
     providerError:
       storyStatus?.providerError ?? input.providerErrorFallback ?? null,
     lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
@@ -241,6 +252,7 @@ export async function completeMobileVideoStory(
       assetKind: input.storedAsset.assetKind,
       mediaUrl: input.storedAsset.mediaUrl,
       thumbnailUrl: input.storedAsset.thumbnailUrl,
+      placeholderUrl: input.storedAsset.placeholderUrl ?? null,
       storageProvider: input.storedAsset.storageProvider,
       storageKey: input.storedAsset.storageKey,
       contentType: input.storedAsset.contentType,

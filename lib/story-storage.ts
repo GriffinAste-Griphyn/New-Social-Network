@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto"
+import { createHash, createPrivateKey, createSign, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -28,6 +28,7 @@ export {
 } from "@/lib/story-media/access"
 
 const maxStoryUploadBytes = 25 * 1024 * 1024
+export const maxStoryImageUploadBytes = maxStoryUploadBytes
 export const maxStoryVideoUploadBytes = 512 * 1024 * 1024
 export const maxOriginalStoryVideoUploadBytes = maxStoryVideoUploadBytes
 export const maxOriginalStoryVideoThumbnailUploadBytes = 2 * 1024 * 1024
@@ -36,6 +37,11 @@ const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stor
 const cloudflareStreamClientThumbnailDirectory =
   "stories/mobile-cloudflare-thumbnails"
 const execFileAsync = promisify(execFile)
+const directStoryImageDisplayWidth = 1080
+const directStoryImageDisplayHeight = 1920
+const directStoryImageThumbnailWidth = 720
+const directStoryImageThumbnailHeight = 1280
+const directStoryImageDerivativeCacheMaxAgeSeconds = 60 * 60 * 24 * 30
 
 type ResolvedUploadType = {
   assetKind: "image" | "video"
@@ -58,6 +64,7 @@ export type StoredStoryAsset = {
   assetKind: "image" | "video"
   mediaUrl: string
   thumbnailUrl: string | null
+  placeholderUrl?: string | null
   storageProvider: "local" | "vercel-blob" | "cloudflare-stream"
   storageKey: string
   originalMediaUrl?: string | null
@@ -77,6 +84,7 @@ export type StoredStoryAsset = {
   height: number | null
   durationMs: number | null
   processingStatus: StoryAssetProcessingStatus
+  providerPctComplete?: number | null
 }
 
 type StoryStorageProvider = {
@@ -186,6 +194,7 @@ const localStoryStorageProvider: StoryStorageProvider = {
       assetKind,
       mediaUrl,
       thumbnailUrl,
+      placeholderUrl: thumbnailUrl,
       storageProvider: "local",
       storageKey: buildLocalStoryMediaPathname(fileName),
       contentType,
@@ -230,6 +239,7 @@ const vercelBlobStoryStorageProvider: StoryStorageProvider = {
       assetKind,
       mediaUrl,
       thumbnailUrl: assetKind === "image" ? mediaUrl : null,
+      placeholderUrl: assetKind === "image" ? mediaUrl : null,
       storageProvider: "vercel-blob",
       storageKey: blob.pathname,
       contentType,
@@ -286,6 +296,7 @@ type CloudflareStreamVideoDetailsResponse = {
     size?: number | null
     status?: {
       state?: string
+      pctComplete?: number | string | null
       errorReasonCode?: string
       errorReasonText?: string
     } | null
@@ -301,6 +312,16 @@ type CloudflareStreamUpdateResponse = {
   success: boolean
   errors?: Array<{ message?: string }>
 }
+
+type CachedCloudflareStreamToken = {
+  customerSubdomain: string
+  token: string
+  expiresAtMs: number
+}
+
+const cloudflareStreamTokenCache = new Map<string, CachedCloudflareStreamToken>()
+const cloudflareStreamTokenCacheMaxEntries = 500
+const cloudflareStreamTokenCacheSkewMs = 60 * 1000
 
 function getCloudflareStreamConfig() {
   const accountId = process.env.CLOUDFLARE_STREAM_ACCOUNT_ID
@@ -323,6 +344,77 @@ function buildCloudflarePlaybackUrl(customerSubdomain: string, playbackId: strin
     : `https://${customerSubdomain}`
 
   return `${origin}/${playbackId}/manifest/video.m3u8`
+}
+
+function parseCloudflareStreamSigningJwk(value: string) {
+  const trimmed = value.trim()
+  const json = trimmed.startsWith("{")
+    ? trimmed
+    : Buffer.from(trimmed.replace(/-/g, "+").replace(/_/g, "/"), "base64")
+        .toString("utf8")
+
+  return JSON.parse(json) as Record<string, unknown>
+}
+
+function getCloudflareStreamSigningKeyConfig() {
+  const keyId = process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID?.trim()
+  const pem = process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM
+    ?.replace(/\\n/g, "\n")
+    .trim()
+  const jwk = process.env.CLOUDFLARE_STREAM_SIGNING_KEY_JWK?.trim()
+
+  if (!keyId && !pem && !jwk) {
+    return null
+  }
+
+  if (!keyId || (!pem && !jwk)) {
+    throw new StoryUploadError(
+      "Cloudflare Stream signing requires CLOUDFLARE_STREAM_SIGNING_KEY_ID and CLOUDFLARE_STREAM_SIGNING_KEY_JWK or CLOUDFLARE_STREAM_SIGNING_KEY_PEM.",
+    )
+  }
+
+  try {
+    const privateKey = pem
+      ? createPrivateKey(pem)
+      : createPrivateKey({
+          key: parseCloudflareStreamSigningJwk(jwk!),
+          format: "jwk",
+        })
+
+    return { keyId, privateKey }
+  } catch {
+    throw new StoryUploadError("Cloudflare Stream signing key is not valid.")
+  }
+}
+
+function base64UrlJson(value: unknown) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url")
+}
+
+function createSignedCloudflareStreamToken(input: {
+  uid: string
+  keyId: string
+  privateKey: ReturnType<typeof createPrivateKey>
+  expiresAtMs: number
+}) {
+  const header = base64UrlJson({
+    alg: "RS256",
+    kid: input.keyId,
+    typ: "JWT",
+  })
+  const payload = base64UrlJson({
+    sub: input.uid,
+    kid: input.keyId,
+    exp: Math.floor(input.expiresAtMs / 1000),
+    downloadable: false,
+  })
+  const unsignedToken = `${header}.${payload}`
+  const signer = createSign("RSA-SHA256")
+
+  signer.update(unsignedToken)
+  signer.end()
+
+  return `${unsignedToken}.${signer.sign(input.privateKey).toString("base64url")}`
 }
 
 function buildCloudflareThumbnailUrl(customerSubdomain: string, playbackId: string) {
@@ -355,6 +447,20 @@ function buildCloudflareTusUploadMetadata(input: {
 
 function isCloudflareStreamUid(value: string) {
   return /^[a-f0-9]{32}$/i.test(value)
+}
+
+function parseCloudflarePctComplete(value: number | string | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value)
+
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : null
+  }
+
+  return null
 }
 
 export function isAllowedOriginalQualityVideoThumbnailContentType(
@@ -436,6 +542,7 @@ export async function createOriginalQualityVideoStoryAsset(input: {
     assetKind: "video",
     mediaUrl,
     thumbnailUrl,
+    placeholderUrl: thumbnailUrl,
     storageProvider: "vercel-blob",
     storageKey: input.pathname,
     originalMediaUrl: mediaUrl,
@@ -474,6 +581,94 @@ export function directStoryImagePathname(userId: string, fileName: string) {
   return `stories/web-direct/${safeUserId}/${randomUUID()}${resolvedExtension}`
 }
 
+export function directStoryImageDisplayPathname(originalPathname: string) {
+  return buildDirectStoryImageDisplayPathname(originalPathname)
+}
+
+export function directStoryImageThumbnailPathname(originalPathname: string) {
+  return buildDirectStoryImageThumbnailPathname(originalPathname)
+}
+
+export function directStoryImagePlaceholderPathname(originalPathname: string) {
+  const extension = path.extname(originalPathname)
+
+  return extension
+    ? `${originalPathname.slice(0, -extension.length)}-placeholder.jpg`
+    : `${originalPathname}-placeholder.jpg`
+}
+
+export type DirectStoryImageClientDerivativeInput = {
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width?: number | null
+  height?: number | null
+}
+
+type VerifiedDirectStoryImageDerivative = {
+  mediaUrl: string
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  width: number | null
+  height: number | null
+}
+
+function expectedDirectDerivativePathnames(originalPathname: string) {
+  return new Set([
+    directStoryImageDisplayPathname(originalPathname),
+    directStoryImageThumbnailPathname(originalPathname),
+    directStoryImagePlaceholderPathname(originalPathname),
+  ])
+}
+
+async function verifyDirectStoryImageClientDerivative(input: {
+  originalPathname: string
+  derivative: DirectStoryImageClientDerivativeInput | null | undefined
+  maxByteSize: number
+}): Promise<VerifiedDirectStoryImageDerivative | null> {
+  if (!input.derivative) {
+    return null
+  }
+
+  const { derivative } = input
+  if (
+    derivative.pathname.includes("..") ||
+    !expectedDirectDerivativePathnames(input.originalPathname).has(
+      derivative.pathname,
+    ) ||
+    derivative.contentType.toLowerCase() !== "image/jpeg" ||
+    !Number.isSafeInteger(derivative.byteSize) ||
+    derivative.byteSize <= 0 ||
+    derivative.byteSize > input.maxByteSize ||
+    !/^[a-f0-9]{64}$/i.test(derivative.checksum)
+  ) {
+    throw new StoryUploadError("Could not verify the uploaded story image variants.")
+  }
+
+  const blobMetadata = await head(derivative.pathname).catch(() => null)
+
+  if (
+    !blobMetadata ||
+    blobMetadata.size !== derivative.byteSize ||
+    blobMetadata.contentType.toLowerCase() !== "image/jpeg"
+  ) {
+    throw new StoryUploadError("Could not verify the uploaded story image variants.")
+  }
+
+  return {
+    mediaUrl: blobMetadata.url ?? buildStoryMediaRoute(blobMetadata.pathname),
+    pathname: blobMetadata.pathname,
+    contentType: "image/jpeg",
+    byteSize: derivative.byteSize,
+    checksum: derivative.checksum.toLowerCase(),
+    width: derivative.width ?? null,
+    height: derivative.height ?? null,
+  }
+}
+
 export async function createDirectBlobStoryImageAsset(input: {
   pathname: string
   ownerUserId: string
@@ -482,6 +677,9 @@ export async function createDirectBlobStoryImageAsset(input: {
   checksum: string
   width?: number | null
   height?: number | null
+  displayDerivative?: DirectStoryImageClientDerivativeInput | null
+  thumbnailDerivative?: DirectStoryImageClientDerivativeInput | null
+  placeholderDerivative?: DirectStoryImageClientDerivativeInput | null
 }): Promise<StoredStoryAsset> {
   const expectedPrefix = `stories/web-direct/${input.ownerUserId.replace(
     /[^a-zA-Z0-9_-]/g,
@@ -510,22 +708,84 @@ export async function createDirectBlobStoryImageAsset(input: {
     throw new StoryUploadError("Could not verify the uploaded story image.")
   }
 
-  const mediaUrl = buildStoryMediaRoute(input.pathname)
-  const thumbnailUrl =
-    (await createDirectStoryImageThumbnail(input.pathname).catch(() => null)) ??
-    mediaUrl
+  const originalMediaUrl = buildStoryMediaRoute(input.pathname)
+  const clientDisplay = await verifyDirectStoryImageClientDerivative({
+    originalPathname: input.pathname,
+    derivative: input.displayDerivative,
+    maxByteSize: maxStoryUploadBytes,
+  })
+  const clientThumbnail = await verifyDirectStoryImageClientDerivative({
+    originalPathname: input.pathname,
+    derivative: input.thumbnailDerivative,
+    maxByteSize: maxOriginalStoryVideoThumbnailUploadBytes,
+  })
+  const clientPlaceholder = await verifyDirectStoryImageClientDerivative({
+    originalPathname: input.pathname,
+    derivative: input.placeholderDerivative,
+    maxByteSize: 128 * 1024,
+  })
+  const generatedDerivatives =
+    clientDisplay && clientThumbnail
+      ? null
+      : await createDirectStoryImageDerivatives(input.pathname).catch(() => null)
+  const derivatives = clientDisplay
+    ? {
+        display: clientDisplay,
+        thumbnail: clientThumbnail ?? clientDisplay,
+        placeholder: clientPlaceholder,
+      }
+    : generatedDerivatives
+
+  if (!derivatives) {
+    return {
+      assetKind: "image",
+      mediaUrl: originalMediaUrl,
+      thumbnailUrl: originalMediaUrl,
+      placeholderUrl: originalMediaUrl,
+      storageProvider: "vercel-blob",
+      storageKey: input.pathname,
+      originalMediaUrl,
+      originalThumbnailUrl: originalMediaUrl,
+      originalStorageProvider: "vercel-blob",
+      originalStorageKey: input.pathname,
+      originalContentType: input.contentType,
+      originalByteSize: input.byteSize,
+      originalChecksum: input.checksum.toLowerCase(),
+      originalWidth: input.width ?? null,
+      originalHeight: input.height ?? null,
+      originalDurationMs: null,
+      contentType: input.contentType,
+      byteSize: input.byteSize,
+      checksum: input.checksum.toLowerCase(),
+      width: input.width ?? null,
+      height: input.height ?? null,
+      durationMs: null,
+      processingStatus: "ready",
+    }
+  }
 
   return {
     assetKind: "image",
-    mediaUrl,
-    thumbnailUrl,
+    mediaUrl: derivatives.display.mediaUrl,
+    thumbnailUrl: derivatives.thumbnail.mediaUrl,
+    placeholderUrl: derivatives.placeholder?.mediaUrl ?? derivatives.thumbnail.mediaUrl,
     storageProvider: "vercel-blob",
-    storageKey: input.pathname,
-    contentType: input.contentType,
-    byteSize: input.byteSize,
-    checksum: input.checksum.toLowerCase(),
-    width: input.width ?? null,
-    height: input.height ?? null,
+    storageKey: derivatives.display.pathname,
+    originalMediaUrl,
+    originalThumbnailUrl: derivatives.thumbnail.mediaUrl,
+    originalStorageProvider: "vercel-blob",
+    originalStorageKey: input.pathname,
+    originalContentType: input.contentType,
+    originalByteSize: input.byteSize,
+    originalChecksum: input.checksum.toLowerCase(),
+    originalWidth: input.width ?? null,
+    originalHeight: input.height ?? null,
+    originalDurationMs: null,
+    contentType: derivatives.display.contentType,
+    byteSize: derivatives.display.byteSize,
+    checksum: derivatives.display.checksum,
+    width: derivatives.display.width,
+    height: derivatives.display.height,
     durationMs: null,
     processingStatus: "ready",
   }
@@ -665,8 +925,53 @@ export function parseCloudflareStreamMediaPathname(pathname: string) {
   return null
 }
 
+function pruneCloudflareStreamTokenCache() {
+  if (cloudflareStreamTokenCache.size <= cloudflareStreamTokenCacheMaxEntries) {
+    return
+  }
+
+  const now = Date.now()
+
+  for (const [key, cached] of cloudflareStreamTokenCache) {
+    if (
+      cached.expiresAtMs <= now + cloudflareStreamTokenCacheSkewMs ||
+      cloudflareStreamTokenCache.size > cloudflareStreamTokenCacheMaxEntries
+    ) {
+      cloudflareStreamTokenCache.delete(key)
+    }
+  }
+}
+
 async function createCloudflareStreamToken(uid: string) {
   const { accountId, apiToken, customerSubdomain } = getCloudflareStreamConfig()
+  const now = Date.now()
+  const signingKey = getCloudflareStreamSigningKeyConfig()
+  const cacheKey = `${customerSubdomain}:${signingKey?.keyId ?? "api"}:${uid}`
+  const cached = cloudflareStreamTokenCache.get(cacheKey)
+
+  if (cached && cached.expiresAtMs > now + cloudflareStreamTokenCacheSkewMs) {
+    return cached
+  }
+
+  const expiresAtMs = now + storyMediaAccessTokenTtlMs
+  if (signingKey) {
+    const nextCached = {
+      customerSubdomain,
+      token: createSignedCloudflareStreamToken({
+        uid,
+        keyId: signingKey.keyId,
+        privateKey: signingKey.privateKey,
+        expiresAtMs,
+      }),
+      expiresAtMs,
+    }
+
+    cloudflareStreamTokenCache.set(cacheKey, nextCached)
+    pruneCloudflareStreamTokenCache()
+
+    return nextCached
+  }
+
   const tokenResponse = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}/token`,
     {
@@ -677,7 +982,7 @@ async function createCloudflareStreamToken(uid: string) {
       },
       body: JSON.stringify({
         downloadable: false,
-        exp: Math.floor((Date.now() + storyMediaAccessTokenTtlMs) / 1000),
+        exp: Math.floor(expiresAtMs / 1000),
       }),
     },
   )
@@ -693,7 +998,12 @@ async function createCloudflareStreamToken(uid: string) {
     )
   }
 
-  return { customerSubdomain, token }
+  const nextCached = { customerSubdomain, token, expiresAtMs }
+
+  cloudflareStreamTokenCache.set(cacheKey, nextCached)
+  pruneCloudflareStreamTokenCache()
+
+  return nextCached
 }
 
 export async function createCloudflareStreamPlaybackUrl(uid: string) {
@@ -771,6 +1081,9 @@ export async function getCloudflareStreamVideoDetails(uid: string) {
   return {
     readyToStream: detailsPayload.result?.readyToStream === true,
     state: detailsPayload.result?.status?.state ?? null,
+    pctComplete: parseCloudflarePctComplete(
+      detailsPayload.result?.status?.pctComplete,
+    ),
     errorReason:
       detailsPayload.result?.status?.errorReasonText ||
       detailsPayload.result?.status?.errorReasonCode ||
@@ -855,6 +1168,7 @@ async function saveCloudflareStreamVideo(
     assetKind: "video",
     mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(uid)),
     thumbnailUrl: createCloudflareStreamThumbnailMediaUrl(uid),
+    placeholderUrl: createCloudflareStreamThumbnailMediaUrl(uid),
     storageProvider: "cloudflare-stream",
     storageKey: uid,
     contentType,
@@ -967,6 +1281,7 @@ export function createCloudflareStreamStoredVideoAsset(input: {
   width?: number | null
   height?: number | null
   processingStatus?: StoryAssetProcessingStatus
+  providerPctComplete?: number | null
 }): StoredStoryAsset {
   assertCloudflareStreamUploadsEnabled()
 
@@ -978,6 +1293,7 @@ export function createCloudflareStreamStoredVideoAsset(input: {
     assetKind: "video",
     mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(input.uid)),
     thumbnailUrl: createCloudflareStreamThumbnailMediaUrl(input.uid),
+    placeholderUrl: createCloudflareStreamThumbnailMediaUrl(input.uid),
     storageProvider: "cloudflare-stream",
     storageKey: input.uid,
     contentType: input.contentType.startsWith("video/")
@@ -989,6 +1305,9 @@ export function createCloudflareStreamStoredVideoAsset(input: {
     height: input.height ?? null,
     durationMs: input.durationMs ?? null,
     processingStatus: input.processingStatus ?? "ready",
+    providerPctComplete:
+      input.providerPctComplete ??
+      (input.processingStatus === "processing" ? null : 100),
   }
 }
 
@@ -1031,7 +1350,54 @@ function buildDirectStoryImageThumbnailPathname(pathname: string) {
     : `${pathname}-thumb.jpg`
 }
 
-async function createDirectStoryImageThumbnail(pathname: string) {
+function buildDirectStoryImageDisplayPathname(pathname: string) {
+  const extension = path.extname(pathname)
+
+  return extension
+    ? `${pathname.slice(0, -extension.length)}-display.jpg`
+    : `${pathname}-display.jpg`
+}
+
+async function createDirectStoryImageDerivative(input: {
+  sourceBytes: Buffer
+  outputPathname: string
+  width: number
+  height: number
+  quality: number
+}) {
+  const { data, info } = await sharp(input.sourceBytes)
+    .rotate()
+    .resize({
+      width: input.width,
+      height: input.height,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .jpeg({
+      quality: input.quality,
+      progressive: true,
+      mozjpeg: true,
+    })
+    .toBuffer({ resolveWithObject: true })
+  const blob = await put(input.outputPathname, data, {
+    access: "public",
+    contentType: "image/jpeg",
+    addRandomSuffix: false,
+    cacheControlMaxAge: directStoryImageDerivativeCacheMaxAgeSeconds,
+  })
+
+  return {
+    mediaUrl: blob.url ?? buildStoryMediaRoute(blob.pathname),
+    pathname: blob.pathname,
+    contentType: "image/jpeg",
+    byteSize: data.byteLength,
+    checksum: createHash("sha256").update(data).digest("hex"),
+    width: info.width ?? input.width,
+    height: info.height ?? input.height,
+  }
+}
+
+async function createDirectStoryImageDerivatives(pathname: string) {
   const source = await get(pathname, { access: "private", useCache: false })
 
   if (!source?.stream || source.statusCode !== 200) {
@@ -1041,36 +1407,44 @@ async function createDirectStoryImageThumbnail(pathname: string) {
   const sourceBytes = Buffer.from(
     await new Response(source.stream).arrayBuffer(),
   )
-  const thumbnailBytes = await sharp(sourceBytes)
-    .rotate()
-    .resize({
-      width: 720,
-      height: 1280,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .jpeg({
-      quality: 84,
-      progressive: true,
-    })
-    .toBuffer()
-  const thumbnail = await put(buildDirectStoryImageThumbnailPathname(pathname), thumbnailBytes, {
-    access: "private",
-    contentType: "image/jpeg",
-    addRandomSuffix: false,
+  const display = await createDirectStoryImageDerivative({
+    sourceBytes,
+    outputPathname: buildDirectStoryImageDisplayPathname(pathname),
+    width: directStoryImageDisplayWidth,
+    height: directStoryImageDisplayHeight,
+    quality: 88,
   })
+  const thumbnail =
+    (await createDirectStoryImageDerivative({
+      sourceBytes,
+      outputPathname: buildDirectStoryImageThumbnailPathname(pathname),
+      width: directStoryImageThumbnailWidth,
+      height: directStoryImageThumbnailHeight,
+      quality: 84,
+    }).catch(() => null)) ?? display
+  const placeholder = await createDirectStoryImageDerivative({
+    sourceBytes,
+    outputPathname: directStoryImagePlaceholderPathname(pathname),
+    width: 36,
+    height: 64,
+    quality: 58,
+  }).catch(() => null)
 
-  return buildStoryMediaRoute(thumbnail.pathname)
+  return { display, thumbnail, placeholder }
 }
 
-async function removeDirectStoryImageThumbnail(mediaUrl: string) {
+async function removeDirectStoryImageDerivatives(mediaUrl: string) {
   const pathname = getPrivateVercelBlobPathname(mediaUrl)
 
   if (!pathname?.startsWith("stories/web-direct/")) {
     return
   }
 
-  await del(buildDirectStoryImageThumbnailPathname(pathname)).catch(() => undefined)
+  await Promise.allSettled([
+    del(buildDirectStoryImageDisplayPathname(pathname)),
+    del(buildDirectStoryImageThumbnailPathname(pathname)),
+    del(directStoryImagePlaceholderPathname(pathname)),
+  ])
 }
 
 function hasPrefix(buffer: Buffer, bytes: number[]) {
@@ -1560,6 +1934,31 @@ export async function removeStoryAsset(mediaUrl: string) {
     await removeCloudflareStreamVideo(mediaUrl)
   }
 
-  await removeDirectStoryImageThumbnail(mediaUrl)
+  await removeDirectStoryImageDerivatives(mediaUrl)
   await getStoryStorageProvider().remove(mediaUrl)
+}
+
+export async function removeStoredStoryAsset(
+  asset: Pick<
+    StoredStoryAsset,
+    | "mediaUrl"
+    | "thumbnailUrl"
+    | "placeholderUrl"
+    | "originalMediaUrl"
+    | "originalThumbnailUrl"
+  >,
+) {
+  const mediaUrls = Array.from(
+    new Set(
+      [
+        asset.mediaUrl,
+        asset.thumbnailUrl,
+        asset.placeholderUrl,
+        asset.originalMediaUrl,
+        asset.originalThumbnailUrl,
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  )
+
+  await Promise.allSettled(mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)))
 }

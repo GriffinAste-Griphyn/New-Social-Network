@@ -64,9 +64,12 @@ export async function DELETE(
     const removedStory = await removeStoryForOwner(id, session.id)
     const mediaUrls = Array.from(
       new Set(
-        [removedStory.mediaUrl, removedStory.thumbnailUrl].filter(
-          (value): value is string => Boolean(value),
-        ),
+        [
+          removedStory.mediaUrl,
+          removedStory.thumbnailUrl,
+          removedStory.originalMediaUrl,
+          removedStory.originalThumbnailUrl,
+        ].filter((value): value is string => Boolean(value)),
       ),
     )
 

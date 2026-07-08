@@ -7,12 +7,23 @@ enum MediaPlaybackQuality {
 
     @MainActor
     static var preferredStreamingPeakBitRate: Double {
-        0
+        NetworkQualityMonitor.shared.startupStreamingPeakBitRate
     }
 
     @MainActor
     static var preferredStreamingMaximumResolution: CGSize {
-        .zero
+        NetworkQualityMonitor.shared.startupStreamingMaximumResolution
+    }
+
+    @MainActor
+    static func relaxStreamingHints(for item: AVPlayerItem?, playbackURL: URL?) {
+        guard let item,
+              playbackURL?.pathExtension.lowercased() == "m3u8" else {
+            return
+        }
+
+        item.preferredPeakBitRate = 0
+        item.preferredMaximumResolution = .zero
     }
 
     @MainActor

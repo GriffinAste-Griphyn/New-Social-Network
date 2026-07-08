@@ -414,9 +414,9 @@ enum StoryVideoUploadNormalizer {
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
-            AVAssetExportPresetHighestQuality,
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
+            AVAssetExportPresetHighestQuality,
         ]
         var presets: [String] = []
 

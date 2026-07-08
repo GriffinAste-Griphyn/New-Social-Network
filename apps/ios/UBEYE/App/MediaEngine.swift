@@ -121,12 +121,13 @@ final class MediaEngine: ObservableObject {
                 return
             }
 
-            let restoredCount = await api.restoreCachedStoryStacks(ids: ids, limit: 4)
+            let warmLimit = min(NetworkQualityMonitor.shared.stackPreheatLimit, 8)
+            let restoredCount = await api.restoreCachedStoryStacks(ids: ids, limit: warmLimit)
             if let cached = await api.cachedStoryStackForDisplay(storyId: storyId) {
                 prepare(stack: cached.story, around: 0, activeURL: nil)
             }
             MediaPerformance.mark("media_engine_story_open_warm id=\(storyId) restored=\(restoredCount) candidates=\(ids.count)")
-            api.prefetchStoryStacks(ids: ids, refresh: false, limit: 4)
+            api.prefetchStoryStacks(ids: ids, refresh: false, limit: warmLimit)
         }
     }
 
@@ -184,7 +185,7 @@ final class MediaEngine: ObservableObject {
         }
 
         var seen = Set<Int>()
-        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex - 1]
+        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex + 3, itemIndex - 1, itemIndex + 4, itemIndex - 2]
             .filter { index in
                 stack.items.indices.contains(index) && seen.insert(index).inserted
             }
@@ -204,13 +205,13 @@ final class MediaEngine: ObservableObject {
 
         switch priority {
         case .active:
-            priorityLimit = 2
-        case .next, .previous:
             priorityLimit = 3
+        case .next, .previous:
+            priorityLimit = 5
         case .visible:
-            priorityLimit = 4
+            priorityLimit = 8
         case .background:
-            priorityLimit = NetworkQualityMonitor.shared.isConstrained ? 2 : 6
+            priorityLimit = NetworkQualityMonitor.shared.isConstrained ? 3 : 10
         }
 
         return min(requestedLimit, priorityLimit, networkLimit)
@@ -227,7 +228,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
     private var preparedPlayers: [URL: PreparedPlayer] = [:]
     private var prepareTasks: [URL: Task<Void, Never>] = [:]
-    private let maxPreparedPlayers = 3
+    private var maxPreparedPlayers: Int {
+        NetworkQualityMonitor.shared.preparedPlayerLimit
+    }
 
     func hasPreparedPlayer(for url: URL) -> Bool {
         preparedPlayers[url] != nil

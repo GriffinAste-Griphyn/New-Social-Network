@@ -187,6 +187,7 @@ struct StoryTextOverlay: Codable, Hashable, Identifiable {
 struct StoryMediaRendition: Codable, Hashable {
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let placeholderUrl: URL?
     let storageProvider: String?
     let storageKey: String?
     let contentType: String?
@@ -218,6 +219,7 @@ struct StoryCard: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let placeholderUrl: URL?
     let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
@@ -235,6 +237,10 @@ extension StoryCard {
 
     var playbackThumbnailUrl: URL? {
         renditions?.playback.thumbnailUrl ?? thumbnailUrl
+    }
+
+    var playbackPlaceholderUrl: URL? {
+        renditions?.playback.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
     }
 
     var isProcessingVideo: Bool {
@@ -484,6 +490,7 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
     let assetKind: SocialAssetKind
     let mediaUrl: URL
     let thumbnailUrl: URL?
+    let placeholderUrl: URL?
     let renditions: StoryMediaRenditions?
     let title: String
     let processingStatus: String?
@@ -503,6 +510,10 @@ extension StoryStackItem {
         renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
 
+    var playbackPlaceholderUrl: URL? {
+        renditions?.playback.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
+    }
+
     var isProcessingVideo: Bool {
         assetKind == .video && processingStatus != nil && processingStatus != "ready"
     }
@@ -517,6 +528,7 @@ struct StoryInteractionResponse: Codable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let placeholderUrl: URL?
         let renditions: StoryMediaRenditions?
     }
 
@@ -535,6 +547,7 @@ struct StoryInteractionEvent: Codable, Identifiable, Hashable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let placeholderUrl: URL?
     }
 
     struct Actor: Codable, Hashable {
@@ -625,6 +638,7 @@ struct StoryUploadResponse: Codable {
         let assetKind: SocialAssetKind
         let mediaUrl: URL
         let thumbnailUrl: URL?
+        let placeholderUrl: URL?
         let renditions: StoryMediaRenditions?
     }
 
@@ -633,6 +647,8 @@ struct StoryUploadResponse: Codable {
     let asset: Asset
     let processingStatus: String?
     let providerStatus: String?
+    let providerPctComplete: Int?
+    let fullQualityReady: Bool?
     let providerError: String?
     let lastCheckedAt: String?
     let readyAt: String?
@@ -641,7 +657,91 @@ struct StoryUploadResponse: Codable {
     let textOverlays: [StoryTextOverlay]?
 }
 
-struct VideoUploadResponse: Codable {
+struct ImageUploadPart: Codable, Hashable {
+    let pathname: String
+    let uploadUrl: URL
+    let clientToken: String
+    let contentType: String
+    let maxSizeBytes: Int64
+    let access: String?
+}
+
+struct ImageUploadResponse: Codable {
+    let ok: Bool
+    let pathname: String
+    let uploadUrl: URL
+    let clientToken: String
+    let contentType: String
+    let maxSizeBytes: Int64
+    let access: String?
+    let original: ImageUploadPart?
+    let display: ImageUploadPart?
+    let thumbnail: ImageUploadPart?
+    let placeholder: ImageUploadPart?
+}
+
+extension ImageUploadResponse {
+    var originalPart: ImageUploadPart {
+        original ?? ImageUploadPart(
+            pathname: pathname,
+            uploadUrl: uploadUrl,
+            clientToken: clientToken,
+            contentType: contentType,
+            maxSizeBytes: maxSizeBytes,
+            access: access
+        )
+    }
+}
+
+struct PreparedImageDerivativeUpload: Codable, Hashable {
+    let pathname: String
+    let contentType: String
+    let byteSize: Int64
+    let checksum: String
+    let width: Int?
+    let height: Int?
+}
+
+struct MobileMediaConfigResponse: Codable {
+    struct Media: Codable {
+        struct LimitPair: Codable {
+            let constrained: Int
+            let standard: Int
+        }
+
+        struct BitRatePair: Codable {
+            let constrained: Double
+            let standard: Double
+        }
+
+        struct Resolution: Codable {
+            let width: Double
+            let height: Double
+        }
+
+        struct ResolutionPair: Codable {
+            let constrained: Resolution
+            let standard: Resolution
+        }
+
+        let version: String
+        let imageDerivativeUploadEnabled: Bool
+        let qoeAccessLogSampleRate: Double
+        let uploadChunkBytes: Int
+        let mediaFileCacheMaxBytes: Int
+        let imagePreheatLimit: LimitPair
+        let stackPreheatLimit: LimitPair
+        let preparedPlayerLimit: LimitPair
+        let persistentVideoPreheatLimit: LimitPair
+        let startupStreamingPeakBitRate: BitRatePair
+        let startupStreamingMaximumResolution: ResolutionPair
+    }
+
+    let ok: Bool
+    let media: Media
+}
+
+struct VideoUploadResponse: Codable, Hashable {
     let ok: Bool
     let uid: String
     let uploadUrl: URL
@@ -688,6 +788,8 @@ struct StoryStatusResponse: Codable {
         let status: String
         let processingStatus: String
         let hasOriginalRendition: Bool?
+        let providerPctComplete: Int?
+        let fullQualityReady: Bool?
         let isLive: Bool
     }
 
