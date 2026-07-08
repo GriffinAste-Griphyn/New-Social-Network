@@ -267,6 +267,13 @@
       "when": 1783372800000,
       "tag": "0037_media_provider_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783460400000,
+      "tag": "0038_media_quality_control",
+      "breakpoints": true
     }
   ]
 }
