@@ -34,6 +34,7 @@ describe("Cloudflare Stream webhook", () => {
     process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET = "webhook_secret"
     vi.mocked(syncCloudflareStreamStoryStatus).mockResolvedValue({
       status: "live",
+      processingStatus: "ready",
       storyId: "story_123",
     })
   })
@@ -63,7 +64,7 @@ describe("Cloudflare Stream webhook", () => {
     const body = JSON.stringify({
       uid: "11111111111111111111111111111111",
       readyToStream: true,
-      status: { state: "ready" },
+      status: { state: "ready", pctComplete: 100 },
       duration: 7.2,
       size: 123456,
       input: { width: 1080, height: 1920 },
@@ -80,7 +81,7 @@ describe("Cloudflare Stream webhook", () => {
       details: {
         readyToStream: true,
         state: "ready",
-        pctComplete: null,
+        pctComplete: 100,
         errorReason: null,
         byteSize: 123456,
         durationMs: 7200,

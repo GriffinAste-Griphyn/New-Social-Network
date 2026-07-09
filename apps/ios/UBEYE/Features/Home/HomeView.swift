@@ -1038,7 +1038,6 @@ struct StoryMediaView: View {
         } else if story.assetKind == .video {
             AutoPlayVideoPlayer(
                 url: story.playbackMediaUrl,
-                highQualityUrl: MediaPlaybackQuality.highQualityCandidate(for: story),
                 thumbnailUrl: story.playbackThumbnailUrl,
                 preloadUrls: MediaPlaybackQuality.preloadURLs(for: story)
             )

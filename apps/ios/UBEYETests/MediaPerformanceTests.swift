@@ -36,96 +36,38 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(parsed?.metadata.values.first?.count, 500)
     }
 
-    func testDirectPlayableOriginalAcceptsReadyVideoUnderUploadCap() {
-        XCTAssertTrue(
-            MediaPlaybackQuality.isDirectPlayableOriginal(
-                rendition(
-                    url: URL(string: "https://example.com/story.mp4")!,
-                    contentType: "video/mp4",
-                    byteSize: 20 * 1024 * 1024,
-                    processingStatus: "ready"
-                )
-            )
-        )
+    @MainActor
+    func testPreferredPlaybackAlwaysUsesCanonicalAdaptiveStream() {
+        let defaultURL = URL(string: "https://example.com/playback/video.m3u8")!
+        let selected = MediaPlaybackQuality.preferredPlaybackURL(defaultURL: defaultURL)
 
-        XCTAssertTrue(
-            MediaPlaybackQuality.isDirectPlayableOriginal(
-                rendition(
-                    url: URL(string: "https://example.com/story.mov")!,
-                    contentType: "video/quicktime",
-                    byteSize: 20 * 1024 * 1024,
-                    processingStatus: "ready"
-                )
-            )
-        )
-
-        XCTAssertTrue(
-            MediaPlaybackQuality.isDirectPlayableOriginal(
-                rendition(
-                    url: URL(string: "https://example.com/story.mp4")!,
-                    contentType: "video/mp4",
-                    byteSize: 512 * 1024 * 1024,
-                    processingStatus: "ready"
-                )
-            )
-        )
-
-        XCTAssertFalse(
-            MediaPlaybackQuality.isDirectPlayableOriginal(
-                rendition(
-                    url: URL(string: "https://example.com/story.mp4")!,
-                    contentType: "video/mp4",
-                    byteSize: 513 * 1024 * 1024,
-                    processingStatus: "ready"
-                )
-            )
-        )
-
-        XCTAssertFalse(
-            MediaPlaybackQuality.isDirectPlayableOriginal(
-                rendition(
-                    url: URL(string: "https://example.com/story.mp4")!,
-                    contentType: "video/mp4",
-                    byteSize: 20 * 1024 * 1024,
-                    processingStatus: "processing"
-                )
-            )
-        )
+        XCTAssertEqual(selected.url, defaultURL)
+        XCTAssertEqual(selected.quality, "adaptive_hls")
     }
 
     @MainActor
-    func testPreferredPlaybackDefersHighQualityOriginalBeforeCacheWarmup() async {
-        let defaultURL = URL(string: "https://example.com/playback/video.m3u8")!
-        let highQualityURL = URL(string: "https://example.com/original/\(UUID().uuidString).mp4")!
+    func testPlayerPoolKeepsActiveURLInsideBoundedPriorityWindow() {
+        let first = URL(string: "https://example.com/first.m3u8")!
+        let active = URL(string: "https://example.com/active.m3u8")!
+        let third = URL(string: "https://example.com/third.m3u8")!
+        let fourth = URL(string: "https://example.com/fourth.m3u8")!
 
-        let selected = await MediaPlaybackQuality.preferredPlaybackURL(
-            defaultURL: defaultURL,
-            highQualityURL: highQualityURL,
-            playerPool: nil
+        let prioritized = StoryVideoPlaybackPool.prioritizedURLs(
+            urls: [first, active, third, fourth, active],
+            activeURL: active,
+            limit: 3
         )
 
-        XCTAssertEqual(selected.url, defaultURL)
-        XCTAssertEqual(selected.quality, "playback_original_deferred")
+        XCTAssertEqual(prioritized, [active, first, third])
     }
 
-    private func rendition(
-        url: URL,
-        contentType: String?,
-        byteSize: Int?,
-        processingStatus: String?
-    ) -> StoryMediaRendition {
-        StoryMediaRendition(
-            mediaUrl: url,
-            thumbnailUrl: nil,
-            storageProvider: "vercel-blob",
-            storageKey: "story.mp4",
-            contentType: contentType,
-            byteSize: byteSize,
-            checksum: nil,
-            width: 1080,
-            height: 1920,
-            durationMs: 10_000,
-            processingStatus: processingStatus
+    @MainActor
+    func testPlayerPoolReturnsNoURLsWhenPrefetchIsDisabled() {
+        let url = URL(string: "https://example.com/video.m3u8")!
+
+        XCTAssertEqual(
+            StoryVideoPlaybackPool.prioritizedURLs(urls: [url], activeURL: url, limit: 0),
+            []
         )
     }
 }

@@ -83,11 +83,7 @@ export async function createMediaAssetFromStoredStoryAsset(input: {
 }): Promise<CreatedMediaAsset> {
   const scan = scanStoredMedia(input.storedAsset)
   const processingStatus =
-    scan.scanStatus === "flagged" || scan.scanStatus === "failed"
-      ? "flagged"
-      : input.storedAsset.processingStatus === "processing"
-        ? "processing"
-        : "ready"
+    input.storedAsset.processingStatus === "processing" ? "processing" : "ready"
   const now = new Date()
   const id = `media-${randomUUID()}`
 
@@ -258,32 +254,19 @@ export async function applyMediaModerationResult(input: {
   actorUserId?: string | null
   result: ContentModerationResult
 }) {
-  const now = new Date()
   const scanStatus =
     input.result.action === "approve"
       ? "passed"
       : input.result.action === "reject"
         ? "failed"
         : "flagged"
-  const processingStatus =
-    input.result.action === "reject"
-      ? "rejected"
-      : input.result.action === "hold"
-        ? "flagged"
-        : undefined
 
   await getDb()
     .update(mediaAssets)
     .set({
       scanStatus,
       scanReason: input.result.reason,
-      ...(processingStatus ? { processingStatus } : {}),
-      providerStatus: input.result.provider,
-      ...(input.result.action === "approve" ? { providerPctComplete: 100 } : {}),
-      providerError: input.result.error ?? null,
-      lastCheckedAt: now,
-      readyAt: input.result.action === "approve" ? now : null,
-      updatedAt: now,
+      updatedAt: new Date(),
     })
     .where(eq(mediaAssets.id, input.mediaAssetId))
 

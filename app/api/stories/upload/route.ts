@@ -4,9 +4,16 @@ import { z } from "zod"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
 import {
+  createMediaUploadSession,
+  getReusableMediaUploadSession,
+  MediaUploadSessionError,
+  retireMediaUploadSession,
+} from "@/lib/media-upload-sessions"
+import {
   createCloudflareStreamTusUpload,
   directStoryImagePathname,
   isAllowedDirectStoryImageContentType,
+  removeCloudflareStreamVideoByUid,
   StoryUploadError,
 } from "@/lib/story-storage"
 import {
@@ -27,6 +34,8 @@ const uploadSchema = z.object({
   fileName: z.string().trim().min(1).max(180),
   contentType: z.string().trim().min(1).max(120),
   byteSize: z.number().int().positive(),
+  clientUploadId: z.string().uuid().optional(),
+  replaceUploadSessionId: z.string().trim().min(1).max(100).optional(),
 })
 
 function blobApiUrl() {
@@ -130,18 +139,92 @@ export async function POST(request: Request) {
       )
     }
 
+    if (parsed.data.replaceUploadSessionId && !parsed.data.clientUploadId) {
+      throw new MediaUploadSessionError(
+        "A client upload id is required to replace an upload session.",
+        400,
+      )
+    }
+
+    let reusableSession = await getReusableMediaUploadSession({
+      ownerUserId: session.id,
+      clientUploadId: parsed.data.clientUploadId,
+      storageProvider: "cloudflare-stream",
+      expectedContentType: parsed.data.contentType,
+      expectedByteSize: parsed.data.byteSize,
+      maxDurationSeconds: maxWebStoryVideoDurationSeconds,
+    })
+
+    if (
+      parsed.data.replaceUploadSessionId &&
+      parsed.data.clientUploadId &&
+      (!reusableSession ||
+        reusableSession.id === parsed.data.replaceUploadSessionId)
+    ) {
+      const retired = await retireMediaUploadSession({
+        ownerUserId: session.id,
+        clientUploadId: parsed.data.clientUploadId,
+        uploadSessionId: parsed.data.replaceUploadSessionId,
+      })
+
+      if (retired) {
+        await removeCloudflareStreamVideoByUid(retired.storageKey).catch(
+          () => undefined,
+        )
+      }
+      reusableSession = null
+    }
+
+    if (reusableSession) {
+      return NextResponse.json({
+        ok: true,
+        assetKind: "video",
+        uploadSessionId: reusableSession.id,
+        uid: reusableSession.storageKey,
+        uploadUrl: reusableSession.uploadUrl,
+        uploadProtocol: reusableSession.uploadProtocol,
+        maxSizeBytes: maxWebStoryVideoUploadBytes,
+        maxDurationSeconds: maxWebStoryVideoDurationSeconds,
+      })
+    }
+
     const upload = await createCloudflareStreamTusUpload({
       fileName: parsed.data.fileName,
       uploadLengthBytes: parsed.data.byteSize,
       maxDurationSeconds: maxWebStoryVideoDurationSeconds,
     })
 
+    let uploadSession
+
+    try {
+      uploadSession = await createMediaUploadSession({
+        ownerUserId: session.id,
+        clientUploadId: parsed.data.clientUploadId,
+        assetKind: "video",
+        storageProvider: "cloudflare-stream",
+        storageKey: upload.uid,
+        uploadUrl: upload.uploadUrl,
+        uploadProtocol: upload.uploadProtocol,
+        expectedContentType: parsed.data.contentType,
+        expectedByteSize: parsed.data.byteSize,
+        maxDurationSeconds: maxWebStoryVideoDurationSeconds,
+      })
+    } catch (error) {
+      await removeCloudflareStreamVideoByUid(upload.uid).catch(() => undefined)
+      throw error
+    }
+
+    if (uploadSession.storageKey !== upload.uid) {
+      await removeCloudflareStreamVideoByUid(upload.uid).catch(() => undefined)
+    }
+
     return NextResponse.json({
       ok: true,
       assetKind: "video",
-      uid: upload.uid,
-      uploadUrl: upload.uploadUrl,
-      uploadProtocol: upload.uploadProtocol,
+      uploadSessionId: uploadSession.id,
+      uid: uploadSession.storageKey,
+      uploadUrl: uploadSession.uploadUrl,
+      uploadProtocol: uploadSession.uploadProtocol,
       maxSizeBytes: maxWebStoryVideoUploadBytes,
       maxDurationSeconds: maxWebStoryVideoDurationSeconds,
     })
@@ -153,7 +236,7 @@ export async function POST(request: Request) {
             ? error.message
             : "Could not prepare the upload.",
       },
-      { status: 400 },
+      { status: error instanceof MediaUploadSessionError ? error.statusCode : 400 },
     )
   }
 }

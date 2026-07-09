@@ -274,6 +274,13 @@
       "when": 1783460400000,
       "tag": "0038_media_quality_control",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783638000000,
+      "tag": "0039_media_upload_sessions",
+      "breakpoints": true
     }
   ]
 }

@@ -108,7 +108,8 @@ enum PendingStoryUploadPipeline: String, Codable, Hashable {
     case imageMultipart
     case imageDirectBlob
     case videoTus
-    case originalQualityVideo
+    // Decode build-250 manifests, but route every retry through Stream/TUS.
+    case legacyOriginalQualityVideo = "originalQualityVideo"
 }
 
 struct PendingStoryUploadDraft: Codable, Hashable {
@@ -203,6 +204,70 @@ private struct UploadedImageDerivativeSet {
     let display: PreparedImageDerivativeUpload
     let thumbnail: PreparedImageDerivativeUpload
     let placeholder: PreparedImageDerivativeUpload
+}
+
+enum StoryUploadFileIO {
+    static func stageVideo(
+        sourceURL: URL,
+        destinationURL: URL,
+        thumbnailData: Data?,
+        thumbnailURL: URL?
+    ) async throws -> URL? {
+        try await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            try fileManager.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? fileManager.removeItem(at: destinationURL)
+
+            do {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+
+                guard let thumbnailData, !thumbnailData.isEmpty, let thumbnailURL else {
+                    return nil
+                }
+
+                try thumbnailData.write(to: thumbnailURL, options: .atomic)
+                return thumbnailURL
+            } catch {
+                try? fileManager.removeItem(at: destinationURL)
+                if let thumbnailURL {
+                    try? fileManager.removeItem(at: thumbnailURL)
+                }
+                throw error
+            }
+        }.value
+    }
+
+    static func fileSize(at url: URL) async throws -> Int64 {
+        try await Task.detached(priority: .utility) {
+            guard let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber,
+                  size.int64Value > 0 else {
+                throw APIClientError.invalidResponse
+            }
+
+            return size.int64Value
+        }.value
+    }
+
+    static func data(at url: URL?) async -> Data? {
+        guard let url else {
+            return nil
+        }
+
+        return await Task.detached(priority: .utility) {
+            try? Data(contentsOf: url, options: .mappedIfSafe)
+        }.value
+    }
+
+    static func remove(_ urls: Set<URL>) async {
+        await Task.detached(priority: .utility) {
+            for url in urls {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }.value
+    }
 }
 
 private enum StoryImageDerivativeBuilder {
@@ -330,30 +395,26 @@ final class PendingStoryUploadStore: ObservableObject {
         sourceURL: URL,
         thumbnailData: Data?,
         durationMs: Int?,
-        pipeline: PendingStoryUploadPipeline,
         draft: PendingStoryUploadDraft,
         textOverlays: [StoryTextOverlay]
-    ) throws -> PendingStoryUpload {
-        try ensureDirectories()
+    ) async throws -> PendingStoryUpload {
         let id = Self.makePendingId()
         let fileExtension = sourceURL.pathExtension.isEmpty ? "mp4" : sourceURL.pathExtension
         let mediaURL = filesURL.appendingPathComponent("\(id).\(fileExtension)")
-        try? fileManager.removeItem(at: mediaURL)
-        try fileManager.copyItem(at: sourceURL, to: mediaURL)
-
-        let thumbnailURL: URL?
-        if let thumbnailData, !thumbnailData.isEmpty {
-            let localThumbnailURL = filesURL.appendingPathComponent("\(id)-thumbnail.jpg")
-            try thumbnailData.write(to: localThumbnailURL, options: .atomic)
-            thumbnailURL = localThumbnailURL
-        } else {
-            thumbnailURL = nil
-        }
+        let thumbnailDestinationURL = thumbnailData?.isEmpty == false
+            ? filesURL.appendingPathComponent("\(id)-thumbnail.jpg")
+            : nil
+        let thumbnailURL = try await StoryUploadFileIO.stageVideo(
+            sourceURL: sourceURL,
+            destinationURL: mediaURL,
+            thumbnailData: thumbnailData,
+            thumbnailURL: thumbnailDestinationURL
+        )
 
         let pending = PendingStoryUpload(
             id: id,
             assetKind: .video,
-            pipeline: pipeline,
+            pipeline: .videoTus,
             mediaFileURL: mediaURL,
             thumbnailFileURL: thumbnailURL,
             fileName: sourceURL.lastPathComponent.isEmpty ? "story-video.mp4" : sourceURL.lastPathComponent,
@@ -393,8 +454,9 @@ final class PendingStoryUploadStore: ObservableObject {
                 response = try await uploadDirectImage(upload, api: api)
             case .videoTus:
                 response = try await uploadTusVideo(upload, api: api)
-            case .originalQualityVideo:
-                response = try await uploadOriginalQualityVideo(upload, api: api)
+            case .legacyOriginalQualityVideo:
+                MediaPerformance.mark("pending_video_legacy_pipeline_migrated id=\(upload.id)")
+                response = try await uploadTusVideo(upload, api: api)
             }
 
             await cacheUploadedMedia(upload, response: response)
@@ -613,142 +675,119 @@ final class PendingStoryUploadStore: ObservableObject {
 
     private func uploadTusVideo(_ upload: PendingStoryUpload, api: APIClient) async throws -> StoryUploadResponse {
         update(id: upload.id, state: .uploading, progress: 0.12)
-        let byteSize = try fileSize(upload.mediaFileURL)
-        let usesResumableUpload = shouldUseResumableVideoUpload(byteSize: byteSize)
-        let preparedUpload: VideoUploadResponse
+        let byteSize = try await StoryUploadFileIO.fileSize(at: upload.mediaFileURL)
+        let thumbnailData = await StoryUploadFileIO.data(at: upload.thumbnailFileURL)
+        var preparedUpload: VideoUploadResponse
 
-        if usesResumableUpload,
-           upload.preparedVideoUpload?.uploadProtocol == "tus",
-           let resumableUpload = upload.preparedVideoUpload {
+        if let resumableUpload = upload.preparedVideoUpload,
+           resumableUpload.uploadProtocol == "tus" {
             preparedUpload = resumableUpload
             MediaPerformance.mark("pending_video_upload_resume uid=\(resumableUpload.uid)")
         } else {
-            preparedUpload = try await api.prepareVideoUpload(
-                fileName: upload.fileName.isEmpty ? "story-video.mp4" : upload.fileName,
-                byteSize: usesResumableUpload ? byteSize : nil,
-                maxDurationSeconds: maxVideoDurationSeconds,
-                maxSizeBytes: usesResumableUpload ? nil : byteSize
+            preparedUpload = try await prepareTusVideoUpload(
+                upload,
+                byteSize: byteSize,
+                replacing: nil,
+                api: api
             )
-            if preparedUpload.uploadProtocol == "tus" {
-                setPreparedVideoUpload(id: upload.id, preparedUpload: preparedUpload)
-            }
         }
-        update(id: upload.id, state: .uploading, progress: 0.2)
 
-        let uploadedThumbnailData = await uploadVideoThumbnailIfPossible(
-            localThumbnailData(for: upload),
-            upload: preparedUpload,
-            api: api
-        )
-        update(id: upload.id, state: .uploading, progress: 0.24)
+        for leaseAttempt in 0..<2 {
+            do {
+                update(id: upload.id, state: .uploading, progress: 0.2)
+                let uploadedThumbnailData = await uploadVideoThumbnailIfPossible(
+                    thumbnailData,
+                    upload: preparedUpload,
+                    api: api
+                )
+                update(id: upload.id, state: .uploading, progress: 0.24)
 
-        do {
-            try await api.uploadVideoFile(
-                fileURL: upload.mediaFileURL,
-                upload: preparedUpload,
-                onRetry: { reason in
-                    self.recordRetry(id: upload.id, reason: reason)
-                },
-                maxChunkBytes: videoUploadChunkBytes(),
-                onProgress: { progress in
-                    self.update(
-                        id: upload.id,
-                        state: .uploading,
-                        progress: 0.24 + min(max(progress, 0), 1) * 0.66
-                    )
+                try await api.uploadVideoFile(
+                    fileURL: upload.mediaFileURL,
+                    upload: preparedUpload,
+                    onRetry: { reason in
+                        self.recordRetry(id: upload.id, reason: reason)
+                    },
+                    maxChunkBytes: videoUploadChunkBytes(),
+                    onProgress: { progress in
+                        self.update(
+                            id: upload.id,
+                            state: .uploading,
+                            progress: 0.24 + min(max(progress, 0), 1) * 0.66
+                        )
+                    }
+                )
+
+                update(id: upload.id, state: .completing, progress: 0.94)
+                let response = try await api.completeVideoStory(
+                    upload: preparedUpload,
+                    fileURL: upload.mediaFileURL,
+                    caption: upload.draft.caption,
+                    brandTags: upload.draft.brandTags,
+                    textOverlay: upload.draft.textOverlay,
+                    textOverlayPositionX: upload.draft.textOverlayPositionX,
+                    textOverlayPositionY: upload.draft.textOverlayPositionY,
+                    linkLabel: upload.draft.linkLabel,
+                    linkUrl: upload.draft.linkUrl,
+                    linkOverlayPositionX: upload.draft.linkOverlayPositionX,
+                    linkOverlayPositionY: upload.draft.linkOverlayPositionY,
+                    quoteReplyId: upload.draft.quoteReplyId,
+                    quoteReplyPositionX: upload.draft.quoteReplyPositionX,
+                    quoteReplyPositionY: upload.draft.quoteReplyPositionY,
+                    durationMs: upload.durationMs,
+                    thumbnailData: uploadedThumbnailData
+                )
+                update(id: upload.id, state: .completing, progress: 1)
+                return response
+            } catch {
+                let statusCode = (error as? APIClientError)?.statusCode
+                let sessionIsTerminal = statusCode.map { [403, 404, 410].contains($0) } == true
+                guard leaseAttempt == 0, sessionIsTerminal else {
+                    if sessionIsTerminal {
+                        setPreparedVideoUpload(id: upload.id, preparedUpload: nil)
+                    }
+                    throw error
                 }
-            )
-        } catch {
-            if let statusCode = (error as? APIClientError)?.statusCode,
-               [403, 404, 410].contains(statusCode) {
+
+                let failedSessionId = preparedUpload.uploadSessionId
+                recordRetry(id: upload.id, reason: "replace_upload_session")
                 setPreparedVideoUpload(id: upload.id, preparedUpload: nil)
+                preparedUpload = try await prepareTusVideoUpload(
+                    upload,
+                    byteSize: byteSize,
+                    replacing: failedSessionId,
+                    api: api
+                )
             }
-            throw error
         }
 
-        update(id: upload.id, state: .completing, progress: 0.94)
-        let response = try await api.completeVideoStory(
-            upload: preparedUpload,
-            fileURL: upload.mediaFileURL,
-            caption: upload.draft.caption,
-            brandTags: upload.draft.brandTags,
-            textOverlay: upload.draft.textOverlay,
-            textOverlayPositionX: upload.draft.textOverlayPositionX,
-            textOverlayPositionY: upload.draft.textOverlayPositionY,
-            linkLabel: upload.draft.linkLabel,
-            linkUrl: upload.draft.linkUrl,
-            linkOverlayPositionX: upload.draft.linkOverlayPositionX,
-            linkOverlayPositionY: upload.draft.linkOverlayPositionY,
-            quoteReplyId: upload.draft.quoteReplyId,
-            quoteReplyPositionX: upload.draft.quoteReplyPositionX,
-            quoteReplyPositionY: upload.draft.quoteReplyPositionY,
-            durationMs: upload.durationMs,
-            thumbnailData: uploadedThumbnailData
-        )
-        update(id: upload.id, state: .completing, progress: 1)
-        return response
-    }
-
-    private func shouldUseResumableVideoUpload(byteSize: Int64) -> Bool {
-        if NetworkQualityMonitor.shared.isConstrained || NetworkQualityMonitor.shared.isCellular {
-            return true
-        }
-
-        return byteSize > 200 * 1024 * 1024
+        throw APIClientError.server("Could not resume this video upload.", 0)
     }
 
     private func videoUploadChunkBytes() -> Int64 {
         Int64(MediaControlConfig.shared.uploadChunkBytes)
     }
 
-    private func uploadOriginalQualityVideo(_ upload: PendingStoryUpload, api: APIClient) async throws -> StoryUploadResponse {
-        update(id: upload.id, state: .uploading, progress: 0.12)
-        let preparedUpload = try await api.prepareOriginalQualityVideoUpload(
-            fileName: upload.fileName.isEmpty ? "story-video.mov" : upload.fileName,
-            fileURL: upload.mediaFileURL
-        )
-        update(id: upload.id, state: .uploading, progress: 0.2)
-
-        let uploadedThumbnailData = await uploadOriginalQualityVideoThumbnailIfPossible(
-            localThumbnailData(for: upload),
-            upload: preparedUpload,
-            api: api
-        )
-        update(id: upload.id, state: .uploading, progress: 0.24)
-
-        _ = try await api.uploadOriginalQualityVideoFile(
-            fileURL: upload.mediaFileURL,
-            upload: preparedUpload,
-            onProgress: { progress in
-                self.update(
-                    id: upload.id,
-                    state: .uploading,
-                    progress: 0.24 + min(max(progress, 0), 1) * 0.66
-                )
-            }
+    private func prepareTusVideoUpload(
+        _ upload: PendingStoryUpload,
+        byteSize: Int64,
+        replacing uploadSessionId: String?,
+        api: APIClient
+    ) async throws -> VideoUploadResponse {
+        let preparedUpload = try await api.prepareVideoUpload(
+            fileName: upload.fileName.isEmpty ? "story-video.mp4" : upload.fileName,
+            byteSize: byteSize,
+            maxDurationSeconds: maxVideoDurationSeconds,
+            clientUploadId: Self.clientUploadId(for: upload.id),
+            replaceUploadSessionId: uploadSessionId
         )
 
-        update(id: upload.id, state: .completing, progress: 0.94)
-        let response = try await api.completeOriginalQualityVideoStory(
-            upload: preparedUpload,
-            fileURL: upload.mediaFileURL,
-            caption: upload.draft.caption,
-            brandTags: upload.draft.brandTags,
-            textOverlay: upload.draft.textOverlay,
-            textOverlayPositionX: upload.draft.textOverlayPositionX,
-            textOverlayPositionY: upload.draft.textOverlayPositionY,
-            linkLabel: upload.draft.linkLabel,
-            linkUrl: upload.draft.linkUrl,
-            linkOverlayPositionX: upload.draft.linkOverlayPositionX,
-            linkOverlayPositionY: upload.draft.linkOverlayPositionY,
-            quoteReplyId: upload.draft.quoteReplyId,
-            quoteReplyPositionX: upload.draft.quoteReplyPositionX,
-            quoteReplyPositionY: upload.draft.quoteReplyPositionY,
-            durationMs: upload.durationMs,
-            thumbnailData: uploadedThumbnailData
-        )
-        update(id: upload.id, state: .completing, progress: 1)
-        return response
+        guard preparedUpload.uploadProtocol == "tus" else {
+            throw APIClientError.server("The media service did not provide a resumable upload.", 0)
+        }
+
+        setPreparedVideoUpload(id: upload.id, preparedUpload: preparedUpload)
+        return preparedUpload
     }
 
     private func uploadVideoThumbnailIfPossible(
@@ -765,24 +804,6 @@ final class PendingStoryUploadStore: ObservableObject {
             return data
         } catch {
             MediaPerformance.mark("pending_video_thumbnail_upload_failed")
-            return nil
-        }
-    }
-
-    private func uploadOriginalQualityVideoThumbnailIfPossible(
-        _ data: Data?,
-        upload: OriginalVideoUploadResponse,
-        api: APIClient
-    ) async -> Data? {
-        guard let data else {
-            return nil
-        }
-
-        do {
-            try await api.uploadOriginalQualityVideoThumbnail(data: data, upload: upload)
-            return data
-        } catch {
-            MediaPerformance.mark("pending_video_original_thumbnail_upload_failed")
             return nil
         }
     }
@@ -957,14 +978,6 @@ final class PendingStoryUploadStore: ObservableObject {
         }
     }
 
-    private func localThumbnailData(for upload: PendingStoryUpload) -> Data? {
-        guard let thumbnailFileURL = upload.thumbnailFileURL else {
-            return nil
-        }
-
-        return try? Data(contentsOf: thumbnailFileURL)
-    }
-
     private func fileSize(_ url: URL) throws -> Int64 {
         guard let size = try fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber,
               size.int64Value > 0 else {
@@ -976,6 +989,15 @@ final class PendingStoryUploadStore: ObservableObject {
 
     private static func makePendingId() -> String {
         "pending-story-\(UUID().uuidString.lowercased())"
+    }
+
+    private static func clientUploadId(for pendingId: String) -> String {
+        let prefix = "pending-story-"
+        guard pendingId.hasPrefix(prefix) else {
+            return pendingId
+        }
+
+        return String(pendingId.dropFirst(prefix.count))
     }
 }
 

@@ -68,7 +68,7 @@ function booleanEnv(name: string, fallback: boolean) {
 
 export function getMobileMediaConfig(): RuntimeMediaConfig {
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-08.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-09.1",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
       true,
@@ -87,21 +87,21 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
       { min: 128 * 1024 * 1024, max: 2 * 1024 * 1024 * 1024 },
     ),
     imagePreheatLimit: {
-      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 18, {
+      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 12, {
         min: 4,
         max: 40,
       }),
-      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 64, {
+      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 32, {
         min: 12,
         max: 120,
       }),
     },
     stackPreheatLimit: {
-      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 5, {
+      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 3, {
         min: 2,
         max: 10,
       }),
-      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", 16, {
+      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", 8, {
         min: 4,
         max: 28,
       }),
@@ -111,18 +111,18 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
         min: 1,
         max: 4,
       }),
-      standard: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 6, {
+      standard: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 3, {
         min: 2,
         max: 10,
       }),
     },
     persistentVideoPreheatLimit: {
-      constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", 1, {
+      constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", 0, {
         min: 0,
         max: 3,
       }),
-      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", 5, {
-        min: 1,
+      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", 0, {
+        min: 0,
         max: 8,
       }),
     },

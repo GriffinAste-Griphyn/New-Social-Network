@@ -1541,18 +1541,15 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        let videoItems = nearbyItems.filter(\.isPlayableVideo)
-        let videoUrls = videoItems.map(\.playbackMediaUrl) + videoItems.compactMap { item in
-            MediaPlaybackQuality.highQualityCandidate(for: item)
-        }
-        let allowsPersistentDownloads = !NetworkQualityMonitor.shared.isConstrained && !NetworkQualityMonitor.shared.isCellular
-        let videoLimit = NetworkQualityMonitor.shared.persistentVideoPreheatLimit
+        let videoUrls = nearbyItems
+            .filter(\.isPlayableVideo)
+            .map(\.playbackMediaUrl)
+        let videoLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
 
         Task {
             await MediaVideoPreheater.shared.preheat(
                 videoUrls,
-                limit: videoLimit,
-                allowsPersistentDownloads: allowsPersistentDownloads
+                limit: videoLimit
             )
         }
     }
@@ -1563,7 +1560,7 @@ enum MediaPreheater {
         }
 
         var seen = Set<Int>()
-        return [index, index + 1, index + 2, index + 3, index - 1, index + 4, index - 2]
+        return [index, index + 1, index - 1]
             .filter { candidate in
                 stack.items.indices.contains(candidate) && seen.insert(candidate).inserted
             }
@@ -1578,7 +1575,7 @@ actor MediaVideoPreheater {
     private var recentlyPreheatedAt: [URL: Date] = [:]
     private let recentPreheatWindow: TimeInterval = 90
 
-    func preheat(_ urls: [URL], limit: Int, allowsPersistentDownloads: Bool) {
+    func preheat(_ urls: [URL], limit: Int) {
         guard limit > 0 else {
             return
         }
@@ -1610,27 +1607,20 @@ actor MediaVideoPreheater {
         for url in candidates {
             activeUrls.insert(url)
             Task.detached(priority: .utility) { [weak self] in
-                await Self.preheatOne(url, allowsPersistentDownloads: allowsPersistentDownloads)
+                await Self.preheatOne(url)
                 await self?.finish(url)
             }
         }
     }
 
-    private static func preheatOne(_ url: URL, allowsPersistentDownloads: Bool) async {
+    private static func preheatOne(_ url: URL) async {
         let preheatInterval = MediaPerformance.beginInterval(
-            "video_asset_preheated persistent=\(allowsPersistentDownloads) url=\(url.lastPathComponent)"
+            "video_asset_preheated mode=manifest url=\(url.lastPathComponent)"
         )
         let playbackURL: URL
 
         if isHTTPStreamingPlaylist(url) {
-            if allowsPersistentDownloads {
-                await HLSAssetDownloadCoordinator.shared.preheat(urls: [url], limit: 1)
-            }
             playbackURL = await HLSAssetDownloadCoordinator.shared.localAssetURL(for: url) ?? url
-        } else if allowsPersistentDownloads,
-           await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video),
-           let cachedURL = await MediaFileDiskCache.shared.cache(url: url, kind: .video) {
-            playbackURL = cachedURL
         } else {
             playbackURL = await MediaFileDiskCache.shared.cachedFileURL(for: url) ?? url
         }

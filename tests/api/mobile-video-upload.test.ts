@@ -2,6 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client"
 import { getCompleteMobileSession } from "@/lib/auth"
+import {
+  claimMediaUploadSessionForCompletion,
+  createMediaUploadSession,
+  getReusableMediaUploadSession,
+  markMediaUploadSessionCompleted,
+  MediaUploadSessionError,
+  recordCloudflareStreamUploadStatus,
+  releaseMediaUploadSessionCompletion,
+  retireMediaUploadSession,
+} from "@/lib/media-upload-sessions"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   createStory,
@@ -19,6 +29,7 @@ import {
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
   removeStoryAsset,
+  removeCloudflareStreamVideoByUid,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
 
@@ -39,6 +50,24 @@ vi.mock("@/lib/request-security", async () => {
   return {
     ...actual,
     enforceRequestRateLimits: vi.fn(),
+  }
+})
+
+vi.mock("@/lib/media-upload-sessions", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/media-upload-sessions")>(
+      "@/lib/media-upload-sessions",
+    )
+
+  return {
+    ...actual,
+    claimMediaUploadSessionForCompletion: vi.fn(),
+    createMediaUploadSession: vi.fn(),
+    getReusableMediaUploadSession: vi.fn(),
+    markMediaUploadSessionCompleted: vi.fn(),
+    recordCloudflareStreamUploadStatus: vi.fn(),
+    releaseMediaUploadSessionCompletion: vi.fn(),
+    retireMediaUploadSession: vi.fn(),
   }
 })
 
@@ -65,6 +94,7 @@ vi.mock("@/lib/story-storage", async () => {
     createOriginalQualityVideoStoryAsset: vi.fn(),
     getCloudflareStreamVideoDetails: vi.fn(),
     publicStoryMediaUrl: vi.fn(),
+    removeCloudflareStreamVideoByUid: vi.fn(),
     removeStoryAsset: vi.fn(),
     setCloudflareStreamThumbnailToLastFrame: vi.fn(),
   }
@@ -80,6 +110,41 @@ const session = {
   creatorStatus: "active" as const,
 }
 const originalEnv = { ...process.env }
+
+const uploadSession = {
+  id: "upload-11111111-1111-4111-8111-111111111111",
+  ownerUserId: session.id,
+  purpose: "story" as const,
+  assetKind: "video" as const,
+  storageProvider: "cloudflare-stream" as const,
+  storageKey: "11111111111111111111111111111111",
+  clientUploadId: null,
+  uploadUrl: "https://upload.cloudflarestream.com/tus/abc",
+  uploadProtocol: "tus",
+  expectedContentType: "video/mp4",
+  expectedByteSize: 12 * 1024 * 1024,
+  maxDurationSeconds: 120,
+  status: "prepared",
+  providerStatus: null,
+  providerPctComplete: null,
+  providerError: null,
+  providerPayload: null,
+  providerEventAt: null,
+  completedMediaAssetId: null,
+  completedStoryId: null,
+  completionClaimedAt: null,
+  consumedAt: null,
+  expiresAt: new Date("2026-07-10T00:00:00.000Z"),
+  createdAt: new Date("2026-07-09T00:00:00.000Z"),
+  updatedAt: new Date("2026-07-09T00:00:00.000Z"),
+}
+const replacementUploadSession = {
+  ...uploadSession,
+  id: "upload-22222222-2222-4222-8222-222222222222",
+  storageKey: "22222222222222222222222222222222",
+  clientUploadId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  uploadUrl: "https://upload.cloudflarestream.com/tus/replacement",
+}
 
 function jsonRequest(body: unknown) {
   return new Request("https://app.example.com/api/mobile/stories/video-upload", {
@@ -101,6 +166,21 @@ describe("mobile Cloudflare video upload API", () => {
     vi.clearAllMocks()
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
+    process.env.ALLOW_LEGACY_ORIGINAL_VIDEO_UPLOADS = "true"
+    vi.mocked(getReusableMediaUploadSession).mockResolvedValue(null)
+    vi.mocked(createMediaUploadSession).mockResolvedValue(uploadSession)
+    vi.mocked(claimMediaUploadSessionForCompletion).mockResolvedValue({
+      state: "claimed",
+      session: uploadSession,
+    })
+    vi.mocked(markMediaUploadSessionCompleted).mockResolvedValue(undefined)
+    vi.mocked(recordCloudflareStreamUploadStatus).mockResolvedValue(
+      uploadSession,
+    )
+    vi.mocked(releaseMediaUploadSessionCompletion).mockResolvedValue(undefined)
+    vi.mocked(retireMediaUploadSession).mockResolvedValue({
+      storageKey: uploadSession.storageKey,
+    })
     vi.mocked(generateClientTokenFromReadWriteToken).mockResolvedValue(
       "mobile_blob_client_token",
     )
@@ -113,6 +193,8 @@ describe("mobile Cloudflare video upload API", () => {
       processingStatus: "processing",
       hasOriginalRendition: false,
       providerStatus: "processing",
+      providerPctComplete: null,
+      fullQualityReady: false,
       providerError: null,
       lastCheckedAt: "2026-06-08T16:00:00.000Z",
       readyAt: null,
@@ -165,6 +247,7 @@ describe("mobile Cloudflare video upload API", () => {
     vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValue({
       readyToStream: false,
       state: "processing",
+      pctComplete: null,
       errorReason: null,
       byteSize: null,
       durationMs: null,
@@ -175,6 +258,7 @@ describe("mobile Cloudflare video upload API", () => {
       value && request ? new URL(value, request.url).toString() : value,
     )
     vi.mocked(removeStoryAsset).mockResolvedValue(undefined)
+    vi.mocked(removeCloudflareStreamVideoByUid).mockResolvedValue(undefined)
     vi.mocked(setCloudflareStreamThumbnailToLastFrame).mockResolvedValue(undefined)
   })
 
@@ -263,9 +347,116 @@ describe("mobile Cloudflare video upload API", () => {
     })
     expect(await responseJson(response)).toMatchObject({
       ok: true,
+      uploadSessionId: uploadSession.id,
       uid: "11111111111111111111111111111111",
       uploadProtocol: "tus",
     })
+    expect(createMediaUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerUserId: session.id,
+        storageProvider: "cloudflare-stream",
+        storageKey: "11111111111111111111111111111111",
+        expectedByteSize: 12 * 1024 * 1024,
+      }),
+    )
+  })
+
+  it("reuses a prepared provider upload after a lost prepare response", async () => {
+    const clientUploadId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    vi.mocked(getReusableMediaUploadSession).mockResolvedValueOnce({
+      ...uploadSession,
+      clientUploadId,
+    })
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(
+      jsonRequest({
+        clientUploadId,
+        fileName: "story.mp4",
+        contentType: "video/mp4",
+        byteSize: 12 * 1024 * 1024,
+        maxDurationSeconds: 120,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      uploadSessionId: uploadSession.id,
+      uid: uploadSession.storageKey,
+      uploadUrl: uploadSession.uploadUrl,
+    })
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+    expect(createMediaUploadSession).not.toHaveBeenCalled()
+  })
+
+  it("returns an already-created replacement when its first prepare response was lost", async () => {
+    vi.mocked(getReusableMediaUploadSession).mockResolvedValueOnce(
+      replacementUploadSession,
+    )
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(
+      jsonRequest({
+        clientUploadId: replacementUploadSession.clientUploadId,
+        replaceUploadSessionId: uploadSession.id,
+        fileName: "story.mp4",
+        contentType: "video/mp4",
+        byteSize: 12 * 1024 * 1024,
+        maxDurationSeconds: 120,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      uploadSessionId: replacementUploadSession.id,
+      uid: replacementUploadSession.storageKey,
+      uploadUrl: replacementUploadSession.uploadUrl,
+    })
+    expect(retireMediaUploadSession).not.toHaveBeenCalled()
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+    expect(createMediaUploadSession).not.toHaveBeenCalled()
+    expect(removeCloudflareStreamVideoByUid).not.toHaveBeenCalled()
+  })
+
+  it("retires the old mobile session before issuing the first replacement", async () => {
+    const oldSession = {
+      ...uploadSession,
+      clientUploadId: replacementUploadSession.clientUploadId,
+    }
+    vi.mocked(getReusableMediaUploadSession).mockResolvedValueOnce(oldSession)
+    vi.mocked(createCloudflareStreamTusUpload).mockResolvedValueOnce({
+      uid: replacementUploadSession.storageKey,
+      uploadUrl: replacementUploadSession.uploadUrl,
+      uploadProtocol: "tus",
+    })
+    vi.mocked(createMediaUploadSession).mockResolvedValueOnce(
+      replacementUploadSession,
+    )
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(
+      jsonRequest({
+        clientUploadId: oldSession.clientUploadId,
+        replaceUploadSessionId: oldSession.id,
+        fileName: "story.mp4",
+        contentType: "video/mp4",
+        byteSize: 12 * 1024 * 1024,
+        maxDurationSeconds: 120,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await responseJson(response)).toMatchObject({
+      uploadSessionId: replacementUploadSession.id,
+      uid: replacementUploadSession.storageKey,
+    })
+    expect(retireMediaUploadSession).toHaveBeenCalledWith({
+      ownerUserId: session.id,
+      clientUploadId: oldSession.clientUploadId,
+      uploadSessionId: oldSession.id,
+    })
+    expect(removeCloudflareStreamVideoByUid).toHaveBeenCalledWith(
+      oldSession.storageKey,
+    )
+    expect(createCloudflareStreamTusUpload).toHaveBeenCalledTimes(1)
   })
 
   it("stores an uploaded client thumbnail when completing a Cloudflare video story", async () => {
@@ -412,6 +603,111 @@ describe("mobile Cloudflare video upload API", () => {
       lastCheckedAt: "2026-06-08T16:00:00.000Z",
       readyAt: null,
     })
+    expect(markMediaUploadSessionCompleted).toHaveBeenCalledWith({
+      uploadSessionId: uploadSession.id,
+      ownerUserId: session.id,
+      storyId: "22222222-2222-4222-8222-222222222222",
+    })
+  })
+
+  it("rejects completion when the provider upload lease belongs to another user", async () => {
+    vi.mocked(claimMediaUploadSessionForCompletion).mockRejectedValueOnce(
+      new MediaUploadSessionError(
+        "This video upload belongs to a different session.",
+        403,
+      ),
+    )
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          uid: uploadSession.storageKey,
+          uploadSessionId: "upload-owned-by-someone-else",
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+          caption: "Must not publish",
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(403)
+    expect(await responseJson(response)).toMatchObject({
+      error: "This video upload belongs to a different session.",
+    })
+    expect(createStory).not.toHaveBeenCalled()
+  })
+
+  it("keeps a merely playable provider video processing until encoding reaches 100 percent", async () => {
+    vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValueOnce({
+      readyToStream: true,
+      state: "ready",
+      pctComplete: 67,
+      errorReason: null,
+      byteSize: 12 * 1024 * 1024,
+      durationMs: 7_200,
+      width: 1080,
+      height: 1920,
+    })
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          uid: uploadSession.storageKey,
+          uploadSessionId: uploadSession.id,
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+          caption: "Wait for full quality",
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createCloudflareStreamStoredVideoAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        processingStatus: "processing",
+        providerPctComplete: 67,
+      }),
+    )
+  })
+
+  it("signals the client to replace a terminal provider upload", async () => {
+    vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValueOnce({
+      readyToStream: false,
+      state: "error",
+      pctComplete: 42,
+      errorReason: "Video encoding failed.",
+      byteSize: null,
+      durationMs: null,
+      width: null,
+      height: null,
+    })
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      new Request("https://app.example.com/api/mobile/stories/video-complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          uid: uploadSession.storageKey,
+          uploadSessionId: uploadSession.id,
+          contentType: "video/mp4",
+          byteSize: 12 * 1024 * 1024,
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(410)
+    expect(await responseJson(response)).toMatchObject({
+      error: "Video encoding failed.",
+    })
+    expect(releaseMediaUploadSessionCompletion).toHaveBeenCalledWith({
+      uploadSessionId: uploadSession.id,
+      ownerUserId: session.id,
+    })
+    expect(createStory).not.toHaveBeenCalled()
   })
 
   it("reuses an existing Cloudflare video story when completion is retried", async () => {
@@ -474,6 +770,8 @@ describe("mobile Cloudflare video upload API", () => {
       processingStatus: "ready",
       hasOriginalRendition: false,
       providerStatus: null,
+      providerPctComplete: null,
+      fullQualityReady: true,
       providerError: null,
       lastCheckedAt: null,
       readyAt: "2026-06-08T16:00:00.000Z",
@@ -560,6 +858,36 @@ describe("mobile Cloudflare video upload API", () => {
     })
   })
 
+  it("retires the progressive original-video story path for hls-v2 clients", async () => {
+    const { POST } = await import(
+      "@/app/api/mobile/stories/video-original-upload/route"
+    )
+    const response = await POST(
+      new Request(
+        "https://app.example.com/api/mobile/stories/video-original-upload",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-UBEYE-Media-Pipeline": "hls-v2",
+          },
+          body: JSON.stringify({
+            fileName: "story.mov",
+            contentType: "video/quicktime",
+            byteSize: 8 * 1024 * 1024,
+            maxDurationSeconds: 120,
+          }),
+        },
+      ),
+    )
+
+    expect(response.status).toBe(410)
+    expect(await responseJson(response)).toMatchObject({
+      code: "legacy_video_path_retired",
+    })
+    expect(generateClientTokenFromReadWriteToken).not.toHaveBeenCalled()
+  })
+
   it("reuses an existing original-quality video story when completion is retried", async () => {
     vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValueOnce({
       id: "existing-original-story",
@@ -575,6 +903,8 @@ describe("mobile Cloudflare video upload API", () => {
       processingStatus: "ready",
       hasOriginalRendition: false,
       providerStatus: null,
+      providerPctComplete: null,
+      fullQualityReady: true,
       providerError: null,
       lastCheckedAt: null,
       readyAt: "2026-06-08T16:00:00.000Z",

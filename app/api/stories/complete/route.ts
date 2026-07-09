@@ -3,7 +3,20 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
-import { createStory, getStoryUploadStatusForOwner } from "@/lib/story-store"
+import {
+  claimMediaUploadSessionForCompletion,
+  cloudflareDetailsFromUploadSession,
+  isCloudflareStreamFullyReady,
+  markMediaUploadSessionCompleted,
+  MediaUploadSessionError,
+  recordCloudflareStreamUploadStatus,
+  releaseMediaUploadSessionCompletion,
+} from "@/lib/media-upload-sessions"
+import {
+  createStory,
+  getStoryByStoredAssetForOwner,
+  getStoryUploadStatusForOwner,
+} from "@/lib/story-store"
 import {
   createCloudflareStreamStoredVideoAsset,
   createDirectBlobStoryImageAsset,
@@ -59,7 +72,14 @@ const completeSchema = z
       z.object({
         assetKind: z.literal("video"),
         uid: z.string().regex(/^[a-f0-9]{32}$/i),
-        contentType: z.string().trim().min(1).max(120).default("video/mp4"),
+        uploadSessionId: z.string().trim().min(1).max(100).optional(),
+        contentType: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .refine((value) => value.toLowerCase().startsWith("video/"))
+          .default("video/mp4"),
         byteSize: z.number().int().positive(),
         checksum: z.string().regex(/^[a-f0-9]{64}$/i),
         durationMs: z.number().int().positive().nullable().optional(),
@@ -96,6 +116,11 @@ export async function POST(request: Request) {
   }
 
   let storedAsset: StoredStoryAsset | undefined
+  let claimedUploadSession:
+    | Awaited<
+        ReturnType<typeof claimMediaUploadSessionForCompletion>
+      >["session"]
+    | undefined
 
   try {
     const session = await getSession()
@@ -144,14 +169,82 @@ export async function POST(request: Request) {
         height: parsed.data.height ?? null,
       })
     } else {
+      const uploadClaim = await claimMediaUploadSessionForCompletion({
+        ownerUserId: session.id,
+        uploadSessionId: parsed.data.uploadSessionId,
+        storageProvider: "cloudflare-stream",
+        storageKey: parsed.data.uid,
+        contentType: parsed.data.contentType,
+        byteSize: parsed.data.byteSize,
+      })
+      claimedUploadSession = uploadClaim.session
+
+      const existingStory = await getStoryByStoredAssetForOwner({
+        ownerId: session.id,
+        storageProvider: "cloudflare-stream",
+        storageKey: parsed.data.uid,
+      })
+
+      if (existingStory) {
+        await markMediaUploadSessionCompleted({
+          uploadSessionId: uploadClaim.session.id,
+          ownerUserId: session.id,
+          storyId: existingStory.id,
+        })
+        claimedUploadSession = undefined
+        const storyStatus = await getStoryUploadStatusForOwner(
+          existingStory.id,
+          session.id,
+        )
+
+        return NextResponse.json({
+          ok: true,
+          storyId: existingStory.id,
+          completionState: "reused",
+          processingStatus:
+            storyStatus?.processingStatus ?? existingStory.processingStatus,
+          moderationStatus: storyStatus?.moderationStatus,
+          asset: {
+            assetKind: existingStory.assetKind,
+            mediaUrl:
+              publicStoryMediaUrl(existingStory.mediaUrl, request, {
+                signed: true,
+              }) ?? existingStory.mediaUrl,
+            thumbnailUrl: publicStoryMediaUrl(
+              existingStory.thumbnailUrl,
+              request,
+              { signed: true },
+            ),
+          },
+        })
+      }
+
+      if (uploadClaim.state === "completed") {
+        throw new MediaUploadSessionError(
+          "The completed upload could not be matched to its story.",
+          409,
+        )
+      }
+
+      const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
+        uploadClaim.session,
+      )
       const cloudflareDetails = await getCloudflareStreamVideoDetails(
         parsed.data.uid,
-      ).catch(() => null)
+      ).catch(() => retainedCloudflareDetails)
+
+      if (cloudflareDetails) {
+        await recordCloudflareStreamUploadStatus({
+          uid: parsed.data.uid,
+          details: cloudflareDetails,
+        }).catch(() => undefined)
+      }
 
       if (cloudflareDetails?.state === "error") {
-        throw new StoryUploadError(
+        throw new MediaUploadSessionError(
           cloudflareDetails.errorReason ??
             "Cloudflare Stream could not process the video.",
+          410,
         )
       }
 
@@ -166,10 +259,15 @@ export async function POST(request: Request) {
         durationMs: parsed.data.durationMs ?? cloudflareDetails?.durationMs ?? null,
         width: parsed.data.width ?? cloudflareDetails?.width ?? null,
         height: parsed.data.height ?? cloudflareDetails?.height ?? null,
-        processingStatus: cloudflareDetails?.readyToStream ? "ready" : "processing",
+        processingStatus:
+          cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+            ? "ready"
+            : "processing",
         providerPctComplete:
           cloudflareDetails?.pctComplete ??
-          (cloudflareDetails?.readyToStream ? 100 : null),
+          (cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+            ? 100
+            : null),
       })
     }
 
@@ -191,6 +289,15 @@ export async function POST(request: Request) {
       moderationMediaUrl,
       moderationThumbnailUrl,
     })
+
+    if (claimedUploadSession) {
+      await markMediaUploadSessionCompleted({
+        uploadSessionId: claimedUploadSession.id,
+        ownerUserId: session.id,
+        storyId,
+      })
+      claimedUploadSession = undefined
+    }
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
 
     revalidatePath("/feed")
@@ -211,7 +318,14 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
-    if (storedAsset) {
+    if (claimedUploadSession) {
+      await releaseMediaUploadSessionCompletion({
+        uploadSessionId: claimedUploadSession.id,
+        ownerUserId: claimedUploadSession.ownerUserId,
+      }).catch(() => undefined)
+    }
+
+    if (storedAsset?.assetKind === "image") {
       await removeStoredStoryAsset(storedAsset).catch(() => undefined)
     }
 
@@ -222,7 +336,7 @@ export async function POST(request: Request) {
             ? error.message
             : "Could not finish the upload.",
       },
-      { status: 400 },
+      { status: error instanceof MediaUploadSessionError ? error.statusCode : 400 },
     )
   }
 }

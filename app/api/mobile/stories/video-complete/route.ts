@@ -3,6 +3,15 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  claimMediaUploadSessionForCompletion,
+  cloudflareDetailsFromUploadSession,
+  isCloudflareStreamFullyReady,
+  markMediaUploadSessionCompleted,
+  MediaUploadSessionError,
+  recordCloudflareStreamUploadStatus,
+  releaseMediaUploadSessionCompletion,
+} from "@/lib/media-upload-sessions"
+import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
 } from "@/lib/stories/mobile-video-completion"
@@ -13,8 +22,6 @@ import {
   getCloudflareStreamVideoDetails,
   isAllowedOriginalQualityVideoThumbnailContentType,
   maxCloudflareStreamClientThumbnailUploadBytes,
-  removeStoryAsset,
-  removeStoredStoryAsset,
   setCloudflareStreamThumbnailToLastFrame,
   StoryUploadError,
   type StoredStoryAsset,
@@ -29,7 +36,14 @@ export const runtime = "nodejs"
 
 const completeVideoSchema = z.object({
   uid: z.string().regex(/^[a-f0-9]{32}$/i),
-  contentType: z.string().trim().min(1).max(120).default("video/mp4"),
+  uploadSessionId: z.string().trim().min(1).max(100).optional(),
+  contentType: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .refine((value) => value.toLowerCase().startsWith("video/"))
+    .default("video/mp4"),
   byteSize: z.number().int().nonnegative().default(0),
   durationMs: z.number().int().positive().nullable().optional(),
   width: z.number().int().positive().nullable().optional(),
@@ -82,6 +96,11 @@ function logVideoCompleteEvent(
 export async function POST(request: Request) {
   let storedAsset: StoredStoryAsset | undefined
   let uploadedThumbnailUrl: string | null = null
+  let claimedUploadSession:
+    | Awaited<
+        ReturnType<typeof claimMediaUploadSessionForCompletion>
+      >["session"]
+    | undefined
 
   try {
     const session = await getCompleteMobileSession(request)
@@ -132,6 +151,16 @@ export async function POST(request: Request) {
       hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
     })
 
+    const uploadClaim = await claimMediaUploadSessionForCompletion({
+      ownerUserId: session.id,
+      uploadSessionId: parsed.data.uploadSessionId,
+      storageProvider: "cloudflare-stream",
+      storageKey: parsed.data.uid,
+      contentType: parsed.data.contentType,
+      byteSize: parsed.data.byteSize,
+    })
+    claimedUploadSession = uploadClaim.session
+
     const existingCompletion = await getExistingMobileVideoStoryCompletion({
       request,
       session,
@@ -140,6 +169,13 @@ export async function POST(request: Request) {
     })
 
     if (existingCompletion) {
+      await markMediaUploadSessionCompleted({
+        uploadSessionId: uploadClaim.session.id,
+        ownerUserId: session.id,
+        storyId: existingCompletion.storyId,
+      })
+      claimedUploadSession = undefined
+
       logVideoCompleteEvent("complete_reused", {
         userId: session.id,
         uid: parsed.data.uid,
@@ -151,14 +187,32 @@ export async function POST(request: Request) {
       return NextResponse.json(existingCompletion)
     }
 
+    if (uploadClaim.state === "completed") {
+      throw new MediaUploadSessionError(
+        "The completed upload could not be matched to its story.",
+        409,
+      )
+    }
+
+    const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
+      uploadClaim.session,
+    )
     const cloudflareDetails = await getCloudflareStreamVideoDetails(
       parsed.data.uid,
-    ).catch(() => null)
+    ).catch(() => retainedCloudflareDetails)
+
+    if (cloudflareDetails) {
+      await recordCloudflareStreamUploadStatus({
+        uid: parsed.data.uid,
+        details: cloudflareDetails,
+      }).catch(() => undefined)
+    }
 
     if (cloudflareDetails?.state === "error") {
-      throw new StoryUploadError(
+      throw new MediaUploadSessionError(
         cloudflareDetails.errorReason ??
           "Cloudflare Stream could not process the video.",
+        410,
       )
     }
 
@@ -177,9 +231,9 @@ export async function POST(request: Request) {
         !parsed.data.thumbnailByteSize ||
         !parsed.data.thumbnailChecksum
       ) {
-        return NextResponse.json(
-          { error: "Could not verify the story video thumbnail." },
-          { status: 400 },
+        throw new MediaUploadSessionError(
+          "Could not verify the story video thumbnail.",
+          400,
         )
       }
 
@@ -201,10 +255,15 @@ export async function POST(request: Request) {
       durationMs: parsed.data.durationMs ?? cloudflareDetails?.durationMs ?? null,
       width: parsed.data.width ?? cloudflareDetails?.width ?? null,
       height: parsed.data.height ?? cloudflareDetails?.height ?? null,
-      processingStatus: cloudflareDetails?.readyToStream ? "ready" : "processing",
+      processingStatus:
+        cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+          ? "ready"
+          : "processing",
       providerPctComplete:
         cloudflareDetails?.pctComplete ??
-        (cloudflareDetails?.readyToStream ? 100 : null),
+        (cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+          ? 100
+          : null),
     })
     storedAsset = uploadedThumbnailUrl
       ? { ...storedAsset, thumbnailUrl: uploadedThumbnailUrl }
@@ -218,6 +277,13 @@ export async function POST(request: Request) {
       providerStatusFallback: cloudflareDetails?.state ?? null,
       providerErrorFallback: cloudflareDetails?.errorReason ?? null,
     })
+
+    await markMediaUploadSessionCompleted({
+      uploadSessionId: uploadClaim.session.id,
+      ownerUserId: session.id,
+      storyId: completion.storyId,
+    })
+    claimedUploadSession = undefined
 
     logVideoCompleteEvent("complete_succeeded", {
       userId: session.id,
@@ -238,11 +304,11 @@ export async function POST(request: Request) {
           ? error.message
           : "unknown",
     })
-    if (storedAsset) {
-      await removeStoredStoryAsset(storedAsset)
-    }
-    if (uploadedThumbnailUrl) {
-      await removeStoryAsset(uploadedThumbnailUrl).catch(() => undefined)
+    if (claimedUploadSession) {
+      await releaseMediaUploadSessionCompletion({
+        uploadSessionId: claimedUploadSession.id,
+        ownerUserId: claimedUploadSession.ownerUserId,
+      }).catch(() => undefined)
     }
 
     return NextResponse.json(
@@ -252,7 +318,7 @@ export async function POST(request: Request) {
             ? error.message
             : "Could not finish the video upload.",
       },
-      { status: 400 },
+      { status: error instanceof MediaUploadSessionError ? error.statusCode : 400 },
     )
   }
 }

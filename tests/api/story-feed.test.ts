@@ -136,6 +136,8 @@ describe("story upload and mobile feed API", () => {
       moderationStatus: "approved",
       moderationReason: null,
       providerStatus: "ready",
+      providerPctComplete: 100,
+      fullQualityReady: true,
       providerError: null,
       lastCheckedAt: null,
       readyAt: null,

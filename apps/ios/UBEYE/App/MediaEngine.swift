@@ -172,11 +172,9 @@ final class MediaEngine: ObservableObject {
     }
 
     private func adjacentVideoUrls(in stack: StoryStack, around itemIndex: Int) -> [URL] {
-        let videoItems = orderedNearbyStoryItems(in: stack, around: itemIndex)
+        orderedNearbyStoryItems(in: stack, around: itemIndex)
             .filter(\.isPlayableVideo)
-        return videoItems.map(\.playbackMediaUrl) + videoItems.compactMap { item in
-            MediaPlaybackQuality.highQualityCandidate(for: item)
-        }
+            .map(\.playbackMediaUrl)
     }
 
     private func orderedNearbyStoryItems(in stack: StoryStack, around itemIndex: Int) -> [StoryStackItem] {
@@ -185,7 +183,7 @@ final class MediaEngine: ObservableObject {
         }
 
         var seen = Set<Int>()
-        return [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex + 3, itemIndex - 1, itemIndex + 4, itemIndex - 2]
+        return [itemIndex, itemIndex + 1, itemIndex - 1]
             .filter { index in
                 stack.items.indices.contains(index) && seen.insert(index).inserted
             }
@@ -228,12 +226,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
     private var preparedPlayers: [URL: PreparedPlayer] = [:]
     private var prepareTasks: [URL: Task<Void, Never>] = [:]
+    private var desiredURLs = Set<URL>()
     private var maxPreparedPlayers: Int {
-        NetworkQualityMonitor.shared.preparedPlayerLimit
-    }
-
-    func hasPreparedPlayer(for url: URL) -> Bool {
-        preparedPlayers[url] != nil
+        min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
     }
 
     func takePreparedPlayer(for url: URL) -> PreparedPlayer? {
@@ -250,16 +245,15 @@ final class StoryVideoPlaybackPool: ObservableObject {
     }
 
     func prepare(urls: [URL], activeURL: URL?) {
-        var seen = Set<URL>()
-        let desiredUrls = urls
-            .filter { seen.insert($0).inserted }
-            .filter { $0 != activeURL }
-            .prefix(maxPreparedPlayers)
+        let desiredUrls = Self.prioritizedURLs(
+            urls: urls,
+            activeURL: activeURL,
+            limit: maxPreparedPlayers
+        )
+        desiredURLs = Set(desiredUrls)
+        prune(keeping: desiredURLs)
 
-        let desiredSet = Set(desiredUrls)
-        prune(keeping: desiredSet)
-
-        for url in desiredUrls where preparedPlayers[url] == nil && prepareTasks[url] == nil {
+        for url in desiredUrls where url != activeURL && preparedPlayers[url] == nil && prepareTasks[url] == nil {
             prepareTasks[url] = Task { @MainActor [weak self] in
                 guard let self else {
                     return
@@ -273,16 +267,41 @@ final class StoryVideoPlaybackPool: ObservableObject {
                     return
                 }
 
-                self.preparedPlayers[url] = prepared
                 self.prepareTasks[url] = nil
+                guard self.desiredURLs.contains(url) else {
+                    prepared.player.pause()
+                    MediaPerformance.cancelInterval(prepareInterval, reason: "no_longer_adjacent")
+                    return
+                }
+
+                self.preparedPlayers[url] = prepared
                 MediaPerformance.endInterval(
                     prepareInterval,
                     event: "video_player_prepared url=\(url.lastPathComponent)",
                     upload: false
                 )
-                self.prune(keeping: desiredSet)
+                self.prune(keeping: self.desiredURLs)
             }
         }
+    }
+
+    static func prioritizedURLs(urls: [URL], activeURL: URL?, limit: Int) -> [URL] {
+        guard limit > 0 else {
+            return []
+        }
+
+        var seen = Set<URL>()
+        var prioritized: [URL] = []
+
+        if let activeURL, urls.contains(activeURL), seen.insert(activeURL).inserted {
+            prioritized.append(activeURL)
+        }
+
+        for url in urls where seen.insert(url).inserted {
+            prioritized.append(url)
+        }
+
+        return Array(prioritized.prefix(limit))
     }
 
     func removeAll() {
@@ -295,6 +314,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
             prepared.player.pause()
         }
         preparedPlayers.removeAll()
+        desiredURLs.removeAll()
     }
 
     private static func buildPreparedPlayer(for url: URL) async -> PreparedPlayer? {
@@ -313,11 +333,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         let item = AVPlayerItem(asset: asset)
         configureStreamingHints(for: item, playbackURL: resolved.playbackURL)
-        item.preferredForwardBufferDuration = resolved.playbackURL.pathExtension.lowercased() == "m3u8" ? 6 : 3
+        item.preferredForwardBufferDuration = 3
 
         let player = AVPlayer(playerItem: item)
         player.actionAtItemEnd = .pause
         player.automaticallyWaitsToMinimizeStalling = true
+        _ = await player.preroll(atRate: 1)
         player.pause()
 
         return PreparedPlayer(

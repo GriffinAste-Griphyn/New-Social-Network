@@ -92,6 +92,11 @@ Reason:
 - encoding and playback handled for you
 - fewer surprises than storing raw video files and building your own playback pipeline
 
+Every direct upload is represented by an expiring, owner-bound upload session before the
+client receives a provider URL. Completion is idempotent and reconciles provider progress
+with moderation as independent states. Public stories use signed adaptive HLS only; source
+files are not progressive playback fallbacks.
+
 ### Images
 
 Use Vercel Blob or Cloudflare R2 first, then reassess later if image egress or transformation cost becomes a problem.

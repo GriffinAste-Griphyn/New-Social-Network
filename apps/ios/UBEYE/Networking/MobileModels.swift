@@ -744,6 +744,7 @@ struct MobileMediaConfigResponse: Codable {
 struct VideoUploadResponse: Codable, Hashable {
     let ok: Bool
     let uid: String
+    let uploadSessionId: String?
     let uploadUrl: URL
     let uploadProtocol: String?
     let thumbnailPathname: String?
@@ -753,20 +754,6 @@ struct VideoUploadResponse: Codable, Hashable {
     let maxThumbnailSizeBytes: Int64?
 }
 
-struct OriginalVideoUploadResponse: Codable {
-    let ok: Bool
-    let pathname: String
-    let uploadUrl: URL
-    let clientToken: String
-    let contentType: String
-    let maxSizeBytes: Int64
-    let thumbnailPathname: String
-    let thumbnailUploadUrl: URL
-    let thumbnailClientToken: String
-    let thumbnailContentType: String
-    let maxThumbnailSizeBytes: Int64
-}
-
 struct OriginalVideoBlobUploadResult: Codable {
     let url: URL
     let downloadUrl: URL?
@@ -774,12 +761,6 @@ struct OriginalVideoBlobUploadResult: Codable {
     let contentType: String?
     let contentDisposition: String?
     let etag: String?
-}
-
-struct OriginalVideoAttachResponse: Codable {
-    let ok: Bool
-    let storyId: String
-    let alreadyAttached: Bool?
 }
 
 struct StoryStatusResponse: Codable {

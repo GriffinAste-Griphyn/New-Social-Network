@@ -1328,6 +1328,24 @@ async function removeCloudflareStreamVideo(mediaUrl: string) {
   })
 }
 
+export async function removeCloudflareStreamVideoByUid(uid: string) {
+  if (!isCloudflareStreamUid(uid)) {
+    return
+  }
+
+  const { accountId, apiToken } = getCloudflareStreamConfig()
+
+  await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+      },
+    },
+  )
+}
+
 function getStoryStorageProvider() {
   if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
     return vercelBlobStoryStorageProvider

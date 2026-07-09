@@ -5,6 +5,10 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  allowsLegacyOriginalVideoStory,
+  legacyOriginalVideoRetiredResponse,
+} from "@/lib/mobile-media-pipeline"
+import {
   isAllowedOriginalQualityVideoContentType,
   maxOriginalStoryVideoThumbnailUploadBytes,
   maxOriginalStoryVideoUploadBytes,
@@ -90,6 +94,14 @@ export async function POST(request: Request) {
   ])
   if (rateLimitResponse) {
     return rateLimitResponse
+  }
+
+  if (
+    !allowsLegacyOriginalVideoStory({ request, phase: "prepare" })
+  ) {
+    return NextResponse.json(legacyOriginalVideoRetiredResponse, {
+      status: 410,
+    })
   }
 
   const parsed = originalVideoUploadSchema.safeParse(

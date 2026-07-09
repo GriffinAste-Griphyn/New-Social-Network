@@ -4,6 +4,10 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  allowsLegacyOriginalVideoStory,
+  legacyOriginalVideoRetiredResponse,
+} from "@/lib/mobile-media-pipeline"
+import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
 } from "@/lib/stories/mobile-video-completion"
@@ -117,6 +121,14 @@ export async function POST(request: Request) {
     ])
     if (rateLimitResponse) {
       return rateLimitResponse
+    }
+
+    if (
+      !allowsLegacyOriginalVideoStory({ request, phase: "complete" })
+    ) {
+      return NextResponse.json(legacyOriginalVideoRetiredResponse, {
+        status: 410,
+      })
     }
 
     const parsed = completeOriginalVideoSchema.safeParse(

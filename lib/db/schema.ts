@@ -814,6 +814,75 @@ export const stories = pgTable(
   ],
 )
 
+export const mediaUploadSessions = pgTable(
+  "media_upload_sessions",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id),
+    purpose: mediaAssetPurpose("purpose").notNull().default("story"),
+    assetKind: storyAssetKind("asset_kind").notNull(),
+    storageProvider: mediaStorageProvider("storage_provider").notNull(),
+    storageKey: text("storage_key").notNull(),
+    clientUploadId: text("client_upload_id"),
+    uploadUrl: text("upload_url").notNull(),
+    uploadProtocol: text("upload_protocol").notNull(),
+    expectedContentType: text("expected_content_type"),
+    expectedByteSize: integer("expected_byte_size"),
+    maxDurationSeconds: integer("max_duration_seconds"),
+    status: text("status").notNull().default("prepared"),
+    providerStatus: text("provider_status"),
+    providerPctComplete: integer("provider_pct_complete"),
+    providerError: text("provider_error"),
+    providerPayload: jsonb("provider_payload"),
+    providerEventAt: timestamp("provider_event_at", { withTimezone: true }),
+    completedMediaAssetId: text("completed_media_asset_id").references(
+      () => mediaAssets.id,
+      { onDelete: "set null" },
+    ),
+    completedStoryId: text("completed_story_id").references(() => stories.id, {
+      onDelete: "set null",
+    }),
+    completionClaimedAt: timestamp("completion_claimed_at", {
+      withTimezone: true,
+    }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("media_upload_sessions_provider_key_uidx").on(
+      table.storageProvider,
+      table.storageKey,
+    ),
+    uniqueIndex("media_upload_sessions_completed_story_uidx").on(
+      table.completedStoryId,
+    ),
+    uniqueIndex("media_upload_sessions_completed_asset_uidx").on(
+      table.completedMediaAssetId,
+    ),
+    uniqueIndex("media_upload_sessions_owner_client_uidx").on(
+      table.ownerUserId,
+      table.clientUploadId,
+    ),
+    index("media_upload_sessions_owner_status_idx").on(
+      table.ownerUserId,
+      table.status,
+      table.expiresAt,
+    ),
+    index("media_upload_sessions_provider_event_idx").on(
+      table.storageProvider,
+      table.providerEventAt,
+    ),
+  ],
+)
+
 export const storyMentions = pgTable(
   "story_mentions",
   {

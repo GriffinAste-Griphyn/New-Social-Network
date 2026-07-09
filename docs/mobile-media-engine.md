@@ -32,9 +32,8 @@ These should be measured with existing `MediaPerformance` events:
 - `video_recovered`
 - `video_player_pool_hit`
 - `video_disk_cache_hit`
-- `hls_asset_download_start`
-- `hls_asset_download_finished`
-- `hls_asset_package_hit`
+- `video_player_pool_hit`
+- `video_retry`
 
 ## Architecture
 
@@ -74,9 +73,12 @@ Current cache layers stay, but scheduling is centralized:
 
 - `MediaImageCache` for decoded thumbnails/images.
 - `MediaFileDiskCache` for progressive media files and images.
-- `HLSAssetDownloadCoordinator` for AVFoundation-managed HLS asset packages on non-constrained, non-cellular networks.
+- `AVPlayer`/`AVURLAsset` warming for the active item and a small adjacent window.
 
-The progressive file cache intentionally does not persist `.m3u8` playlists. HLS downloads stay on the AVFoundation path so segment/package ownership remains compatible with `AVAssetDownloadURLSession`.
+The progressive file cache intentionally does not persist `.m3u8` playlists. Launch-time
+prefetch never starts a full `AVAssetDownloadURLSession` package download: AVFoundation's
+streaming cache and a bounded prepared-player pool provide the useful warm path without
+competing with visible playback for bandwidth or retaining multiple stories on disk.
 
 ### Feed Manifest
 
@@ -84,12 +86,16 @@ The mobile feed includes a bounded `initialStoryStacks` manifest keyed by reques
 
 ### Upload Renditions
 
-Stories and media assets now carry explicit playback and original rendition metadata:
+Stories and media assets carry explicit playback and optional original rendition metadata:
 
-1. Playback rendition: the URL used by feed/viewer playback, usually Cloudflare Stream/HLS or the playback-safe mobile media route.
-2. Original rendition: the untouched source media when the client had to normalize a video before upload.
+1. Playback rendition: the Cloudflare Stream signed HLS URL used by feed/viewer playback.
+2. Original rendition: optional archive metadata; it is never selected by the viewer or
+   inserted into the player/preheat pools.
 
-Small H.264 MP4/M4V files can still use the original-quality upload path directly. Large files, MOV containers, HEVC, and other non-optimized originals are normalized into a network-optimized MP4 playback proxy before upload, then the original source is uploaded in the background and attached to the story through the original-rendition endpoint.
+Every newly composed video goes through the owner-bound Cloudflare TUS pipeline, including
+small H.264 MP4/M4V files. Compatible files can skip a local re-encode, but never skip
+adaptive server transcoding. The creator sees a local optimistic preview while processing;
+other users see the story only after full provider readiness and moderation approval.
 
 The mobile API exposes the same `renditions.playback` and `renditions.original` shape on feed stories, stack stories, video completion responses, and cached stack manifests. iOS always renders from playback helpers and treats the original rendition as quality/archive metadata.
 

@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 
 enum StoryVideoUploadStrategy: String {
-    case originalQuality
+    case streamPassthrough
     case normalized
 }
 
@@ -11,14 +11,8 @@ struct PreparedStoryVideo {
     let url: URL
     let durationMs: Int?
     let byteSize: Int64
-    let shouldRemoveAfterUpload: Bool
-    let shouldUploadOriginalQuality: Bool
     let strategy: StoryVideoUploadStrategy
     let inspection: StoryVideoInspection
-
-    var shouldAttachOriginalRendition: Bool {
-        strategy == .normalized && inspection.supportsOriginalQualityUpload
-    }
 }
 
 struct StoryVideoInspection {
@@ -30,25 +24,22 @@ struct StoryVideoInspection {
     let preferredTransform: CGAffineTransform?
     let codecTypes: [String]
 
-    var supportsOriginalQualityUpload: Bool {
+    var hasStreamSupportedContainer: Bool {
         switch originalURL.pathExtension.lowercased() {
         case "mov", "mp4", "m4v":
-            return !codecTypes.isEmpty
+            return true
         default:
             return false
         }
     }
 
-    var isPlaybackOptimizedOriginal: Bool {
-        switch originalURL.pathExtension.lowercased() {
-        case "mp4", "m4v":
-            return !codecTypes.isEmpty && codecTypes.allSatisfy { codec in
-                let normalizedCodec = codec.lowercased()
-                return normalizedCodec == "avc1" || normalizedCodec == "avc3"
-            }
-        default:
+    var isStreamCompatibleInput: Bool {
+        guard hasStreamSupportedContainer, !codecTypes.isEmpty else {
             return false
         }
+
+        let supportedCodecs = Set(["avc1", "avc3", "hvc1", "hev1"])
+        return codecTypes.allSatisfy { supportedCodecs.contains($0.lowercased()) }
     }
 
     var diagnosticSummary: String {
@@ -59,8 +50,8 @@ struct StoryVideoInspection {
             naturalSize.map { "natural=\(Int($0.width))x\(Int($0.height))" },
             preferredTransform.map { "transform=\(Self.transformSummary($0))" },
             codecTypes.isEmpty ? "codecs=none" : "codecs=\(codecTypes.joined(separator: "."))",
-            "originalSupported=\(supportsOriginalQualityUpload)",
-            "playbackOptimized=\(isPlaybackOptimizedOriginal)",
+            "streamContainer=\(hasStreamSupportedContainer)",
+            "streamCompatible=\(isStreamCompatibleInput)",
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -198,7 +189,6 @@ struct StoryVideoUploadAttempt {
 
 enum StoryVideoUploadNormalizer {
     private static let maxUploadBytes: Int64 = 512 * 1024 * 1024
-    private static let maxOriginalFastPathBytes: Int64 = maxUploadBytes
 
     static func prepare(
         url: URL,
@@ -212,28 +202,25 @@ enum StoryVideoUploadNormalizer {
             throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
         }
 
-        if inspection.byteSize <= maxOriginalFastPathBytes, inspection.isPlaybackOptimizedOriginal {
-            MediaPerformance.mark("video_upload_strategy original \(inspection.diagnosticSummary)")
+        if inspection.byteSize <= maxUploadBytes, inspection.isStreamCompatibleInput {
+            MediaPerformance.mark("video_upload_strategy stream_passthrough \(inspection.diagnosticSummary)")
             return PreparedStoryVideo(
                 url: url,
                 durationMs: inspection.durationMs,
                 byteSize: inspection.byteSize,
-                shouldRemoveAfterUpload: false,
-                shouldUploadOriginalQuality: true,
-                strategy: .originalQuality,
+                strategy: .streamPassthrough,
                 inspection: inspection
             )
         }
-        if inspection.supportsOriginalQualityUpload {
-            let reason = inspection.byteSize > maxOriginalFastPathBytes
-                ? "large_original"
-                : "container_or_codec"
-            MediaPerformance.mark("video_upload_original_proxy_required reason=\(reason) \(inspection.diagnosticSummary)")
-        }
+
+        let reason = inspection.byteSize > maxUploadBytes
+            ? "large_input"
+            : "container_or_codec"
+        MediaPerformance.mark("video_upload_stream_normalization_required reason=\(reason) \(inspection.diagnosticSummary)")
 
         let normalizedURL = try await normalizedVideoURL(
             for: url,
-            mirrorsHorizontally: source.mirrorsNormalizedFallback
+            mirrorsHorizontally: false
         )
         guard let normalizedURL else {
             throw APIClientError.server("Could not prepare this video for upload. Try a different video.", 0)
@@ -258,8 +245,6 @@ enum StoryVideoUploadNormalizer {
                 url: normalizedURL,
                 durationMs: durationMs,
                 byteSize: byteSize,
-                shouldRemoveAfterUpload: true,
-                shouldUploadOriginalQuality: false,
                 strategy: .normalized,
                 inspection: inspection
             )

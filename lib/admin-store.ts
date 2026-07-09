@@ -306,10 +306,31 @@ export async function approveModeratedStory(input: {
   storyId: string
   reviewerId: string
 }) {
-  await getDb()
+  const db = getDb()
+  const [story] = await db
+    .select({
+      processingStatus: stories.processingStatus,
+      expiresAt: stories.expiresAt,
+    })
+    .from(stories)
+    .where(eq(stories.id, input.storyId))
+    .limit(1)
+
+  if (!story) {
+    return
+  }
+
+  const nextStatus =
+    story.expiresAt.getTime() <= Date.now()
+      ? "expired"
+      : story.processingStatus === "ready"
+        ? "live"
+        : "processing"
+
+  await db
     .update(stories)
     .set({
-      status: "live",
+      status: nextStatus,
       moderationStatus: "approved",
       moderationReason: null,
       reviewedAt: new Date(),
@@ -317,7 +338,9 @@ export async function approveModeratedStory(input: {
     })
     .where(eq(stories.id, input.storyId))
 
-  await processStoryCreatorEarnings(input.storyId)
+  if (nextStatus === "live") {
+    await processStoryCreatorEarnings(input.storyId)
+  }
 }
 
 export async function rejectModeratedStory(input: {

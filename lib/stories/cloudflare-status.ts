@@ -1,4 +1,4 @@
-import { asc, and, eq, gt } from "drizzle-orm"
+import { and, asc, eq, gt, inArray } from "drizzle-orm"
 
 import { processStoryCreatorEarnings } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
@@ -6,40 +6,81 @@ import { getDb } from "@/lib/db"
 import { mediaAssets, stories, users } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import {
+  isCloudflareStreamFullyReady,
+  recordCloudflareStreamUploadStatus,
+  type CloudflareStreamProviderDetails,
+} from "@/lib/media-upload-sessions"
+import {
   createCloudflareStreamThumbnailMediaUrl,
   getCloudflareStreamVideoDetails,
   setCloudflareStreamThumbnailToLastFrame,
 } from "@/lib/story-storage"
 
+type CloudflareStoryStatus = "processing" | "live" | "expired" | "removed"
+
+export function deriveCloudflareStoryStatus(input: {
+  currentStatus: CloudflareStoryStatus
+  moderationStatus: string
+  providerReady: boolean
+  expiresAt: Date
+  now: Date
+}): CloudflareStoryStatus {
+  if (
+    input.currentStatus === "expired" ||
+    input.expiresAt.getTime() <= input.now.getTime()
+  ) {
+    return "expired"
+  }
+
+  // A removed story may have been deleted by its creator. Provider callbacks
+  // and later moderation changes must never resurrect it.
+  if (input.currentStatus === "removed") {
+    return "removed"
+  }
+
+  if (
+    input.moderationStatus === "rejected" ||
+    input.moderationStatus === "deleted"
+  ) {
+    return "removed"
+  }
+
+  return input.moderationStatus === "approved" && input.providerReady
+    ? "live"
+    : "processing"
+}
+
+async function notifyNewlyPublishedStory(input: {
+  storyId: string
+  creatorId: string
+  creatorName: string | null
+  caption: string | null
+}) {
+  await processStoryCreatorEarnings(input.storyId)
+  await notifyCreatorStoryPosted({
+    creatorId: input.creatorId,
+    creatorName: input.creatorName ?? "Creator",
+    storyId: input.storyId,
+    caption: input.caption,
+  }).catch(() => undefined)
+  await invalidateMobileFeedSnapshotsForCreator(input.creatorId).catch(
+    () => undefined,
+  )
+}
+
 export async function refreshProcessingCloudflareStories(input: {
   creatorId?: string
   limit?: number
 } = {}) {
-  const db = getDb()
-  const now = new Date()
-  const pendingStories = await db
-    .select({
-      id: stories.id,
-      creatorId: stories.creatorId,
-      creatorName: users.displayName,
-      mediaAssetId: stories.mediaAssetId,
-      storageKey: stories.storageKey,
-      thumbnailUrl: stories.thumbnailUrl,
-      caption: stories.caption,
-      durationMs: stories.durationMs,
-      byteSize: stories.byteSize,
-      width: stories.width,
-      height: stories.height,
-    })
+  const pendingStories = await getDb()
+    .select({ uid: stories.storageKey })
     .from(stories)
-    .innerJoin(users, eq(stories.creatorId, users.id))
     .where(
       and(
         eq(stories.storageProvider, "cloudflare-stream"),
         eq(stories.processingStatus, "processing"),
-        eq(stories.status, "processing"),
-        eq(stories.moderationStatus, "approved"),
-        gt(stories.expiresAt, now),
+        inArray(stories.status, ["processing", "live"]),
+        gt(stories.expiresAt, new Date()),
         input.creatorId ? eq(stories.creatorId, input.creatorId) : undefined,
       ),
     )
@@ -47,153 +88,27 @@ export async function refreshProcessingCloudflareStories(input: {
     .limit(input.limit ?? 8)
 
   await Promise.all(
-    pendingStories.map(async (story) => {
-      if (!story.storageKey) {
+    pendingStories.map(async ({ uid }) => {
+      if (!uid) {
         return
       }
 
-      let details: Awaited<ReturnType<typeof getCloudflareStreamVideoDetails>>
-
-      try {
-        details = await getCloudflareStreamVideoDetails(story.storageKey)
-      } catch (error) {
-        await db
-          .update(mediaAssets)
-          .set({
-            providerError:
-              error instanceof Error ? error.message : "Could not check video status.",
-            lastCheckedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(mediaAssets.id, story.mediaAssetId))
-        return
-      }
-
-      if (details.state === "error") {
-        const checkedAt = new Date()
-        await Promise.all([
-          db
-            .update(mediaAssets)
-            .set({
-              processingStatus: "error",
-              providerStatus: "error",
-              providerError:
-                details.errorReason ?? "Cloudflare Stream could not process the video.",
-              lastCheckedAt: checkedAt,
-              updatedAt: checkedAt,
-            })
-            .where(eq(mediaAssets.id, story.mediaAssetId)),
-          db
-            .update(stories)
-            .set({
-              processingStatus: "error",
-              moderationReason:
-                details.errorReason ?? "Cloudflare Stream could not process the video.",
-            })
-            .where(eq(stories.id, story.id)),
-        ])
-        return
-      }
-
-      if (!details.readyToStream) {
-        await db
-          .update(mediaAssets)
-          .set({
-            providerStatus: details.state ?? "processing",
-            providerPctComplete: details.pctComplete ?? undefined,
-            lastCheckedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(mediaAssets.id, story.mediaAssetId))
-        return
-      }
-
-      const readyAt = new Date()
-      const durationMs = details.durationMs ?? story.durationMs
-      const byteSize = details.byteSize ?? story.byteSize
-      const width = details.width ?? story.width
-      const height = details.height ?? story.height
-      const providerPctComplete = details.pctComplete ?? 100
-      const thumbnailUrl =
-        story.thumbnailUrl ??
-        (story.storageKey
-          ? createCloudflareStreamThumbnailMediaUrl(story.storageKey)
-          : null)
-
-      if (story.storageKey) {
-        await setCloudflareStreamThumbnailToLastFrame(story.storageKey).catch(
-          () => undefined,
-        )
-      }
-
-      await db
-        .update(mediaAssets)
-        .set({
-          processingStatus: "ready",
-          providerStatus: "ready",
-          providerPctComplete,
-          providerError: null,
-          byteSize: byteSize ?? undefined,
-          thumbnailUrl,
-          placeholderUrl: thumbnailUrl,
-          durationMs,
-          width,
-          height,
-          readyAt,
-          lastCheckedAt: readyAt,
-          updatedAt: readyAt,
-        })
-        .where(eq(mediaAssets.id, story.mediaAssetId))
-
-      const promotedStories = await db
-        .update(stories)
-        .set({
-          processingStatus: "ready",
-          status: "live",
-          durationMs,
-          byteSize,
-          thumbnailUrl,
-          placeholderUrl: thumbnailUrl,
-          width,
-          height,
-        })
-        .where(
-          and(
-            eq(stories.id, story.id),
-            eq(stories.processingStatus, "processing"),
-            eq(stories.status, "processing"),
-          ),
-        )
-        .returning({ id: stories.id })
-
-      if (promotedStories.length === 0) {
-        return
-      }
-
-      await processStoryCreatorEarnings(story.id)
-      await notifyCreatorStoryPosted({
-        creatorId: story.creatorId,
-        creatorName: story.creatorName ?? "Creator",
-        storyId: story.id,
-        caption: story.caption,
-      }).catch(() => undefined)
-      await invalidateMobileFeedSnapshotsForCreator(story.creatorId).catch(
-        () => undefined,
-      )
+      await syncCloudflareStreamStoryStatus({ uid }).catch(() => undefined)
     }),
   )
 }
 
-type CloudflareStreamStoryDetails = Awaited<
-  ReturnType<typeof getCloudflareStreamVideoDetails>
->
-
 export async function syncCloudflareStreamStoryStatus(input: {
   uid: string
-  details?: CloudflareStreamStoryDetails
+  details?: CloudflareStreamProviderDetails
 }) {
   const db = getDb()
-  const now = new Date()
+  const details =
+    input.details ?? (await getCloudflareStreamVideoDetails(input.uid))
+  const retainedSession = await recordCloudflareStreamUploadStatus({
+    uid: input.uid,
+    details,
+  })
   const [story] = await db
     .select({
       id: stories.id,
@@ -207,45 +122,48 @@ export async function syncCloudflareStreamStoryStatus(input: {
       byteSize: stories.byteSize,
       width: stories.width,
       height: stories.height,
+      expiresAt: stories.expiresAt,
       status: stories.status,
       processingStatus: stories.processingStatus,
       moderationStatus: stories.moderationStatus,
+      assetProcessingStatus: mediaAssets.processingStatus,
+      previousProviderPctComplete: mediaAssets.providerPctComplete,
     })
     .from(stories)
     .innerJoin(users, eq(stories.creatorId, users.id))
+    .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
     .where(
       and(
         eq(stories.storageProvider, "cloudflare-stream"),
         eq(stories.storageKey, input.uid),
-        gt(stories.expiresAt, now),
       ),
     )
     .limit(1)
 
   if (!story) {
-    return { status: "not_found" as const, storyId: null }
+    return retainedSession
+      ? {
+          status: "retained" as const,
+          storyId: null,
+          uploadSessionId: retainedSession.id,
+        }
+      : { status: "not_found" as const, storyId: null }
   }
 
-  if (
-    story.status !== "processing" ||
-    story.processingStatus !== "processing" ||
-    story.moderationStatus !== "approved"
-  ) {
-    return {
-      status: story.status,
-      processingStatus: story.processingStatus,
-      storyId: story.id,
-    }
-  }
-
-  const details = input.details ?? (await getCloudflareStreamVideoDetails(input.uid))
+  const checkedAt = new Date()
 
   if (details.state === "error") {
-    const checkedAt = new Date()
     const errorReason =
       details.errorReason ?? "Cloudflare Stream could not process the video."
+    const nextStatus = deriveCloudflareStoryStatus({
+      currentStatus: story.status,
+      moderationStatus: story.moderationStatus,
+      providerReady: false,
+      expiresAt: story.expiresAt,
+      now: checkedAt,
+    })
 
-    await Promise.all([
+    const [, reconciledStories] = await Promise.all([
       db
         .update(mediaAssets)
         .set({
@@ -258,39 +176,112 @@ export async function syncCloudflareStreamStoryStatus(input: {
         .where(eq(mediaAssets.id, story.mediaAssetId)),
       db
         .update(stories)
-        .set({
-          processingStatus: "error",
-          moderationReason: errorReason,
-        })
-        .where(eq(stories.id, story.id)),
+        .set({ processingStatus: "error", status: nextStatus })
+        .where(
+          and(
+            eq(stories.id, story.id),
+            eq(stories.storageProvider, "cloudflare-stream"),
+            eq(stories.storageKey, input.uid),
+            eq(stories.status, story.status),
+            eq(stories.processingStatus, story.processingStatus),
+            eq(stories.moderationStatus, story.moderationStatus),
+          ),
+        )
+        .returning({ id: stories.id }),
     ])
 
-    return { status: "error" as const, storyId: story.id }
+    if (reconciledStories.length === 0) {
+      return { status: "stale" as const, storyId: story.id }
+    }
+
+    return {
+      status: nextStatus,
+      processingStatus: "error" as const,
+      storyId: story.id,
+    }
   }
 
-  if (!details.readyToStream) {
-    await db
-      .update(mediaAssets)
-      .set({
-        providerStatus: details.state ?? "processing",
-        providerPctComplete: details.pctComplete ?? undefined,
-        lastCheckedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(mediaAssets.id, story.mediaAssetId))
+  const observedProviderPercentages = [
+    story.previousProviderPctComplete,
+    details.pctComplete,
+  ].filter((value): value is number => value !== null)
+  const providerPctComplete =
+    observedProviderPercentages.length > 0
+      ? Math.max(...observedProviderPercentages)
+      : null
+  const providerReady =
+    story.assetProcessingStatus === "ready" ||
+    isCloudflareStreamFullyReady({
+      readyToStream: details.readyToStream,
+      state: details.state,
+      pctComplete: providerPctComplete,
+    })
 
-    return { status: "processing" as const, storyId: story.id }
+  if (!providerReady) {
+    const nextStatus = deriveCloudflareStoryStatus({
+      currentStatus: story.status,
+      moderationStatus: story.moderationStatus,
+      providerReady: false,
+      expiresAt: story.expiresAt,
+      now: checkedAt,
+    })
+
+    const [, reconciledStories] = await Promise.all([
+      db
+        .update(mediaAssets)
+        .set({
+          processingStatus: "processing",
+          providerStatus: details.state ?? "processing",
+          providerPctComplete:
+            details.pctComplete === null ? undefined : providerPctComplete,
+          providerError: null,
+          lastCheckedAt: checkedAt,
+          updatedAt: checkedAt,
+        })
+        .where(eq(mediaAssets.id, story.mediaAssetId)),
+      db
+        .update(stories)
+        .set({ processingStatus: "processing", status: nextStatus })
+        .where(
+          and(
+            eq(stories.id, story.id),
+            eq(stories.storageProvider, "cloudflare-stream"),
+            eq(stories.storageKey, input.uid),
+            eq(stories.status, story.status),
+            eq(stories.processingStatus, story.processingStatus),
+            eq(stories.moderationStatus, story.moderationStatus),
+          ),
+        )
+        .returning({ id: stories.id }),
+    ])
+
+    if (reconciledStories.length === 0) {
+      return { status: "stale" as const, storyId: story.id }
+    }
+
+    return {
+      status: nextStatus,
+      processingStatus: "processing" as const,
+      storyId: story.id,
+    }
   }
 
-  const readyAt = new Date()
   const durationMs = details.durationMs ?? story.durationMs
   const byteSize = details.byteSize ?? story.byteSize
   const width = details.width ?? story.width
   const height = details.height ?? story.height
-  const providerPctComplete = details.pctComplete ?? 100
   const thumbnailUrl =
     story.thumbnailUrl ??
-    (story.storageKey ? createCloudflareStreamThumbnailMediaUrl(story.storageKey) : null)
+    (story.storageKey
+      ? createCloudflareStreamThumbnailMediaUrl(story.storageKey)
+      : null)
+  const nextStatus = deriveCloudflareStoryStatus({
+    currentStatus: story.status,
+    moderationStatus: story.moderationStatus,
+    providerReady: true,
+    expiresAt: story.expiresAt,
+    now: checkedAt,
+  })
 
   if (story.storageKey) {
     await setCloudflareStreamThumbnailToLastFrame(story.storageKey).catch(
@@ -302,8 +293,8 @@ export async function syncCloudflareStreamStoryStatus(input: {
     .update(mediaAssets)
     .set({
       processingStatus: "ready",
-      providerStatus: "ready",
-      providerPctComplete,
+      providerStatus: details.state ?? "ready",
+      providerPctComplete: Math.max(100, providerPctComplete ?? 0),
       providerError: null,
       byteSize: byteSize ?? undefined,
       thumbnailUrl,
@@ -311,17 +302,17 @@ export async function syncCloudflareStreamStoryStatus(input: {
       durationMs,
       width,
       height,
-      readyAt,
-      lastCheckedAt: readyAt,
-      updatedAt: readyAt,
+      readyAt: checkedAt,
+      lastCheckedAt: checkedAt,
+      updatedAt: checkedAt,
     })
     .where(eq(mediaAssets.id, story.mediaAssetId))
 
-  const promotedStories = await db
+  const reconciledStories = await db
     .update(stories)
     .set({
       processingStatus: "ready",
-      status: "live",
+      status: nextStatus,
       byteSize,
       thumbnailUrl,
       placeholderUrl: thumbnailUrl,
@@ -332,26 +323,33 @@ export async function syncCloudflareStreamStoryStatus(input: {
     .where(
       and(
         eq(stories.id, story.id),
-        eq(stories.processingStatus, "processing"),
-        eq(stories.status, "processing"),
+        eq(stories.storageProvider, "cloudflare-stream"),
+        eq(stories.storageKey, input.uid),
+        eq(stories.status, story.status),
+        eq(stories.processingStatus, story.processingStatus),
+        eq(stories.moderationStatus, story.moderationStatus),
       ),
     )
     .returning({ id: stories.id })
 
-  if (promotedStories.length > 0) {
-    await processStoryCreatorEarnings(story.id)
-    await notifyCreatorStoryPosted({
-      creatorId: story.creatorId,
-      creatorName: story.creatorName ?? "Creator",
-      storyId: story.id,
-      caption: story.caption,
-    }).catch(() => undefined)
-    await invalidateMobileFeedSnapshotsForCreator(story.creatorId).catch(
-      () => undefined,
-    )
+  if (reconciledStories.length === 0) {
+    return { status: "stale" as const, storyId: story.id }
   }
 
-  return { status: "live" as const, storyId: story.id }
+  if (nextStatus === "live" && story.status !== "live") {
+    await notifyNewlyPublishedStory({
+      storyId: story.id,
+      creatorId: story.creatorId,
+      creatorName: story.creatorName,
+      caption: story.caption,
+    })
+  }
+
+  return {
+    status: nextStatus,
+    processingStatus: "ready" as const,
+    storyId: story.id,
+  }
 }
 
 export async function getStoryUploadStatusForOwner(
@@ -395,8 +393,7 @@ export async function getStoryUploadStatusForOwner(
   if (
     story.storageProvider === "cloudflare-stream" &&
     story.storageKey &&
-    story.status === "processing" &&
-    story.processingStatus === "processing"
+    story.processingStatus !== "ready"
   ) {
     await syncCloudflareStreamStoryStatus({ uid: story.storageKey }).catch(
       () => undefined,
@@ -419,11 +416,15 @@ export async function getStoryUploadStatusForOwner(
     providerPctComplete: story.providerPctComplete,
     fullQualityReady:
       story.storageProvider === "cloudflare-stream"
-        ? (story.providerPctComplete ?? 0) >= 100
+        ? story.processingStatus === "ready" &&
+          (story.providerPctComplete ?? 0) >= 100
         : story.processingStatus === "ready",
     providerError: story.providerError,
     lastCheckedAt: story.lastCheckedAt?.toISOString() ?? null,
     readyAt: story.readyAt?.toISOString() ?? null,
-    isLive: story.status === "live" && story.processingStatus === "ready",
+    isLive:
+      story.status === "live" &&
+      story.processingStatus === "ready" &&
+      story.moderationStatus === "approved",
   }
 }

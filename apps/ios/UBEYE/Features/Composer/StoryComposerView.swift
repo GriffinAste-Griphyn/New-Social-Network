@@ -15,10 +15,6 @@ struct StoryVideoUpload {
         case cameraFront
         case cameraBack
         case library
-
-        var mirrorsNormalizedFallback: Bool {
-            self == .cameraFront
-        }
     }
 
     let url: URL
@@ -366,11 +362,6 @@ final class StoryComposerStore: ObservableObject {
             )
             attempt.attach(video: preparedVideo)
             lastUploadReport = attempt.report
-            defer {
-                if preparedVideo.shouldRemoveAfterUpload {
-                    try? FileManager.default.removeItem(at: preparedVideo.url)
-                }
-            }
 
             attempt.begin(.thumbnailGenerate)
             uploadStatus = attempt.phase.statusLabel
@@ -382,14 +373,14 @@ final class StoryComposerStore: ObservableObject {
 
             attempt.begin(.prepareUpload)
             uploadStatus = attempt.phase.statusLabel
-            let pendingUpload = try pendingUploads.createVideoUpload(
+            let pendingUpload = try await pendingUploads.createVideoUpload(
                 sourceURL: preparedVideo.url,
                 thumbnailData: thumbnailData,
                 durationMs: preparedVideo.durationMs,
-                pipeline: preparedVideo.shouldUploadOriginalQuality ? .originalQualityVideo : .videoTus,
                 draft: pendingUploadDraft,
                 textOverlays: pendingTextOverlays
             )
+            await StoryUploadFileIO.remove([preparedVideo.url, video.url])
             onPendingUploadStarted(pendingUpload)
             clearUploadedDraft()
 
@@ -402,109 +393,12 @@ final class StoryComposerStore: ObservableObject {
             attempt.begin(.processing)
             attempt.recordSuccess(processingStatus: response.processingStatus)
             lastUploadReport = attempt.report
-            startOriginalRenditionUploadIfNeeded(
-                preparedVideo: preparedVideo,
-                response: response,
-                api: api
-            )
             return response
         } catch {
             attempt.recordFailure(error)
             lastUploadReport = attempt.report
             throw error
         }
-    }
-
-    private func startOriginalRenditionUploadIfNeeded(
-        preparedVideo: PreparedStoryVideo,
-        response: StoryUploadResponse,
-        api: APIClient
-    ) {
-        guard preparedVideo.shouldAttachOriginalRendition else {
-            return
-        }
-
-        let storyId = response.storyId
-        let originalURL = preparedVideo.inspection.originalURL
-        let originalDurationMs = preparedVideo.inspection.durationMs
-        let fileName = originalURL.lastPathComponent.isEmpty ? "story-video.mov" : originalURL.lastPathComponent
-
-        Task { @MainActor [api] in
-            let startedAt = Date()
-            MediaPerformance.mark("video_original_attach_started storyId=\(storyId)")
-
-            do {
-                let upload = try await api.prepareOriginalQualityVideoUpload(
-                    fileName: fileName,
-                    fileURL: originalURL
-                )
-                _ = try await api.uploadOriginalQualityVideoFile(
-                    fileURL: originalURL,
-                    upload: upload
-                )
-                _ = try await api.attachOriginalQualityVideoRendition(
-                    storyId: storyId,
-                    upload: upload,
-                    fileURL: originalURL,
-                    durationMs: originalDurationMs
-                )
-                api.invalidateStoryStacks(ids: ["my-story", storyId])
-                api.prefetchStoryStacks(ids: ["my-story", storyId], refresh: true, limit: 2)
-                MediaPerformance.measure("video_original_attach_succeeded storyId=\(storyId)", since: startedAt)
-            } catch {
-                let reason = StoryVideoUploadAttempt.sanitizedDiagnostic(error.localizedDescription)
-                MediaPerformance.measure("video_original_attach_failed storyId=\(storyId) reason=\(reason)", since: startedAt)
-            }
-        }
-    }
-
-    private func uploadVideoThumbnailIfPossible(
-        _ data: Data?,
-        upload: VideoUploadResponse,
-        api: APIClient
-    ) async -> Data? {
-        guard let data else {
-            return nil
-        }
-
-        do {
-            try await api.uploadVideoThumbnail(data: data, upload: upload)
-            return data
-        } catch {
-            MediaPerformance.mark("video_thumbnail_upload_failed")
-            return nil
-        }
-    }
-
-    private func videoFileSize(for url: URL) throws -> Int64 {
-        guard let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber,
-              size.int64Value > 0 else {
-            throw APIClientError.invalidResponse
-        }
-
-        return size.int64Value
-    }
-
-    private func videoDurationMs(for url: URL) async -> Int? {
-        let asset = AVURLAsset(url: url)
-        let duration: CMTime?
-
-        if #available(iOS 16.0, *) {
-            duration = try? await asset.load(.duration)
-        } else {
-            duration = asset.duration
-        }
-
-        guard let duration else {
-            return nil
-        }
-
-        let seconds = CMTimeGetSeconds(duration)
-        guard seconds.isFinite, seconds > 0 else {
-            return nil
-        }
-
-        return max(1, Int((seconds * 1_000).rounded()))
     }
 
     private func optionalVideoThumbnailData(
@@ -559,25 +453,6 @@ final class StoryComposerStore: ObservableObject {
 
         guard let data else {
             throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
-        }
-
-        return data
-    }
-
-    private func uploadOriginalQualityVideoThumbnailIfPossible(
-        _ data: Data?,
-        upload: OriginalVideoUploadResponse,
-        api: APIClient
-    ) async -> Data? {
-        guard let data else {
-            return nil
-        }
-
-        do {
-            try await api.uploadOriginalQualityVideoThumbnail(data: data, upload: upload)
-        } catch {
-            MediaPerformance.mark("video_original_thumbnail_upload_failed")
-            return nil
         }
 
         return data
@@ -1386,7 +1261,7 @@ struct StoryComposerView: View {
         case .video(let video):
             StoryVideoPreview(
                 url: video.url,
-                mirrorsHorizontally: video.source == .cameraFront
+                mirrorsHorizontally: false
             )
         case nil:
             if let photo = camera.capturedPhoto {
@@ -1403,7 +1278,7 @@ struct StoryComposerView: View {
             } else if let videoURL = camera.capturedVideoURL {
                 StoryVideoPreview(
                     url: videoURL,
-                    mirrorsHorizontally: camera.capturedVideoCameraPosition == .front
+                    mirrorsHorizontally: false
                 )
                     .onAppear {
                         let source: StoryVideoUpload.Source = camera.capturedVideoCameraPosition == .front ? .cameraFront : .cameraBack

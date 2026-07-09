@@ -130,7 +130,7 @@ describe("direct story image storage verification", () => {
 
     vi.mocked(get).mockResolvedValue({
       statusCode: 200,
-      stream: new Blob([sourceBytes], {
+      stream: new Blob([Uint8Array.from(sourceBytes)], {
         type: "image/jpeg",
       }).stream() as ReadableStream<Uint8Array>,
       headers: new Headers(),
