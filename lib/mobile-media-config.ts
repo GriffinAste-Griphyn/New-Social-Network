@@ -67,10 +67,10 @@ function booleanEnv(name: string, fallback: boolean) {
 }
 
 export function getMobileMediaConfig(input: { clientBuild?: number | null } = {}): RuntimeMediaConfig {
-  const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 254
+  const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 255
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.3",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.4",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
       false,

@@ -225,24 +225,81 @@ final class StoryVideoPlaybackPool: ObservableObject {
         let cacheState: String
     }
 
-    private var preparedPlayers: [URL: PreparedPlayer] = [:]
-    private var prepareTasks: [URL: Task<Void, Never>] = [:]
-    private var desiredURLs = Set<URL>()
-    private var maxPreparedPlayers: Int {
-        min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
+    private struct Preparation {
+        let id: UUID
+        let task: Task<Void, Never>
     }
 
-    func takePreparedPlayer(for url: URL) -> PreparedPlayer? {
-        prepareTasks[url]?.cancel()
-        prepareTasks[url] = nil
+    private var preparedPlayers: [URL: PreparedPlayer] = [:]
+    private var prepareTasks: [URL: Preparation] = [:]
+    private var desiredURLs = Set<URL>()
+    private let playerBuilder: (URL) async -> PreparedPlayer?
+    private let preparedPlayerLimitOverride: Int?
+    private var maxPreparedPlayers: Int {
+        min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
+    }
 
-        guard let prepared = preparedPlayers.removeValue(forKey: url) else {
+    init() {
+        playerBuilder = Self.buildPreparedPlayer
+        preparedPlayerLimitOverride = nil
+    }
+
+    init(
+        maxPreparedPlayers: Int,
+        playerBuilder: @escaping (URL) async -> PreparedPlayer?
+    ) {
+        self.playerBuilder = playerBuilder
+        preparedPlayerLimitOverride = max(0, maxPreparedPlayers)
+    }
+
+    func takePreparedPlayer(
+        for url: URL,
+        waitUpTo waitDuration: Duration = .milliseconds(180)
+    ) async -> PreparedPlayer? {
+        let waitStartedAt = Date()
+
+        if let prepared = await checkOutPreparedPlayer(for: url) {
+            logPoolWait(result: "hit", url: url, startedAt: waitStartedAt)
+            return prepared
+        }
+
+        guard let preparation = prepareTasks[url] else {
+            desiredURLs.remove(url)
+            logPoolWait(result: "miss", url: url, startedAt: waitStartedAt)
             return nil
         }
 
-        prepared.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        MediaPerformance.mark("video_player_pool_hit url=\(url.lastPathComponent)")
-        return prepared
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitDuration)
+
+        while clock.now < deadline {
+            guard !Task.isCancelled else {
+                cancelPreparation(preparation, for: url)
+                desiredURLs.remove(url)
+                return nil
+            }
+
+            if let prepared = await checkOutPreparedPlayer(for: url) {
+                logPoolWait(result: "handoff", url: url, startedAt: waitStartedAt)
+                return prepared
+            }
+
+            guard prepareTasks[url]?.id == preparation.id else {
+                break
+            }
+
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        if let prepared = await checkOutPreparedPlayer(for: url) {
+            logPoolWait(result: "handoff", url: url, startedAt: waitStartedAt)
+            return prepared
+        }
+
+        cancelPreparation(preparation, for: url)
+        desiredURLs.remove(url)
+        logPoolWait(result: "timeout", url: url, startedAt: waitStartedAt)
+        return nil
     }
 
     func prepare(urls: [URL], activeURL: URL?) {
@@ -251,24 +308,35 @@ final class StoryVideoPlaybackPool: ObservableObject {
             activeURL: activeURL,
             limit: maxPreparedPlayers
         )
-        desiredURLs = Set(desiredUrls)
+
+        var nextDesiredURLs = Set(desiredUrls)
+        if let activeURL,
+           preparedPlayers[activeURL] != nil || prepareTasks[activeURL] != nil {
+            // Preserve a player that was warmed immediately before navigation long
+            // enough for the active viewer to claim it. It does not consume the
+            // adjacent-player budget and is removed by takePreparedPlayer.
+            nextDesiredURLs.insert(activeURL)
+        }
+
+        desiredURLs = nextDesiredURLs
         prune(keeping: desiredURLs)
 
         for url in desiredUrls where url != activeURL && preparedPlayers[url] == nil && prepareTasks[url] == nil {
-            prepareTasks[url] = Task { @MainActor [weak self] in
+            let preparationID = UUID()
+            let task = Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
 
                 let prepareInterval = MediaPerformance.beginInterval("video_player_prepared url=\(url.lastPathComponent)")
-                guard let prepared = await Self.buildPreparedPlayer(for: url),
+                guard let prepared = await self.playerBuilder(url),
                       !Task.isCancelled else {
                     MediaPerformance.cancelInterval(prepareInterval, reason: "failed_or_cancelled")
-                    self.prepareTasks[url] = nil
+                    self.finishPreparation(id: preparationID, for: url)
                     return
                 }
 
-                self.prepareTasks[url] = nil
+                self.finishPreparation(id: preparationID, for: url)
                 guard self.desiredURLs.contains(url) else {
                     prepared.player.pause()
                     MediaPerformance.cancelInterval(prepareInterval, reason: "no_longer_adjacent")
@@ -283,6 +351,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
                 )
                 self.prune(keeping: self.desiredURLs)
             }
+            prepareTasks[url] = Preparation(id: preparationID, task: task)
         }
     }
 
@@ -294,11 +363,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         var seen = Set<URL>()
         var prioritized: [URL] = []
 
-        if let activeURL, urls.contains(activeURL), seen.insert(activeURL).inserted {
-            prioritized.append(activeURL)
-        }
-
-        for url in urls where seen.insert(url).inserted {
+        for url in urls where url != activeURL && seen.insert(url).inserted {
             prioritized.append(url)
         }
 
@@ -306,8 +371,8 @@ final class StoryVideoPlaybackPool: ObservableObject {
     }
 
     func removeAll() {
-        for task in prepareTasks.values {
-            task.cancel()
+        for preparation in prepareTasks.values {
+            preparation.task.cancel()
         }
         prepareTasks.removeAll()
 
@@ -376,9 +441,70 @@ final class StoryVideoPlaybackPool: ObservableObject {
         item.preferredMaximumResolution = MediaPlaybackQuality.preferredStreamingMaximumResolution
     }
 
+    private func checkOutPreparedPlayer(for url: URL) async -> PreparedPlayer? {
+        guard let prepared = preparedPlayers.removeValue(forKey: url) else {
+            return nil
+        }
+
+        desiredURLs.remove(url)
+        prepared.player.pause()
+        let currentSeconds = prepared.player.currentTime().seconds
+        let didSeek: Bool
+        if !currentSeconds.isFinite || abs(currentSeconds) <= 0.001 {
+            didSeek = true
+        } else {
+            didSeek = await Self.seekToStart(prepared.player)
+        }
+
+        guard didSeek, !Task.isCancelled else {
+            prepared.player.pause()
+            MediaPerformance.mark("video_player_pool_seek_failed url=\(url.lastPathComponent)")
+            return nil
+        }
+
+        MediaPerformance.mark("video_player_pool_hit url=\(url.lastPathComponent)")
+        return prepared
+    }
+
+    private static func seekToStart(_ player: AVPlayer) async -> Bool {
+        await withCheckedContinuation { continuation in
+            player.seek(
+                to: .zero,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            ) { didFinish in
+                continuation.resume(returning: didFinish)
+            }
+        }
+    }
+
+    private func finishPreparation(id: UUID, for url: URL) {
+        guard prepareTasks[url]?.id == id else {
+            return
+        }
+
+        prepareTasks[url] = nil
+    }
+
+    private func cancelPreparation(_ preparation: Preparation, for url: URL) {
+        guard prepareTasks[url]?.id == preparation.id else {
+            return
+        }
+
+        preparation.task.cancel()
+        prepareTasks[url] = nil
+    }
+
+    private func logPoolWait(result: String, url: URL, startedAt: Date) {
+        let waitMilliseconds = Int(max(0, Date().timeIntervalSince(startedAt) * 1_000))
+        MediaPerformance.mark(
+            "video_player_pool_wait result=\(result) wait_ms=\(waitMilliseconds) url=\(url.lastPathComponent)"
+        )
+    }
+
     private func prune(keeping desiredSet: Set<URL>) {
         for url in Array(prepareTasks.keys) where !desiredSet.contains(url) {
-            prepareTasks[url]?.cancel()
+            prepareTasks[url]?.task.cancel()
             prepareTasks[url] = nil
         }
 
@@ -387,13 +513,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
             preparedPlayers[url] = nil
         }
 
-        guard preparedPlayers.count > maxPreparedPlayers else {
-            return
-        }
-
-        for url in Array(preparedPlayers.keys) where preparedPlayers.count > maxPreparedPlayers {
-            preparedPlayers[url]?.player.pause()
-            preparedPlayers[url] = nil
-        }
+        // desiredSet is already bounded to the configured adjacent-player limit,
+        // plus at most one transient active player awaiting handoff.
     }
 }

@@ -1,3 +1,4 @@
+import AVFoundation
 import ImageIO
 import UniformTypeIdentifiers
 import UIKit
@@ -126,7 +127,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testPlayerPoolKeepsActiveURLInsideBoundedPriorityWindow() {
+    func testPlayerPoolUsesLimitForAdjacentURLsInsteadOfActiveURL() {
         let first = URL(string: "https://example.com/first.m3u8")!
         let active = URL(string: "https://example.com/active.m3u8")!
         let third = URL(string: "https://example.com/third.m3u8")!
@@ -138,7 +139,7 @@ final class MediaPerformanceTests: XCTestCase {
             limit: 3
         )
 
-        XCTAssertEqual(prioritized, [active, first, third])
+        XCTAssertEqual(prioritized, [first, third, fourth])
     }
 
     @MainActor
@@ -149,6 +150,53 @@ final class MediaPerformanceTests: XCTestCase {
             StoryVideoPlaybackPool.prioritizedURLs(urls: [url], activeURL: url, limit: 0),
             []
         )
+    }
+
+    @MainActor
+    func testPlayerPoolWaitsForAndHandsOffOwnedPreparation() async {
+        let url = URL(string: "https://example.com/video.m3u8")!
+        let expectedPlayer = AVPlayer()
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { requestedURL in
+            XCTAssertEqual(requestedURL, url)
+            try? await Task.sleep(for: .milliseconds(40))
+            return StoryVideoPlaybackPool.PreparedPlayer(
+                player: expectedPlayer,
+                playbackURL: requestedURL,
+                cacheState: "miss"
+            )
+        }
+
+        pool.prepare(urls: [url], activeURL: nil)
+        let prepared = await pool.takePreparedPlayer(
+            for: url,
+            waitUpTo: .milliseconds(250)
+        )
+
+        XCTAssertTrue(prepared?.player === expectedPlayer)
+        XCTAssertEqual(prepared?.playbackURL, url)
+    }
+
+    @MainActor
+    func testPlayerPoolTimesOutWithoutWaitingIndefinitely() async {
+        let url = URL(string: "https://example.com/slow-video.m3u8")!
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { requestedURL in
+            try? await Task.sleep(for: .seconds(1))
+            return StoryVideoPlaybackPool.PreparedPlayer(
+                player: AVPlayer(),
+                playbackURL: requestedURL,
+                cacheState: "miss"
+            )
+        }
+
+        pool.prepare(urls: [url], activeURL: nil)
+        let startedAt = Date()
+        let prepared = await pool.takePreparedPlayer(
+            for: url,
+            waitUpTo: .milliseconds(30)
+        )
+
+        XCTAssertNil(prepared)
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.5)
     }
 
     private func makeTestImageData(width: Int, height: Int) -> Data {

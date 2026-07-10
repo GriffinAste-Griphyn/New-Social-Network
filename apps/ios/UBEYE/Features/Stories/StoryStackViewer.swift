@@ -295,11 +295,13 @@ struct StoryStackViewer: View {
     @EnvironmentObject private var mediaEngine: MediaEngine
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = StoryStackStore()
     @StateObject private var storyTimerState = StoryTimerState()
     @State private var index = 0
     @State private var timedStoryId: String?
     @State private var videoReadyItemId: String?
+    @State private var pendingFinishedVideoItemId: String?
     @State private var didFinishCurrentItem = false
     @State private var deleteConfirmationItem: StoryStackItem?
     @State private var isDeleteConfirmationPresented = false
@@ -440,6 +442,17 @@ struct StoryStackViewer: View {
             )
             index = min(index, max((store.stack?.items.count ?? 1) - 1, 0))
         }
+        .onChange(of: shouldPauseVideoPlayback) { _, isPaused in
+            guard !isPaused,
+                  let pendingFinishedVideoItemId,
+                  let item = store.stack?.items[safe: index],
+                  item.id == pendingFinishedVideoItemId else {
+                return
+            }
+
+            self.pendingFinishedVideoItemId = nil
+            finishCurrentItem(item)
+        }
         .onChange(of: store.replyConfirmation) { _, confirmation in
             scheduleConfirmationDismiss(for: confirmation)
         }
@@ -502,9 +515,15 @@ struct StoryStackViewer: View {
                     showsThumbnailWhileLoading: true,
                     isPaused: shouldPauseVideoPlayback,
                     onReadyForPlayback: {
-                        guard timedStoryId == item.id, videoReadyItemId != item.id else {
+                        guard store.stack?.items[safe: index]?.id == item.id else {
                             return
                         }
+
+                        startStoryTimerIfNeeded(for: item)
+                        guard videoReadyItemId != item.id else {
+                            return
+                        }
+
                         videoReadyItemId = item.id
                         storyTimerState.resetForPlayerProgress()
                     },
@@ -515,6 +534,7 @@ struct StoryStackViewer: View {
                         finishVideoStory(item)
                     }
                 )
+                .id(item.id)
             } else {
                 CachedAsyncImage(url: item.playbackMediaUrl) { image in
                     image
@@ -1215,6 +1235,7 @@ struct StoryStackViewer: View {
             storyTimerState.reset()
         }
         didFinishCurrentItem = false
+        pendingFinishedVideoItemId = nil
     }
 
     private func updateStoryProgress(now: Date) {
@@ -1261,10 +1282,16 @@ struct StoryStackViewer: View {
     }
 
     private func finishVideoStory(_ item: StoryStackItem) {
-        guard timedStoryId == item.id, !shouldPauseVideoPlayback else {
+        guard timedStoryId == item.id else {
             return
         }
 
+        guard !shouldPauseVideoPlayback else {
+            pendingFinishedVideoItemId = item.id
+            return
+        }
+
+        pendingFinishedVideoItemId = nil
         finishCurrentItem(item)
     }
 
@@ -1355,7 +1382,8 @@ struct StoryStackViewer: View {
     }
 
     private var shouldPauseVideoPlayback: Bool {
-        isReplyFieldFocused ||
+        scenePhase != .active ||
+            isReplyFieldFocused ||
             repliesSheetItem != nil ||
             store.isSendingReply ||
             !store.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2180,9 +2208,15 @@ struct AutoPlayVideoPlayer: View {
 
     var body: some View {
         ZStack {
-            FullBleedVideoPlayer(player: playback.player) { player in
-                playback.revealVideo(player: player, reason: "layer_ready")
-            }
+            FullBleedVideoPlayer(
+                player: playback.player,
+                onPlayerAttached: { player in
+                    playback.playerDidAttach(player)
+                },
+                onReadyForDisplay: { player in
+                    playback.revealVideo(player: player, reason: "layer_ready")
+                }
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showsThumbnailWhileLoading, !playback.isReadyForPlayback, let thumbnailUrl {
@@ -2196,6 +2230,22 @@ struct AutoPlayVideoPlayer: View {
                 }
                 .transition(.opacity)
                 .zIndex(1)
+            }
+
+            if playback.hasTerminalPlaybackFailure {
+                Button {
+                    playback.retry(playerPool: playerPool)
+                } label: {
+                    Label("Retry video", systemImage: "arrow.clockwise")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .background(.black.opacity(0.72), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Attempts to load this video again")
+                .zIndex(2)
             }
         }
         .animation(.easeOut(duration: 0.12), value: playback.isReadyForPlayback)
@@ -2238,8 +2288,20 @@ struct AutoPlayVideoPlayer: View {
 
 @MainActor
 private final class AutoPlayVideoPlaybackController: ObservableObject {
+    private enum PlaybackPhase: Equatable {
+        case idle
+        case resolving
+        case awaitingAttachment
+        case positioning
+        case awaitingFirstFrame
+        case rewindingForReveal
+        case visible
+        case finished
+    }
+
     @Published private(set) var player: AVPlayer?
     @Published private(set) var isReadyForPlayback = false
+    @Published private(set) var hasTerminalPlaybackFailure = false
 
     private var activeURL: URL?
     private var activePlaybackURL: URL?
@@ -2254,6 +2316,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private weak var timeObserverPlayer: AVPlayer?
     private var playTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
+    private var seekTask: Task<Void, Never>?
     private var stallRecoveryTask: Task<Void, Never>?
     private var playbackStartedAt: Date?
     private var startupInterval: MediaPerformance.Interval?
@@ -2264,6 +2327,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var playbackRetryCount = 0
     private var layerReadyForDisplay = false
     private var didUploadAccessLog = false
+    private var playbackPhase = PlaybackPhase.idle
+    private var playbackGeneration = 0
+    private var revealTargetSeconds: TimeInterval = 0
     private let maxPlaybackRetries = 2
 
     func play(
@@ -2279,17 +2345,23 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         self.onProgress = onProgress
         self.onFinished = onFinished
         self.isPaused = isPaused
-        expectedDurationSeconds = expectedDuration.map { max(0.001, $0) }
+        let nextExpectedDurationSeconds = expectedDuration.map { max(0.001, $0) }
 
-        if activeURL == url, player != nil {
+        if let activeURL,
+           player != nil,
+           Self.hasSameMediaIdentity(activeURL, url) {
+            self.activeURL = url
+            expectedDurationSeconds = nextExpectedDurationSeconds
             setPaused(isPaused)
             return
         }
 
         cleanupCurrentPlayer(reason: activeURL == nil ? nil : "replace")
         activeURL = url
+        expectedDurationSeconds = nextExpectedDurationSeconds
         playbackRetryCount = 0
         isReadyForPlayback = false
+        hasTerminalPlaybackFailure = false
         layerReadyForDisplay = false
         didFinishPlayback = false
         didUploadAccessLog = false
@@ -2305,6 +2377,14 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playTask?.cancel()
         revealTask?.cancel()
         revealTask = nil
+        seekTask?.cancel()
+        seekTask = nil
+        playbackGeneration += 1
+        let generation = playbackGeneration
+        playbackPhase = .resolving
+        revealTargetSeconds = resumeTimeSeconds.flatMap { value in
+            value.isFinite ? max(0, value) : nil
+        } ?? 0
         playTask = Task { @MainActor in
             let startedAt = Date()
             playbackStartedAt = startedAt
@@ -2312,8 +2392,15 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             self.startupInterval = startupInterval
             startupMetadata = "url=\(url.lastPathComponent)"
             let selected = MediaPlaybackQuality.preferredPlaybackURL(defaultURL: url)
-            let prepared = playerPool?.takePreparedPlayer(for: selected.url)
+            let prepared = await playerPool?.takePreparedPlayer(for: selected.url)
             let resolved = prepared == nil ? await resolvePlaybackURL(for: selected.url) : nil
+
+            guard self.isCurrentPlayback(generation: generation, url: url),
+                  !Task.isCancelled else {
+                prepared?.player.pause()
+                return
+            }
+
             let playbackURL = prepared?.playbackURL ?? resolved?.playbackURL ?? selected.url
             activePlaybackURL = playbackURL
             let delivery = playbackDelivery(for: selected.url)
@@ -2326,50 +2413,118 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 MediaPerformance.mark("video_disk_cache_hit state=\(cacheState) quality=\(selected.quality) url=\(selected.url.lastPathComponent)")
             }
 
-            guard !Task.isCancelled else {
-                return
-            }
-
             player?.pause()
             let next = prepared?.player ?? makeFreshPlayer(playbackURL: playbackURL)
+            next.pause()
+            next.isMuted = true
             player = next
-            observeReadiness(player: next, url: selected.url, startedAt: startedAt)
-            observeStalls(player: next, url: selected.url)
-            observeFailures(player: next, url: selected.url)
-            observeCompletion(player: next, url: selected.url)
-            observeProgress(player: next)
-            AppAudioSession.configureForVideoPlayback()
-            startOrResume(player: next, at: resumeTimeSeconds)
+            playbackPhase = .awaitingAttachment
+            observeReadiness(
+                player: next,
+                url: selected.url,
+                startedAt: startedAt,
+                generation: generation,
+                source: playerSource
+            )
+            observeStalls(player: next, url: selected.url, generation: generation)
+            observeFailures(player: next, url: selected.url, generation: generation)
+            observeCompletion(player: next, url: selected.url, generation: generation)
+            observeProgress(player: next, generation: generation)
         }
     }
 
-    private func startOrResume(player: AVPlayer, at resumeTimeSeconds: TimeInterval?) {
-        guard let resumeTimeSeconds,
-              resumeTimeSeconds.isFinite,
-              resumeTimeSeconds > 0.05 else {
-            if isPaused {
-                player.pause()
-            } else {
-                player.play()
+    func playerDidAttach(_ attachedPlayer: AVPlayer) {
+        guard player === attachedPlayer,
+              playbackPhase == .awaitingAttachment else {
+            return
+        }
+
+        let generation = playbackGeneration
+        AppAudioSession.configureForVideoPlayback()
+
+        guard revealTargetSeconds > 0.05 else {
+            playbackPhase = .awaitingFirstFrame
+            updatePlaybackState(for: attachedPlayer)
+            if layerReadyForDisplay {
+                attemptRevealVideo(reason: "attached_after_layer")
             }
             return
         }
 
-        player.pause()
-        let resumeTime = CMTime(seconds: resumeTimeSeconds, preferredTimescale: 600)
-        player.seek(to: resumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
-            Task { @MainActor in
-                guard let self, let player, self.player === player else {
-                    return
-                }
-
-                MediaPerformance.mark("video_recovered reason=retry_resume position_ms=\(Int(resumeTimeSeconds * 1_000))")
-                if self.isPaused {
-                    player.pause()
-                } else if !self.didFinishPlayback {
-                    player.play()
-                }
+        playbackPhase = .positioning
+        let targetSeconds = revealTargetSeconds
+        attachedPlayer.pause()
+        seekTask?.cancel()
+        seekTask = Task { @MainActor [weak self, weak attachedPlayer] in
+            guard let self, let attachedPlayer else {
+                return
             }
+
+            let didSeek = await Self.seek(
+                player: attachedPlayer,
+                to: targetSeconds
+            )
+            guard didSeek,
+                  !Task.isCancelled,
+                  self.isCurrentPlayer(attachedPlayer, generation: generation) else {
+                if self.isCurrentPlayer(attachedPlayer, generation: generation),
+                   let activeURL = self.activeURL {
+                    self.recoverOrFail(
+                        player: attachedPlayer,
+                        url: activeURL,
+                        reason: "resume_seek_failed"
+                    )
+                }
+                return
+            }
+
+            self.seekTask = nil
+            self.playbackPhase = .awaitingFirstFrame
+            MediaPerformance.mark(
+                "video_recovered reason=retry_resume position_ms=\(Int(targetSeconds * 1_000))"
+            )
+            self.updatePlaybackState(for: attachedPlayer)
+            if self.layerReadyForDisplay {
+                self.attemptRevealVideo(reason: "resume_positioned")
+            }
+        }
+    }
+
+    func retry(playerPool: StoryVideoPlaybackPool?) {
+        guard let activeURL else {
+            return
+        }
+
+        let expectedDuration = expectedDurationSeconds
+        cleanupCurrentPlayer(reason: nil)
+        self.activeURL = activeURL
+        expectedDurationSeconds = expectedDuration
+        playbackRetryCount = 0
+        hasTerminalPlaybackFailure = false
+        didFinishPlayback = false
+        lastPublishedProgress = 0
+        startPlayback(url: activeURL, playerPool: playerPool)
+    }
+
+    private func updatePlaybackState(for player: AVPlayer) {
+        guard self.player === player else {
+            return
+        }
+
+        guard !isPaused, !didFinishPlayback else {
+            player.pause()
+            return
+        }
+
+        switch playbackPhase {
+        case .awaitingFirstFrame:
+            player.isMuted = true
+            player.play()
+        case .visible:
+            player.isMuted = false
+            player.play()
+        default:
+            player.pause()
         }
     }
 
@@ -2426,11 +2581,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
-        if isPaused {
-            player.pause()
-        } else if !didFinishPlayback {
-            player.play()
-        }
+        updatePlaybackState(for: player)
     }
 
     func stop(reason: String) {
@@ -2438,13 +2589,26 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         activeURL = nil
     }
 
-    private func observeReadiness(player: AVPlayer, url: URL, startedAt: Date) {
+    private func observeReadiness(
+        player: AVPlayer,
+        url: URL,
+        startedAt: Date,
+        generation: Int,
+        source: String
+    ) {
         revealTask?.cancel()
         revealTask = Task { @MainActor in
             var didLogItemReady = false
+            var elapsedUnpausedSeconds: TimeInterval = 0
+            let timeoutSeconds: TimeInterval = 4
 
-            for _ in 0..<300 {
-                guard self.player === player else {
+            while elapsedUnpausedSeconds < timeoutSeconds {
+                guard self.isCurrentPlayer(player, generation: generation),
+                      !Task.isCancelled else {
+                    return
+                }
+
+                if self.isReadyForPlayback {
                     return
                 }
 
@@ -2459,28 +2623,50 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                     return
                 }
 
+                if !self.isPaused, self.playbackPhase == .awaitingFirstFrame {
+                    elapsedUnpausedSeconds += 0.05
+                }
                 try? await Task.sleep(for: .milliseconds(50))
             }
 
-            guard self.player === player, !isReadyForPlayback else {
+            guard self.isCurrentPlayer(player, generation: generation),
+                  !Task.isCancelled,
+                  !isReadyForPlayback else {
                 return
             }
 
-            retryPlaybackIfPossible(player: player, url: url, reason: "readiness_timeout")
+            recoverOrFail(
+                player: player,
+                url: url,
+                reason: "first_frame_timeout_\(source)"
+            )
         }
     }
 
     func revealVideo(player: AVPlayer, reason: String) {
-        guard self.player === player else {
+        guard self.player === player,
+              !isReadyForPlayback else {
             return
         }
 
         layerReadyForDisplay = true
+
+        guard playbackPhase != .awaitingAttachment,
+              playbackPhase != .positioning else {
+            return
+        }
+
         attemptRevealVideo(reason: reason)
+        if !isReadyForPlayback, playbackPhase == .awaitingFirstFrame {
+            updatePlaybackState(for: player)
+        }
     }
 
     private func attemptRevealVideo(reason: String) {
-        guard !isReadyForPlayback, layerReadyForDisplay else {
+        guard !isReadyForPlayback,
+              playbackPhase == .awaitingFirstFrame,
+              layerReadyForDisplay,
+              let player else {
             return
         }
 
@@ -2488,23 +2674,91 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
+        let generation = playbackGeneration
+        let currentSeconds = player.currentTime().seconds
+        let finiteCurrentSeconds = currentSeconds.isFinite ? max(0, currentSeconds) : revealTargetSeconds
+        let hiddenAdvanceSeconds = abs(finiteCurrentSeconds - revealTargetSeconds)
+
+        guard hiddenAdvanceSeconds > 0.08 else {
+            completeReveal(
+                player: player,
+                generation: generation,
+                reason: reason,
+                hiddenAdvanceSeconds: hiddenAdvanceSeconds
+            )
+            return
+        }
+
+        playbackPhase = .rewindingForReveal
+        player.pause()
+        let targetSeconds = revealTargetSeconds
+        seekTask?.cancel()
+        seekTask = Task { @MainActor [weak self, weak player] in
+            guard let self, let player else {
+                return
+            }
+
+            let didSeek = await Self.seek(player: player, to: targetSeconds)
+            guard didSeek,
+                  !Task.isCancelled,
+                  self.isCurrentPlayer(player, generation: generation) else {
+                if self.isCurrentPlayer(player, generation: generation),
+                   let activeURL = self.activeURL {
+                    self.recoverOrFail(
+                        player: player,
+                        url: activeURL,
+                        reason: "first_frame_seek_failed"
+                    )
+                }
+                return
+            }
+
+            self.seekTask = nil
+            self.completeReveal(
+                player: player,
+                generation: generation,
+                reason: "\(reason)_rewound",
+                hiddenAdvanceSeconds: hiddenAdvanceSeconds
+            )
+        }
+    }
+
+    private func completeReveal(
+        player: AVPlayer,
+        generation: Int,
+        reason: String,
+        hiddenAdvanceSeconds: TimeInterval
+    ) {
+        guard isCurrentPlayer(player, generation: generation),
+              !isReadyForPlayback else {
+            return
+        }
+
         let startedAt = playbackStartedAt ?? Date()
+        playbackPhase = .visible
         isReadyForPlayback = true
         MediaPlaybackQuality.relaxStreamingHints(
-            for: player?.currentItem,
+            for: player.currentItem,
             playbackURL: activePlaybackURL
         )
         onReadyForPlayback()
         let metadata = startupMetadata.isEmpty
             ? "url=\(activeURL?.lastPathComponent ?? "unknown")"
             : startupMetadata
-        let firstFrameEvent = "video_first_frame reason=\(reason) \(metadata)"
+        let displayedSeconds = player.currentTime().seconds
+        let finiteDisplayedSeconds = displayedSeconds.isFinite
+            ? max(0, displayedSeconds)
+            : revealTargetSeconds
+        let positionMilliseconds = Int(finiteDisplayedSeconds * 1_000)
+        let hiddenMilliseconds = Int(max(0, hiddenAdvanceSeconds) * 1_000)
+        let firstFrameEvent = "video_first_frame reason=\(reason) position_ms=\(positionMilliseconds) hidden_ms=\(hiddenMilliseconds) \(metadata)"
         if let startupInterval {
             MediaPerformance.endInterval(startupInterval, event: firstFrameEvent)
             self.startupInterval = nil
         } else {
             MediaPerformance.measure(firstFrameEvent, since: startedAt)
         }
+        updatePlaybackState(for: player)
     }
 
     private var isPlayerReadyToReveal: Bool {
@@ -2520,16 +2774,27 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return true
         }
 
-        let loadedDuration = item.loadedTimeRanges
-            .map(\.timeRangeValue)
-            .map { $0.start.seconds + $0.duration.seconds }
-            .filter { $0.isFinite }
-            .max() ?? 0
         let currentTime = player?.currentTime().seconds ?? 0
-        return loadedDuration - currentTime >= 0.2
+        let bufferedAhead = item.loadedTimeRanges
+            .map(\.timeRangeValue)
+            .compactMap { range -> TimeInterval? in
+                let start = range.start.seconds
+                let end = start + range.duration.seconds
+                guard start.isFinite,
+                      end.isFinite,
+                      currentTime.isFinite,
+                      currentTime + 0.05 >= start,
+                      currentTime <= end else {
+                    return nil
+                }
+
+                return max(0, end - currentTime)
+            }
+            .max() ?? 0
+        return bufferedAhead >= 0.75
     }
 
-    private func observeStalls(player: AVPlayer, url: URL) {
+    private func observeStalls(player: AVPlayer, url: URL, generation: Int) {
         if let stallObserver {
             NotificationCenter.default.removeObserver(stallObserver)
         }
@@ -2540,35 +2805,41 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             queue: .main
         ) { [weak self, weak player] _ in
             Task { @MainActor in
-                guard let self, let player, self.player === player else {
+                guard let self,
+                      let player,
+                      self.isCurrentPlayer(player, generation: generation) else {
                     return
                 }
 
                 let phase = self.isReadyForPlayback ? "playing" : "startup"
                 MediaPerformance.mark("video_stalled phase=\(phase) url=\(url.lastPathComponent)")
-                if self.isReadyForPlayback {
-                    self.monitorStallRecovery(player: player, url: url)
-                } else {
-                    self.retryPlaybackIfPossible(player: player, url: url, reason: "stalled_before_ready")
-                }
+                self.monitorStallRecovery(
+                    player: player,
+                    url: url,
+                    generation: generation
+                )
             }
         }
     }
 
-    private func monitorStallRecovery(player: AVPlayer, url: URL) {
+    private func monitorStallRecovery(player: AVPlayer, url: URL, generation: Int) {
         stallRecoveryTask?.cancel()
         stallRecoveryTask = Task { @MainActor in
             let stalledAt = Date()
             let stalledTime = player.currentTime().seconds
+            var recoveryChecks = 0
 
-            for _ in 0..<50 {
-                guard self.player === player, !Task.isCancelled else {
+            while recoveryChecks < 70 {
+                guard self.isCurrentPlayer(player, generation: generation),
+                      !Task.isCancelled else {
                     return
                 }
 
-                guard !self.isPaused else {
-                    return
+                if self.isPaused {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    continue
                 }
+                recoveryChecks += 1
 
                 let currentTime = player.currentTime().seconds
                 let playbackAdvanced = stalledTime.isFinite &&
@@ -2579,8 +2850,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                         "video_recovered reason=stall url=\(url.lastPathComponent)",
                         since: stalledAt
                     )
-                    if !self.isPaused, !self.didFinishPlayback {
-                        player.play()
+                    if self.isReadyForPlayback {
+                        self.updatePlaybackState(for: player)
+                    } else {
+                        self.attemptRevealVideo(reason: "stall_recovered")
+                        self.updatePlaybackState(for: player)
                     }
                     return
                 }
@@ -2588,16 +2862,17 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(50))
             }
 
-            guard self.player === player, !Task.isCancelled else {
+            guard self.isCurrentPlayer(player, generation: generation),
+                  !Task.isCancelled else {
                 return
             }
 
             logPlaybackFailure(player: player, url: url, reason: "stall_recovery_timeout")
-            retryPlaybackIfPossible(player: player, url: url, reason: "stall_recovery_timeout")
+            recoverOrFail(player: player, url: url, reason: "stall_recovery_timeout")
         }
     }
 
-    private func observeFailures(player: AVPlayer, url: URL) {
+    private func observeFailures(player: AVPlayer, url: URL, generation: Int) {
         if let playbackFailureObserver {
             NotificationCenter.default.removeObserver(playbackFailureObserver)
         }
@@ -2608,7 +2883,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             queue: .main
         ) { [weak self, weak player] notification in
             Task { @MainActor in
-                guard let self, self.player === player, let player else {
+                guard let self,
+                      let player,
+                      self.isCurrentPlayer(player, generation: generation) else {
                     return
                 }
 
@@ -2618,7 +2895,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
     }
 
-    private func observeCompletion(player: AVPlayer, url: URL) {
+    private func observeCompletion(player: AVPlayer, url: URL, generation: Int) {
         if let playbackEndObserver {
             NotificationCenter.default.removeObserver(playbackEndObserver)
         }
@@ -2629,23 +2906,27 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             queue: .main
         ) { [weak self, weak player] _ in
             Task { @MainActor in
-                guard let self, self.player === player else {
+                guard let self,
+                      let player,
+                      self.isCurrentPlayer(player, generation: generation) else {
                     return
                 }
 
-                self.finishPlayback(url: url)
+                self.finishPlayback(player: player, url: url)
             }
         }
     }
 
-    private func observeProgress(player: AVPlayer) {
+    private func observeProgress(player: AVPlayer, generation: Int) {
         removeTimeObserver()
 
         let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
         timeObserverPlayer = player
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
             Task { @MainActor in
-                guard let self, self.player === player, let player else {
+                guard let self,
+                      let player,
+                      self.isCurrentPlayer(player, generation: generation) else {
                     return
                 }
 
@@ -2655,7 +2936,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     private func publishProgress(currentTime: CMTime, player: AVPlayer) {
-        guard !didFinishPlayback,
+        guard isReadyForPlayback,
+              playbackPhase == .visible,
+              !didFinishPlayback,
               let durationSeconds = finiteSeconds(player.currentItem?.duration) ?? expectedDurationSeconds,
               durationSeconds > 0 else {
             return
@@ -2671,13 +2954,26 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         onProgress(progress)
     }
 
-    private func finishPlayback(url: URL) {
+    private func finishPlayback(player: AVPlayer, url: URL) {
         guard !didFinishPlayback else {
             return
         }
 
+        guard isReadyForPlayback, playbackPhase == .visible else {
+            player.pause()
+            MediaPerformance.mark(
+                "video_ended_before_first_frame attempt=\(playbackRetryCount) url=\(url.lastPathComponent)"
+            )
+            recoverOrFail(
+                player: player,
+                url: url,
+                reason: "ended_before_first_frame"
+            )
+            return
+        }
+
         didFinishPlayback = true
-        isReadyForPlayback = true
+        playbackPhase = .finished
         lastPublishedProgress = 1
         onProgress(1)
         MediaPerformance.mark("video_ended url=\(url.lastPathComponent)")
@@ -2686,15 +2982,50 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
     private func handlePlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
         logPlaybackFailure(player: player, url: url, reason: reason, error: error)
-        retryPlaybackIfPossible(player: player, url: url, reason: reason)
+        recoverOrFail(player: player, url: url, reason: reason)
     }
 
-    private func retryPlaybackIfPossible(player: AVPlayer, url: URL, reason: String) {
+    private func recoverOrFail(player: AVPlayer, url: URL, reason: String) {
+        guard !retryPlaybackIfPossible(player: player, url: url, reason: reason) else {
+            return
+        }
+
+        markTerminalPlaybackFailure(player: player, url: url, reason: reason)
+    }
+
+    private func markTerminalPlaybackFailure(player: AVPlayer, url: URL, reason: String) {
+        guard self.player === player else {
+            return
+        }
+
+        player.pause()
+        player.isMuted = true
+        revealTask?.cancel()
+        revealTask = nil
+        seekTask?.cancel()
+        seekTask = nil
+        stallRecoveryTask?.cancel()
+        stallRecoveryTask = nil
+        didFinishPlayback = true
+        playbackPhase = .idle
+        isReadyForPlayback = false
+        hasTerminalPlaybackFailure = true
+        if let startupInterval {
+            MediaPerformance.cancelInterval(startupInterval, reason: "terminal_\(reason)")
+            self.startupInterval = nil
+        }
+        MediaPerformance.mark(
+            "video_terminal_failure reason=\(reason) attempts=\(playbackRetryCount) url=\(url.lastPathComponent)"
+        )
+    }
+
+    @discardableResult
+    private func retryPlaybackIfPossible(player: AVPlayer, url: URL, reason: String) -> Bool {
         guard self.player === player,
               !didFinishPlayback,
               let retryURL = activeURL,
               playbackRetryCount < maxPlaybackRetries else {
-            return
+            return false
         }
 
         let resumeTimeSeconds = isReadyForPlayback ? player.currentTime().seconds : nil
@@ -2707,6 +3038,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         activeURL = retryURL
         expectedDurationSeconds = expectedDuration
         isReadyForPlayback = false
+        hasTerminalPlaybackFailure = false
         layerReadyForDisplay = false
         didFinishPlayback = false
         lastPublishedProgress = publishedProgress
@@ -2715,6 +3047,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             playerPool: nil,
             resumeTimeSeconds: resumeTimeSeconds
         )
+        return true
     }
 
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
@@ -2773,10 +3106,13 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     private func cleanupCurrentPlayer(reason: String?) {
+        playbackGeneration += 1
         playTask?.cancel()
         playTask = nil
         revealTask?.cancel()
         revealTask = nil
+        seekTask?.cancel()
+        seekTask = nil
         stallRecoveryTask?.cancel()
         stallRecoveryTask = nil
 
@@ -2806,8 +3142,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         player?.pause()
+        player?.currentItem?.cancelPendingSeeks()
         player = nil
         isReadyForPlayback = false
+        hasTerminalPlaybackFailure = false
         layerReadyForDisplay = false
         didFinishPlayback = false
         lastPublishedProgress = 0
@@ -2815,6 +3153,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         activePlaybackURL = nil
         expectedDurationSeconds = nil
         startupMetadata = ""
+        playbackPhase = .idle
+        revealTargetSeconds = 0
     }
 
     private func removeTimeObserver() {
@@ -2823,6 +3163,54 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
         timeObserver = nil
         timeObserverPlayer = nil
+    }
+
+    private func isCurrentPlayback(generation: Int, url: URL) -> Bool {
+        guard playbackGeneration == generation,
+              let activeURL else {
+            return false
+        }
+
+        return Self.hasSameMediaIdentity(activeURL, url)
+    }
+
+    private func isCurrentPlayer(_ player: AVPlayer, generation: Int) -> Bool {
+        playbackGeneration == generation && self.player === player
+    }
+
+    private static func hasSameMediaIdentity(_ first: URL, _ second: URL) -> Bool {
+        if first == second {
+            return true
+        }
+
+        if first.isFileURL || second.isFileURL {
+            return first.standardizedFileURL == second.standardizedFileURL
+        }
+
+        var firstComponents = URLComponents(url: first, resolvingAgainstBaseURL: false)
+        var secondComponents = URLComponents(url: second, resolvingAgainstBaseURL: false)
+        firstComponents?.query = nil
+        firstComponents?.fragment = nil
+        secondComponents?.query = nil
+        secondComponents?.fragment = nil
+        return firstComponents?.url == secondComponents?.url
+    }
+
+    private static func seek(player: AVPlayer, to seconds: TimeInterval) async -> Bool {
+        let target = CMTime(
+            seconds: max(0, seconds),
+            preferredTimescale: 600
+        )
+
+        return await withCheckedContinuation { continuation in
+            player.seek(
+                to: target,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            ) { didFinish in
+                continuation.resume(returning: didFinish)
+            }
+        }
     }
 
     private func finiteSeconds(_ time: CMTime?) -> Double? {
@@ -2841,6 +3229,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
 private struct FullBleedVideoPlayer: UIViewRepresentable {
     let player: AVPlayer?
+    let onPlayerAttached: (AVPlayer) -> Void
     let onReadyForDisplay: (AVPlayer) -> Void
 
     func makeUIView(context: Context) -> FullBleedPlayerView {
@@ -2856,6 +3245,7 @@ private struct FullBleedVideoPlayer: UIViewRepresentable {
         context.coordinator.observeReadyForDisplay(
             playerLayer: view.playerLayer,
             player: player,
+            onPlayerAttached: onPlayerAttached,
             onReadyForDisplay: onReadyForDisplay
         )
     }
@@ -2867,27 +3257,40 @@ private struct FullBleedVideoPlayer: UIViewRepresentable {
 
     final class Coordinator {
         private var observation: NSKeyValueObservation?
+        private weak var observedLayer: AVPlayerLayer?
+        private weak var observedPlayer: AVPlayer?
 
         func observeReadyForDisplay(
             playerLayer: AVPlayerLayer,
             player: AVPlayer?,
+            onPlayerAttached: @escaping (AVPlayer) -> Void,
             onReadyForDisplay: @escaping (AVPlayer) -> Void
         ) {
-            observation?.invalidate()
-
             guard let player else {
-                observation = nil
+                stopObserving()
                 return
             }
 
-            if playerLayer.player === player, playerLayer.isReadyForDisplay {
-                onReadyForDisplay(player)
+            if observedLayer === playerLayer, observedPlayer === player {
+                Task { @MainActor in
+                    guard playerLayer.player === player else {
+                        return
+                    }
+
+                    onPlayerAttached(player)
+                    if playerLayer.isReadyForDisplay {
+                        onReadyForDisplay(player)
+                    }
+                }
                 return
             }
 
+            stopObserving()
+            observedLayer = playerLayer
+            observedPlayer = player
             observation = playerLayer.observe(
                 \.isReadyForDisplay,
-                options: [.new]
+                options: [.initial, .new]
             ) { layer, _ in
                 guard layer.player === player, layer.isReadyForDisplay else {
                     return
@@ -2897,11 +3300,24 @@ private struct FullBleedVideoPlayer: UIViewRepresentable {
                     onReadyForDisplay(player)
                 }
             }
+
+            Task { @MainActor in
+                guard playerLayer.player === player else {
+                    return
+                }
+
+                onPlayerAttached(player)
+                if playerLayer.isReadyForDisplay {
+                    onReadyForDisplay(player)
+                }
+            }
         }
 
         func stopObserving() {
             observation?.invalidate()
             observation = nil
+            observedLayer = nil
+            observedPlayer = nil
         }
     }
 }

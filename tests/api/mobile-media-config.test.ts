@@ -33,7 +33,7 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-07-10.3",
+      version: "2026-07-10.4",
       imageDerivativeUploadEnabled: false,
       imagePreheatLimit: { constrained: 1, standard: 2 },
       stackPreheatLimit: { constrained: 1, standard: 2 },
@@ -71,6 +71,9 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 0, standard: 0 },
     })
     expect(getMobileMediaConfig({ clientBuild: 254 })).toMatchObject({
+      preparedPlayerLimit: { constrained: 0, standard: 0 },
+    })
+    expect(getMobileMediaConfig({ clientBuild: 255 })).toMatchObject({
       preparedPlayerLimit: { constrained: 0, standard: 1 },
     })
   })
