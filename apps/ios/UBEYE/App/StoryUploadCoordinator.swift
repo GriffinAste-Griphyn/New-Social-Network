@@ -204,6 +204,7 @@ private struct UploadedImageDerivativeSet {
     let display: PreparedImageDerivativeUpload
     let thumbnail: PreparedImageDerivativeUpload
     let placeholder: PreparedImageDerivativeUpload
+    let local: LocalImageDerivativeSet
 }
 
 enum StoryUploadFileIO {
@@ -261,6 +262,16 @@ enum StoryUploadFileIO {
         }.value
     }
 
+    static func write(_ data: Data, to url: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+        }.value
+    }
+
     static func remove(_ urls: Set<URL>) async {
         await Task.detached(priority: .utility) {
             for url in urls {
@@ -273,54 +284,61 @@ enum StoryUploadFileIO {
 private enum StoryImageDerivativeBuilder {
     static func build(fileURL: URL) async throws -> LocalImageDerivativeSet {
         try await Task.detached(priority: .userInitiated) {
-            guard let image = UIImage(contentsOfFile: fileURL.path) else {
-                throw APIClientError.invalidResponse
+            let display = try autoreleasepool {
+                try encode(fileURL: fileURL, maxPixelDimension: 1_920, quality: 0.88)
+            }
+            let thumbnail = try autoreleasepool {
+                try encode(data: display.data, maxPixelDimension: 720, quality: 0.82)
+            }
+            let placeholder = try autoreleasepool {
+                try encode(data: thumbnail.data, maxPixelDimension: 64, quality: 0.55)
             }
 
             return LocalImageDerivativeSet(
-                display: try encode(image, maxSize: CGSize(width: 1080, height: 1920), quality: 0.88),
-                thumbnail: try encode(image, maxSize: CGSize(width: 720, height: 1280), quality: 0.84),
-                placeholder: try encode(image, maxSize: CGSize(width: 36, height: 64), quality: 0.55)
+                display: display,
+                thumbnail: thumbnail,
+                placeholder: placeholder
             )
         }.value
     }
 
-    private static func encode(_ image: UIImage, maxSize: CGSize, quality: CGFloat) throws -> LocalImageDerivative {
-        let fittedSize = aspectFitSize(
-            source: CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale),
-            maxSize: maxSize
-        )
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-
-        let renderer = UIGraphicsImageRenderer(size: fittedSize, format: format)
-        let rendered = renderer.image { context in
-            UIColor.black.setFill()
-            context.fill(CGRect(origin: .zero, size: fittedSize))
-            image.draw(in: CGRect(origin: .zero, size: fittedSize))
-        }
-
-        guard let data = rendered.jpegData(compressionQuality: quality) else {
+    private static func encode(
+        fileURL: URL,
+        maxPixelDimension: Int,
+        quality: CGFloat
+    ) throws -> LocalImageDerivative {
+        guard let encoded = StoryImageTranscoder.jpegDerivative(
+            fileURL: fileURL,
+            maxPixelDimension: maxPixelDimension,
+            quality: quality
+        ) else {
             throw APIClientError.invalidResponse
         }
 
         return LocalImageDerivative(
-            data: data,
-            width: max(1, Int(fittedSize.width.rounded())),
-            height: max(1, Int(fittedSize.height.rounded()))
+            data: encoded.data,
+            width: encoded.width,
+            height: encoded.height
         )
     }
 
-    private static func aspectFitSize(source: CGSize, maxSize: CGSize) -> CGSize {
-        guard source.width > 0, source.height > 0 else {
-            return maxSize
+    private static func encode(
+        data: Data,
+        maxPixelDimension: Int,
+        quality: CGFloat
+    ) throws -> LocalImageDerivative {
+        guard let encoded = StoryImageTranscoder.jpegDerivative(
+            data: data,
+            maxPixelDimension: maxPixelDimension,
+            quality: quality
+        ) else {
+            throw APIClientError.invalidResponse
         }
 
-        let scale = min(maxSize.width / source.width, maxSize.height / source.height, 1)
-        return CGSize(
-            width: max(1, floor(source.width * scale)),
-            height: max(1, floor(source.height * scale))
+        return LocalImageDerivative(
+            data: encoded.data,
+            width: encoded.width,
+            height: encoded.height
         )
     }
 }
@@ -636,6 +654,9 @@ final class PendingStoryUploadStore: ObservableObject {
             quoteReplyPositionX: upload.draft.quoteReplyPositionX,
             quoteReplyPositionY: upload.draft.quoteReplyPositionY
         )
+        if let derivatives {
+            await cacheUploadedImageDerivatives(derivatives, response: response)
+        }
         update(id: upload.id, state: .completing, progress: 1)
         return response
     }
@@ -661,7 +682,8 @@ final class PendingStoryUploadStore: ObservableObject {
             let uploaded = UploadedImageDerivativeSet(
                 display: localDerivatives.display.metadata(pathname: displayPart.pathname),
                 thumbnail: localDerivatives.thumbnail.metadata(pathname: thumbnailPart.pathname),
-                placeholder: localDerivatives.placeholder.metadata(pathname: placeholderPart.pathname)
+                placeholder: localDerivatives.placeholder.metadata(pathname: placeholderPart.pathname),
+                local: localDerivatives
             )
             MediaPerformance.mark(
                 "image_derivatives_prepared displayBytes=\(uploaded.display.byteSize) thumbBytes=\(uploaded.thumbnail.byteSize) placeholderBytes=\(uploaded.placeholder.byteSize)"
@@ -809,11 +831,17 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     private func cacheUploadedMedia(_ upload: PendingStoryUpload, response: StoryUploadResponse) async {
+        guard upload.assetKind == .video else {
+            // Image playback URLs point at generated or uploaded derivatives. The raw
+            // original is not byte-equivalent and must never be cached under those keys.
+            return
+        }
+
         let mediaUrl = response.asset.renditions?.playback.mediaUrl ?? response.asset.mediaUrl
         await MediaFileDiskCache.shared.storeLocalFile(
             sourceURL: upload.mediaFileURL,
             for: mediaUrl,
-            kind: upload.assetKind == .video ? .video : .image
+            kind: .video
         )
 
         guard let thumbnailUrl = response.asset.renditions?.playback.thumbnailUrl ?? response.asset.thumbnailUrl,
@@ -826,6 +854,39 @@ final class PendingStoryUploadStore: ObservableObject {
             for: thumbnailUrl,
             kind: .image
         )
+    }
+
+    private func cacheUploadedImageDerivatives(
+        _ derivatives: UploadedImageDerivativeSet,
+        response: StoryUploadResponse
+    ) async {
+        let playback = response.asset.renditions?.playback
+        let candidates: [(derivative: LocalImageDerivative, url: URL?)] = [
+            (derivatives.local.display, playback?.mediaUrl ?? response.asset.mediaUrl),
+            (derivatives.local.thumbnail, playback?.thumbnailUrl ?? response.asset.thumbnailUrl),
+            (derivatives.local.placeholder, playback?.placeholderUrl ?? response.asset.placeholderUrl),
+        ]
+        var cachedURLs: Set<URL> = []
+
+        for candidate in candidates {
+            guard let url = candidate.url, cachedURLs.insert(url).inserted else {
+                continue
+            }
+
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("story-cache-\(UUID().uuidString.lowercased()).jpg")
+            do {
+                try await StoryUploadFileIO.write(candidate.derivative.data, to: temporaryURL)
+                await MediaFileDiskCache.shared.storeLocalFile(
+                    sourceURL: temporaryURL,
+                    for: url,
+                    kind: .image
+                )
+            } catch {
+                MediaPerformance.mark("image_derivative_cache_failed")
+            }
+            await StoryUploadFileIO.remove([temporaryURL])
+        }
     }
 
     private func storyCard(for upload: PendingStoryUpload, owner: MyStorySummary.Owner) -> StoryCard {

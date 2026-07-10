@@ -1297,12 +1297,29 @@ extension HLSAssetDownloadCoordinator: AVAssetDownloadDelegate {
 final class MediaImageCache {
     static let shared = MediaImageCache()
 
+    private struct InFlightLoad {
+        let id: UUID
+        let task: Task<UIImage?, Never>
+    }
+
+    private struct ActivePreheat {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     private let cache = NSCache<NSURL, UIImage>()
-    private let maxDecodedPixelDimension: CGFloat = 2_800
+    private var inFlightLoads: [URL: InFlightLoad] = [:]
+    private var queuedPreheatURLs = Set<URL>()
+    private var preheatQueue: [URL] = []
+    private var activePreheats: [URL: ActivePreheat] = [:]
+    private let maxDecodedPixelDimension: CGFloat = 2_400
+    private let maxCachedImageCost = 24 * 1024 * 1024
+    private let maxConcurrentPreheats = 2
+    private let maxPreheatWorkItems = 16
 
     private init() {
-        cache.countLimit = 220
-        cache.totalCostLimit = 96 * 1024 * 1024
+        cache.countLimit = 120
+        cache.totalCostLimit = 64 * 1024 * 1024
     }
 
     func cachedImage(for url: URL?) -> UIImage? {
@@ -1317,22 +1334,102 @@ final class MediaImageCache {
             return cached
         }
 
+        if let inFlightLoad = inFlightLoads[url] {
+            return await inFlightLoad.task.value
+        }
+
+        let loadID = UUID()
+        let loadTask = Task<UIImage?, Never> { @MainActor [weak self] in
+            guard let self,
+                  let image = await loadUncachedImage(for: url),
+                  !Task.isCancelled else {
+                return nil
+            }
+
+            let cost = image.cacheCost
+            if cost > maxCachedImageCost {
+                MediaPerformance.mark("image_cache_skip reason=decoded_cost url=\(url.lastPathComponent) bytes=\(cost)")
+                return image
+            }
+
+            cache.setObject(image, forKey: url as NSURL, cost: cost)
+            return image
+        }
+        inFlightLoads[url] = InFlightLoad(id: loadID, task: loadTask)
+
+        let image = await loadTask.value
+        if inFlightLoads[url]?.id == loadID {
+            inFlightLoads[url] = nil
+        }
+        return image
+    }
+
+    func preheat(_ urls: [URL], limit: Int = 16) {
+        guard limit > 0 else {
+            return
+        }
+
+        var seen = Set<URL>()
+        for url in urls where seen.insert(url).inserted {
+            guard seen.count <= limit else {
+                break
+            }
+            guard activePreheats.count + preheatQueue.count < maxPreheatWorkItems else {
+                break
+            }
+            guard cachedImage(for: url) == nil,
+                  inFlightLoads[url] == nil,
+                  activePreheats[url] == nil,
+                  queuedPreheatURLs.insert(url).inserted else {
+                continue
+            }
+            preheatQueue.append(url)
+        }
+
+        drainPreheatQueue()
+    }
+
+    func removeAll() {
+        for preheat in activePreheats.values {
+            preheat.task.cancel()
+        }
+        activePreheats.removeAll()
+        queuedPreheatURLs.removeAll()
+        preheatQueue.removeAll()
+
+        for load in inFlightLoads.values {
+            load.task.cancel()
+        }
+        inFlightLoads.removeAll()
+        cache.removeAllObjects()
+    }
+
+    private func loadUncachedImage(for url: URL) async -> UIImage? {
         if url.isFileURL,
            let image = await ImageDecodePipeline.decode(contentsOf: url, maxPixelDimension: maxDecodedPixelDimension) {
-            cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)
             return image
+        }
+
+        guard !Task.isCancelled else {
+            return nil
         }
 
         if let fileURL = await MediaFileDiskCache.shared.cachedFileURL(for: url),
            let image = await ImageDecodePipeline.decode(contentsOf: fileURL, maxPixelDimension: maxDecodedPixelDimension) {
-            cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)
             return image
+        }
+
+        guard !Task.isCancelled else {
+            return nil
         }
 
         if let fileURL = await MediaFileDiskCache.shared.cache(url: url, kind: .image),
            let image = await ImageDecodePipeline.decode(contentsOf: fileURL, maxPixelDimension: maxDecodedPixelDimension) {
-            cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)
             return image
+        }
+
+        guard !Task.isCancelled else {
+            return nil
         }
 
         var request = URLRequest(url: url)
@@ -1351,43 +1448,67 @@ final class MediaImageCache {
                 return nil
             }
 
-            cache.setObject(image, forKey: url as NSURL, cost: image.cacheCost)
             return image
         } catch {
             return nil
         }
     }
 
-    func preheat(_ urls: [URL], limit: Int = 16) {
-        var seen = Set<URL>()
-        let uniqueUrls = urls.filter { seen.insert($0).inserted }.prefix(limit)
+    private func drainPreheatQueue() {
+        while activePreheats.count < maxConcurrentPreheats,
+              !preheatQueue.isEmpty {
+            let url = preheatQueue.removeFirst()
+            queuedPreheatURLs.remove(url)
 
-        for url in uniqueUrls {
-            Task {
-                _ = await loadImage(for: url)
+            guard cachedImage(for: url) == nil else {
+                continue
             }
+
+            let preheatID = UUID()
+            let preheatTask = Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                _ = await loadImage(for: url)
+                finishPreheat(for: url, id: preheatID)
+            }
+            activePreheats[url] = ActivePreheat(id: preheatID, task: preheatTask)
         }
+    }
+
+    private func finishPreheat(for url: URL, id: UUID) {
+        guard activePreheats[url]?.id == id else {
+            return
+        }
+        activePreheats[url] = nil
+        drainPreheatQueue()
     }
 }
 
 private enum ImageDecodePipeline {
     static func decode(contentsOf fileURL: URL, maxPixelDimension: CGFloat) async -> UIImage? {
         await Task.detached(priority: .utility) {
-            guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else {
-                return UIImage(contentsOfFile: fileURL.path)
-            }
+            autoreleasepool {
+                let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+                guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions) else {
+                    return nil
+                }
 
-            return downsample(source: source, maxPixelDimension: maxPixelDimension)
+                return downsample(source: source, maxPixelDimension: maxPixelDimension)
+            }
         }.value
     }
 
     static func decode(data: Data, maxPixelDimension: CGFloat) async -> UIImage? {
         await Task.detached(priority: .utility) {
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-                return UIImage(data: data)
-            }
+            autoreleasepool {
+                let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+                guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+                    return nil
+                }
 
-            return downsample(source: source, maxPixelDimension: maxPixelDimension)
+                return downsample(source: source, maxPixelDimension: maxPixelDimension)
+            }
         }.value
     }
 

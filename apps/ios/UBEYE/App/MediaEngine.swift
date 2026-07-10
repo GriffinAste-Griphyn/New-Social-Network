@@ -168,6 +168,7 @@ final class MediaEngine: ObservableObject {
         backgroundPrefetchTask?.cancel()
         backgroundPrefetchTask = nil
         storyVideoPlaybackPool.removeAll()
+        MediaImageCache.shared.removeAll()
         MediaPerformance.mark("media_engine_clear reason=\(reason)")
     }
 

@@ -1,3 +1,6 @@
+import ImageIO
+import UniformTypeIdentifiers
+import UIKit
 import XCTest
 @testable import UBEYE
 
@@ -36,6 +39,64 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(parsed?.metadata.values.first?.count, 500)
     }
 
+    func testStoryImageTranscoderBoundsAndNormalizesOversizedImage() throws {
+        let sourceData = makeTestImageData(width: 3_000, height: 2_000)
+
+        let encoded = try XCTUnwrap(
+            StoryImageTranscoder.normalizedJPEG(
+                data: sourceData,
+                maxPixelDimension: StoryImageUpload.maximumPixelDimension
+            )
+        )
+
+        XCTAssertEqual(max(encoded.width, encoded.height), StoryImageUpload.maximumPixelDimension)
+        XCTAssertLessThanOrEqual(min(encoded.width, encoded.height), StoryImageUpload.maximumPixelDimension)
+
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(encoded.data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
+    }
+
+    func testStoryImageUploadNormalizesFilenameAndMimeTypeToJPEG() throws {
+        let sourceData = makeTestImageData(width: 2_400, height: 3_200)
+
+        let upload = try XCTUnwrap(
+            StoryImageUpload(
+                data: sourceData,
+                fallbackFileName: "IMG_1234.HEIC"
+            )
+        )
+
+        XCTAssertEqual(upload.fileName, "IMG_1234.jpg")
+        XCTAssertEqual(upload.mimeType, "image/jpeg")
+
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(upload.data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
+        XCTAssertLessThanOrEqual(
+            max(upload.image.cgImage?.width ?? 0, upload.image.cgImage?.height ?? 0),
+            StoryImageUpload.maximumPixelDimension
+        )
+    }
+
+    func testStoryImageTranscoderHonorsOrientationFromFileURL() throws {
+        let sourceData = try makeOrientedJPEGData(width: 1_200, height: 800)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("oriented-photo-\(UUID().uuidString).jpg")
+        try sourceData.write(to: fileURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let encoded = try XCTUnwrap(
+            StoryImageTranscoder.normalizedJPEG(
+                fileURL: fileURL,
+                maxPixelDimension: StoryImageUpload.maximumPixelDimension
+            )
+        )
+
+        XCTAssertEqual(encoded.width, 800)
+        XCTAssertEqual(encoded.height, 1_200)
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(encoded.data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
+    }
+
     @MainActor
     func testPreferredPlaybackAlwaysUsesCanonicalAdaptiveStream() {
         let defaultURL = URL(string: "https://example.com/playback/video.m3u8")!
@@ -69,5 +130,50 @@ final class MediaPerformanceTests: XCTestCase {
             StoryVideoPlaybackPool.prioritizedURLs(urls: [url], activeURL: url, limit: 0),
             []
         )
+    }
+
+    private func makeTestImageData(width: Int, height: Int) -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: width, height: height),
+            format: format
+        )
+
+        return renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    private func makeOrientedJPEGData(width: Int, height: Int) throws -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(
+            size: CGSize(width: width, height: height),
+            format: format
+        ).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let output = NSMutableData()
+        let destination = try XCTUnwrap(
+            CGImageDestinationCreateWithData(
+                output,
+                UTType.jpeg.identifier as CFString,
+                1,
+                nil
+            )
+        )
+        let properties: [CFString: Any] = [
+            kCGImagePropertyOrientation: CGImagePropertyOrientation.right.rawValue,
+            kCGImageDestinationLossyCompressionQuality: 0.9,
+        ]
+        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return output as Data
     }
 }

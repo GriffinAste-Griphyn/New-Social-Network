@@ -1,4 +1,5 @@
 import AVFoundation
+import ImageIO
 import Photos
 import PhotosUI
 import SwiftUI
@@ -22,6 +23,8 @@ struct StoryVideoUpload {
 }
 
 struct StoryImageUpload: Equatable {
+    static let maximumPixelDimension = 1_920
+
     let image: UIImage
     let data: Data
     let fileName: String
@@ -32,27 +35,46 @@ struct StoryImageUpload: Equatable {
         fallbackFileName: String = "story-photo",
         displayImage: UIImage? = nil
     ) {
-        guard let image = displayImage ?? UIImage(data: data) else {
+        guard let normalized = StoryImageTranscoder.normalizedJPEG(
+            data: data,
+            maxPixelDimension: Self.maximumPixelDimension
+        ) else {
             return nil
         }
 
-        let format = StoryImageFormat(data: data)
-        self.image = image
-        self.data = data
-        fileName = Self.normalizedFileName(fallbackFileName, fileExtension: format.fileExtension)
-        mimeType = format.mimeType
+        image = displayImage ?? normalized.image
+        self.data = normalized.data
+        fileName = Self.normalizedFileName(fallbackFileName)
+        mimeType = "image/jpeg"
     }
 
-    private static func normalizedFileName(_ value: String, fileExtension: String) -> String {
+    init?(
+        fileURL: URL,
+        fallbackFileName: String = "story-photo"
+    ) {
+        guard let normalized = StoryImageTranscoder.normalizedJPEG(
+            fileURL: fileURL,
+            maxPixelDimension: Self.maximumPixelDimension
+        ) else {
+            return nil
+        }
+
+        image = normalized.image
+        data = normalized.data
+        fileName = Self.normalizedFileName(fallbackFileName)
+        mimeType = "image/jpeg"
+    }
+
+    private static func normalizedFileName(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = trimmed.isEmpty ? "story-photo" : trimmed
 
-        if base.lowercased().hasSuffix(".\(fileExtension)") {
+        if base.lowercased().hasSuffix(".jpg") || base.lowercased().hasSuffix(".jpeg") {
             return base
         }
 
         let stem = (base as NSString).deletingPathExtension
-        return "\(stem.isEmpty ? "story-photo" : stem).\(fileExtension)"
+        return "\(stem.isEmpty ? "story-photo" : stem).jpg"
     }
 
     static func == (lhs: StoryImageUpload, rhs: StoryImageUpload) -> Bool {
@@ -62,38 +84,123 @@ struct StoryImageUpload: Equatable {
     }
 }
 
-private struct StoryImageFormat {
-    let fileExtension: String
-    let mimeType: String
+struct StoryJPEGEncoding {
+    let data: Data
+    let image: UIImage
+    let width: Int
+    let height: Int
+}
 
-    init(data: Data) {
-        let bytes = [UInt8](data.prefix(16))
-
-        if bytes.starts(with: [0xff, 0xd8, 0xff]) {
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
-        } else if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
-            fileExtension = "png"
-            mimeType = "image/png"
-        } else if data.count >= 12,
-                  String(data: data.prefix(4), encoding: .ascii) == "RIFF",
-                  String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
-            fileExtension = "webp"
-            mimeType = "image/webp"
-        } else if data.count >= 12,
-                  String(data: data.dropFirst(4).prefix(4), encoding: .ascii) == "ftyp" {
-            let brand = String(data: data.dropFirst(8).prefix(4), encoding: .ascii) ?? ""
-            if ["avif", "avis"].contains(brand) {
-                fileExtension = "avif"
-                mimeType = "image/avif"
-            } else {
-                fileExtension = "heic"
-                mimeType = "image/heic"
+enum StoryImageTranscoder {
+    static func normalizedJPEG(
+        data: Data,
+        maxPixelDimension: Int,
+        quality: CGFloat = 0.9
+    ) -> StoryJPEGEncoding? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+                return nil
             }
-        } else {
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
+
+            return encodeJPEG(
+                source: source,
+                maxPixelDimension: maxPixelDimension,
+                quality: quality
+            )
         }
+    }
+
+    static func normalizedJPEG(
+        fileURL: URL,
+        maxPixelDimension: Int,
+        quality: CGFloat = 0.9
+    ) -> StoryJPEGEncoding? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions) else {
+                return nil
+            }
+
+            return encodeJPEG(
+                source: source,
+                maxPixelDimension: maxPixelDimension,
+                quality: quality
+            )
+        }
+    }
+
+    static func jpegDerivative(
+        data: Data,
+        maxPixelDimension: Int,
+        quality: CGFloat
+    ) -> StoryJPEGEncoding? {
+        normalizedJPEG(
+            data: data,
+            maxPixelDimension: maxPixelDimension,
+            quality: quality
+        )
+    }
+
+    static func jpegDerivative(
+        fileURL: URL,
+        maxPixelDimension: Int,
+        quality: CGFloat
+    ) -> StoryJPEGEncoding? {
+        normalizedJPEG(
+            fileURL: fileURL,
+            maxPixelDimension: maxPixelDimension,
+            quality: quality
+        )
+    }
+
+    private static func encodeJPEG(
+        source: CGImageSource,
+        maxPixelDimension: Int,
+        quality: CGFloat
+    ) -> StoryJPEGEncoding? {
+        guard maxPixelDimension > 0 else {
+            return nil
+        }
+
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelDimension,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            thumbnailOptions as CFDictionary
+        ) else {
+            return nil
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        let destinationOptions: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: min(max(quality, 0), 1),
+        ]
+        CGImageDestinationAddImage(destination, cgImage, destinationOptions as CFDictionary)
+        guard CGImageDestinationFinalize(destination), output.length > 0 else {
+            return nil
+        }
+
+        return StoryJPEGEncoding(
+            data: output as Data,
+            image: UIImage(cgImage: cgImage),
+            width: cgImage.width,
+            height: cgImage.height
+        )
     }
 }
 
@@ -1801,9 +1908,8 @@ private struct PickedImage: Transferable {
             try image.upload.data.write(to: copy, options: .atomic)
             return SentTransferredFile(copy)
         } importing: { received in
-            let data = try Data(contentsOf: received.file)
             guard let upload = StoryImageUpload(
-                data: data,
+                fileURL: received.file,
                 fallbackFileName: received.file.lastPathComponent
             ) else {
                 throw APIClientError.invalidResponse

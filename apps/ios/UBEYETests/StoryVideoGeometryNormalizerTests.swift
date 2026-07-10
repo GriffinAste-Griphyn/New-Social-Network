@@ -301,7 +301,37 @@ private final class UploadRequestRecorder: @unchecked Sendable {
     }
 
     func append(_ request: URLRequest) {
-        lock.withLock { storage.append(request) }
+        var capturedRequest = request
+        if capturedRequest.httpBody == nil,
+           let bodyStream = capturedRequest.httpBodyStream,
+           let body = Self.readBody(from: bodyStream) {
+            capturedRequest.httpBodyStream = nil
+            capturedRequest.httpBody = body
+        }
+
+        lock.withLock { storage.append(capturedRequest) }
+    }
+
+    private static func readBody(from stream: InputStream) -> Data? {
+        stream.open()
+        defer { stream.close() }
+
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let bytesRead = buffer.withUnsafeMutableBufferPointer { buffer in
+                guard let baseAddress = buffer.baseAddress else { return 0 }
+                return stream.read(baseAddress, maxLength: buffer.count)
+            }
+
+            if bytesRead < 0 {
+                return nil
+            }
+            if bytesRead == 0 {
+                return body
+            }
+            body.append(contentsOf: buffer.prefix(bytesRead))
+        }
     }
 }
 
