@@ -107,13 +107,13 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
       }),
     },
     preparedPlayerLimit: {
-      constrained: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED", 2, {
-        min: 1,
-        max: 4,
+      constrained: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED", 0, {
+        min: 0,
+        max: 0,
       }),
-      standard: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 3, {
-        min: 2,
-        max: 10,
+      standard: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 0, {
+        min: 0,
+        max: 0,
       }),
     },
     persistentVideoPreheatLimit: {

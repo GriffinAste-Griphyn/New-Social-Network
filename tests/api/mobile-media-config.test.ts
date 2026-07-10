@@ -31,7 +31,7 @@ describe("mobile media runtime config", () => {
       imageDerivativeUploadEnabled: false,
       imagePreheatLimit: { constrained: 1, standard: 2 },
       stackPreheatLimit: { constrained: 1, standard: 2 },
-      preparedPlayerLimit: { constrained: 2, standard: 3 },
+      preparedPlayerLimit: { constrained: 0, standard: 0 },
       persistentVideoPreheatLimit: { constrained: 0, standard: 0 },
     })
   })
@@ -45,7 +45,7 @@ describe("mobile media runtime config", () => {
     expect(getMobileMediaConfig()).toMatchObject({
       imagePreheatLimit: { standard: 4 },
       stackPreheatLimit: { constrained: 1 },
-      preparedPlayerLimit: { standard: 10 },
+      preparedPlayerLimit: { standard: 0 },
       persistentVideoPreheatLimit: { standard: 0 },
     })
   })
