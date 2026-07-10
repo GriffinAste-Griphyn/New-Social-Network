@@ -66,9 +66,11 @@ function booleanEnv(name: string, fallback: boolean) {
   return ["1", "true", "yes", "on"].includes(raw)
 }
 
-export function getMobileMediaConfig(): RuntimeMediaConfig {
+export function getMobileMediaConfig(input: { clientBuild?: number | null } = {}): RuntimeMediaConfig {
+  const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 254
+
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.2",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.3",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
       false,
@@ -107,14 +109,13 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
       }),
     },
     preparedPlayerLimit: {
-      constrained: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED", 0, {
-        min: 0,
-        max: 0,
-      }),
-      standard: integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 0, {
-        min: 0,
-        max: 0,
-      }),
+      constrained: 0,
+      standard: supportsSafePlayerPreparation
+        ? integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 1, {
+            min: 0,
+            max: 1,
+          })
+        : 0,
     },
     persistentVideoPreheatLimit: {
       constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", 0, {
@@ -129,10 +130,10 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
     startupStreamingPeakBitRate: {
       constrained: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        2_400_000,
-        { min: 800_000, max: 5_000_000 },
+        6_000_000,
+        { min: 2_000_000, max: 10_000_000 },
       ),
-      standard: integerEnv("MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD", 5_500_000, {
+      standard: integerEnv("MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD", 10_000_000, {
         min: 1_500_000,
         max: 12_000_000,
       }),

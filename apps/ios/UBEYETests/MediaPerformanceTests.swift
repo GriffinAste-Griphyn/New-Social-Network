@@ -40,23 +40,27 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testStoryImageTranscoderBoundsAndNormalizesOversizedImage() throws {
-        let sourceData = makeTestImageData(width: 3_000, height: 2_000)
+        let sourceData = makeTestImageData(width: 4_800, height: 3_200)
 
         let encoded = try XCTUnwrap(
             StoryImageTranscoder.normalizedJPEG(
                 data: sourceData,
-                maxPixelDimension: StoryImageUpload.maximumPixelDimension
+                maxPixelDimension: StoryImageUpload.maximumTranscodedPixelDimension,
+                quality: StoryImageUpload.transcodedJPEGQuality
             )
         )
 
-        XCTAssertEqual(max(encoded.width, encoded.height), StoryImageUpload.maximumPixelDimension)
-        XCTAssertLessThanOrEqual(min(encoded.width, encoded.height), StoryImageUpload.maximumPixelDimension)
+        XCTAssertEqual(max(encoded.width, encoded.height), StoryImageUpload.maximumTranscodedPixelDimension)
+        XCTAssertLessThanOrEqual(
+            min(encoded.width, encoded.height),
+            StoryImageUpload.maximumTranscodedPixelDimension
+        )
 
         let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(encoded.data as CFData, nil))
         XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
     }
 
-    func testStoryImageUploadNormalizesFilenameAndMimeTypeToJPEG() throws {
+    func testStoryImageUploadPreservesCompatibleOriginalAndBuildsBoundedPreview() throws {
         let sourceData = makeTestImageData(width: 2_400, height: 3_200)
 
         let upload = try XCTUnwrap(
@@ -66,15 +70,30 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(upload.fileName, "IMG_1234.jpg")
-        XCTAssertEqual(upload.mimeType, "image/jpeg")
+        XCTAssertEqual(upload.fileName, "IMG_1234.png")
+        XCTAssertEqual(upload.mimeType, "image/png")
+        XCTAssertEqual(upload.data, sourceData)
 
         let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(upload.data as CFData, nil))
-        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
+        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.png.identifier)
         XCTAssertLessThanOrEqual(
             max(upload.image.cgImage?.width ?? 0, upload.image.cgImage?.height ?? 0),
-            StoryImageUpload.maximumPixelDimension
+            StoryImageUpload.maximumPreviewPixelDimension
         )
+    }
+
+    func testStoryImageUploadPreservesCameraJPEGBytes() throws {
+        let sourceData = try makeOrientedJPEGData(width: 1_200, height: 800)
+        let upload = try XCTUnwrap(
+            StoryImageUpload(
+                data: sourceData,
+                fallbackFileName: "story-photo"
+            )
+        )
+
+        XCTAssertEqual(upload.fileName, "story-photo.jpg")
+        XCTAssertEqual(upload.mimeType, "image/jpeg")
+        XCTAssertEqual(upload.data, sourceData)
     }
 
     func testStoryImageTranscoderHonorsOrientationFromFileURL() throws {
@@ -87,7 +106,7 @@ final class MediaPerformanceTests: XCTestCase {
         let encoded = try XCTUnwrap(
             StoryImageTranscoder.normalizedJPEG(
                 fileURL: fileURL,
-                maxPixelDimension: StoryImageUpload.maximumPixelDimension
+                maxPixelDimension: StoryImageUpload.maximumTranscodedPixelDimension
             )
         )
 

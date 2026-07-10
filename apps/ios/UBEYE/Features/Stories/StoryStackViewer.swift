@@ -2748,9 +2748,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         let downloadedMs = Int(max(0, event.segmentsDownloadedDuration) * 1000)
         let uri = accessLogURIIdentifier(event.uri)
         let delivery = sourceURL.map(playbackDelivery(for:)) ?? "unknown"
+        let presentationSize = player?.currentItem?.presentationSize ?? .zero
+        let presentationWidth = Int(max(0, presentationSize.width).rounded())
+        let presentationHeight = Int(max(0, presentationSize.height).rounded())
 
         MediaPerformance.mark(
-            "video_access_log reason=\(reason) delivery=\(delivery) observedBitrate=\(observedBitrate) indicatedBitrate=\(indicatedBitrate) stalls=\(event.numberOfStalls) transferDurationMs=\(transferDurationMs) watchedMs=\(watchedMs) downloadedMs=\(downloadedMs) bytes=\(event.numberOfBytesTransferred) uri=\(uri)"
+            "video_access_log reason=\(reason) delivery=\(delivery) observedBitrate=\(observedBitrate) indicatedBitrate=\(indicatedBitrate) width=\(presentationWidth) height=\(presentationHeight) stalls=\(event.numberOfStalls) transferDurationMs=\(transferDurationMs) watchedMs=\(watchedMs) downloadedMs=\(downloadedMs) bytes=\(event.numberOfBytesTransferred) uri=\(uri)"
         )
     }
 

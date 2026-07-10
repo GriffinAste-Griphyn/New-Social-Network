@@ -640,7 +640,7 @@ final class MediaControlConfig {
     private init() {}
 
     var imageDerivativeUploadEnabled: Bool {
-        read { $0?.imageDerivativeUploadEnabled ?? true }
+        read { $0?.imageDerivativeUploadEnabled ?? false }
     }
 
     var qoeAccessLogSampleRate: Double {
@@ -672,7 +672,7 @@ final class MediaControlConfig {
     }
 
     func preparedPlayerLimit(isLimited: Bool) -> Int {
-        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 2 : 6)
+        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: 0)
     }
 
     func persistentVideoPreheatLimit(isLimited: Bool) -> Int {
@@ -682,7 +682,7 @@ final class MediaControlConfig {
     func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
             guard let pair = $0?.startupStreamingPeakBitRate else {
-                return isLimited ? 2_400_000 : 5_500_000
+                return isLimited ? 6_000_000 : 10_000_000
             }
 
             return isLimited ? pair.constrained : pair.standard
@@ -740,38 +740,42 @@ final class NetworkQualityMonitor {
     private(set) var isConstrained = false
     private(set) var isCellular = false
 
-    private var isLimited: Bool {
+    private var shouldLimitPreheating: Bool {
         isConstrained || isCellular
     }
 
+    private var shouldLimitStreamingQuality: Bool {
+        isConstrained
+    }
+
     var imagePreheatLimit: Int {
-        MediaControlConfig.shared.imagePreheatLimit(isLimited: isLimited)
+        MediaControlConfig.shared.imagePreheatLimit(isLimited: shouldLimitPreheating)
     }
 
     var stackPreheatLimit: Int {
-        MediaControlConfig.shared.stackPreheatLimit(isLimited: isLimited)
+        MediaControlConfig.shared.stackPreheatLimit(isLimited: shouldLimitPreheating)
     }
 
     var preparedPlayerLimit: Int {
-        MediaControlConfig.shared.preparedPlayerLimit(isLimited: isLimited)
+        MediaControlConfig.shared.preparedPlayerLimit(isLimited: shouldLimitPreheating)
     }
 
     var persistentVideoPreheatLimit: Int {
-        MediaControlConfig.shared.persistentVideoPreheatLimit(isLimited: isLimited)
+        MediaControlConfig.shared.persistentVideoPreheatLimit(isLimited: shouldLimitPreheating)
     }
 
     var startupStreamingPeakBitRate: Double {
-        MediaControlConfig.shared.startupStreamingPeakBitRate(isLimited: isLimited)
+        MediaControlConfig.shared.startupStreamingPeakBitRate(isLimited: shouldLimitStreamingQuality)
     }
 
     var startupStreamingMaximumResolution: CGSize {
-        MediaControlConfig.shared.startupStreamingMaximumResolution(isLimited: isLimited)
+        MediaControlConfig.shared.startupStreamingMaximumResolution(isLimited: shouldLimitStreamingQuality)
     }
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
-                self?.isConstrained = path.isConstrained || path.isExpensive
+                self?.isConstrained = path.isConstrained
                 self?.isCellular = path.usesInterfaceType(.cellular)
             }
         }
@@ -1312,7 +1316,7 @@ final class MediaImageCache {
     private var queuedPreheatURLs = Set<URL>()
     private var preheatQueue: [URL] = []
     private var activePreheats: [URL: ActivePreheat] = [:]
-    private let maxDecodedPixelDimension: CGFloat = 2_400
+    private let maxDecodedPixelDimension: CGFloat = 2_560
     private let maxCachedImageCost = 24 * 1024 * 1024
     private let maxConcurrentPreheats = 2
     private let maxPreheatWorkItems = 16

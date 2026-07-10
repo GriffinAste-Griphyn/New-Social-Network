@@ -14,6 +14,12 @@ const mediaConfigEnvironmentNames = [
   "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
   "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED",
   "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD",
+  "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
+  "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
+  "MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED",
+  "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED",
+  "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
+  "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
 ] as const
 
 describe("mobile media runtime config", () => {
@@ -27,12 +33,20 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-07-10.2",
+      version: "2026-07-10.3",
       imageDerivativeUploadEnabled: false,
       imagePreheatLimit: { constrained: 1, standard: 2 },
       stackPreheatLimit: { constrained: 1, standard: 2 },
       preparedPlayerLimit: { constrained: 0, standard: 0 },
       persistentVideoPreheatLimit: { constrained: 0, standard: 0 },
+      startupStreamingPeakBitRate: {
+        constrained: 6_000_000,
+        standard: 10_000_000,
+      },
+      startupStreamingMaximumResolution: {
+        constrained: { width: 720, height: 1280 },
+        standard: { width: 1080, height: 1920 },
+      },
     })
   })
 
@@ -47,6 +61,17 @@ describe("mobile media runtime config", () => {
       stackPreheatLimit: { constrained: 1 },
       preparedPlayerLimit: { standard: 0 },
       persistentVideoPreheatLimit: { standard: 0 },
+    })
+  })
+
+  it("enables one safe prepared player only for the fixed iOS build", () => {
+    delete process.env.MOBILE_PREPARED_PLAYER_LIMIT_STANDARD
+
+    expect(getMobileMediaConfig({ clientBuild: 253 })).toMatchObject({
+      preparedPlayerLimit: { constrained: 0, standard: 0 },
+    })
+    expect(getMobileMediaConfig({ clientBuild: 254 })).toMatchObject({
+      preparedPlayerLimit: { constrained: 0, standard: 1 },
     })
   })
 })

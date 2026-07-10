@@ -423,7 +423,8 @@ function buildCloudflareThumbnailUrl(customerSubdomain: string, playbackId: stri
     : `https://${customerSubdomain}`
   const thumbnailUrl = new URL(`${origin}/${playbackId}/thumbnails/thumbnail.jpg`)
 
-  thumbnailUrl.searchParams.set("height", "1280")
+  thumbnailUrl.searchParams.set("width", "1080")
+  thumbnailUrl.searchParams.set("height", "1920")
   thumbnailUrl.searchParams.set("fit", "clip")
 
   return thumbnailUrl.toString()
@@ -440,7 +441,7 @@ function buildCloudflareTusUploadMetadata(input: {
   return [
     `name ${encodeCloudflareTusMetadataValue(input.fileName)}`,
     "requiresignedurls",
-    "thumbnailtimestamppct MS4w",
+    `thumbnailtimestamppct ${encodeCloudflareTusMetadataValue(0.15)}`,
     `maxdurationseconds ${encodeCloudflareTusMetadataValue(input.maxDurationSeconds)}`,
   ].join(",")
 }
@@ -726,7 +727,7 @@ export async function createDirectBlobStoryImageAsset(input: {
   })
   let generatedDerivatives: Awaited<
     ReturnType<typeof createDirectStoryImageDerivatives>
-  > = null
+  > | null = null
   if (!clientDisplay || !clientThumbnail) {
     try {
       generatedDerivatives = await createDirectStoryImageDerivatives(input.pathname)
@@ -1044,7 +1045,7 @@ export async function setCloudflareStreamThumbnailToLastFrame(uid: string) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        thumbnailTimestampPct: 1.0,
+        thumbnailTimestampPct: 0.15,
       }),
     },
   )
@@ -1397,19 +1398,23 @@ async function createDirectStoryImageDerivative(input: {
     .resize({
       width: input.width,
       height: input.height,
-      fit: "inside",
+      fit: "cover",
+      position: "centre",
       withoutEnlargement: true,
     })
+    .withIccProfile("srgb")
     .jpeg({
       quality: input.quality,
       progressive: true,
       mozjpeg: true,
+      chromaSubsampling: "4:4:4",
     })
     .toBuffer({ resolveWithObject: true })
   const blob = await put(input.outputPathname, data, {
     access: "public",
     contentType: "image/jpeg",
     addRandomSuffix: false,
+    allowOverwrite: true,
     cacheControlMaxAge: directStoryImageDerivativeCacheMaxAgeSeconds,
   })
 
@@ -1424,22 +1429,37 @@ async function createDirectStoryImageDerivative(input: {
   }
 }
 
-async function createDirectStoryImageDerivatives(pathname: string) {
-  const source = await get(pathname, { access: "private", useCache: false })
+async function readDirectStoryImageSourceBytes(pathname: string) {
+  const retryDelaysMs = [0, 150, 400, 900]
 
-  if (!source?.stream || source.statusCode !== 200) {
-    return null
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+
+    const source = await get(pathname, {
+      access: "private",
+      useCache: false,
+    }).catch(() => null)
+
+    if (source?.stream && source.statusCode === 200) {
+      return Buffer.from(await new Response(source.stream).arrayBuffer())
+    }
   }
 
-  const sourceBytes = Buffer.from(
-    await new Response(source.stream).arrayBuffer(),
+  throw new StoryUploadError(
+    "The uploaded story image was not available for display processing.",
   )
+}
+
+async function createDirectStoryImageDerivatives(pathname: string) {
+  const sourceBytes = await readDirectStoryImageSourceBytes(pathname)
   const display = await createDirectStoryImageDerivative({
     sourceBytes,
     outputPathname: buildDirectStoryImageDisplayPathname(pathname),
     width: directStoryImageDisplayWidth,
     height: directStoryImageDisplayHeight,
-    quality: 88,
+    quality: 92,
   })
   const thumbnail =
     (await createDirectStoryImageDerivative({

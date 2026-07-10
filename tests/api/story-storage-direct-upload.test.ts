@@ -119,8 +119,8 @@ describe("direct story image storage verification", () => {
   it("publishes display and thumbnail derivatives while preserving the private original", async () => {
     const sourceBytes = await sharp({
       create: {
-        width: 1440,
-        height: 2560,
+        width: 2304,
+        height: 3072,
         channels: 3,
         background: "#f24c3d",
       },
@@ -128,24 +128,26 @@ describe("direct story image storage verification", () => {
       .jpeg({ quality: 95 })
       .toBuffer()
 
-    vi.mocked(get).mockResolvedValue({
-      statusCode: 200,
-      stream: new Blob([Uint8Array.from(sourceBytes)], {
-        type: "image/jpeg",
-      }).stream() as ReadableStream<Uint8Array>,
-      headers: new Headers(),
-      blob: {
-        url: "https://blob.example.com/story.jpg",
-        downloadUrl: "https://blob.example.com/story.jpg?download=1",
-        pathname: "stories/web-direct/creator_123/story.jpg",
-        contentDisposition: "inline",
-        cacheControl: "public, max-age=31536000",
-        uploadedAt: new Date(),
-        etag: "etag",
-        contentType: "image/jpeg",
-        size: 1234,
-      },
-    } as unknown as Awaited<ReturnType<typeof get>>)
+    vi.mocked(get)
+      .mockRejectedValueOnce(new Error("Blob is not readable yet"))
+      .mockResolvedValue({
+        statusCode: 200,
+        stream: new Blob([Uint8Array.from(sourceBytes)], {
+          type: "image/jpeg",
+        }).stream() as ReadableStream<Uint8Array>,
+        headers: new Headers(),
+        blob: {
+          url: "https://blob.example.com/story.jpg",
+          downloadUrl: "https://blob.example.com/story.jpg?download=1",
+          pathname: "stories/web-direct/creator_123/story.jpg",
+          contentDisposition: "inline",
+          cacheControl: "public, max-age=31536000",
+          uploadedAt: new Date(),
+          etag: "etag",
+          contentType: "image/jpeg",
+          size: 1234,
+        },
+      } as unknown as Awaited<ReturnType<typeof get>>)
     vi.mocked(put).mockImplementation(async (pathname) => ({
       pathname,
       url: `https://blob.example.com/${pathname}`,
@@ -157,9 +159,23 @@ describe("direct story image storage verification", () => {
       contentType: "image/jpeg",
       byteSize: 1234,
       checksum: "a".repeat(64),
-      width: 1440,
-      height: 2560,
+      width: 2304,
+      height: 3072,
     })
+
+    const displayUpload = vi.mocked(put).mock.calls.find(
+      ([pathname]) => pathname === "stories/web-direct/creator_123/story-display.jpg",
+    )
+    const displayMetadata = await sharp(
+      displayUpload?.[1] as Buffer,
+    ).metadata()
+
+    expect(displayMetadata).toMatchObject({
+      width: 1080,
+      height: 1920,
+      chromaSubsampling: "4:4:4",
+    })
+    expect(get).toHaveBeenCalledTimes(2)
 
     expect(put).toHaveBeenCalledWith(
       "stories/web-direct/creator_123/story-display.jpg",
@@ -168,6 +184,7 @@ describe("direct story image storage verification", () => {
         access: "public",
         contentType: "image/jpeg",
         addRandomSuffix: false,
+        allowOverwrite: true,
         cacheControlMaxAge: 60 * 60 * 24 * 30,
       }),
     )
@@ -195,8 +212,8 @@ describe("direct story image storage verification", () => {
       originalStorageKey: "stories/web-direct/creator_123/story.jpg",
       originalContentType: "image/jpeg",
       originalByteSize: 1234,
-      originalWidth: 1440,
-      originalHeight: 2560,
+      originalWidth: 2304,
+      originalHeight: 3072,
       contentType: "image/jpeg",
       width: 1080,
       height: 1920,

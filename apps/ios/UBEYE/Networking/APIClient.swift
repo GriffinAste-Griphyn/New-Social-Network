@@ -1282,6 +1282,10 @@ final class APIClient: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(deviceId(), forHTTPHeaderField: "X-Device-Id")
         request.setValue(Self.mediaPipelineVersion, forHTTPHeaderField: "X-UBEYE-Media-Pipeline")
+        if let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !appBuild.isEmpty {
+            request.setValue(appBuild, forHTTPHeaderField: "X-UBEYE-App-Build")
+        }
         if let authToken {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         }

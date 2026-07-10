@@ -285,10 +285,10 @@ private enum StoryImageDerivativeBuilder {
     static func build(fileURL: URL) async throws -> LocalImageDerivativeSet {
         try await Task.detached(priority: .userInitiated) {
             let display = try autoreleasepool {
-                try encode(fileURL: fileURL, maxPixelDimension: 1_920, quality: 0.88)
+                try encode(fileURL: fileURL, maxPixelDimension: 2_560, quality: 0.92)
             }
             let thumbnail = try autoreleasepool {
-                try encode(data: display.data, maxPixelDimension: 720, quality: 0.82)
+                try encode(data: display.data, maxPixelDimension: 720, quality: 0.84)
             }
             let placeholder = try autoreleasepool {
                 try encode(data: thumbnail.data, maxPixelDimension: 64, quality: 0.55)

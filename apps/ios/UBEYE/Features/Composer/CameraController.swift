@@ -18,9 +18,19 @@ private func applyVideoRotationAngle(_ angle: CGFloat, to connection: AVCaptureC
 }
 
 enum StoryCaptureQuality {
-    static let videoBitrate = 12_000_000
+    static let hevcVideoBitrate = 12_000_000
+    static let h264VideoBitrate = 16_000_000
     static let videoFrameRate = 30
     static let videoKeyFrameInterval = 60
+
+    static func preferredCodec(from availableCodecs: [AVVideoCodecType]) -> AVVideoCodecType? {
+        availableCodecs.first(where: { $0 == .hevc }) ??
+            availableCodecs.first(where: { $0 == .h264 })
+    }
+
+    static func videoBitrate(for codec: AVVideoCodecType) -> Int {
+        codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
+    }
 }
 
 @MainActor
@@ -51,7 +61,7 @@ final class CameraController: NSObject, ObservableObject {
     private var isConfigured = false
     private var captureRotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var configuredMaxPhotoDimensions: CMVideoDimensions?
-    private let frontCameraPhotoMaxPixels = 3_000_000
+    private let frontCameraPhotoMaxPixels = 12_000_000
 
     func requestAccessAndConfigure() async {
         if authorizationStatus == .notDetermined {
@@ -108,7 +118,7 @@ final class CameraController: NSObject, ObservableObject {
 
         let settings = makePhotoSettings()
         settings.flashMode = preferredPhotoFlashMode()
-        settings.photoQualityPrioritization = capturePosition == .front ? .speed : .quality
+        settings.photoQualityPrioritization = .quality
         if let configuredMaxPhotoDimensions {
             settings.maxPhotoDimensions = configuredMaxPhotoDimensions
         }
@@ -284,16 +294,16 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         let availableCodecs = movieOutput.availableVideoCodecTypes
-        guard let codec = availableCodecs.first(where: { $0 == .h264 }) ??
-            availableCodecs.first(where: { $0 == .hevc }) else {
+        guard let codec = StoryCaptureQuality.preferredCodec(from: availableCodecs) else {
             MediaPerformance.mark("capture_video_custom_codec_unavailable")
             return
         }
+        let bitrate = StoryCaptureQuality.videoBitrate(for: codec)
         movieOutput.setOutputSettings(
             [
                 AVVideoCodecKey: codec,
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: StoryCaptureQuality.videoBitrate,
+                    AVVideoAverageBitRateKey: bitrate,
                     AVVideoExpectedSourceFrameRateKey: StoryCaptureQuality.videoFrameRate,
                     AVVideoMaxKeyFrameIntervalKey: StoryCaptureQuality.videoKeyFrameInterval,
                 ],
@@ -301,7 +311,7 @@ final class CameraController: NSObject, ObservableObject {
             for: videoConnection
         )
         MediaPerformance.mark(
-            "capture_video_settings codec=\(codec.rawValue) bitrate=\(StoryCaptureQuality.videoBitrate) fps=\(StoryCaptureQuality.videoFrameRate) gop=\(StoryCaptureQuality.videoKeyFrameInterval)"
+            "capture_video_settings codec=\(codec.rawValue) bitrate=\(bitrate) fps=\(StoryCaptureQuality.videoFrameRate) gop=\(StoryCaptureQuality.videoKeyFrameInterval)"
         )
     }
 
@@ -440,7 +450,7 @@ final class CameraController: NSObject, ObservableObject {
             connection.isVideoMirrored = mirrorsFrontCamera && cameraPosition == .front
         }
         if connection.isVideoStabilizationSupported {
-            connection.preferredVideoStabilizationMode = .cinematic
+            connection.preferredVideoStabilizationMode = .standard
         }
     }
 

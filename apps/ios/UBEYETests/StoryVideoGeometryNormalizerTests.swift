@@ -148,8 +148,16 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     }
 
     func testCaptureQualityBalances1080pQualityAndUploadLatency() {
-        XCTAssertGreaterThanOrEqual(StoryCaptureQuality.videoBitrate, 10_000_000)
-        XCTAssertLessThanOrEqual(StoryCaptureQuality.videoBitrate, 12_000_000)
+        XCTAssertEqual(StoryCaptureQuality.videoBitrate(for: .hevc), 12_000_000)
+        XCTAssertEqual(StoryCaptureQuality.videoBitrate(for: .h264), 16_000_000)
+        XCTAssertEqual(
+            StoryCaptureQuality.preferredCodec(from: [.h264, .hevc]),
+            .hevc
+        )
+        XCTAssertEqual(
+            StoryCaptureQuality.preferredCodec(from: [.h264]),
+            .h264
+        )
         XCTAssertEqual(StoryCaptureQuality.videoFrameRate, 30)
         XCTAssertEqual(StoryCaptureQuality.videoKeyFrameInterval, 60)
     }
