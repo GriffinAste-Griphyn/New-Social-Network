@@ -339,7 +339,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
         let player = AVPlayer(playerItem: item)
         player.actionAtItemEnd = .pause
         player.automaticallyWaitsToMinimizeStalling = true
-        _ = await player.preroll(atRate: 1)
+        // Loading the asset above is enough to warm AVFoundation. Explicit preroll is
+        // unsafe until AVPlayer itself reaches readyToPlay and raises an Objective-C
+        // exception (which Swift cannot catch) when preparation is still asynchronous.
         player.pause()
 
         return PreparedPlayer(
