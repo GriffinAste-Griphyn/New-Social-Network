@@ -27,9 +27,10 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-07-09.1",
-      imagePreheatLimit: { constrained: 12, standard: 32 },
-      stackPreheatLimit: { constrained: 3, standard: 8 },
+      version: "2026-07-10.2",
+      imageDerivativeUploadEnabled: false,
+      imagePreheatLimit: { constrained: 1, standard: 2 },
+      stackPreheatLimit: { constrained: 1, standard: 2 },
       preparedPlayerLimit: { constrained: 2, standard: 3 },
       persistentVideoPreheatLimit: { constrained: 0, standard: 0 },
     })
@@ -42,8 +43,8 @@ describe("mobile media runtime config", () => {
     process.env.MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD = "-5"
 
     expect(getMobileMediaConfig()).toMatchObject({
-      imagePreheatLimit: { standard: 120 },
-      stackPreheatLimit: { constrained: 2 },
+      imagePreheatLimit: { standard: 4 },
+      stackPreheatLimit: { constrained: 1 },
       preparedPlayerLimit: { standard: 10 },
       persistentVideoPreheatLimit: { standard: 0 },
     })

@@ -68,10 +68,10 @@ function booleanEnv(name: string, fallback: boolean) {
 
 export function getMobileMediaConfig(): RuntimeMediaConfig {
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-09.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.2",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
-      true,
+      false,
     ),
     qoeAccessLogSampleRate: floatEnv("MOBILE_QOE_ACCESS_LOG_SAMPLE_RATE", 1, {
       min: 0,
@@ -87,23 +87,23 @@ export function getMobileMediaConfig(): RuntimeMediaConfig {
       { min: 128 * 1024 * 1024, max: 2 * 1024 * 1024 * 1024 },
     ),
     imagePreheatLimit: {
-      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 12, {
-        min: 4,
-        max: 40,
+      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 1, {
+        min: 1,
+        max: 2,
       }),
-      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 32, {
-        min: 12,
-        max: 120,
+      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 2, {
+        min: 1,
+        max: 4,
       }),
     },
     stackPreheatLimit: {
-      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 3, {
-        min: 2,
-        max: 10,
+      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 1, {
+        min: 1,
+        max: 2,
       }),
-      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", 8, {
-        min: 4,
-        max: 28,
+      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", 2, {
+        min: 1,
+        max: 3,
       }),
     },
     preparedPlayerLimit: {

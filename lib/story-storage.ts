@@ -724,10 +724,19 @@ export async function createDirectBlobStoryImageAsset(input: {
     derivative: input.placeholderDerivative,
     maxByteSize: 128 * 1024,
   })
-  const generatedDerivatives =
-    clientDisplay && clientThumbnail
-      ? null
-      : await createDirectStoryImageDerivatives(input.pathname).catch(() => null)
+  let generatedDerivatives: Awaited<
+    ReturnType<typeof createDirectStoryImageDerivatives>
+  > = null
+  if (!clientDisplay || !clientThumbnail) {
+    try {
+      generatedDerivatives = await createDirectStoryImageDerivatives(input.pathname)
+    } catch (error) {
+      console.error("[story-image] server derivative generation failed", {
+        fileName: path.basename(input.pathname),
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
   const derivatives = clientDisplay
     ? {
         display: clientDisplay,

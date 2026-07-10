@@ -8,6 +8,7 @@ import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
+const initialStoryStackLimit = 2
 
 function absoluteMediaUrl(value: string | null, request: Request) {
   if (!value) {
@@ -137,9 +138,11 @@ function initialStoryStackIds(input: {
   const seen = new Set<string>()
   const ids = [
     ...(input.hasActiveMyStory ? ["my-story"] : []),
-    ...input.followingTimelineStories.slice(0, 6).map((story) => story.id),
-    ...input.followingStories.slice(0, 3).map((story) => story.id),
-    ...input.discoverStories.slice(0, 3).map((story) => story.id),
+    ...input.followingTimelineStories
+      .slice(0, initialStoryStackLimit)
+      .map((story) => story.id),
+    ...input.followingStories.slice(0, 1).map((story) => story.id),
+    ...input.discoverStories.slice(0, 1).map((story) => story.id),
   ]
 
   return ids.filter((id) => {
@@ -205,7 +208,7 @@ async function feedResponse(
     }),
     viewerId: user.id,
     request,
-    limit: 8,
+    limit: initialStoryStackLimit,
   })
   const latestMyStoryItem =
     feed.myStory.items.length > 0
