@@ -281,6 +281,20 @@
       "when": 1783638000000,
       "tag": "0039_media_upload_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1785522000000,
+      "tag": "0040_media_player_pool_diagnostics",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785525600000,
+      "tag": "0041_feed_events",
+      "breakpoints": true
     }
   ]
 }

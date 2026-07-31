@@ -91,6 +91,7 @@ export const mobilePerformanceEventName = pgEnum(
     "image_derivatives_prepared",
     "image_derivative_upload_failed",
     "background_upload_resume",
+    "silent_push_prewarm",
     "story_open",
     "story_open_warm",
     "story_stack_cache_clear",
@@ -108,6 +109,7 @@ export const mobilePerformanceEventName = pgEnum(
     "video_disk_cache_hit",
     "video_dismissed",
     "video_ended",
+    "video_player_pool_hit",
     "video_retry",
     "video_recovered",
     "video_startup",
@@ -121,6 +123,13 @@ export const mobilePerformanceEventName = pgEnum(
     "video_access_log",
   ],
 )
+export const feedEventKind = pgEnum("feed_event_kind", [
+  "impression",
+  "completion",
+  "skip",
+  "hide",
+  "rewatch",
+])
 export const safetyReportTargetKind = pgEnum("safety_report_target_kind", [
   "story",
   "user",
@@ -947,6 +956,37 @@ export const feedImpressions = pgTable("feed_impressions", {
     .notNull()
     .defaultNow(),
 })
+
+export const feedEvents = pgTable(
+  "feed_events",
+  {
+    id: text("id").primaryKey(),
+    viewerId: text("viewer_id")
+      .notNull()
+      .references(() => users.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => users.id),
+    kind: feedEventKind("kind").notNull(),
+    viewedMs: integer("viewed_ms"),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("feed_events_viewer_created_idx").on(table.viewerId, table.createdAt),
+    index("feed_events_story_created_idx").on(table.storyId, table.createdAt),
+    index("feed_events_creator_kind_created_idx").on(
+      table.creatorId,
+      table.kind,
+      table.createdAt,
+    ),
+  ],
+)
 
 export const storyInteractions = pgTable(
   "story_interactions",
