@@ -2,13 +2,60 @@ import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { readFeedCacheBatch } from "@/lib/feed-snapshot-store"
 import { getMobileInitialStoryStacks } from "@/lib/mobile-story-stacks"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
+import { refreshProcessingCloudflareStories } from "@/lib/stories/cloudflare-status"
 
 export const runtime = "nodejs"
-const initialStoryStackLimit = 2
+const initialStoryStackLimit = 4
+const defaultPageSize = 20
+const maxPageSize = 50
+
+type FeedCursor = {
+  lastSeenAt: string
+  id: string
+}
+
+function parsePageRequest(request: Request) {
+  const url = new URL(request.url)
+  const requestedLimit = Number.parseInt(url.searchParams.get("limit") ?? "", 10)
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(maxPageSize, requestedLimit))
+    : defaultPageSize
+  const encodedCursor = url.searchParams.get("cursor")
+
+  if (!encodedCursor) {
+    return { cursor: null, limit }
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(encodedCursor, "base64url").toString("utf8"),
+    ) as Partial<FeedCursor>
+    return {
+      cursor:
+        typeof parsed.lastSeenAt === "string" && typeof parsed.id === "string"
+          ? { lastSeenAt: parsed.lastSeenAt, id: parsed.id }
+          : null,
+      limit,
+    }
+  } catch {
+    return { cursor: null, limit }
+  }
+}
+
+function encodeCursor(story: { id: string; lastUploadedAt?: string | null }) {
+  if (!story.lastUploadedAt) {
+    return null
+  }
+
+  return Buffer.from(
+    JSON.stringify({ lastSeenAt: story.lastUploadedAt, id: story.id }),
+  ).toString("base64url")
+}
 
 function absoluteMediaUrl(value: string | null, request: Request) {
   if (!value) {
@@ -29,6 +76,9 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 
   try {
     const url = new URL(value)
+    if (url.protocol === "data:") {
+      return value
+    }
     url.searchParams.set("v", version)
     return url.toString()
   } catch {
@@ -155,26 +205,64 @@ function initialStoryStackIds(input: {
   })
 }
 
-function jsonResponse(payload: unknown) {
+function hlsPreconnectLinks(stories: Array<{
+  assetKind: string
+  mediaUrl: string
+}>) {
+  const customerSubdomain = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN
+    ?.replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "")
+  if (!customerSubdomain) return []
+
+  const uids = stories
+    .filter((story) => story.assetKind === "video")
+    .flatMap((story) => story.mediaUrl.match(/([a-f0-9]{32})/i)?.[1] ?? [])
+    .slice(0, 4)
+  const links: string[] = []
+  for (let i = 0; i < uids.length; i++) {
+    const uid = uids[i]
+    const manifest = `https://${customerSubdomain}/${uid}/manifest/video.m3u8`
+    links.push(`<${manifest}>; rel=preconnect`)
+    if (i === 0) links.push(`<${manifest}>; rel=preload; as=fetch; crossorigin`)
+  }
+  links.push(`<https://${customerSubdomain}>; rel=dns-prefetch`)
+  links.push(`<https://videodelivery.net>; rel=dns-prefetch`)
+  return links
+}
+
+function jsonResponse(
+  payload: unknown,
+  request: Request,
+  userId: string,
+  linkValues: string[],
+) {
   const body = JSON.stringify(payload)
   const etag = `"${createHash("sha256").update(body).digest("base64url")}"`
-  const cacheControl = "private, no-store"
+  const cacheControl = "private, max-age=5, stale-while-revalidate=30"
   const vary = "Authorization, X-Device-Id"
-
-  return new Response(body, {
-    headers: {
-      "Cache-Control": cacheControl,
-      "Content-Type": "application/json",
-      ETag: etag,
-      Vary: vary,
-    },
+  const headers = new Headers({
+    "Cache-Control": cacheControl,
+    "CDN-Cache-Control": "s-maxage=5",
+    "Content-Type": "application/json",
+    ETag: etag,
+    "Surrogate-Key": `feed:${userId}`,
+    "Vercel-Cache-Tag": `feed:${userId}`,
+    Vary: vary,
   })
+  if (linkValues.length > 0) headers.set("Link", linkValues.join(", "))
+
+  if (request.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers })
+  }
+
+  return new Response(body, { headers })
 }
 
 async function feedResponse(
   request: Request,
 ) {
   const startedAt = performance.now()
+  const pageRequest = parsePageRequest(request)
   const user = await getCompleteMobileSession(request)
 
   if (!user) {
@@ -184,15 +272,40 @@ async function feedResponse(
     )
   }
 
-  const feed = await getFeedData(user.id)
+  const cursorDate = pageRequest.cursor
+    ? new Date(pageRequest.cursor.lastSeenAt)
+    : null
+  const validCursor =
+    cursorDate && Number.isFinite(cursorDate.getTime())
+      ? { createdAt: cursorDate, id: pageRequest.cursor!.id }
+      : null
+  const cacheBatch = await readFeedCacheBatch(
+    user.id,
+    Math.min((pageRequest.limit + 1) * 3, 50),
+    validCursor?.createdAt.getTime(),
+  )
+  const timelineStoryIds = cacheBatch?.timelineIds ?? []
+  const feed = await getFeedData(user.id, {
+    timelineStoryIds,
+    timelineCursor: validCursor,
+    timelineLimit: pageRequest.limit + 1,
+    useSnapshot: !validCursor,
+  })
+  await refreshProcessingCloudflareStories({ limit: 50 })
   const followingStories = collapseStoryCardsByCreator(
     feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
   )
-  const followingTimelineStories = collapseStoryCardsByCreator(
+  const completeFollowingTimeline = collapseStoryCardsByCreator(
     feed.followingTimelineStories.map((story) =>
       absoluteStoryCardMedia(story, request),
     ),
   )
+  const hasMoreTimelineStories = completeFollowingTimeline.length > pageRequest.limit
+  const followingTimelineStories = completeFollowingTimeline.slice(0, pageRequest.limit)
+  const nextCursor =
+    hasMoreTimelineStories && followingTimelineStories.length > 0
+      ? encodeCursor(followingTimelineStories[followingTimelineStories.length - 1])
+      : null
   const followedCreatorNames = new Set(
     followingStories.map((story) => story.creator.toLowerCase()),
   )
@@ -221,8 +334,7 @@ async function feedResponse(
     latestMyStoryItem?.id,
   )
 
-  const response = jsonResponse(
-    {
+  const payload = {
       ok: true,
       session: {
         displayName: user.displayName,
@@ -236,6 +348,7 @@ async function feedResponse(
       })),
       followingStories,
       followingTimelineStories,
+      nextCursor,
       discoverTiles: discoverStories.map((story) => ({
         id: story.id,
         assetKind: story.assetKind,
@@ -265,7 +378,12 @@ async function feedResponse(
           absoluteStoryCardMedia(story, request),
         ),
       },
-    },
+    }
+  const response = jsonResponse(
+    payload,
+    request,
+    user.id,
+    hlsPreconnectLinks(followingTimelineStories),
   )
   response.headers.set(
     "Server-Timing",

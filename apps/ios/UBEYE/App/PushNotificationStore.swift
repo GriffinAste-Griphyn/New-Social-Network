@@ -76,6 +76,29 @@ final class PushNotificationStore: ObservableObject {
         }
     }
 
+    func handleBackgroundNotification(
+        _ userInfo: [AnyHashable: Any],
+        api: APIClient
+    ) async -> UIBackgroundFetchResult {
+        guard api.authToken != nil,
+              userInfo["type"] as? String == "creator_story_posted",
+              let storyId = userInfo["storyId"] as? String,
+              !storyId.isEmpty else {
+            return .noData
+        }
+
+        do {
+            async let stack: StoryStackResponse = api.storyStack(storyId: storyId, refresh: true)
+            async let feed: MobileFeedResponse = api.mobileFeed(limit: 20)
+            _ = try await (stack, feed)
+            MediaPerformance.mark("silent_push_prewarm id=\(storyId) result=success")
+            return .newData
+        } catch {
+            MediaPerformance.mark("silent_push_prewarm id=\(storyId) result=failed")
+            return .failed
+        }
+    }
+
     private static var apnsEnvironment: String {
         #if DEBUG
         return "sandbox"

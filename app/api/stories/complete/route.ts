@@ -9,6 +9,7 @@ import {
   isCloudflareStreamFullyReady,
   markMediaUploadSessionCompleted,
   MediaUploadSessionError,
+  mergeCloudflareStreamProviderDetails,
   recordCloudflareStreamUploadStatus,
   releaseMediaUploadSessionCompletion,
 } from "@/lib/media-upload-sessions"
@@ -23,7 +24,7 @@ import {
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
   removeStoredStoryAsset,
-  setCloudflareStreamThumbnailToLastFrame,
+  setCloudflareStreamThumbnailAtDefaultTime,
   StoryUploadError,
   type StoredStoryAsset,
 } from "@/lib/story-storage"
@@ -33,6 +34,10 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import {
+  isSupportedStoryVideoInputContentType,
+  storyMediaContract,
+} from "@/lib/story-media-contract"
 import {
   parseBrandTags,
   parseStoryCaption,
@@ -62,12 +67,24 @@ const completeSchema = z
     z.union([
       z.object({
         assetKind: z.literal("image"),
-        pathname: z.string().trim().min(1).max(500),
-        contentType: z.string().trim().min(1).max(120),
-        byteSize: z.number().int().positive(),
-        checksum: z.string().regex(/^[a-f0-9]{64}$/i),
-        width: z.number().int().positive().nullable().optional(),
-        height: z.number().int().positive().nullable().optional(),
+        basePathname: z.string().trim().min(1).max(500),
+        displayDerivative: z.object({
+          pathname: z.string().trim().min(1).max(500),
+          contentType: z.enum(["image/avif", "image/webp"]),
+          byteSize: z.number().int().positive(),
+          checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+          width: z.literal(storyMediaContract.canvas.width),
+          height: z.literal(storyMediaContract.canvas.height),
+        }),
+        thumbnailDerivative: z.object({
+          pathname: z.string().trim().min(1).max(500),
+          contentType: z.literal("image/webp"),
+          byteSize: z.number().int().positive(),
+          checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+          width: z.literal(storyMediaContract.thumbnail.width),
+          height: z.literal(storyMediaContract.thumbnail.height),
+        }),
+        thumbHash: z.string().min(20).max(80).regex(/^[A-Za-z0-9_-]+$/),
       }),
       z.object({
         assetKind: z.literal("video"),
@@ -78,7 +95,7 @@ const completeSchema = z
           .trim()
           .min(1)
           .max(120)
-          .refine((value) => value.toLowerCase().startsWith("video/"))
+          .refine(isSupportedStoryVideoInputContentType)
           .default("video/mp4"),
         byteSize: z.number().int().positive(),
         checksum: z.string().regex(/^[a-f0-9]{64}$/i),
@@ -160,13 +177,11 @@ export async function POST(request: Request) {
 
     if (parsed.data.assetKind === "image") {
       storedAsset = await createDirectBlobStoryImageAsset({
-        pathname: parsed.data.pathname,
+        basePathname: parsed.data.basePathname,
         ownerUserId: session.id,
-        contentType: parsed.data.contentType,
-        byteSize: parsed.data.byteSize,
-        checksum: parsed.data.checksum,
-        width: parsed.data.width ?? null,
-        height: parsed.data.height ?? null,
+        displayDerivative: parsed.data.displayDerivative,
+        thumbnailDerivative: parsed.data.thumbnailDerivative,
+        thumbHash: parsed.data.thumbHash,
       })
     } else {
       const uploadClaim = await claimMediaUploadSessionForCompletion({
@@ -229,9 +244,15 @@ export async function POST(request: Request) {
       const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
         uploadClaim.session,
       )
-      const cloudflareDetails = await getCloudflareStreamVideoDetails(
+      const observedCloudflareDetails = await getCloudflareStreamVideoDetails(
         parsed.data.uid,
       ).catch(() => retainedCloudflareDetails)
+      const cloudflareDetails = observedCloudflareDetails
+        ? mergeCloudflareStreamProviderDetails(
+            retainedCloudflareDetails,
+            observedCloudflareDetails,
+          )
+        : retainedCloudflareDetails
 
       if (cloudflareDetails) {
         await recordCloudflareStreamUploadStatus({
@@ -248,7 +269,7 @@ export async function POST(request: Request) {
         )
       }
 
-      await setCloudflareStreamThumbnailToLastFrame(parsed.data.uid).catch(
+      await setCloudflareStreamThumbnailAtDefaultTime(parsed.data.uid).catch(
         () => undefined,
       )
 

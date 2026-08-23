@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { put } from "@vercel/blob/client"
 import { Camera, Clapperboard, Coins, Loader2 } from "lucide-react"
+import { rgbaToThumbHash } from "thumbhash"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,6 +16,13 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { highestQualityImageWithinBudget } from "@/lib/story-image-encoding"
+import {
+  isSupportedStoryImageInputContentType,
+  isSupportedStoryVideoInputContentType,
+  storyMediaContract,
+  storyMediaInputAccept,
+} from "@/lib/story-media-contract"
 
 type StoryComposerProps = {
   handle: string
@@ -23,9 +31,16 @@ type StoryComposerProps = {
 type PreparedImageUpload = {
   ok: true
   assetKind: "image"
+  basePathname: string
+  display: PreparedImageUploadPart
+  thumbnail: PreparedImageUploadPart
+}
+
+type PreparedImageUploadPart = {
   pathname: string
   clientToken: string
-  contentType: string
+  contentType: "image/avif" | "image/webp"
+  maxSizeBytes: number
 }
 
 type PreparedVideoUpload = {
@@ -46,7 +61,7 @@ type PreparedLegacyUpload = {
 type PreparedUpload = PreparedImageUpload | PreparedVideoUpload | PreparedLegacyUpload
 
 const tusVersion = "1.0.0"
-const tusChunkSizeBytes = 8 * 1024 * 1024
+const tusChunkSizeBytes = 3 * 1024 * 1024
 const tusRequestTimeoutMs = 5 * 60 * 1000
 const tusMaxTransientRetries = 4
 const videoUploadIdentityStoragePrefix = "ubeye:story-video-upload:v1:"
@@ -96,15 +111,184 @@ function fileAssetKind(file: File) {
     return "video" as const
   }
 
+  const extension = file.name.split(".").pop()?.toLowerCase()
+  if (["jpg", "jpeg", "png", "webp"].includes(extension ?? "")) {
+    return "image" as const
+  }
+  if (["mp4", "mov", "webm"].includes(extension ?? "")) {
+    return "video" as const
+  }
+
   return null
 }
 
-async function sha256Hex(file: File) {
+function resolvedMediaContentType(file: File, assetKind: "image" | "video") {
+  if (file.type) {
+    return file.type.toLowerCase()
+  }
+
+  const extension = file.name.split(".").pop()?.toLowerCase()
+  if (assetKind === "image") {
+    if (extension === "png") return "image/png"
+    if (extension === "webp") return "image/webp"
+    return "image/jpeg"
+  }
+
+  if (extension === "mov") return "video/quicktime"
+  if (extension === "webm") return "video/webm"
+  return "video/mp4"
+}
+
+async function sha256Hex(file: Blob) {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer())
 
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")
+}
+
+type BrowserImageDerivative = {
+  blob: Blob
+  contentType: "image/avif" | "image/webp"
+  width: number
+  height: number
+}
+
+async function canvasBlob(
+  canvas: HTMLCanvasElement,
+  contentType: "image/avif" | "image/webp",
+  quality: number,
+) {
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, contentType, quality),
+  )
+  return blob?.type === contentType ? blob : null
+}
+
+async function highestQualityCanvasBlobWithinBudget(
+  canvas: HTMLCanvasElement,
+  contentType: "image/avif" | "image/webp",
+  qualities: readonly number[],
+  maxByteSize: number,
+) {
+  return highestQualityImageWithinBudget({
+    qualities,
+    maxByteSize,
+    encode: (quality) => canvasBlob(canvas, contentType, quality),
+  })
+}
+
+function storyCanvas(image: ImageBitmap, width: number, height: number) {
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext("2d", { alpha: false })
+  if (!context) throw new Error("Could not prepare this image.")
+
+  context.fillStyle = "#000000"
+  context.fillRect(0, 0, width, height)
+
+  const containScale = Math.min(width / image.width, height / image.height)
+  const containWidth = image.width * containScale
+  const containHeight = image.height * containScale
+  context.drawImage(
+    image,
+    (width - containWidth) / 2,
+    (height - containHeight) / 2,
+    containWidth,
+    containHeight,
+  )
+  return canvas
+}
+
+function base64Url(bytes: Uint8Array) {
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "")
+}
+
+async function buildBrowserImageDerivatives(file: File) {
+  const image = await createImageBitmap(file, { imageOrientation: "from-image" })
+  try {
+    const displayCanvas = storyCanvas(
+      image,
+      storyMediaContract.canvas.width,
+      storyMediaContract.canvas.height,
+    )
+    const thumbnailCanvas = storyCanvas(
+      image,
+      storyMediaContract.thumbnail.width,
+      storyMediaContract.thumbnail.height,
+    )
+    const avifDisplay = await highestQualityCanvasBlobWithinBudget(
+      displayCanvas,
+      "image/avif",
+      storyMediaContract.imageEncoding.displayAvifQualities,
+      storyMediaContract.upload.maxImageDisplayDerivativeBytes,
+    )
+    const displayBlob =
+      avifDisplay ??
+      (await highestQualityCanvasBlobWithinBudget(
+        displayCanvas,
+        "image/webp",
+        storyMediaContract.imageEncoding.displayWebpQualities,
+        storyMediaContract.upload.maxImageDisplayDerivativeBytes,
+      ))
+    const thumbnailBlob = await highestQualityCanvasBlobWithinBudget(
+      thumbnailCanvas,
+      "image/webp",
+      storyMediaContract.imageEncoding.thumbnailWebpQualities,
+      storyMediaContract.upload.maxImageThumbnailDerivativeBytes,
+    )
+    if (!displayBlob || !thumbnailBlob) {
+      throw new Error("This image could not fit the story upload limits.")
+    }
+    if (
+      displayBlob.size >
+        storyMediaContract.upload.maxImageDisplayDerivativeBytes ||
+      thumbnailBlob.size >
+        storyMediaContract.upload.maxImageThumbnailDerivativeBytes
+    ) {
+      throw new Error("This image could not fit the story upload limits.")
+    }
+
+    const hashCanvas = document.createElement("canvas")
+    hashCanvas.width = 18
+    hashCanvas.height = 32
+    const hashContext = hashCanvas.getContext("2d")
+    if (!hashContext) throw new Error("Could not prepare this image.")
+    hashContext.drawImage(thumbnailCanvas, 0, 0, 18, 32)
+    const rgba = hashContext.getImageData(0, 0, 18, 32).data
+
+    return {
+      display: {
+        blob: displayBlob,
+        contentType: displayBlob.type as BrowserImageDerivative["contentType"],
+        width: storyMediaContract.canvas.width,
+        height: storyMediaContract.canvas.height,
+      } satisfies BrowserImageDerivative,
+      thumbnail: {
+        blob: thumbnailBlob,
+        contentType: "image/webp",
+        width: storyMediaContract.thumbnail.width,
+        height: storyMediaContract.thumbnail.height,
+      } satisfies BrowserImageDerivative,
+      thumbHash: base64Url(
+        rgbaToThumbHash(
+          18,
+          32,
+          new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+        ),
+      ),
+    }
+  } finally {
+    image.close()
+  }
 }
 
 function videoUploadFingerprint(file: File, checksum: string) {
@@ -247,23 +431,6 @@ function clearVideoUploadIdentity(fingerprint: string) {
   } catch {
     // Nothing else is required when session storage is unavailable.
   }
-}
-
-function imageDimensions(file: File) {
-  return new Promise<{ width: number | null; height: number | null }>((resolve) => {
-    const image = new Image()
-    const url = URL.createObjectURL(file)
-
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve({ width: image.naturalWidth || null, height: image.naturalHeight || null })
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      resolve({ width: null, height: null })
-    }
-    image.src = url
-  })
 }
 
 function videoMetadata(file: File) {
@@ -699,6 +866,46 @@ export function StoryComposer({ handle }: StoryComposerProps) {
     let preparedVideoUploadSessionId: string | null = null
 
     try {
+      const contentType = resolvedMediaContentType(mediaEntry, assetKind)
+      if (
+        assetKind === "image" &&
+        !isSupportedStoryImageInputContentType(contentType)
+      ) {
+        throw new Error("Choose a JPG, PNG, or WEBP image.")
+      }
+      if (
+        assetKind === "video" &&
+        !isSupportedStoryVideoInputContentType(contentType)
+      ) {
+        throw new Error("Choose an MP4, MOV, or WEBM video.")
+      }
+      if (
+        assetKind === "image" &&
+        mediaEntry.size > storyMediaContract.upload.maxImageBytes
+      ) {
+        throw new Error("Choose an image up to 25 MB.")
+      }
+      if (
+        assetKind === "video" &&
+        mediaEntry.size > storyMediaContract.upload.maxVideoBytes
+      ) {
+        throw new Error("Choose a video up to 512 MB.")
+      }
+
+      const resolvedVideoMetadata =
+        assetKind === "video" ? await videoMetadata(mediaEntry) : null
+      if (
+        resolvedVideoMetadata?.durationMs &&
+        resolvedVideoMetadata.durationMs >
+          storyMediaContract.upload.maxVideoDurationSeconds * 1_000
+      ) {
+        throw new Error("Story videos are capped at 2 minutes.")
+      }
+
+      const imageDerivatives =
+        assetKind === "image"
+          ? await buildBrowserImageDerivatives(mediaEntry)
+          : null
       const videoChecksum =
         assetKind === "video" ? await sha256Hex(mediaEntry) : null
       videoFingerprint =
@@ -716,8 +923,11 @@ export function StoryComposer({ handle }: StoryComposerProps) {
         body: JSON.stringify({
           assetKind,
           fileName: mediaEntry.name || (assetKind === "image" ? "story.jpg" : "story.mp4"),
-          contentType: mediaEntry.type || (assetKind === "image" ? "image/jpeg" : "video/mp4"),
+          contentType,
           byteSize: mediaEntry.size,
+          ...(imageDerivatives
+            ? { displayContentType: imageDerivatives.display.contentType }
+            : {}),
           ...(videoUploadIdentity ?? {}),
         }),
       })
@@ -772,36 +982,58 @@ export function StoryComposer({ handle }: StoryComposerProps) {
         return
       }
 
-      const checksum = videoChecksum ?? (await sha256Hex(mediaEntry))
-      let completionPayload:
-        | Record<string, string | number | null>
-        | undefined
+      let completionPayload: Record<string, unknown> | undefined
 
       if (prepared.assetKind === "image") {
-        const dimensions = await imageDimensions(mediaEntry)
+        if (!imageDerivatives) {
+          throw new Error("Could not prepare the image derivatives.")
+        }
+        if (
+          imageDerivatives.display.blob.size > prepared.display.maxSizeBytes ||
+          imageDerivatives.thumbnail.blob.size > prepared.thumbnail.maxSizeBytes
+        ) {
+          throw new Error("The upload service returned incompatible image limits.")
+        }
 
         setStatusText("Uploading image")
-        await put(prepared.pathname, mediaEntry, {
-          access: "private",
-          token: prepared.clientToken,
-          contentType: prepared.contentType,
-          multipart: mediaEntry.size > 8 * 1024 * 1024,
-          abortSignal: uploadAbortController.signal,
-          onUploadProgress: ({ percentage }) => setProgress(Math.round(percentage)),
-        })
+        await Promise.all([
+          put(prepared.display.pathname, imageDerivatives.display.blob, {
+            access: "private",
+            token: prepared.display.clientToken,
+            contentType: prepared.display.contentType,
+            abortSignal: uploadAbortController.signal,
+          }),
+          put(prepared.thumbnail.pathname, imageDerivatives.thumbnail.blob, {
+            access: "private",
+            token: prepared.thumbnail.clientToken,
+            contentType: prepared.thumbnail.contentType,
+            abortSignal: uploadAbortController.signal,
+          }),
+        ])
+        setProgress(100)
 
         completionPayload = {
           assetKind: "image",
-          pathname: prepared.pathname,
-          contentType: prepared.contentType,
-          byteSize: mediaEntry.size,
-          checksum,
-          width: dimensions.width,
-          height: dimensions.height,
+          basePathname: prepared.basePathname,
+          displayDerivative: {
+            pathname: prepared.display.pathname,
+            contentType: imageDerivatives.display.contentType,
+            byteSize: imageDerivatives.display.blob.size,
+            checksum: await sha256Hex(imageDerivatives.display.blob),
+            width: imageDerivatives.display.width,
+            height: imageDerivatives.display.height,
+          },
+          thumbnailDerivative: {
+            pathname: prepared.thumbnail.pathname,
+            contentType: imageDerivatives.thumbnail.contentType,
+            byteSize: imageDerivatives.thumbnail.blob.size,
+            checksum: await sha256Hex(imageDerivatives.thumbnail.blob),
+            width: imageDerivatives.thumbnail.width,
+            height: imageDerivatives.thumbnail.height,
+          },
+          thumbHash: imageDerivatives.thumbHash,
         }
       } else {
-        const metadata = await videoMetadata(mediaEntry)
-
         setStatusText("Uploading video")
         await uploadTusFile({
           uploadUrl: prepared.uploadUrl,
@@ -814,12 +1046,12 @@ export function StoryComposer({ handle }: StoryComposerProps) {
           assetKind: "video",
           uid: prepared.uid,
           uploadSessionId: prepared.uploadSessionId,
-          contentType: mediaEntry.type || "video/mp4",
+          contentType,
           byteSize: mediaEntry.size,
-          checksum,
-          durationMs: metadata.durationMs,
-          width: metadata.width,
-          height: metadata.height,
+          checksum: videoChecksum!,
+          durationMs: resolvedVideoMetadata?.durationMs ?? null,
+          width: resolvedVideoMetadata?.width ?? null,
+          height: resolvedVideoMetadata?.height ?? null,
         }
       }
 
@@ -919,13 +1151,13 @@ export function StoryComposer({ handle }: StoryComposerProps) {
               id="media"
               name="media"
               type="file"
-              accept="image/jpeg,image/png,image/webp,video/mp4,video/webm"
+              accept={storyMediaInputAccept}
               disabled={isUploading}
               required
             />
             <p className="text-xs text-muted-foreground">
-              JPG, PNG, WEBP, or video. Images upload up to 25 MB; videos upload
-              directly to processing storage.
+              JPG, PNG, WEBP, MP4, MOV, or WEBM. Images may be up to 25 MB;
+              videos may be up to 512 MB and 2 minutes.
             </p>
           </div>
 

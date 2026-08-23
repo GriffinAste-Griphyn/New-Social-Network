@@ -54,7 +54,18 @@ struct FollowingView: View {
                                         priority: .visible,
                                         limit: 1
                                     )
+                                    if story.id == stories.last?.id {
+                                        Task {
+                                            await store.loadNextPage(api: api, mediaEngine: mediaEngine)
+                                        }
+                                    }
                                 }
+                            }
+
+                            if store.isLoadingNextPage {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
                             }
                         }
                     }

@@ -1,25 +1,25 @@
 import { createHash, createPrivateKey, createSign, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
-import { del, get, head, put } from "@vercel/blob"
-import sharp from "sharp"
+import { del, head, put } from "@vercel/blob"
 
 import {
   buildCloudflareStreamPathname,
   buildCloudflareStreamThumbnailPathname,
-  buildLocalStoryMediaPathname,
   buildStoryMediaRoute,
   cloudflareStreamMediaPrefix,
-  getLocalStoryMediaPathname,
   getPrivateVercelBlobPathname,
   isVercelBlobUrl,
-  localStoryMediaPrefix,
   storyMediaAccessTokenTtlMs,
-  withConfiguredPublicBaseUrl,
 } from "@/lib/story-media/access"
+import {
+  isSupportedStoryImageInputContentType,
+  storyMediaContract,
+} from "@/lib/story-media-contract"
 export {
   createStoryMediaAccessToken,
   getStoryMediaAccessTokenMaxAgeSeconds,
@@ -27,21 +27,21 @@ export {
   verifyStoryMediaAccessToken,
 } from "@/lib/story-media/access"
 
-const maxStoryUploadBytes = 25 * 1024 * 1024
+const maxStoryUploadBytes = storyMediaContract.upload.maxImageBytes
 export const maxStoryImageUploadBytes = maxStoryUploadBytes
-export const maxStoryVideoUploadBytes = 512 * 1024 * 1024
-export const maxOriginalStoryVideoUploadBytes = maxStoryVideoUploadBytes
-export const maxOriginalStoryVideoThumbnailUploadBytes = 2 * 1024 * 1024
-export const maxCloudflareStreamClientThumbnailUploadBytes = 2 * 1024 * 1024
-const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
-const cloudflareStreamClientThumbnailDirectory =
-  "stories/mobile-cloudflare-thumbnails"
+export const maxStoryImageDisplayDerivativeBytes =
+  storyMediaContract.upload.maxImageDisplayDerivativeBytes
+export const maxStoryImageThumbnailDerivativeBytes =
+  storyMediaContract.upload.maxImageThumbnailDerivativeBytes
+export const maxStoryImagePlaceholderBytes =
+  storyMediaContract.upload.maxImagePlaceholderBytes
+export const maxStoryVideoUploadBytes = storyMediaContract.upload.maxVideoBytes
+export const maxStoryVideoPosterUploadBytes = 2 * 1024 * 1024
 const execFileAsync = promisify(execFile)
-const directStoryImageDisplayWidth = 1080
-const directStoryImageDisplayHeight = 1920
-const directStoryImageThumbnailWidth = 720
-const directStoryImageThumbnailHeight = 1280
-const directStoryImageDerivativeCacheMaxAgeSeconds = 60 * 60 * 24 * 30
+const directStoryImageDisplayWidth = storyMediaContract.canvas.width
+const directStoryImageDisplayHeight = storyMediaContract.canvas.height
+const directStoryImageThumbnailWidth = storyMediaContract.thumbnail.width
+const directStoryImageThumbnailHeight = storyMediaContract.thumbnail.height
 
 type ResolvedUploadType = {
   assetKind: "image" | "video"
@@ -107,126 +107,6 @@ export function createCloudflareStreamThumbnailMediaUrl(uid: string) {
   return buildStoryMediaRoute(buildCloudflareStreamThumbnailPathname(uid))
 }
 
-async function createLocalVideoThumbnail(videoPath: string, thumbnailPath: string) {
-  const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg"
-  const extractLastFrame = [
-    "-y",
-    "-sseof",
-    "-0.1",
-    "-i",
-    videoPath,
-    "-frames:v",
-    "1",
-    thumbnailPath,
-  ]
-  const extractFirstFrame = [
-    "-y",
-    "-i",
-    videoPath,
-    "-frames:v",
-    "1",
-    thumbnailPath,
-  ]
-
-  try {
-    await execFileAsync(ffmpegPath, extractLastFrame)
-  } catch {
-    try {
-      await execFileAsync(ffmpegPath, extractFirstFrame)
-    } catch {
-      return false
-    }
-  }
-
-  try {
-    const normalizedThumbnail = Buffer.from(await sharp(thumbnailPath)
-      .rotate()
-      .resize({
-        width: 720,
-        height: 1280,
-        fit: "inside",
-        withoutEnlargement: true,
-      })
-      .jpeg({
-        quality: 86,
-        progressive: false,
-      })
-      .toBuffer())
-
-    await writeFile(thumbnailPath, normalizedThumbnail)
-    return true
-  } catch {
-    await rm(thumbnailPath, { force: true })
-    return false
-  }
-}
-
-const localStoryStorageProvider: StoryStorageProvider = {
-  async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
-    await mkdir(storyUploadDirectory, { recursive: true })
-    const absolutePath = path.join(storyUploadDirectory, fileName)
-    const temporaryPath = path.join(
-      storyUploadDirectory,
-      `.${fileName}.${randomUUID()}.tmp`,
-    )
-
-    await writeFile(temporaryPath, buffer)
-    await rename(temporaryPath, absolutePath)
-
-    const mediaUrl = withConfiguredPublicBaseUrl(
-      buildStoryMediaRoute(buildLocalStoryMediaPathname(fileName)),
-    )
-    let thumbnailUrl = assetKind === "image" ? mediaUrl : null
-
-    if (assetKind === "video") {
-      const extension = path.extname(fileName)
-      const thumbnailFileName = `${fileName.slice(0, -extension.length)}-thumb.jpg`
-      const thumbnailPath = path.join(storyUploadDirectory, thumbnailFileName)
-
-      if (await createLocalVideoThumbnail(absolutePath, thumbnailPath)) {
-        thumbnailUrl = withConfiguredPublicBaseUrl(
-          buildStoryMediaRoute(buildLocalStoryMediaPathname(thumbnailFileName)),
-        )
-      }
-    }
-
-    return {
-      assetKind,
-      mediaUrl,
-      thumbnailUrl,
-      placeholderUrl: thumbnailUrl,
-      storageProvider: "local",
-      storageKey: buildLocalStoryMediaPathname(fileName),
-      contentType,
-      byteSize: buffer.byteLength,
-      checksum,
-      ...metadata,
-    }
-  },
-  async remove(mediaUrl) {
-    const localStoryMediaPathname = getLocalStoryMediaPathname(mediaUrl)
-
-    if (!localStoryMediaPathname?.startsWith(`${localStoryMediaPrefix}/`)) {
-      return
-    }
-
-    const fileName = localStoryMediaPathname.slice(localStoryMediaPrefix.length + 1)
-    const absolutePath = path.join(storyUploadDirectory, fileName)
-    const extension = path.extname(fileName)
-    const thumbnailPath = extension
-      ? path.join(
-          storyUploadDirectory,
-          `${fileName.slice(0, -extension.length)}-thumb.jpg`,
-        )
-      : null
-
-    await rm(absolutePath, { force: true })
-    if (thumbnailPath) {
-      await rm(thumbnailPath, { force: true })
-    }
-  },
-}
-
 const vercelBlobStoryStorageProvider: StoryStorageProvider = {
   async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
     const blob = await put(`stories/${fileName}`, buffer, {
@@ -266,12 +146,6 @@ type CloudflareDirectUploadResponse = {
     uid?: string
     uploadURL?: string
   }
-}
-
-type CloudflareDirectUpload = {
-  uid: string
-  uploadUrl: string
-  uploadProtocol: "form"
 }
 
 type CloudflareTusUpload = {
@@ -364,6 +238,11 @@ function getCloudflareStreamSigningKeyConfig() {
   const jwk = process.env.CLOUDFLARE_STREAM_SIGNING_KEY_JWK?.trim()
 
   if (!keyId && !pem && !jwk) {
+    if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") {
+      throw new StoryUploadError(
+        "Production Cloudflare Stream playback requires a local signing key.",
+      )
+    }
     return null
   }
 
@@ -464,138 +343,33 @@ function parseCloudflarePctComplete(value: number | string | null | undefined) {
   return null
 }
 
-export function isAllowedOriginalQualityVideoThumbnailContentType(
-  contentType: string,
-) {
-  return contentType.toLowerCase() === "image/jpeg"
-}
-
-export function isAllowedOriginalQualityVideoContentType(contentType: string) {
-  return ["video/mp4", "video/quicktime", "video/x-m4v"].includes(
-    contentType.toLowerCase(),
-  )
-}
-
-export async function createOriginalQualityVideoStoryAsset(input: {
-  pathname: string
-  contentType: string
-  byteSize: number
-  checksum: string
-  thumbnailPathname?: string | null
-  thumbnailContentType?: string | null
-  thumbnailByteSize?: number | null
-  thumbnailChecksum?: string | null
-  durationMs?: number | null
-  width?: number | null
-  height?: number | null
-}): Promise<StoredStoryAsset> {
-  if (
-    input.pathname.includes("..") ||
-    !input.pathname.startsWith("stories/mobile-original/") ||
-    !isAllowedOriginalQualityVideoContentType(input.contentType) ||
-    !Number.isSafeInteger(input.byteSize) ||
-    input.byteSize <= 0 ||
-    input.byteSize > maxOriginalStoryVideoUploadBytes
-  ) {
-    throw new StoryUploadError("Could not verify the original story video.")
-  }
-
-  const videoMetadata = await head(input.pathname).catch(() => null)
-
-  if (
-    !videoMetadata ||
-    videoMetadata.size !== input.byteSize ||
-    videoMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
-  ) {
-    throw new StoryUploadError("Could not verify the original story video.")
-  }
-
-  let thumbnailUrl: string | null = null
-
-  if (input.thumbnailPathname) {
-    if (
-      input.thumbnailPathname.includes("..") ||
-      !input.thumbnailPathname.startsWith("stories/mobile-original/") ||
-      !input.thumbnailPathname.endsWith("-thumb.jpg") ||
-      input.thumbnailContentType !== "image/jpeg" ||
-      !input.thumbnailByteSize ||
-      input.thumbnailByteSize > maxOriginalStoryVideoThumbnailUploadBytes
-    ) {
-      throw new StoryUploadError("Could not verify the original story thumbnail.")
-    }
-
-    const thumbnailMetadata = await head(input.thumbnailPathname).catch(() => null)
-
-    if (
-      !thumbnailMetadata ||
-      thumbnailMetadata.size !== input.thumbnailByteSize ||
-      thumbnailMetadata.contentType.toLowerCase() !== "image/jpeg"
-    ) {
-      throw new StoryUploadError("Could not verify the original story thumbnail.")
-    }
-
-    thumbnailUrl = buildStoryMediaRoute(input.thumbnailPathname)
-  }
-
-  const mediaUrl = buildStoryMediaRoute(input.pathname)
-
-  return {
-    assetKind: "video",
-    mediaUrl,
-    thumbnailUrl,
-    placeholderUrl: thumbnailUrl,
-    storageProvider: "vercel-blob",
-    storageKey: input.pathname,
-    originalMediaUrl: mediaUrl,
-    originalThumbnailUrl: thumbnailUrl,
-    originalStorageProvider: "vercel-blob",
-    originalStorageKey: input.pathname,
-    originalContentType: input.contentType,
-    originalByteSize: input.byteSize,
-    originalChecksum: input.checksum,
-    originalWidth: input.width ?? null,
-    originalHeight: input.height ?? null,
-    originalDurationMs: input.durationMs ?? null,
-    contentType: input.contentType,
-    byteSize: input.byteSize,
-    checksum: input.checksum,
-    width: input.width ?? null,
-    height: input.height ?? null,
-    durationMs: input.durationMs ?? null,
-    processingStatus: "ready",
-  }
-}
-
 export function isAllowedDirectStoryImageContentType(contentType: string) {
-  return ["image/jpeg", "image/png", "image/webp"].includes(
-    contentType.toLowerCase(),
-  )
+  return isSupportedStoryImageInputContentType(contentType)
 }
 
 export function directStoryImagePathname(userId: string, fileName: string) {
   const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_")
-  const extension = path.extname(fileName).toLowerCase()
-  const resolvedExtension = [".jpg", ".jpeg", ".png", ".webp"].includes(extension)
-    ? extension
-    : ".jpg"
-
-  return `stories/web-direct/${safeUserId}/${randomUUID()}${resolvedExtension}`
+  void fileName
+  return `stories/web-direct/${safeUserId}/${randomUUID()}`
 }
 
-export function directStoryImageDisplayPathname(originalPathname: string) {
-  return buildDirectStoryImageDisplayPathname(originalPathname)
+export function directStoryImageDisplayPathname(
+  basePathname: string,
+  contentType: "image/avif" | "image/webp" = "image/avif",
+) {
+  return `${basePathname}-display.${contentType === "image/avif" ? "avif" : "webp"}`
 }
 
-export function directStoryImageThumbnailPathname(originalPathname: string) {
-  return buildDirectStoryImageThumbnailPathname(originalPathname)
+export function directStoryImageThumbnailPathname(basePathname: string) {
+  return `${basePathname}-thumb.webp`
 }
 
-export function directStoryImagePlaceholderPathname(originalPathname: string) {
-  const extension = path.extname(originalPathname)
+export function directStoryVideoPosterPathname(uid: string) {
+  if (!isCloudflareStreamUid(uid)) {
+    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  }
 
-  return extension
-    ? `${originalPathname.slice(0, -extension.length)}-placeholder.jpg`
-    : `${originalPathname}-placeholder.jpg`
+  return `stories/video-posters/${uid}-poster.jpg`
 }
 
 export type DirectStoryImageClientDerivativeInput = {
@@ -617,18 +391,50 @@ type VerifiedDirectStoryImageDerivative = {
   height: number | null
 }
 
-function expectedDirectDerivativePathnames(originalPathname: string) {
-  return new Set([
-    directStoryImageDisplayPathname(originalPathname),
-    directStoryImageThumbnailPathname(originalPathname),
-    directStoryImagePlaceholderPathname(originalPathname),
-  ])
+async function waitForDirectBlobMetadata(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+}) {
+  const retryDelaysMs = [0, 150, 400, 900]
+
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) {
+      await delay(delayMs)
+    }
+
+    const candidate = await head(input.pathname).catch(() => null)
+    if (
+      candidate &&
+      candidate.size === input.byteSize &&
+      candidate.contentType.toLowerCase() === input.contentType.toLowerCase()
+    ) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+export function normalizeStoryImageThumbHash(value: string | null | undefined) {
+  const trimmed = value?.trim()
+  if (!trimmed || !/^[A-Za-z0-9_-]{20,80}$/.test(trimmed)) {
+    return null
+  }
+  const bytes = Buffer.from(trimmed, "base64url")
+  if (bytes.length < 15 || bytes.length > 64) {
+    return null
+  }
+  return bytes.toString("base64url")
 }
 
 async function verifyDirectStoryImageClientDerivative(input: {
-  originalPathname: string
+  expectedPathname: string
   derivative: DirectStoryImageClientDerivativeInput | null | undefined
   maxByteSize: number
+  contentTypes: readonly string[]
+  width: number
+  height: number
 }): Promise<VerifiedDirectStoryImageDerivative | null> {
   if (!input.derivative) {
     return null
@@ -637,32 +443,34 @@ async function verifyDirectStoryImageClientDerivative(input: {
   const { derivative } = input
   if (
     derivative.pathname.includes("..") ||
-    !expectedDirectDerivativePathnames(input.originalPathname).has(
-      derivative.pathname,
-    ) ||
-    derivative.contentType.toLowerCase() !== "image/jpeg" ||
+    derivative.pathname !== input.expectedPathname ||
+    !input.contentTypes.includes(derivative.contentType.toLowerCase()) ||
     !Number.isSafeInteger(derivative.byteSize) ||
     derivative.byteSize <= 0 ||
     derivative.byteSize > input.maxByteSize ||
+    derivative.width !== input.width ||
+    derivative.height !== input.height ||
     !/^[a-f0-9]{64}$/i.test(derivative.checksum)
   ) {
     throw new StoryUploadError("Could not verify the uploaded story image variants.")
   }
 
-  const blobMetadata = await head(derivative.pathname).catch(() => null)
+  const blobMetadata = await waitForDirectBlobMetadata({
+    pathname: derivative.pathname,
+    contentType: derivative.contentType,
+    byteSize: derivative.byteSize,
+  })
 
-  if (
-    !blobMetadata ||
-    blobMetadata.size !== derivative.byteSize ||
-    blobMetadata.contentType.toLowerCase() !== "image/jpeg"
-  ) {
-    throw new StoryUploadError("Could not verify the uploaded story image variants.")
+  if (!blobMetadata) {
+    throw new StoryUploadError(
+      "The uploaded image is still being verified. Retry in a moment.",
+    )
   }
 
   return {
-    mediaUrl: blobMetadata.url ?? buildStoryMediaRoute(blobMetadata.pathname),
+    mediaUrl: buildStoryMediaRoute(blobMetadata.pathname),
     pathname: blobMetadata.pathname,
-    contentType: "image/jpeg",
+    contentType: derivative.contentType.toLowerCase(),
     byteSize: derivative.byteSize,
     checksum: derivative.checksum.toLowerCase(),
     width: derivative.width ?? null,
@@ -670,17 +478,67 @@ async function verifyDirectStoryImageClientDerivative(input: {
   }
 }
 
-export async function createDirectBlobStoryImageAsset(input: {
+export type DirectStoryVideoPosterInput = {
   pathname: string
-  ownerUserId: string
   contentType: string
   byteSize: number
   checksum: string
-  width?: number | null
-  height?: number | null
-  displayDerivative?: DirectStoryImageClientDerivativeInput | null
-  thumbnailDerivative?: DirectStoryImageClientDerivativeInput | null
-  placeholderDerivative?: DirectStoryImageClientDerivativeInput | null
+  width: number
+  height: number
+}
+
+export async function createDirectBlobStoryVideoPosterUrl(input: {
+  uid: string
+  poster: DirectStoryVideoPosterInput
+}) {
+  const expectedPathname = directStoryVideoPosterPathname(input.uid)
+  const poster = input.poster
+  if (
+    poster.pathname.includes("..") ||
+    poster.pathname !== expectedPathname ||
+    poster.contentType.toLowerCase() !== "image/jpeg" ||
+    !Number.isSafeInteger(poster.byteSize) ||
+    poster.byteSize <= 0 ||
+    poster.byteSize > maxStoryVideoPosterUploadBytes ||
+    !/^[a-f0-9]{64}$/i.test(poster.checksum) ||
+    !Number.isSafeInteger(poster.width) ||
+    poster.width <= 0 ||
+    poster.width > storyMediaContract.canvas.width ||
+    !Number.isSafeInteger(poster.height) ||
+    poster.height <= 0 ||
+    poster.height > storyMediaContract.canvas.height
+  ) {
+    throw new StoryUploadError("Could not verify the story video poster.")
+  }
+
+  const blobMetadata = await waitForDirectBlobMetadata({
+    pathname: poster.pathname,
+    contentType: poster.contentType,
+    byteSize: poster.byteSize,
+  })
+  if (!blobMetadata) {
+    throw new StoryUploadError(
+      "The uploaded video poster is still being verified. Retry in a moment.",
+    )
+  }
+
+  return buildStoryMediaRoute(blobMetadata.pathname)
+}
+
+export async function removeDirectBlobStoryVideoPoster(uid: string) {
+  if (!isCloudflareStreamUid(uid)) {
+    return
+  }
+
+  await del(directStoryVideoPosterPathname(uid))
+}
+
+export async function createDirectBlobStoryImageAsset(input: {
+  basePathname: string
+  ownerUserId: string
+  displayDerivative: DirectStoryImageClientDerivativeInput
+  thumbnailDerivative: DirectStoryImageClientDerivativeInput
+  thumbHash: string
 }): Promise<StoredStoryAsset> {
   const expectedPrefix = `stories/web-direct/${input.ownerUserId.replace(
     /[^a-zA-Z0-9_-]/g,
@@ -688,134 +546,54 @@ export async function createDirectBlobStoryImageAsset(input: {
   )}/`
 
   if (
-    input.pathname.includes("..") ||
-    !input.pathname.startsWith(expectedPrefix) ||
-    !isAllowedDirectStoryImageContentType(input.contentType) ||
-    !Number.isSafeInteger(input.byteSize) ||
-    input.byteSize <= 0 ||
-    input.byteSize > maxStoryUploadBytes ||
-    !/^[a-f0-9]{64}$/i.test(input.checksum)
+    input.basePathname.includes("..") ||
+    !input.basePathname.startsWith(expectedPrefix)
   ) {
     throw new StoryUploadError("Could not verify the uploaded story image.")
   }
 
-  const blobMetadata = await head(input.pathname).catch(() => null)
-
-  if (
-    !blobMetadata ||
-    blobMetadata.size !== input.byteSize ||
-    blobMetadata.contentType.toLowerCase() !== input.contentType.toLowerCase()
-  ) {
-    throw new StoryUploadError("Could not verify the uploaded story image.")
-  }
-
-  const originalMediaUrl = buildStoryMediaRoute(input.pathname)
+  const displayContentType = input.displayDerivative.contentType.toLowerCase()
   const clientDisplay = await verifyDirectStoryImageClientDerivative({
-    originalPathname: input.pathname,
+    expectedPathname: directStoryImageDisplayPathname(
+      input.basePathname,
+      displayContentType === "image/avif" ? "image/avif" : "image/webp",
+    ),
     derivative: input.displayDerivative,
-    maxByteSize: maxStoryUploadBytes,
+    maxByteSize: maxStoryImageDisplayDerivativeBytes,
+    contentTypes: ["image/avif", "image/webp"],
+    width: directStoryImageDisplayWidth,
+    height: directStoryImageDisplayHeight,
   })
   const clientThumbnail = await verifyDirectStoryImageClientDerivative({
-    originalPathname: input.pathname,
+    expectedPathname: directStoryImageThumbnailPathname(input.basePathname),
     derivative: input.thumbnailDerivative,
-    maxByteSize: maxOriginalStoryVideoThumbnailUploadBytes,
+    maxByteSize: maxStoryImageThumbnailDerivativeBytes,
+    contentTypes: ["image/webp"],
+    width: directStoryImageThumbnailWidth,
+    height: directStoryImageThumbnailHeight,
   })
-  const clientPlaceholder = await verifyDirectStoryImageClientDerivative({
-    originalPathname: input.pathname,
-    derivative: input.placeholderDerivative,
-    maxByteSize: 128 * 1024,
-  })
-  let generatedDerivatives: Awaited<
-    ReturnType<typeof createDirectStoryImageDerivatives>
-  > | null = null
-  if (!clientDisplay || !clientThumbnail) {
-    try {
-      generatedDerivatives = await createDirectStoryImageDerivatives(input.pathname)
-    } catch (error) {
-      console.error("[story-image] server derivative generation failed", {
-        fileName: path.basename(input.pathname),
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-  const derivatives = clientDisplay
-    ? {
-        display: clientDisplay,
-        thumbnail: clientThumbnail ?? clientDisplay,
-        placeholder: clientPlaceholder,
-      }
-    : generatedDerivatives
-
-  if (!derivatives) {
-    return {
-      assetKind: "image",
-      mediaUrl: originalMediaUrl,
-      thumbnailUrl: originalMediaUrl,
-      placeholderUrl: originalMediaUrl,
-      storageProvider: "vercel-blob",
-      storageKey: input.pathname,
-      originalMediaUrl,
-      originalThumbnailUrl: originalMediaUrl,
-      originalStorageProvider: "vercel-blob",
-      originalStorageKey: input.pathname,
-      originalContentType: input.contentType,
-      originalByteSize: input.byteSize,
-      originalChecksum: input.checksum.toLowerCase(),
-      originalWidth: input.width ?? null,
-      originalHeight: input.height ?? null,
-      originalDurationMs: null,
-      contentType: input.contentType,
-      byteSize: input.byteSize,
-      checksum: input.checksum.toLowerCase(),
-      width: input.width ?? null,
-      height: input.height ?? null,
-      durationMs: null,
-      processingStatus: "ready",
-    }
+  const thumbHash = normalizeStoryImageThumbHash(input.thumbHash)
+  if (!clientDisplay || !clientThumbnail || !thumbHash) {
+    throw new StoryUploadError("Could not verify the uploaded story image variants.")
   }
 
   return {
     assetKind: "image",
-    mediaUrl: derivatives.display.mediaUrl,
-    thumbnailUrl: derivatives.thumbnail.mediaUrl,
-    placeholderUrl: derivatives.placeholder?.mediaUrl ?? derivatives.thumbnail.mediaUrl,
+    mediaUrl: clientDisplay.mediaUrl,
+    thumbnailUrl: clientThumbnail.mediaUrl,
+    placeholderUrl: `thumbhash:${thumbHash}`,
     storageProvider: "vercel-blob",
-    storageKey: derivatives.display.pathname,
-    originalMediaUrl,
-    originalThumbnailUrl: derivatives.thumbnail.mediaUrl,
-    originalStorageProvider: "vercel-blob",
-    originalStorageKey: input.pathname,
-    originalContentType: input.contentType,
-    originalByteSize: input.byteSize,
-    originalChecksum: input.checksum.toLowerCase(),
-    originalWidth: input.width ?? null,
-    originalHeight: input.height ?? null,
-    originalDurationMs: null,
-    contentType: derivatives.display.contentType,
-    byteSize: derivatives.display.byteSize,
-    checksum: derivatives.display.checksum,
-    width: derivatives.display.width,
-    height: derivatives.display.height,
+    storageKey: clientDisplay.pathname,
+    contentType: clientDisplay.contentType,
+    byteSize: clientDisplay.byteSize,
+    checksum: clientDisplay.checksum,
+    width: clientDisplay.width,
+    height: clientDisplay.height,
     durationMs: null,
     processingStatus: "ready",
   }
 }
 
-export async function createOriginalQualityVideoThumbnail(pathname: string) {
-  const extensionIndex = pathname.lastIndexOf(".")
-  const thumbnailPathname =
-    extensionIndex >= 0
-      ? `${pathname.slice(0, extensionIndex)}-thumb.jpg`
-      : `${pathname}-thumb.jpg`
-
-  const thumbnailMetadata = await head(thumbnailPathname).catch(() => null)
-
-  if (!thumbnailMetadata) {
-    throw new StoryUploadError("Original story video thumbnail is not available.")
-  }
-
-  return buildStoryMediaRoute(thumbnailPathname)
-}
 
 export async function backfillStoryImageThumbnails(input: {
   dryRun?: boolean
@@ -843,49 +621,6 @@ export async function backfillCloudflareStreamPosterThumbnails(input: {
   }
 }
 
-export function createCloudflareStreamClientThumbnailPathname(
-  userId: string,
-  uid: string,
-) {
-  if (!isCloudflareStreamUid(uid)) {
-    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
-  }
-
-  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_")
-
-  return `${cloudflareStreamClientThumbnailDirectory}/${safeUserId}/${uid}-thumb.jpg`
-}
-
-export async function createCloudflareStreamClientThumbnailUrl(input: {
-  pathname: string
-  contentType: string
-  byteSize: number
-}) {
-  if (
-    !input.pathname.startsWith(`${cloudflareStreamClientThumbnailDirectory}/`) ||
-    input.pathname.includes("..") ||
-    !input.pathname.endsWith("-thumb.jpg") ||
-    !isAllowedOriginalQualityVideoThumbnailContentType(input.contentType) ||
-    !Number.isSafeInteger(input.byteSize) ||
-    input.byteSize <= 0 ||
-    input.byteSize > maxCloudflareStreamClientThumbnailUploadBytes
-  ) {
-    throw new StoryUploadError("Could not verify the story video thumbnail.")
-  }
-
-  const thumbnailMetadata = await head(input.pathname).catch(() => null)
-
-  if (
-    !thumbnailMetadata ||
-    thumbnailMetadata.size !== input.byteSize ||
-    thumbnailMetadata.contentType.toLowerCase() !==
-      input.contentType.toLowerCase()
-  ) {
-    throw new StoryUploadError("Could not verify the story video thumbnail.")
-  }
-
-  return buildStoryMediaRoute(input.pathname)
-}
 
 function assertCloudflareStreamUploadsEnabled() {
   if (process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
@@ -1028,7 +763,7 @@ export async function createCloudflareStreamThumbnailUrl(uid: string) {
   return buildCloudflareThumbnailUrl(customerSubdomain, token)
 }
 
-export async function setCloudflareStreamThumbnailToLastFrame(uid: string) {
+export async function setCloudflareStreamThumbnailAtDefaultTime(uid: string) {
   assertCloudflareStreamUploadsEnabled()
 
   if (!isCloudflareStreamUid(uid)) {
@@ -1172,7 +907,7 @@ async function saveCloudflareStreamVideo(
     throw new StoryUploadError("Cloudflare Stream could not process the video upload.")
   }
 
-  await setCloudflareStreamThumbnailToLastFrame(uid).catch(() => undefined)
+  await setCloudflareStreamThumbnailAtDefaultTime(uid).catch(() => undefined)
 
   return {
     assetKind: "video",
@@ -1189,47 +924,6 @@ async function saveCloudflareStreamVideo(
     durationMs: metadata.durationMs,
     processingStatus: "processing",
   }
-}
-
-export async function createCloudflareStreamDirectUpload(input: {
-  fileName: string
-  maxDurationSeconds?: number
-  maxSizeBytes?: number
-}): Promise<CloudflareDirectUpload> {
-  assertCloudflareStreamUploadsEnabled()
-
-  const { accountId, apiToken } = getCloudflareStreamConfig()
-  const createUploadResponse = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        maxDurationSeconds: input.maxDurationSeconds ?? 60 * 60,
-        maxSizeBytes: input.maxSizeBytes,
-        meta: { name: input.fileName },
-        requireSignedURLs: true,
-      }),
-    },
-  )
-  const createUploadPayload =
-    (await createUploadResponse.json().catch(() => null)) as
-      | CloudflareDirectUploadResponse
-      | null
-  const uid = createUploadPayload?.result?.uid
-  const uploadUrl = createUploadPayload?.result?.uploadURL
-
-  if (!createUploadResponse.ok || !createUploadPayload?.success || !uid || !uploadUrl) {
-    throw new StoryUploadError(
-      createUploadPayload?.errors?.[0]?.message ??
-        "Could not create a Cloudflare Stream upload.",
-    )
-  }
-
-  return { uid, uploadUrl, uploadProtocol: "form" }
 }
 
 export async function createCloudflareStreamTusUpload(input: {
@@ -1287,6 +981,7 @@ export function createCloudflareStreamStoredVideoAsset(input: {
   uid: string
   contentType: string
   byteSize: number
+  thumbnailUrl?: string | null
   durationMs?: number | null
   width?: number | null
   height?: number | null
@@ -1302,8 +997,10 @@ export function createCloudflareStreamStoredVideoAsset(input: {
   return {
     assetKind: "video",
     mediaUrl: buildStoryMediaRoute(buildCloudflareStreamPathname(input.uid)),
-    thumbnailUrl: createCloudflareStreamThumbnailMediaUrl(input.uid),
-    placeholderUrl: createCloudflareStreamThumbnailMediaUrl(input.uid),
+    thumbnailUrl:
+      input.thumbnailUrl ?? createCloudflareStreamThumbnailMediaUrl(input.uid),
+    placeholderUrl:
+      input.thumbnailUrl ?? createCloudflareStreamThumbnailMediaUrl(input.uid),
     storageProvider: "cloudflare-stream",
     storageKey: input.uid,
     contentType: input.contentType.startsWith("video/")
@@ -1345,7 +1042,7 @@ export async function removeCloudflareStreamVideoByUid(uid: string) {
 
   const { accountId, apiToken } = getCloudflareStreamConfig()
 
-  await fetch(
+  const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`,
     {
       method: "DELETE",
@@ -1354,130 +1051,24 @@ export async function removeCloudflareStreamVideoByUid(uid: string) {
       },
     },
   )
+
+  if (!response.ok && response.status !== 404) {
+    throw new StoryUploadError(
+      `Could not remove abandoned Cloudflare Stream upload (${response.status}).`,
+    )
+  }
 }
 
 function getStoryStorageProvider() {
-  if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
-    return vercelBlobStoryStorageProvider
-  }
-
-  if (process.env.NODE_ENV === "production") {
+  if (
+    process.env.STORY_STORAGE_PROVIDER !== "vercel-blob" ||
+    !process.env.BLOB_READ_WRITE_TOKEN
+  ) {
     throw new StoryUploadError(
-      "Production story uploads require STORY_STORAGE_PROVIDER=vercel-blob.",
+      "Story uploads require private Vercel Blob storage.",
     )
   }
-
-  return localStoryStorageProvider
-}
-
-function buildDirectStoryImageThumbnailPathname(pathname: string) {
-  const extension = path.extname(pathname)
-
-  return extension
-    ? `${pathname.slice(0, -extension.length)}-thumb.jpg`
-    : `${pathname}-thumb.jpg`
-}
-
-function buildDirectStoryImageDisplayPathname(pathname: string) {
-  const extension = path.extname(pathname)
-
-  return extension
-    ? `${pathname.slice(0, -extension.length)}-display.jpg`
-    : `${pathname}-display.jpg`
-}
-
-async function createDirectStoryImageDerivative(input: {
-  sourceBytes: Buffer
-  outputPathname: string
-  width: number
-  height: number
-  quality: number
-}) {
-  const { data, info } = await sharp(input.sourceBytes)
-    .rotate()
-    .resize({
-      width: input.width,
-      height: input.height,
-      fit: "cover",
-      position: "centre",
-      withoutEnlargement: true,
-    })
-    .withIccProfile("srgb")
-    .jpeg({
-      quality: input.quality,
-      progressive: true,
-      mozjpeg: true,
-      chromaSubsampling: "4:4:4",
-    })
-    .toBuffer({ resolveWithObject: true })
-  const blob = await put(input.outputPathname, data, {
-    access: "public",
-    contentType: "image/jpeg",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    cacheControlMaxAge: directStoryImageDerivativeCacheMaxAgeSeconds,
-  })
-
-  return {
-    mediaUrl: blob.url ?? buildStoryMediaRoute(blob.pathname),
-    pathname: blob.pathname,
-    contentType: "image/jpeg",
-    byteSize: data.byteLength,
-    checksum: createHash("sha256").update(data).digest("hex"),
-    width: info.width ?? input.width,
-    height: info.height ?? input.height,
-  }
-}
-
-async function readDirectStoryImageSourceBytes(pathname: string) {
-  const retryDelaysMs = [0, 150, 400, 900]
-
-  for (const delayMs of retryDelaysMs) {
-    if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-    }
-
-    const source = await get(pathname, {
-      access: "private",
-      useCache: false,
-    }).catch(() => null)
-
-    if (source?.stream && source.statusCode === 200) {
-      return Buffer.from(await new Response(source.stream).arrayBuffer())
-    }
-  }
-
-  throw new StoryUploadError(
-    "The uploaded story image was not available for display processing.",
-  )
-}
-
-async function createDirectStoryImageDerivatives(pathname: string) {
-  const sourceBytes = await readDirectStoryImageSourceBytes(pathname)
-  const display = await createDirectStoryImageDerivative({
-    sourceBytes,
-    outputPathname: buildDirectStoryImageDisplayPathname(pathname),
-    width: directStoryImageDisplayWidth,
-    height: directStoryImageDisplayHeight,
-    quality: 92,
-  })
-  const thumbnail =
-    (await createDirectStoryImageDerivative({
-      sourceBytes,
-      outputPathname: buildDirectStoryImageThumbnailPathname(pathname),
-      width: directStoryImageThumbnailWidth,
-      height: directStoryImageThumbnailHeight,
-      quality: 84,
-    }).catch(() => null)) ?? display
-  const placeholder = await createDirectStoryImageDerivative({
-    sourceBytes,
-    outputPathname: directStoryImagePlaceholderPathname(pathname),
-    width: 36,
-    height: 64,
-    quality: 58,
-  }).catch(() => null)
-
-  return { display, thumbnail, placeholder }
+  return vercelBlobStoryStorageProvider
 }
 
 async function removeDirectStoryImageDerivatives(mediaUrl: string) {
@@ -1487,10 +1078,16 @@ async function removeDirectStoryImageDerivatives(mediaUrl: string) {
     return
   }
 
+  const derivativeMatch = pathname.match(/^(.*)-(?:display|thumb)\.(?:avif|webp)$/i)
+  const basePathname = derivativeMatch?.[1]
+  if (!basePathname) {
+    return
+  }
+
   await Promise.allSettled([
-    del(buildDirectStoryImageDisplayPathname(pathname)),
-    del(buildDirectStoryImageThumbnailPathname(pathname)),
-    del(directStoryImagePlaceholderPathname(pathname)),
+    del(directStoryImageDisplayPathname(basePathname, "image/avif")),
+    del(directStoryImageDisplayPathname(basePathname, "image/webp")),
+    del(directStoryImageThumbnailPathname(basePathname)),
   ])
 }
 
@@ -1929,15 +1526,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   let storedBuffer: Buffer = buffer
   let storedUploadType = uploadType
 
-  if (assetKind === "image") {
-    try {
-      await sharp(buffer).metadata()
-    } catch {
-      throw new StoryUploadError(
-        "Could not process that image. Choose a JPG, PNG, WEBP, or HEIC story photo.",
-      )
-    }
-  } else if (process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
+  if (assetKind !== "image" && process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
     storedBuffer = await normalizeVideoForLocalPlayback(buffer)
     storedUploadType = {
       assetKind: "video",

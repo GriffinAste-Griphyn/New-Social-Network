@@ -37,6 +37,7 @@ import type {
   MyStorySummary,
   SuggestedAccount,
 } from "@/lib/story-store"
+import { storyMediaContract } from "@/lib/story-media-contract"
 import { cn } from "@/lib/utils"
 
 type FeedShellProps = {
@@ -421,6 +422,7 @@ function StoryMedia({
         alt={alt}
         fill
         sizes={sizes}
+        quality={storyMediaContract.imageEncoding.deliveryQuality}
         className="object-cover"
       />
     )

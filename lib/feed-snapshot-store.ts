@@ -1,160 +1,124 @@
-import { and, eq, gt, inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
+import { invalidateByTag } from "@vercel/functions"
 
 import { getDb } from "@/lib/db"
-import { follows, mobileFeedSnapshots } from "@/lib/db/schema"
+import { follows } from "@/lib/db/schema"
 import type { FeedData } from "@/lib/story-store"
+import { hasRedisCache, redisCommand, redisPipeline } from "@/lib/upstash-redis"
 
-const mobileFeedSnapshotTtlMs = 60 * 1000
-const mobileFeedSnapshotVersion = "mobile-feed:v1"
-let snapshotTableUnavailableUntil = 0
+const freshSnapshotTtlMs = 60 * 1000
+const staleSnapshotTtlSeconds = 5 * 60
 
-function snapshotExpiresAt() {
-  return new Date(Date.now() + mobileFeedSnapshotTtlMs)
+type CachedFeedSnapshot = {
+  cachedAt: number
+  payload: FeedData
+}
+
+function snapshotKey(viewerId: string) {
+  return `mobile-feed:snapshot:v2:${viewerId}`
 }
 
 function serializeFeedData(feed: FeedData) {
   return JSON.parse(JSON.stringify(feed)) as FeedData
 }
 
-function snapshotsAreTemporarilyDisabled() {
-  return Date.now() < snapshotTableUnavailableUntil
-}
-
-function disableSnapshotsBriefly() {
-  snapshotTableUnavailableUntil = Date.now() + 5 * 60 * 1000
-}
-
-function isMissingSnapshotTableError(error: unknown) {
-  if (typeof error === "object" && error && "code" in error) {
-    return (error as { code?: string }).code === "42P01"
+async function readSnapshot(viewerId: string) {
+  if (!hasRedisCache()) {
+    return null
   }
 
-  return error instanceof Error && error.message.includes("mobile_feed_snapshots")
+  const value = await redisCommand<string>(["GET", snapshotKey(viewerId)]).catch(
+    () => null,
+  )
+  if (!value) {
+    return null
+  }
+
+  try {
+    return JSON.parse(value) as CachedFeedSnapshot
+  } catch {
+    await redisCommand(["DEL", snapshotKey(viewerId)]).catch(() => undefined)
+    return null
+  }
 }
 
 export async function readMobileFeedSnapshot(viewerId: string) {
-  if (snapshotsAreTemporarilyDisabled()) {
+  const snapshot = await readSnapshot(viewerId)
+  if (!snapshot) {
     return null
   }
 
-  try {
-    const [snapshot] = await getDb()
-      .select({
-        payload: mobileFeedSnapshots.payload,
-      })
-      .from(mobileFeedSnapshots)
-      .where(eq(mobileFeedSnapshots.viewerId, viewerId))
-      .limit(1)
+  const staleAt =
+    snapshot.cachedAt + staleSnapshotTtlSeconds * 1000
+  return staleAt > Date.now() ? snapshot.payload : null
+}
 
-    if (!snapshot) {
-      return null
-    }
-
-    return snapshot.payload as FeedData
-  } catch (error) {
-    if (isMissingSnapshotTableError(error)) {
-      disableSnapshotsBriefly()
-      return null
-    }
-
-    throw error
-  }
+export async function readFeedCacheBatch(viewerId: string, timelineLimit: number, beforeScore?: number | null) {
+  if (!hasRedisCache()) return { snapshot: null, timelineIds: null as string[] | null }
+  const snapKey = snapshotKey(viewerId)
+  const tlKey = `mobile-feed:timeline:v1:${viewerId}`
+  const res = await redisPipeline([
+    ["GET", snapKey],
+    ["ZREVRANGEBYSCORE", tlKey, beforeScore ? String(beforeScore) : "+inf", "-inf", "LIMIT", 0, Math.max(1, Math.min(timelineLimit, 500))],
+  ]).catch(() => null) as Array<string | string[] | null> | null
+  const snapRaw = (res?.[0] ?? null) as string | null
+  let snapshot: CachedFeedSnapshot | null = null
+  if (snapRaw) { try { snapshot = JSON.parse(snapRaw) as CachedFeedSnapshot } catch { snapshot = null } }
+  const tlIds = (res?.[1] ?? null) as string[] | null
+  return { snapshot, timelineIds: tlIds }
 }
 
 export async function readFreshMobileFeedSnapshot(viewerId: string) {
-  if (snapshotsAreTemporarilyDisabled()) {
+  const snapshot = await readSnapshot(viewerId)
+  if (!snapshot || snapshot.cachedAt + freshSnapshotTtlMs <= Date.now()) {
     return null
   }
 
-  try {
-    const [snapshot] = await getDb()
-      .select({
-        payload: mobileFeedSnapshots.payload,
-      })
-      .from(mobileFeedSnapshots)
-      .where(
-        and(
-          eq(mobileFeedSnapshots.viewerId, viewerId),
-          eq(mobileFeedSnapshots.sourceFingerprint, mobileFeedSnapshotVersion),
-          gt(mobileFeedSnapshots.expiresAt, new Date()),
-        ),
-      )
-      .limit(1)
-
-    if (!snapshot) {
-      return null
-    }
-
-    return snapshot.payload as FeedData
-  } catch (error) {
-    if (isMissingSnapshotTableError(error)) {
-      disableSnapshotsBriefly()
-      return null
-    }
-
-    throw error
-  }
+  return snapshot.payload
 }
 
 export async function writeMobileFeedSnapshot(viewerId: string, feed: FeedData) {
-  if (snapshotsAreTemporarilyDisabled()) {
+  const snapshot: CachedFeedSnapshot = {
+    cachedAt: Date.now(),
+    payload: serializeFeedData(feed),
+  }
+
+  if (!hasRedisCache()) {
     return
   }
 
-  const now = new Date()
-
-  try {
-    await getDb()
-      .insert(mobileFeedSnapshots)
-      .values({
-        viewerId,
-        payload: serializeFeedData(feed),
-        sourceFingerprint: mobileFeedSnapshotVersion,
-        createdAt: now,
-        updatedAt: now,
-        expiresAt: snapshotExpiresAt(),
-      })
-      .onConflictDoUpdate({
-        target: mobileFeedSnapshots.viewerId,
-        set: {
-          payload: serializeFeedData(feed),
-          sourceFingerprint: mobileFeedSnapshotVersion,
-          updatedAt: now,
-          expiresAt: snapshotExpiresAt(),
-        },
-      })
-  } catch (error) {
-    if (isMissingSnapshotTableError(error)) {
-      disableSnapshotsBriefly()
-      return
-    }
-
-    throw error
-  }
+  await redisCommand([
+    "SET",
+    snapshotKey(viewerId),
+    JSON.stringify(snapshot),
+    "EX",
+    staleSnapshotTtlSeconds,
+  ])
 }
 
 export async function invalidateMobileFeedSnapshots(viewerIds: string[]) {
-  if (snapshotsAreTemporarilyDisabled()) {
-    return
-  }
-
   const uniqueViewerIds = [...new Set(viewerIds.filter(Boolean))]
-
   if (uniqueViewerIds.length === 0) {
     return
   }
 
-  try {
-    await getDb()
-      .delete(mobileFeedSnapshots)
-      .where(inArray(mobileFeedSnapshots.viewerId, uniqueViewerIds))
-  } catch (error) {
-    if (isMissingSnapshotTableError(error)) {
-      disableSnapshotsBriefly()
-      return
-    }
+  if (hasRedisCache()) {
+    await redisCommand([
+      "DEL",
+      ...uniqueViewerIds.map(snapshotKey),
+    ]).catch(() => undefined)
+  }
 
-    throw error
+  for (let index = 0; index < uniqueViewerIds.length; index += 128) {
+    try {
+      await invalidateByTag(
+        uniqueViewerIds
+          .slice(index, index + 128)
+          .map((viewerId) => `feed:${viewerId}`),
+      )
+    } catch {
+      // Local development and non-Vercel test runtimes have no CDN context.
+    }
   }
 }
 
@@ -163,10 +127,6 @@ export async function invalidateMobileFeedSnapshot(viewerId: string) {
 }
 
 export async function invalidateMobileFeedSnapshotsForCreator(creatorId: string) {
-  if (snapshotsAreTemporarilyDisabled()) {
-    return
-  }
-
   const followerRows = await getDb()
     .select({ followerId: follows.followerId })
     .from(follows)

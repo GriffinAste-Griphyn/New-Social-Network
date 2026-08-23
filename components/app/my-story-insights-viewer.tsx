@@ -1,6 +1,5 @@
 "use client"
 
-import Image from "next/image"
 import type { ReactNode } from "react"
 import { useMemo, useState } from "react"
 import {
@@ -16,6 +15,7 @@ import {
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { StoryMediaFrame } from "@/components/app/story-media-frame"
 import type { CreatorStoryStats } from "@/lib/creator-stats"
 import type { MyStoryItem } from "@/lib/story-store"
 
@@ -122,33 +122,20 @@ export function MyStoryInsightsViewer({
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
       <div className="overflow-hidden rounded-[8px] bg-neutral-950 shadow-[0_24px_70px_rgba(15,23,42,0.2)]">
-        <div className="relative min-h-[720px]">
-          {activeStory.assetKind === "video" ? (
-            <video
-              key={activeStory.id}
-              src={activeStory.mediaUrl}
-              poster={activeStory.thumbnailUrl ?? undefined}
-              className="absolute inset-0 h-full w-full object-cover"
-              autoPlay
-              muted
-              loop
-              playsInline
-              controls
-            />
-          ) : (
-            <Image
-              key={activeStory.id}
-              src={activeStory.mediaUrl}
-              alt="Your story"
-              fill
-              sizes="(min-width: 1024px) 620px, 100vw"
-              className="object-cover"
-              priority={boundedIndex === 0}
-            />
-          )}
+        <StoryMediaFrame
+          key={activeStory.id}
+          assetKind={activeStory.assetKind}
+          mediaUrl={activeStory.mediaUrl}
+          thumbnailUrl={activeStory.thumbnailUrl}
+          alt="Your story"
+          sizes="(min-width: 1024px) 405px, 100vw"
+          className="mx-auto max-w-[405px]"
+          preloadImage={boundedIndex === 0}
+          videoControls
+        >
           <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/10 to-black/80" />
 
-          <div className="relative flex min-h-[720px] flex-col justify-between p-5 text-white">
+          <div className="relative flex h-full flex-col justify-between p-5 text-white">
             <div className="space-y-4">
               <div
                 className="grid gap-2"
@@ -257,7 +244,7 @@ export function MyStoryInsightsViewer({
               </div>
             ) : null}
           </div>
-        </div>
+        </StoryMediaFrame>
       </div>
 
       <aside className="rounded-[8px] bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">

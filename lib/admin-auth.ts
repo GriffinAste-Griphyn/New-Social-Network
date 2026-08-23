@@ -11,7 +11,7 @@ function getAdminEmails() {
     .filter(Boolean)
 
   return Array.from(
-    new Set(["griffin.aste@gmail.com", "griffin@griphyn.ai", ...configuredEmails]),
+    new Set(["griffin@ubeye.ai", ...configuredEmails]),
   )
 }
 

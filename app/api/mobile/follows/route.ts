@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
+import { start } from "workflow/api"
 import { z } from "zod"
 import { and, eq, inArray } from "drizzle-orm"
 
@@ -6,6 +7,7 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, users } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
+import { removeCreatorStoriesFromTimeline } from "@/lib/feed-timeline-store"
 import {
   followUser,
   listFollowingProfiles,
@@ -16,6 +18,7 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import { backfillFollowTimelineWorkflow } from "@/workflows/story-publication/follow-backfill"
 
 export const runtime = "nodejs"
 
@@ -118,7 +121,9 @@ export async function POST(request: Request) {
       followerId: session.id,
       followeeId,
     })
-    await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
+    after(async () => {
+      await start(backfillFollowTimelineWorkflow, [session.id, followeeId])
+    })
 
     return NextResponse.json({ ok: true })
   } catch (error) {
@@ -172,6 +177,10 @@ export async function DELETE(request: Request) {
     followerId: session.id,
     followeeId,
   })
+  await removeCreatorStoriesFromTimeline({
+    followerId: session.id,
+    followeeId,
+  }).catch(() => undefined)
   await invalidateMobileFeedSnapshot(session.id).catch(() => undefined)
 
   return NextResponse.json({ ok: true })

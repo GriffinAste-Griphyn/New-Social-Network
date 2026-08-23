@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { and, eq, gt, isNull, lte, or } from "drizzle-orm"
+import { and, asc, eq, gt, isNull, lte, or } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { mediaUploadSessions, stories } from "@/lib/db/schema"
@@ -28,8 +28,78 @@ export class MediaUploadSessionError extends Error {
 
 const uploadSessionLifetimeMs = 24 * 60 * 60 * 1_000
 const completionClaimRecoveryMs = 15 * 60 * 1_000
+const completedUploadSessionRetentionMs = 7 * 24 * 60 * 60 * 1_000
 
 type MediaUploadSession = typeof mediaUploadSessions.$inferSelect
+
+export type MediaUploadSessionCleanupCandidate = Pick<
+  MediaUploadSession,
+  "id" | "status" | "storageProvider" | "storageKey"
+>
+
+export async function getMediaUploadSessionsForCleanup(input: {
+  now?: Date
+  limit?: number
+} = {}): Promise<MediaUploadSessionCleanupCandidate[]> {
+  const now = input.now ?? new Date()
+  const completedBefore = new Date(
+    now.getTime() - completedUploadSessionRetentionMs,
+  )
+  const staleCompletionClaimBefore = new Date(
+    now.getTime() - completionClaimRecoveryMs,
+  )
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500)
+
+  return getDb()
+    .select({
+      id: mediaUploadSessions.id,
+      status: mediaUploadSessions.status,
+      storageProvider: mediaUploadSessions.storageProvider,
+      storageKey: mediaUploadSessions.storageKey,
+    })
+    .from(mediaUploadSessions)
+    .where(
+      or(
+        and(
+          eq(mediaUploadSessions.status, "prepared"),
+          lte(mediaUploadSessions.expiresAt, now),
+        ),
+        and(
+          eq(mediaUploadSessions.status, "completing"),
+          lte(mediaUploadSessions.expiresAt, now),
+          or(
+            isNull(mediaUploadSessions.completionClaimedAt),
+            lte(
+              mediaUploadSessions.completionClaimedAt,
+              staleCompletionClaimBefore,
+            ),
+          ),
+        ),
+        and(
+          eq(mediaUploadSessions.status, "completed"),
+          lte(mediaUploadSessions.consumedAt, completedBefore),
+        ),
+      ),
+    )
+    .orderBy(asc(mediaUploadSessions.updatedAt))
+    .limit(limit)
+}
+
+export async function deleteMediaUploadSessionForCleanup(
+  candidate: MediaUploadSessionCleanupCandidate,
+) {
+  const deleted = await getDb()
+    .delete(mediaUploadSessions)
+    .where(
+      and(
+        eq(mediaUploadSessions.id, candidate.id),
+        eq(mediaUploadSessions.status, candidate.status),
+      ),
+    )
+    .returning({ id: mediaUploadSessions.id })
+
+  return deleted.length > 0
+}
 
 function matchesExpectedUpload(
   session: MediaUploadSession,
@@ -54,11 +124,11 @@ export function isCloudflareStreamFullyReady(
     "readyToStream" | "state" | "pctComplete"
   >,
 ) {
-  return (
-    details.readyToStream &&
-    ((details.pctComplete ?? 0) >= 100 ||
-      (details.pctComplete === null && details.state === "ready"))
-  )
+  if (details.state === "error" || !details.readyToStream) {
+    return false
+  }
+
+  return details.pctComplete === null || details.pctComplete >= 95
 }
 
 export async function getReusableMediaUploadSession(input: {
@@ -420,25 +490,10 @@ export async function recordCloudflareStreamUploadStatus(input: {
   }
 
   const previous = cloudflareDetailsFromUploadSession(existing)
-  const providerPctComplete = Math.max(
-    existing.providerPctComplete ?? 0,
-    previous?.pctComplete ?? 0,
-    input.details.pctComplete ?? 0,
+  const details = mergeCloudflareStreamProviderDetails(
+    previous,
+    input.details,
   )
-  const details: CloudflareStreamProviderDetails = {
-    readyToStream:
-      input.details.readyToStream || previous?.readyToStream === true,
-    state: input.details.state ?? previous?.state ?? null,
-    pctComplete:
-      providerPctComplete > 0 || input.details.pctComplete !== null
-        ? providerPctComplete
-        : null,
-    errorReason: input.details.errorReason,
-    byteSize: input.details.byteSize ?? previous?.byteSize ?? null,
-    durationMs: input.details.durationMs ?? previous?.durationMs ?? null,
-    width: input.details.width ?? previous?.width ?? null,
-    height: input.details.height ?? previous?.height ?? null,
-  }
   const now = new Date()
   const [session] = await db
     .update(mediaUploadSessions)
@@ -456,13 +511,78 @@ export async function recordCloudflareStreamUploadStatus(input: {
   return session ?? null
 }
 
+export function mergeCloudflareStreamProviderDetails(
+  previous: CloudflareStreamProviderDetails | null,
+  observed: CloudflareStreamProviderDetails,
+): CloudflareStreamProviderDetails {
+  const providerPctComplete = Math.max(
+    previous?.pctComplete ?? 0,
+    observed.pctComplete ?? 0,
+  )
+  const previousFailed = previous?.state === "error"
+  const observedFailed = observed.state === "error"
+  const terminalError = previousFailed || observedFailed
+  const fullyReady =
+    !terminalError &&
+    isCloudflareStreamFullyReady({
+      readyToStream:
+        observed.readyToStream || previous?.readyToStream === true,
+      state: observed.state ?? previous?.state ?? null,
+      pctComplete:
+        providerPctComplete > 0 || observed.pctComplete !== null
+          ? providerPctComplete
+          : null,
+    })
+
+  return {
+    readyToStream:
+      !terminalError &&
+      (observed.readyToStream || previous?.readyToStream === true),
+    state: terminalError
+      ? "error"
+      : fullyReady
+        ? "ready"
+        : observed.state ?? previous?.state ?? null,
+    pctComplete:
+      providerPctComplete > 0 || observed.pctComplete !== null
+        ? providerPctComplete
+        : null,
+    errorReason: terminalError
+      ? observed.errorReason ?? previous?.errorReason ?? "Provider processing failed."
+      : null,
+    byteSize: observed.byteSize ?? previous?.byteSize ?? null,
+    durationMs: observed.durationMs ?? previous?.durationMs ?? null,
+    width: observed.width ?? previous?.width ?? null,
+    height: observed.height ?? previous?.height ?? null,
+  }
+}
+
 export function cloudflareDetailsFromUploadSession(
   session: MediaUploadSession,
 ): CloudflareStreamProviderDetails | null {
   const payload = session.providerPayload
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null
+    if (
+      session.providerStatus === null &&
+      session.providerPctComplete === null &&
+      session.providerError === null
+    ) {
+      return null
+    }
+
+    return {
+      readyToStream:
+        session.providerStatus === "ready" ||
+        (session.providerPctComplete ?? 0) >= 100,
+      state: session.providerStatus,
+      pctComplete: session.providerPctComplete,
+      errorReason: session.providerError,
+      byteSize: null,
+      durationMs: null,
+      width: null,
+      height: null,
+    }
   }
 
   const details = payload as Partial<CloudflareStreamProviderDetails>

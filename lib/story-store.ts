@@ -8,16 +8,15 @@ import {
   gt,
   inArray,
   isNotNull,
+  lt,
   or,
 } from "drizzle-orm"
 import type { SocialStoryCard } from "@ubeye/shared"
 
 import type { CompleteAuthSession } from "@/lib/auth"
 import {
-  processStoryCreatorEarnings,
   reverseUnpaidStoryEarnings,
 } from "@/lib/creator-earnings"
-import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
 import {
   applyMediaModerationResult,
@@ -38,17 +37,22 @@ import {
 } from "@/lib/db/schema"
 import {
   invalidateMobileFeedSnapshotsForCreator,
+  readMobileFeedSnapshot,
   readFreshMobileFeedSnapshot,
   writeMobileFeedSnapshot,
 } from "@/lib/feed-snapshot-store"
 import { listFollowingProfiles } from "@/lib/follow-store"
 import { formatStoryPostedAt } from "@/lib/story-time"
+import { enqueueStoryPublication } from "@/lib/story-publication"
 import {
   publicStoryMediaUrl,
   StoryUploadError,
   type StoredStoryAsset,
 } from "@/lib/story-storage"
-import { refreshProcessingCloudflareStories } from "@/lib/stories/cloudflare-status"
+import {
+  deriveStoryPublicationStatus,
+  refreshProcessingCloudflareStories,
+} from "@/lib/stories/cloudflare-status"
 import { getBlockedPeerIds, isBlockedBetween } from "@/lib/social-safety"
 import {
   extractCaptionMentions,
@@ -173,6 +177,12 @@ function storyMediaRenditions(row: FeedStoryRow): StoryMediaRenditions {
   const playbackMediaUrl = publicStoryMediaUrl(row.mediaUrl) ?? row.mediaUrl
   const playbackThumbnailUrl = publicStoryMediaUrl(row.thumbnailUrl)
 
+  const isCfVideo =
+    row.assetKind === "video" &&
+    (row.storageProvider === "cloudflare-stream" ||
+      (row.originalStorageProvider ?? null) === "cloudflare-stream" ||
+      (row.storageKey != null && /^[a-f0-9]{32}$/i.test(row.storageKey ?? "")))
+
   return {
     playback: {
       mediaUrl: playbackMediaUrl,
@@ -188,23 +198,27 @@ function storyMediaRenditions(row: FeedStoryRow): StoryMediaRenditions {
       durationMs: row.durationMs,
       processingStatus: row.processingStatus,
     },
-    original: row.originalMediaUrl
-      ? {
-          mediaUrl:
-            publicStoryMediaUrl(row.originalMediaUrl) ?? row.originalMediaUrl,
-          thumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
-          placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
-          storageProvider: row.originalStorageProvider,
-          storageKey: row.originalStorageKey,
-          contentType: row.originalContentType,
-          byteSize: row.originalByteSize,
-          checksum: row.originalChecksum,
-          width: row.originalWidth,
-          height: row.originalHeight,
-          durationMs: row.originalDurationMs,
-          processingStatus: "ready",
-        }
-      : null,
+    original:
+      isCfVideo
+        ? null
+        : row.originalMediaUrl
+          ? {
+              mediaUrl:
+                publicStoryMediaUrl(row.originalMediaUrl) ??
+                row.originalMediaUrl,
+              thumbnailUrl: publicStoryMediaUrl(row.originalThumbnailUrl),
+              placeholderUrl: publicStoryMediaUrl(row.placeholderUrl),
+              storageProvider: row.originalStorageProvider,
+              storageKey: row.originalStorageKey,
+              contentType: row.originalContentType,
+              byteSize: row.originalByteSize,
+              checksum: row.originalChecksum,
+              width: row.originalWidth,
+              height: row.originalHeight,
+              durationMs: row.originalDurationMs,
+              processingStatus: "ready",
+            }
+          : null,
   }
 }
 
@@ -332,6 +346,9 @@ export type MobileCreatorProfile = {
 type FeedDataOptions = {
   refreshProcessing?: boolean
   useSnapshot?: boolean
+  timelineStoryIds?: string[]
+  timelineCursor?: { createdAt: Date; id: string } | null
+  timelineLimit?: number
 }
 
 type CreateStoryInput = {
@@ -609,19 +626,6 @@ function moderationStatusFromResult(result: ContentModerationResult) {
       : "flagged"
 }
 
-function storyStatusFromModeration(input: {
-  result: ContentModerationResult
-  isMediaReady: boolean
-}) {
-  if (input.result.action === "reject") {
-    return "removed"
-  }
-
-  return input.result.action === "approve" && input.isMediaReady
-    ? "live"
-    : "processing"
-}
-
 function storyModerationTextParts(input: {
   caption: string
   explicitBrandTags: string[]
@@ -740,12 +744,6 @@ function firstStoryPerCreator<T extends { creatorId: string }>(rows: T[]) {
 function orderStoriesChronologically<T extends { createdAt: Date }>(rows: T[]) {
   return [...rows].sort(
     (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
-  )
-}
-
-function orderStoriesNewestFirst<T extends { createdAt: Date }>(rows: T[]) {
-  return [...rows].sort(
-    (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
   )
 }
 
@@ -883,7 +881,13 @@ function buildMyStorySummary(
   }
 }
 
-async function getLiveStoryRows() {
+async function getLiveStoryRows(
+  storyIds?: string[],
+  options: {
+    cursor?: { createdAt: Date; id: string } | null
+    limit?: number
+  } = {},
+) {
   const db = getDb()
 
   const rows = await db
@@ -933,12 +937,29 @@ async function getLiveStoryRows() {
         eq(stories.status, "live"),
         eq(stories.moderationStatus, "approved"),
         gt(stories.expiresAt, new Date()),
+        storyIds && storyIds.length > 0
+          ? inArray(stories.id, storyIds)
+          : undefined,
+        options.cursor
+          ? or(
+              lt(stories.createdAt, options.cursor.createdAt),
+              and(
+                eq(stories.createdAt, options.cursor.createdAt),
+                lt(stories.id, options.cursor.id),
+              ),
+            )
+          : undefined,
         isNotNull(users.displayName),
         isNotNull(users.handle),
       ),
     )
-    .orderBy(desc(stories.createdAt))
-    .limit(24)
+    .orderBy(desc(stories.createdAt), desc(stories.id))
+    .limit(
+      Math.min(
+        options.limit ?? (storyIds ? storyIds.length : 24),
+        50,
+      ),
+    )
 
   return rows.flatMap((row) => {
     const story = toCompleteStoryRow(row)
@@ -1181,7 +1202,19 @@ export async function getFeedData(
     }
   }
 
-  const feed = await buildLiveFeedData(viewerId, options)
+  let feed: FeedData
+  try {
+    feed = await buildLiveFeedData(viewerId, options)
+  } catch (error) {
+    const staleSnapshot =
+      options.useSnapshot !== false
+        ? await readMobileFeedSnapshot(viewerId).catch(() => null)
+        : null
+    if (staleSnapshot) {
+      return staleSnapshot
+    }
+    throw error
+  }
 
   if (options.useSnapshot !== false && !options.refreshProcessing) {
     await writeMobileFeedSnapshot(viewerId, feed).catch(() => undefined)
@@ -1194,17 +1227,25 @@ async function buildLiveFeedData(
   viewerId: string,
   options: FeedDataOptions = {},
 ): Promise<FeedData> {
-  if (options.refreshProcessing) {
-    await refreshProcessingCloudflareStories({ limit: 12 })
-  }
-
-  const [rawStoryRows, followingProfiles, myStory, blockedPeerIds] =
+  const [recentStoryRows, timelineStoryRows, followingProfiles, myStory, blockedPeerIds] =
     await Promise.all([
       getLiveStoryRows(),
+      options.timelineStoryIds?.length
+        ? getLiveStoryRows(options.timelineStoryIds, {
+            cursor: options.timelineCursor,
+            limit: options.timelineLimit ?? 20,
+          })
+        : Promise.resolve([]),
       listFollowingProfiles(viewerId),
       getMyStoryStack(viewerId, options),
       getBlockedPeerIds(viewerId),
     ])
+  const rawStoryRows = [
+    ...timelineStoryRows,
+    ...recentStoryRows.filter(
+      (story) => !timelineStoryRows.some((candidate) => candidate.id === story.id),
+    ),
+  ]
   const storyRows = rawStoryRows.filter(
     (story) =>
       story.creatorId === viewerId || !blockedPeerIds.has(story.creatorId),
@@ -1237,9 +1278,20 @@ async function buildLiveFeedData(
   const followingRankedStories = rankedStories.filter((story) =>
     followedCreatorIds.has(story.creatorId),
   )
-  const followingTimelineRows = orderStoriesNewestFirst(
-    storyRows.filter((story) => followedCreatorIds.has(story.creatorId)),
+  const timelineOrder = new Map(
+    (options.timelineStoryIds ?? []).map((storyId, index) => [storyId, index]),
   )
+  const followingTimelineRows = storyRows
+    .filter((story) => followedCreatorIds.has(story.creatorId))
+    .sort((left, right) => {
+      const leftIndex = timelineOrder.get(left.id)
+      const rightIndex = timelineOrder.get(right.id)
+      if (leftIndex !== undefined || rightIndex !== undefined) {
+        return (leftIndex ?? Number.MAX_SAFE_INTEGER) -
+          (rightIndex ?? Number.MAX_SAFE_INTEGER)
+      }
+      return right.createdAt.getTime() - left.createdAt.getTime()
+    })
   const discoverRankedStories = rankedStories.filter(
     (story) =>
       story.creatorId !== viewerId && !followedCreatorIds.has(story.creatorId),
@@ -1295,7 +1347,7 @@ async function buildLiveFeedData(
   )
   const followingTimelineStoryRows = firstStoryPerCreator(
     followingTimelineRows,
-  ).slice(0, 24)
+  ).slice(0, options.timelineLimit ?? 20)
   const discoverStoryRows = firstStoryPerCreator(discoverRankedStories)
     .slice(0, 8)
     .map((story) => latestDiscoverStoryByCreator.get(story.creatorId) ?? story)
@@ -1561,9 +1613,16 @@ export async function createStory(input: CreateStoryInput) {
       }
     : contentModeration
   const isMediaReady = mediaAsset.processingStatus === "ready"
-  const nextStoryStatus = storyStatusFromModeration({
-    result: moderation,
-    isMediaReady,
+  const nextStoryStatus = deriveStoryPublicationStatus({
+    currentStatus: "processing",
+    moderationStatus: moderationStatusFromResult(moderation),
+    providerReady:
+      input.storedAsset.storageProvider === "cloudflare-stream"
+        ? false
+        : isMediaReady,
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+    now,
+    scanStatus: mediaAsset.scanStatus,
   })
 
   await applyMediaModerationResult({
@@ -1659,19 +1718,15 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
-  if (moderation.action === "approve" && isMediaReady) {
-    await processStoryCreatorEarnings(storyId)
-    await notifyCreatorStoryPosted({
-      creatorId: input.session.id,
-      creatorName: input.session.displayName,
-      storyId,
-      caption: input.caption || null,
-    }).catch(() => undefined)
+  if (nextStoryStatus === "live") {
+    await enqueueStoryPublication(storyId).catch((error) => {
+      console.error("story_publication_enqueue_failed", { storyId, error })
+    })
+  } else {
+    await invalidateMobileFeedSnapshotsForCreator(input.session.id).catch(
+      () => undefined,
+    )
   }
-
-  await invalidateMobileFeedSnapshotsForCreator(input.session.id).catch(
-    () => undefined,
-  )
 
   return storyId
 }
@@ -1813,6 +1868,9 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
     .select({
       id: stories.id,
       creatorId: stories.creatorId,
+      status: stories.status,
+      processingStatus: stories.processingStatus,
+      moderationStatus: stories.moderationStatus,
     })
     .from(stories)
     .where(
@@ -1862,7 +1920,7 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
 
   await reverseUnpaidStoryEarnings(story.id)
 
-  await db
+  const updatedStories = await db
     .update(stories)
     .set({
       caption: input.caption || null,
@@ -1873,7 +1931,21 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
       reviewedByUserId: null,
       brandSignalScore: brandSignalScore.toFixed(2),
     })
-    .where(eq(stories.id, input.storyId))
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.creatorId, input.ownerId),
+        eq(stories.status, story.status),
+        eq(stories.processingStatus, story.processingStatus),
+        eq(stories.moderationStatus, story.moderationStatus),
+        gt(stories.expiresAt, new Date()),
+      ),
+    )
+    .returning({ id: stories.id })
+
+  if (updatedStories.length === 0) {
+    throw new Error("Story changed while it was being reviewed. Try again.")
+  }
 
   await recordModerationCheck({
     targetKind: "story",
@@ -1916,7 +1988,12 @@ export async function updateStoryForOwner(input: UpdateStoryInput) {
   }
 
   if (isApproved) {
-    await processStoryCreatorEarnings(input.storyId)
+    await enqueueStoryPublication(input.storyId).catch((error) => {
+      console.error("story_publication_enqueue_failed", {
+        storyId: input.storyId,
+        error,
+      })
+    })
   }
 
   await invalidateMobileFeedSnapshotsForCreator(input.ownerId).catch(

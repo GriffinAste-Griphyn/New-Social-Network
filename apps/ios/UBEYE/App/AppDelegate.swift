@@ -3,6 +3,7 @@ import UIKit
 final class AppDelegate: NSObject, UIApplicationDelegate {
     static var onDeviceToken: ((Data) -> Void)?
     static var onRegistrationError: ((Error) -> Void)?
+    static var onBackgroundNotification: (([AnyHashable: Any], @escaping (UIBackgroundFetchResult) -> Void) -> Void)?
 
     func application(
         _ application: UIApplication,
@@ -16,5 +17,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         Self.onRegistrationError?(error)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard let handler = Self.onBackgroundNotification else {
+            completionHandler(.noData)
+            return
+        }
+
+        handler(userInfo, completionHandler)
+    }
+
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier == BackgroundTusUploadTransport.sessionIdentifier else {
+            completionHandler()
+            return
+        }
+
+        BackgroundTusUploadTransport.shared.attachSystemCompletionHandler(completionHandler)
     }
 }

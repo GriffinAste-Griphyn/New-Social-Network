@@ -5,6 +5,7 @@ import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
 export const runtime = "nodejs"
+const noStoreHeaders = { "Cache-Control": "private, no-store" }
 
 export async function GET(
   request: Request,
@@ -13,24 +14,33 @@ export async function GET(
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: noStoreHeaders },
+    )
   }
 
   const { id } = await context.params
   const storyStatus = await getStoryUploadStatusForOwner(id, session.id)
 
   if (!storyStatus) {
-    return NextResponse.json({ error: "Story not found." }, { status: 404 })
+    return NextResponse.json(
+      { error: "Story not found." },
+      { status: 404, headers: noStoreHeaders },
+    )
   }
 
-  return NextResponse.json({
-    ok: true,
-    story: {
-      ...storyStatus,
-      moderationReason: userFacingModerationReason({
-        moderationStatus: storyStatus.moderationStatus,
-        moderationReason: storyStatus.moderationReason,
-      }),
+  return NextResponse.json(
+    {
+      ok: true,
+      story: {
+        ...storyStatus,
+        moderationReason: userFacingModerationReason({
+          moderationStatus: storyStatus.moderationStatus,
+          moderationReason: storyStatus.moderationReason,
+        }),
+      },
     },
-  })
+    { headers: noStoreHeaders },
+  )
 }

@@ -164,6 +164,7 @@ async function sendApnsMessage(input: {
             title: input.message.title,
             body: input.message.body,
           },
+          "content-available": 1,
           sound: "default",
         },
         ...input.message.data,

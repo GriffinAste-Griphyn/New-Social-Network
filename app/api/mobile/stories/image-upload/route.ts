@@ -6,9 +6,10 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import {
   directStoryImageDisplayPathname,
   directStoryImagePathname,
-  directStoryImagePlaceholderPathname,
   directStoryImageThumbnailPathname,
   isAllowedDirectStoryImageContentType,
+  maxStoryImageDisplayDerivativeBytes,
+  maxStoryImageThumbnailDerivativeBytes,
   maxStoryImageUploadBytes,
 } from "@/lib/story-storage"
 import {
@@ -23,9 +24,12 @@ const imageUploadSchema = z.object({
   fileName: z.string().trim().min(1).max(180).default("story-photo.jpg"),
   contentType: z.string().trim().min(1).max(120),
   byteSize: z.number().int().positive().max(maxStoryImageUploadBytes),
+  displayContentType: z.enum(["image/avif", "image/webp"]),
 })
 
-type ImageUploadPartAccess = "private" | "public"
+const minimumDerivativeOnlyBuild = 285
+
+type ImageUploadPartAccess = "private"
 
 function blobApiUploadUrl(pathname: string) {
   const baseUrl =
@@ -52,8 +56,6 @@ async function createImageUploadPart(input: {
     validUntil: Date.now() + 15 * 60 * 1000,
     addRandomSuffix: false,
     allowOverwrite: false,
-    cacheControlMaxAge:
-      input.access === "public" ? 60 * 60 * 24 * 30 : undefined,
   })
 
   return {
@@ -73,6 +75,17 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Sign in before uploading stories." },
       { status: 401 },
+    )
+  }
+
+  const clientBuild = Number.parseInt(
+    request.headers.get("x-ubeye-app-build") ?? "",
+    10,
+  )
+  if (!Number.isFinite(clientBuild) || clientBuild < minimumDerivativeOnlyBuild) {
+    return NextResponse.json(
+      { error: "Update UBEYE to post image stories." },
+      { status: 426, headers: { Upgrade: "UBEYE/285" } },
     )
   }
 
@@ -104,47 +117,39 @@ export async function POST(request: Request) {
     )
   }
 
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (
+    process.env.STORY_STORAGE_PROVIDER !== "vercel-blob" ||
+    !process.env.BLOB_READ_WRITE_TOKEN
+  ) {
     return NextResponse.json(
       { error: "Direct image uploads are not configured." },
       { status: 503 },
     )
   }
 
-  const pathname = directStoryImagePathname(session.id, parsed.data.fileName)
-  const original = await createImageUploadPart({
-    pathname,
-    contentType: parsed.data.contentType,
-    maxSizeBytes: maxStoryImageUploadBytes,
-    access: "private",
-  })
-  const [display, thumbnail, placeholder] = await Promise.all([
+  const basePathname = directStoryImagePathname(session.id, parsed.data.fileName)
+  const [display, thumbnail] = await Promise.all([
     createImageUploadPart({
-      pathname: directStoryImageDisplayPathname(pathname),
-      contentType: "image/jpeg",
-      maxSizeBytes: maxStoryImageUploadBytes,
-      access: "public",
+      pathname: directStoryImageDisplayPathname(
+        basePathname,
+        parsed.data.displayContentType,
+      ),
+      contentType: parsed.data.displayContentType,
+      maxSizeBytes: maxStoryImageDisplayDerivativeBytes,
+      access: "private",
     }),
     createImageUploadPart({
-      pathname: directStoryImageThumbnailPathname(pathname),
-      contentType: "image/jpeg",
-      maxSizeBytes: maxStoryImageUploadBytes,
-      access: "public",
-    }),
-    createImageUploadPart({
-      pathname: directStoryImagePlaceholderPathname(pathname),
-      contentType: "image/jpeg",
-      maxSizeBytes: 128 * 1024,
-      access: "public",
+      pathname: directStoryImageThumbnailPathname(basePathname),
+      contentType: "image/webp",
+      maxSizeBytes: maxStoryImageThumbnailDerivativeBytes,
+      access: "private",
     }),
   ])
 
   return NextResponse.json({
     ok: true,
-    ...original,
-    original,
+    basePathname,
     display,
     thumbnail,
-    placeholder,
   })
 }

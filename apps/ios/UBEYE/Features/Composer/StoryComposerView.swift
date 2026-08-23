@@ -11,6 +11,20 @@ enum PickedStoryMedia {
     case video(StoryVideoUpload)
 }
 
+enum StoryImageContentMode: String, Codable, CaseIterable, Hashable {
+    case fit
+    case fill
+
+    var title: String {
+        switch self {
+        case .fit:
+            "Fit"
+        case .fill:
+            "Fill"
+        }
+    }
+}
+
 struct StoryVideoUpload {
     enum Source {
         case cameraFront
@@ -22,18 +36,49 @@ struct StoryVideoUpload {
     let source: Source
 }
 
-struct StoryImageUpload: Equatable {
-    static let maximumUploadBytes = 25 * 1024 * 1024
+struct StoryImageUpload: Equatable, @unchecked Sendable {
+    static let maximumUploadBytes = StoryMediaContract.maximumImageUploadBytes
     static let maximumTranscodedPixelDimension = 4_096
     static let maximumPreviewPixelDimension = 2_560
     static let transcodedJPEGQuality: CGFloat = 0.95
     static let fallbackTranscodedPixelDimension = 3_072
     static let fallbackJPEGQuality: CGFloat = 0.88
+    static let playbackCanvasWidth = Int(StoryCanvasLayout.playbackPixelSize.width)
+    static let playbackCanvasHeight = Int(StoryCanvasLayout.playbackPixelSize.height)
+    static let playbackJPEGQuality: CGFloat = 0.78
+    static let thumbnailCanvasWidth = Int(StoryCanvasLayout.thumbnailPixelSize.width)
+    static let thumbnailCanvasHeight = Int(StoryCanvasLayout.thumbnailPixelSize.height)
 
     let image: UIImage
     let data: Data
     let fileName: String
     let mimeType: String
+
+    static func prepare(
+        data: Data,
+        fallbackFileName: String = "story-photo",
+        displayImage: UIImage? = nil
+    ) async -> StoryImageUpload? {
+        await Task.detached(priority: .userInitiated) {
+            StoryImageUpload(
+                data: data,
+                fallbackFileName: fallbackFileName,
+                displayImage: displayImage
+            )
+        }.value
+    }
+
+    static func prepare(
+        fileURL: URL,
+        fallbackFileName: String = "story-photo"
+    ) async -> StoryImageUpload? {
+        await Task.detached(priority: .userInitiated) {
+            StoryImageUpload(
+                fileURL: fileURL,
+                fallbackFileName: fallbackFileName
+            )
+        }.value
+    }
 
     init?(
         data: Data,
@@ -315,6 +360,72 @@ enum StoryImageTranscoder {
         )
     }
 
+    static func storyCanvasJPEG(
+        data: Data,
+        width: Int,
+        height: Int,
+        quality: CGFloat,
+        contentMode: StoryImageContentMode = .fill
+    ) -> StoryJPEGEncoding? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+                return nil
+            }
+
+            return encodeStoryCanvas(
+                source: source,
+                width: width,
+                height: height,
+                quality: quality,
+                contentMode: contentMode
+            )
+        }
+    }
+
+    static func storyCanvasImage(
+        fileURL: URL,
+        width: Int,
+        height: Int,
+        contentMode: StoryImageContentMode = .fill
+    ) -> CGImage? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions) else {
+                return nil
+            }
+            return renderStoryCanvas(
+                source: source,
+                width: width,
+                height: height,
+                contentMode: contentMode
+            )
+        }
+    }
+
+    static func storyCanvasJPEG(
+        fileURL: URL,
+        width: Int,
+        height: Int,
+        quality: CGFloat,
+        contentMode: StoryImageContentMode = .fill
+    ) -> StoryJPEGEncoding? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions) else {
+                return nil
+            }
+
+            return encodeStoryCanvas(
+                source: source,
+                width: width,
+                height: height,
+                quality: quality,
+                contentMode: contentMode
+            )
+        }
+    }
+
     private static func encodeJPEG(
         source: CGImageSource,
         maxPixelDimension: Int,
@@ -350,6 +461,103 @@ enum StoryImageTranscoder {
             width: cgImage.width,
             height: cgImage.height
         )
+    }
+
+    private static func encodeStoryCanvas(
+        source: CGImageSource,
+        width: Int,
+        height: Int,
+        quality: CGFloat,
+        contentMode: StoryImageContentMode
+    ) -> StoryJPEGEncoding? {
+        guard let renderedImage = renderStoryCanvas(
+            source: source,
+            width: width,
+            height: height,
+            contentMode: contentMode
+        ) else {
+            return nil
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        let destinationOptions: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: min(max(quality, 0), 1),
+        ]
+        CGImageDestinationAddImage(
+            destination,
+            renderedImage,
+            destinationOptions as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination), output.length > 0 else {
+            return nil
+        }
+
+        return StoryJPEGEncoding(data: output as Data, width: width, height: height)
+    }
+
+    private static func renderStoryCanvas(
+        source: CGImageSource,
+        width: Int,
+        height: Int,
+        contentMode: StoryImageContentMode
+    ) -> CGImage? {
+        guard width > 0,
+              height > 0,
+              let sourceImage = downsampledImage(
+                source: source,
+                maxPixelDimension: max(
+                    StoryImageUpload.maximumTranscodedPixelDimension,
+                    max(width, height)
+                )
+              ) else {
+            return nil
+        }
+
+        let sourceSize = CGSize(width: sourceImage.width, height: sourceImage.height)
+        let targetSize = CGSize(width: width, height: height)
+        let widthScale = targetSize.width / sourceSize.width
+        let heightScale = targetSize.height / sourceSize.height
+        let scale = contentMode == .fill
+            ? max(widthScale, heightScale)
+            : min(widthScale, heightScale)
+        let fittedSize = CGSize(
+            width: sourceSize.width * scale,
+            height: sourceSize.height * scale
+        )
+        let fittedRect = CGRect(
+            x: (targetSize.width - fittedSize.width) / 2,
+            y: (targetSize.height - fittedSize.height) / 2,
+            width: fittedSize.width,
+            height: fittedSize.height
+        )
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: targetSize))
+        context.draw(sourceImage, in: fittedRect)
+        return context.makeImage()
     }
 
     private static func downsampledImage(
@@ -415,9 +623,36 @@ private enum ComposerOverlayInputMode: Identifiable {
     }
 }
 
+private enum StoryComposerLimits {
+    static let caption = 220
+    static let textOverlay = 220
+    static let linkLabel = 64
+    static let linkURL = 320
+    static let brandTag = 32
+    static let brandTagsInput = 320
+}
+
+private func storyTextPrefix(_ value: String, maximumUTF16Length: Int) -> String {
+    guard value.utf16.count > maximumUTF16Length else {
+        return value
+    }
+
+    var result = ""
+    var length = 0
+    for character in value {
+        let characterLength = String(character).utf16.count
+        guard length + characterLength <= maximumUTF16Length else {
+            break
+        }
+        result.append(character)
+        length += characterLength
+    }
+    return result
+}
+
 @MainActor
 final class StoryComposerStore: ObservableObject {
-    private let maxVideoDurationSeconds = 120
+    private let maxVideoDurationSeconds = StoryMediaContract.maximumVideoDurationSeconds
 
     @Published var caption = ""
     @Published var brandTags = ""
@@ -432,6 +667,7 @@ final class StoryComposerStore: ObservableObject {
     @Published var quoteReplyPositionX: Double = 50
     @Published var quoteReplyPositionY: Double = 58
     @Published var selectedMedia: PickedStoryMedia?
+    @Published var imageContentMode: StoryImageContentMode = .fit
     @Published var uploadStatus: String?
     @Published var error: String?
     @Published var lastUploadReport: String?
@@ -567,10 +803,15 @@ final class StoryComposerStore: ObservableObject {
             return nil
         }
 
-        isUploading = true
         error = nil
         lastUploadReport = nil
         normalizeLinkDraft()
+        if let validationMessage = draftValidationMessage {
+            error = validationMessage
+            return nil
+        }
+
+        isUploading = true
         uploadStatus = "Preparing upload"
         var uploadResponse: StoryUploadResponse?
         var didCreatePendingUpload = false
@@ -581,6 +822,7 @@ final class StoryComposerStore: ObservableObject {
                 uploadStatus = "Posting"
                 let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
+                    contentMode: imageContentMode,
                     draft: pendingUploadDraft,
                     textOverlays: pendingTextOverlays
                 )
@@ -643,7 +885,7 @@ final class StoryComposerStore: ObservableObject {
 
             attempt.begin(.thumbnailGenerate)
             uploadStatus = attempt.phase.statusLabel
-            let thumbnailData = await optionalVideoThumbnailData(
+            let thumbnailData = try await videoThumbnailData(
                 for: preparedVideo.url,
                 durationMs: preparedVideo.durationMs,
                 overlays: thumbnailOverlaySpecs
@@ -662,12 +904,14 @@ final class StoryComposerStore: ObservableObject {
             onPendingUploadStarted(pendingUpload)
             clearUploadedDraft()
 
-            attempt.begin(.videoUpload)
-            uploadStatus = attempt.phase.statusLabel
-            let response = try await pendingUploads.performUpload(id: pendingUpload.id, api: api)
+            let response = try await pendingUploads.performUpload(
+                id: pendingUpload.id,
+                api: api
+            ) { phase in
+                attempt.begin(phase)
+                self.uploadStatus = phase.statusLabel
+            }
 
-            attempt.begin(.completeStory)
-            uploadStatus = attempt.phase.statusLabel
             attempt.begin(.processing)
             attempt.recordSuccess(processingStatus: response.processingStatus)
             lastUploadReport = attempt.report
@@ -679,11 +923,11 @@ final class StoryComposerStore: ObservableObject {
         }
     }
 
-    private func optionalVideoThumbnailData(
+    private func videoThumbnailData(
         for url: URL,
         durationMs: Int?,
         overlays: [StoryThumbnailOverlaySpec]
-    ) async -> Data? {
+    ) async throws -> Data {
         do {
             return try await withThrowingTaskGroup(of: Data.self) { group in
                 group.addTask {
@@ -707,7 +951,7 @@ final class StoryComposerStore: ObservableObject {
             }
         } catch {
             MediaPerformance.mark("video_thumbnail_generation_failed")
-            return nil
+            throw error
         }
     }
 
@@ -717,10 +961,10 @@ final class StoryComposerStore: ObservableObject {
         overlays: [StoryThumbnailOverlaySpec]
     ) async throws -> Data {
         let image = try await generateVideoThumbnailImage(for: url, durationMs: durationMs)
-        let thumbnail = compositedThumbnailImage(
-            baseImage: UIImage(cgImage: image),
-            overlays: overlays
-        )
+        // Story overlays are rendered by the viewer. Keeping this fallback image
+        // clean prevents the thumbnail caption from appearing underneath the
+        // live caption while a video is loading.
+        let thumbnail = UIImage(cgImage: image)
 
         let maxThumbnailBytes = 2 * 1024 * 1024
         let preferredData = thumbnail.jpegData(compressionQuality: 0.9)
@@ -753,6 +997,7 @@ final class StoryComposerStore: ObservableObject {
                 var didResume = false
                 var remaining = 0
                 var lastError: Error?
+                var candidates: [(image: CGImage, score: Double)] = []
                 let times = videoThumbnailCandidateTimes(durationMs: durationMs)
                 remaining = times.count
 
@@ -768,44 +1013,115 @@ final class StoryComposerStore: ObservableObject {
                     continuation.resume(with: result)
                 }
 
-                func recordFailure(_ error: Error?) {
+                func recordResult(image: CGImage?, error: Error?) {
                     lock.lock()
                     guard !didResume else {
                         lock.unlock()
                         return
                     }
                     remaining -= 1
+                    if let image {
+                        candidates.append((
+                            image: image,
+                            score: Self.videoThumbnailQualityScore(image)
+                        ))
+                    }
                     if let error {
                         lastError = error
                     }
                     let shouldFinish = remaining <= 0
+                    let bestImage = candidates.max { left, right in
+                        left.score < right.score
+                    }?.image
                     lock.unlock()
 
                     if shouldFinish {
-                        finish(.failure(lastError ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)))
+                        if let bestImage {
+                            finish(.success(bestImage))
+                        } else {
+                            finish(.failure(lastError ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)))
+                        }
                     }
                 }
 
                 generator.generateCGImagesAsynchronously(forTimes: times.map { NSValue(time: $0) }) { _, image, _, result, error in
                     switch result {
                     case .succeeded:
-                        if let image {
-                            finish(.success(image))
-                        } else {
-                            recordFailure(nil)
-                        }
+                        recordResult(image: image, error: nil)
                     case .failed:
-                        recordFailure(error)
+                        recordResult(image: nil, error: error)
                     case .cancelled:
-                        recordFailure(error ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0))
+                        recordResult(
+                            image: nil,
+                            error: error ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
+                        )
                     @unknown default:
-                        recordFailure(error)
+                        recordResult(image: nil, error: error)
                     }
                 }
             }
         } onCancel: {
             generationBox.cancel()
         }
+    }
+
+    nonisolated private static func videoThumbnailQualityScore(_ image: CGImage) -> Double {
+        let sampleWidth = 24
+        let sampleHeight = 24
+        let bytesPerPixel = 4
+        var pixels = [UInt8](
+            repeating: 0,
+            count: sampleWidth * sampleHeight * bytesPerPixel
+        )
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+            return 0
+        }
+        let didRender = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: sampleWidth,
+                height: sampleHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: sampleWidth * bytesPerPixel,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+            context.interpolationQuality = .low
+            context.draw(
+                image,
+                in: CGRect(x: 0, y: 0, width: sampleWidth, height: sampleHeight)
+            )
+            return true
+        }
+        guard didRender else {
+            return 0
+        }
+
+        var luminanceSum = 0.0
+        var luminanceSquaredSum = 0.0
+        var darkPixels = 0
+        let pixelCount = sampleWidth * sampleHeight
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let luminance =
+                0.2126 * Double(pixels[offset]) +
+                0.7152 * Double(pixels[offset + 1]) +
+                0.0722 * Double(pixels[offset + 2])
+            luminanceSum += luminance
+            luminanceSquaredSum += luminance * luminance
+            if luminance < 18 {
+                darkPixels += 1
+            }
+        }
+
+        let mean = luminanceSum / Double(pixelCount)
+        let variance = max(
+            0,
+            luminanceSquaredSum / Double(pixelCount) - mean * mean
+        )
+        let darkRatio = Double(darkPixels) / Double(pixelCount)
+        return mean + sqrt(variance) * 1.5 - darkRatio * 140
     }
 
     private func compositedThumbnailImage(
@@ -846,15 +1162,16 @@ final class StoryComposerStore: ObservableObject {
             return
         }
 
-        let fontSize = min(max(18 * scale, 24), 42)
-        let horizontalPadding = 14 * scale
-        let verticalPadding = 8 * scale
+        let fontSize = min(max(StoryTextOverlayAppearance.fontSize * scale, 22), 40)
+        let horizontalPadding = StoryTextOverlayAppearance.horizontalPadding * scale
+        let verticalPadding = StoryTextOverlayAppearance.verticalPadding * scale
         let maxTextWidth = max(canvasSize.width - 72 * scale, 120)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .center
         paragraphStyle.lineBreakMode = .byWordWrapping
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
+            .font: UIFont.systemFont(ofSize: fontSize, weight: .regular),
+            .kern: StoryTextOverlayAppearance.letterSpacing * scale,
             .foregroundColor: UIColor.white,
             .paragraphStyle: paragraphStyle,
         ]
@@ -887,7 +1204,10 @@ final class StoryComposerStore: ObservableObject {
 
         context.saveGState()
         UIColor.black.withAlphaComponent(0.46).setFill()
-        UIBezierPath(roundedRect: chipRect, cornerRadius: chipRect.height / 2).fill()
+        UIBezierPath(
+            roundedRect: chipRect,
+            cornerRadius: StoryTextOverlayAppearance.cornerRadius * scale
+        ).fill()
         context.restoreGState()
 
         let labelRect = CGRect(
@@ -911,26 +1231,26 @@ final class StoryComposerStore: ObservableObject {
         let cardWidth = min(max(canvasSize.width * 0.72, 240 * scale), canvasSize.width - 32 * scale)
         let horizontalPadding = 12 * scale
         let verticalPadding = 10 * scale
-        let avatarSize = 24 * scale
-        let titleFont = min(max(12 * scale, 16), 28)
-        let handleFont = min(max(10 * scale, 13), 22)
-        let messageFont = min(max(15 * scale, 20), 34)
+        let avatarSize = 22 * scale
+        let titleFont = min(max(11 * scale, 14), 25)
+        let handleFont = min(max(9 * scale, 12), 20)
+        let messageFont = min(max(13 * scale, 17), 30)
         let textWidth = cardWidth - horizontalPadding * 2
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .left
         paragraphStyle.lineBreakMode = .byTruncatingTail
         let nameAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: titleFont, weight: .bold),
+            .font: UIFont.systemFont(ofSize: titleFont, weight: .semibold),
             .foregroundColor: UIColor.white,
             .paragraphStyle: paragraphStyle,
         ]
         let handleAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: handleFont, weight: .semibold),
+            .font: UIFont.systemFont(ofSize: handleFont, weight: .regular),
             .foregroundColor: UIColor.white.withAlphaComponent(0.72),
             .paragraphStyle: paragraphStyle,
         ]
         let messageAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: messageFont, weight: .bold),
+            .font: UIFont.systemFont(ofSize: messageFont, weight: .medium),
             .foregroundColor: UIColor.white,
             .paragraphStyle: paragraphStyle,
         ]
@@ -1049,6 +1369,54 @@ final class StoryComposerStore: ObservableObject {
         }
     }
 
+    private var draftValidationMessage: String? {
+        if caption.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count > StoryComposerLimits.caption {
+            return "Captions must be \(StoryComposerLimits.caption) characters or fewer."
+        }
+
+        if textOverlay.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count > StoryComposerLimits.textOverlay {
+            return "Story text must be \(StoryComposerLimits.textOverlay) characters or fewer."
+        }
+
+        let resolvedLinkURL = normalizedLinkUrl
+        if !resolvedLinkURL.isEmpty {
+            if resolvedLinkURL.utf16.count > StoryComposerLimits.linkURL || URL(string: resolvedLinkURL) == nil {
+                return "Enter a valid link up to \(StoryComposerLimits.linkURL) characters."
+            }
+            if linkLabel.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count > StoryComposerLimits.linkLabel {
+                return "Link labels must be \(StoryComposerLimits.linkLabel) characters or fewer."
+            }
+        }
+
+        let rawBrandTags = brandTags.components(
+            separatedBy: CharacterSet(charactersIn: ",\n")
+        ).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter {
+            !$0.isEmpty
+        }
+        for rawBrandTag in rawBrandTags {
+            let normalizedBrandTag = rawBrandTag
+                .lowercased()
+                .replacingOccurrences(
+                    of: "^[@#]+",
+                    with: "",
+                    options: .regularExpression
+                )
+                .replacingOccurrences(
+                    of: "[^a-z0-9._-]+",
+                    with: "-",
+                    options: .regularExpression
+                )
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            guard (2...StoryComposerLimits.brandTag).contains(normalizedBrandTag.utf16.count) else {
+                return "Each brand tag must be 2–\(StoryComposerLimits.brandTag) characters."
+            }
+        }
+
+        return nil
+    }
+
     func applyQuotedReply(_ quote: QuotedStoryReply?) {
         guard quotedReply != quote else {
             return
@@ -1128,102 +1496,108 @@ struct StoryComposerView: View {
     private let recordingTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            mediaPreview
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .overlay(Color.black.opacity(0.18))
-                .overlay {
-                    composerOverlayLayer
-                }
+                mediaPreview
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .overlay(Color.black.opacity(0.18))
+                    .overlay {
+                        positionedComposerOverlay(in: geometry.size)
+                    }
+                    .simultaneousGesture(cameraZoomGesture)
 
-            VStack(spacing: 0) {
-                ZStack(alignment: .top) {
-                    Label("Story", systemImage: "camera.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(.black.opacity(0.34), in: Capsule())
+                VStack(spacing: 0) {
+                    ZStack(alignment: .top) {
+                        Label("Story", systemImage: "camera.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .padding(.horizontal, 14)
+                            .frame(height: 38)
+                            .background(.black.opacity(0.34), in: Capsule())
 
-                    HStack(alignment: .top) {
-                        Button {
-                            resetCapture(clearQuote: true)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 18, weight: .bold))
-                                .frame(width: 42, height: 42)
-                                .background(.black.opacity(0.34), in: Circle())
-                        }
-                        .buttonStyle(.plain)
+                        HStack(alignment: .top) {
+                            Button {
+                                resetCapture(clearQuote: true)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .frame(width: 42, height: 42)
+                                    .background(.black.opacity(0.34), in: Circle())
+                            }
+                            .buttonStyle(.plain)
 
-                        Spacer()
+                            Spacer()
 
-                        VStack(spacing: 8) {
-                            TopAvatarSpacer()
+                            VStack(spacing: 8) {
+                                TopAvatarSpacer()
 
-                            if stagedMedia == nil {
-                                Button {
-                                    camera.switchCamera()
-                                } label: {
-                                    Image(systemName: "camera.rotate")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .frame(width: 42, height: 42)
-                                        .background(.black.opacity(0.34), in: Circle())
+                                if stagedMedia == nil {
+                                    Button {
+                                        camera.switchCamera()
+                                    } label: {
+                                        Image(systemName: "camera.rotate")
+                                            .font(.system(size: 18, weight: .bold))
+                                            .frame(width: 42, height: 42)
+                                            .background(.black.opacity(0.34), in: Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(camera.isRecording || camera.isCapturingPhoto)
+                                } else {
+                                    composerToolRail
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(camera.isRecording || camera.isCapturingPhoto)
-                            } else {
-                                composerToolRail
                             }
                         }
                     }
+                    .padding(.horizontal, UBEYEMetrics.screenInset)
+                    .padding(.top, 14)
+
+                    Spacer()
+
+                    if let uploadStatus = store.uploadStatus {
+                        Text(uploadStatus)
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(.bottom, 16)
+                    } else if let error = store.error ?? camera.error {
+                        Text(error)
+                            .font(.system(size: 16, weight: .bold))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, 16)
+                    } else if camera.isCapturingPhoto {
+                        Text("Preparing photo")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .padding(.bottom, 24)
+                    } else if stagedMedia == nil {
+                        Text("Tap for photo, hold for video")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .padding(.bottom, 24)
+                    }
+
+                    composerFooter
+                        .padding(.horizontal, 28)
+                        .padding(.bottom, 28)
                 }
-                .padding(.horizontal, UBEYEMetrics.screenInset)
-                .padding(.top, 14)
-
-                Spacer()
-
-                if let uploadStatus = store.uploadStatus {
-                    Text(uploadStatus)
-                        .font(.system(size: 18, weight: .bold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .padding(.bottom, 16)
-                } else if let error = store.error ?? camera.error {
-                    Text(error)
-                        .font(.system(size: 16, weight: .bold))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.ubeyeRed.opacity(0.9), in: Capsule())
-                        .padding(.horizontal, 22)
-                        .padding(.bottom, 16)
-                } else if camera.isCapturingPhoto {
-                    Text("Preparing photo")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .padding(.bottom, 24)
-                } else if stagedMedia == nil {
-                    Text("Tap for photo, hold for video")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.65))
-                        .padding(.bottom, 24)
-                }
-
-                composerFooter
-                .padding(.horizontal, 28)
-                .padding(.bottom, 28)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .foregroundStyle(.white)
             }
-            .foregroundStyle(.white)
-
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
         .task {
             store.applyQuotedReply(quotedReply)
             await camera.requestAccessAndConfigure()
             await refreshLatestLibraryThumbnail()
+            applyLayoutFixtureIfRequested()
         }
         .onChange(of: quotedReply) { _, quote in
             store.applyQuotedReply(quote)
@@ -1296,22 +1670,56 @@ struct StoryComposerView: View {
 
             Spacer()
 
+            footerPlaceholder(size: footerSideControlSize)
+        }
+    }
+
+    private var cameraZoomGesture: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                guard stagedMedia == nil,
+                      store.selectedMedia == nil,
+                      camera.authorizationStatus == .authorized else {
+                    return
+                }
+
+                camera.updateZoomGesture(magnification: value.magnification)
+            }
+            .onEnded { _ in
+                camera.endZoomGesture()
+            }
+    }
+
+    private var selectedMediaFooter: some View {
+        HStack(spacing: 0) {
+            if isImageMediaSelected {
+                Picker("Photo framing", selection: $store.imageContentMode) {
+                    ForEach(StoryImageContentMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .accessibilityHint("Fit shows the whole photo. Fill crops it to the story frame.")
+            }
+
+            Spacer(minLength: 0)
             uploadStoryButton
         }
     }
 
-    private var selectedMediaFooter: some View {
-        HStack {
-            footerPlaceholder(size: footerSideControlSize)
-
-            Spacer()
-
-            footerPlaceholder(size: footerShutterSlotSize)
-
-            Spacer()
-
-            uploadStoryButton
+    private var isImageMediaSelected: Bool {
+        guard let media = stagedMedia ?? store.selectedMedia else {
+            return false
         }
+        if case .image = media {
+            return true
+        }
+        return false
+    }
+
+    private var hasSelectedMedia: Bool {
+        (stagedMedia ?? store.selectedMedia) != nil
     }
 
     private func footerPlaceholder(size: CGFloat) -> some View {
@@ -1327,6 +1735,9 @@ struct StoryComposerView: View {
             }
         } label: {
             uploadButtonIcon
+            .foregroundStyle(.white)
+            .frame(width: footerSideControlSize, height: footerSideControlSize)
+            .background(.black.opacity(0.52), in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(store.isUploading)
@@ -1337,9 +1748,6 @@ struct StoryComposerView: View {
     private var uploadButtonIcon: some View {
         Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
             .font(.system(size: 21, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 58, height: 58)
-            .background(.black.opacity(0.34), in: Circle())
     }
 
     private var composerToolRail: some View {
@@ -1375,6 +1783,7 @@ struct StoryComposerView: View {
                 if overlayInputMode == .text || !store.textOverlay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     EditableStoryOverlayChip(
                         text: $store.textOverlay,
+                        maximumLength: StoryComposerLimits.textOverlay,
                         placeholder: "Text",
                         systemImage: nil,
                         positionX: store.textOverlayPositionX,
@@ -1399,6 +1808,7 @@ struct StoryComposerView: View {
                 if overlayInputMode == .link || !store.normalizedLinkUrl.isEmpty {
                     EditableStoryOverlayChip(
                         text: $store.linkUrl,
+                        maximumLength: StoryComposerLimits.linkURL,
                         placeholder: "Paste link",
                         systemImage: "link",
                         positionX: store.linkOverlayPositionX,
@@ -1433,6 +1843,24 @@ struct StoryComposerView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func positionedComposerOverlay(in containerSize: CGSize) -> some View {
+        if hasSelectedMedia {
+            let canvasLayout = StoryCanvasLayout(containerSize: containerSize)
+            composerOverlayLayer
+                .frame(
+                    width: canvasLayout.frame.width,
+                    height: canvasLayout.frame.height
+                )
+                .position(
+                    x: canvasLayout.frame.midX,
+                    y: canvasLayout.frame.midY
+                )
+        } else {
+            composerOverlayLayer
         }
     }
 
@@ -1533,28 +1961,22 @@ struct StoryComposerView: View {
     private var mediaPreview: some View {
         switch stagedMedia ?? store.selectedMedia {
         case .image(let upload):
-            Image(uiImage: upload.image)
-                .resizable()
-                .scaledToFill()
+            storyImagePreview(upload.image)
         case .video(let video):
-            StoryVideoPreview(
+            storyVideoPreview(
                 url: video.url,
                 mirrorsHorizontally: false
             )
         case nil:
             if let photo = camera.capturedPhoto {
-                Image(uiImage: photo.image)
-                    .resizable()
-                    .scaledToFill()
+                storyImagePreview(photo.image)
                     .onAppear {
                         enterComposer(with: .image(photo))
                     }
             } else if let photoPreview = camera.capturedPhotoPreview {
-                Image(uiImage: photoPreview)
-                    .resizable()
-                    .scaledToFill()
+                storyImagePreview(photoPreview)
             } else if let videoURL = camera.capturedVideoURL {
-                StoryVideoPreview(
+                storyVideoPreview(
                     url: videoURL,
                     mirrorsHorizontally: false
                 )
@@ -1574,20 +1996,95 @@ struct StoryComposerView: View {
         }
     }
 
+    private func storyImagePreview(_ image: UIImage) -> some View {
+        GeometryReader { proxy in
+            let canvasLayout = StoryCanvasLayout(containerSize: proxy.size)
+
+            Group {
+                if store.imageContentMode == .fit {
+                    StoryCanvasImage(image: Image(uiImage: image))
+                } else {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                }
+            }
+            .frame(
+                width: canvasLayout.frame.width,
+                height: canvasLayout.frame.height
+            )
+            .position(
+                x: canvasLayout.frame.midX,
+                y: canvasLayout.frame.midY
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
+    private func storyVideoPreview(url: URL, mirrorsHorizontally: Bool) -> some View {
+        GeometryReader { proxy in
+            let canvasLayout = StoryCanvasLayout(containerSize: proxy.size)
+
+            StoryVideoPreview(
+                url: url,
+                mirrorsHorizontally: mirrorsHorizontally
+            )
+            .frame(
+                width: canvasLayout.frame.width,
+                height: canvasLayout.frame.height
+            )
+            .position(
+                x: canvasLayout.frame.midX,
+                y: canvasLayout.frame.midY
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
     private var metadataFields: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Story details")
                 .font(.headline)
-            composerTextField("Caption", text: $store.caption)
-            composerTextField("Brand tags", text: $store.brandTags)
-            composerTextField("Text overlay", text: $store.textOverlay)
+            composerTextField(
+                "Caption",
+                text: $store.caption,
+                maximumLength: StoryComposerLimits.caption
+            )
+            composerTextField(
+                "Brand tags",
+                text: $store.brandTags,
+                maximumLength: StoryComposerLimits.brandTagsInput
+            )
+            composerTextField(
+                "Text overlay",
+                text: $store.textOverlay,
+                maximumLength: StoryComposerLimits.textOverlay
+            )
         }
         .padding(14)
         .ubeyeCard()
     }
 
-    private func composerTextField(_ title: String, text: Binding<String>) -> some View {
-        TextField(title, text: text)
+    private func composerTextField(
+        _ title: String,
+        text: Binding<String>,
+        maximumLength: Int
+    ) -> some View {
+        TextField(
+            title,
+            text: Binding(
+                get: { text.wrappedValue },
+                set: {
+                    text.wrappedValue = storyTextPrefix(
+                        $0,
+                        maximumUTF16Length: maximumLength
+                    )
+                }
+            )
+        )
             .padding()
             .frame(height: 52)
             .background(Color.ubeyeSubtle)
@@ -1762,8 +2259,29 @@ struct StoryComposerView: View {
         store.uploadStatus = nil
         overlayInputMode = nil
         isOverlayInputFocused = false
+        if case .image = media {
+            store.imageContentMode = .fit
+        }
         stagedMedia = media
         store.selectedMedia = media
+    }
+
+    private func applyLayoutFixtureIfRequested() {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-story-composer-selected-photo-fixture") else {
+            return
+        }
+
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1_080, height: 1_920)).image { context in
+            UIColor.systemBrown.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1_080, height: 1_920))
+        }
+        guard let data = image.jpegData(compressionQuality: 0.9),
+              let upload = StoryImageUpload(data: data, displayImage: image) else {
+            return
+        }
+        enterComposer(with: .image(upload))
+        #endif
     }
 
     private func updateRecordingProgress(now: Date) {
@@ -1780,6 +2298,7 @@ struct StoryComposerView: View {
 
 private struct EditableStoryOverlayChip: View {
     @Binding var text: String
+    let maximumLength: Int
     @State private var measuredChipSize: CGSize = .zero
     @State private var dragStartCenter: CGPoint?
     let placeholder: String
@@ -1864,14 +2383,17 @@ private struct EditableStoryOverlayChip: View {
     }
 
     private var chip: some View {
-        let maxChipWidth = max(size.width - 32, 70)
+        let maxChipWidth = max(
+            size.width - StoryTextOverlayAppearance.horizontalScreenInset * 2,
+            StoryTextOverlayAppearance.minimumWidth
+        )
 
-        return HStack(alignment: .bottom, spacing: 7) {
+        return HStack(alignment: .bottom, spacing: 6) {
             if isEditing {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .bold))
-                        .frame(height: 30)
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(height: 28)
                 }
 
                 TextField(
@@ -1886,19 +2408,24 @@ private struct EditableStoryOverlayChip: View {
                 .autocorrectionDisabled(autocorrectionDisabled)
                 .submitLabel(.done)
                 .onSubmit(onSubmit)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: StoryTextOverlayAppearance.fontSize, weight: .regular))
+                .tracking(StoryTextOverlayAppearance.letterSpacing)
                 .multilineTextAlignment(.center)
                 .lineLimit(1...4)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(minWidth: 70, maxWidth: maxChipWidth)
+                .frame(
+                    minWidth: StoryTextOverlayAppearance.minimumWidth,
+                    maxWidth: maxChipWidth
+                )
             } else {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 12, weight: .semibold))
                 }
 
                 Text(displayText ?? text)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: StoryTextOverlayAppearance.fontSize, weight: .regular))
+                    .tracking(StoryTextOverlayAppearance.letterSpacing)
                     .lineLimit(4)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1906,10 +2433,16 @@ private struct EditableStoryOverlayChip: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, StoryTextOverlayAppearance.horizontalPadding)
+        .padding(.vertical, StoryTextOverlayAppearance.verticalPadding)
         .frame(maxWidth: maxChipWidth)
-        .background(.black.opacity(0.46), in: Capsule())
+        .background(
+            .black.opacity(0.46),
+            in: RoundedRectangle(
+                cornerRadius: StoryTextOverlayAppearance.cornerRadius,
+                style: .continuous
+            )
+        )
     }
 
     private var sanitizedTextBinding: Binding<String> {
@@ -1919,14 +2452,20 @@ private struct EditableStoryOverlayChip: View {
             },
             set: { nextValue in
                 if nextValue.contains(where: \.isNewline) {
-                    text = nextValue
-                        .split(whereSeparator: \.isNewline)
-                        .joined(separator: " ")
+                    text = storyTextPrefix(
+                        nextValue
+                            .split(whereSeparator: \.isNewline)
+                            .joined(separator: " "),
+                        maximumUTF16Length: maximumLength
+                    )
                     DispatchQueue.main.async {
                         onSubmit()
                     }
                 } else {
-                    text = nextValue
+                    text = storyTextPrefix(
+                        nextValue,
+                        maximumUTF16Length: maximumLength
+                    )
                 }
             }
         )
@@ -1947,7 +2486,10 @@ private struct EditableStoryOverlayChip: View {
             return 0
         }
 
-        let fallbackLength = min(dimension - 32, 70)
+        let fallbackLength = min(
+            dimension - 32,
+            StoryTextOverlayAppearance.minimumWidth
+        )
         let length = measuredLength > 0 ? measuredLength : fallbackLength
         return min(max((length / 2) + 8, 8), dimension / 2)
     }
@@ -2005,16 +2547,16 @@ private struct QuoteReplyOverlayBubble: View {
     var clear: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                RemoteAvatar(url: quote.actorAvatarUrl, size: 24, name: quote.actorName)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                RemoteAvatar(url: quote.actorAvatarUrl, size: 22, name: quote.actorName)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(quote.actorName)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Text("@\(quote.actorHandle)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                 }
@@ -2024,7 +2566,7 @@ private struct QuoteReplyOverlayBubble: View {
                 if includesCloseButton {
                     Button(action: clear) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10, weight: .semibold))
                             .frame(width: 24, height: 24)
                             .background(.white.opacity(0.14), in: Circle())
                     }
@@ -2034,13 +2576,13 @@ private struct QuoteReplyOverlayBubble: View {
             }
 
             Text(quote.message)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 15, weight: .medium))
                 .lineLimit(4)
                 .multilineTextAlignment(.leading)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -2242,7 +2784,10 @@ final class StoryVideoPreviewView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspectFill
+        clipsToBounds = true
+
+        playerLayer.backgroundColor = UIColor.black.cgColor
+        playerLayer.videoGravity = .resizeAspect
         layer.addSublayer(playerLayer)
     }
 

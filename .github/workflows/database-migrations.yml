@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "drizzle/**"
-      - "lib/db/schema.ts"
+      - "lib/db/schema/**"
       - "drizzle.config.ts"
       - "package.json"
       - "package-lock.json"

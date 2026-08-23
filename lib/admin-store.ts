@@ -4,22 +4,24 @@ import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm"
 import { isAdminSession } from "@/lib/admin-auth"
 import { requireSession } from "@/lib/auth"
 import {
-  processStoryCreatorEarnings,
   reverseUnpaidStoryEarnings,
   settleCreatorPayouts,
 } from "@/lib/creator-earnings"
 import { getDb } from "@/lib/db"
+import { applyMediaModerationResult } from "@/lib/media-assets"
 import {
   advertiserAccounts,
   advertiserWalletTransactions,
   brandFundingProfiles,
   creatorProfiles,
   earningsLedger,
+  mediaAssets,
   stories,
   storyElements,
   users,
 } from "@/lib/db/schema"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
+import { enqueueStoryPublication } from "@/lib/story-publication"
 import {
   countPendingSafetyReports,
   listPendingSafetyReports,
@@ -27,8 +29,15 @@ import {
 } from "@/lib/social-safety"
 import {
   listLatestModerationChecksForTargets,
+  recordModerationCheck,
   type ModerationCheckRecord,
 } from "@/lib/safety/moderation-checks"
+import { moderateUserContent } from "@/lib/safety/moderate-content"
+import { resultFromSignals } from "@/lib/safety/policy"
+import {
+  deriveStoryPublicationStatus,
+} from "@/lib/stories/cloudflare-status"
+import { isCloudflareStreamFullyReady as isProviderReady } from "@/lib/media-upload-sessions"
 
 type DbNumber = bigint | number | string | null
 
@@ -307,27 +316,70 @@ export async function approveModeratedStory(input: {
   reviewerId: string
 }) {
   const db = getDb()
-  const [story] = await db
+  const [row] = await db
     .select({
+      id: stories.id,
+      status: stories.status,
       processingStatus: stories.processingStatus,
+      moderationStatus: stories.moderationStatus,
+      storageProvider: stories.storageProvider,
       expiresAt: stories.expiresAt,
+      mediaAssetId: stories.mediaAssetId,
+      scanStatus: mediaAssets.scanStatus,
+      assetProcessingStatus: mediaAssets.processingStatus,
+      providerStatus: mediaAssets.providerStatus,
+      providerPctComplete: mediaAssets.providerPctComplete,
     })
     .from(stories)
+    .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
     .where(eq(stories.id, input.storyId))
     .limit(1)
 
-  if (!story) {
+  if (!row) {
     return
   }
 
-  const nextStatus =
-    story.expiresAt.getTime() <= Date.now()
-      ? "expired"
-      : story.processingStatus === "ready"
-        ? "live"
-        : "processing"
+  const now = new Date()
+  let nextStatus: "live" | "processing" | "expired" | "removed"
 
-  await db
+  if (row.expiresAt.getTime() <= now.getTime()) {
+    nextStatus = "expired"
+  } else {
+    const isCf = row.storageProvider === "cloudflare-stream"
+    let providerReady: boolean
+
+    if (isCf) {
+      const pct = row.providerPctComplete
+      const providerState = row.providerStatus
+      providerReady = isProviderReady({
+        readyToStream:
+          row.assetProcessingStatus === "ready" || providerState === "ready",
+        state: providerState ?? null,
+        pctComplete: pct ?? null,
+      })
+
+      nextStatus = deriveStoryPublicationStatus({
+        currentStatus: row.status as "processing" | "live" | "expired" | "removed",
+        moderationStatus: "approved",
+        providerReady,
+        expiresAt: row.expiresAt,
+        now,
+        scanStatus: row.scanStatus,
+      })
+    } else {
+      providerReady = row.processingStatus === "ready"
+      nextStatus = deriveStoryPublicationStatus({
+        currentStatus: row.status as "processing" | "live" | "expired" | "removed",
+        moderationStatus: "approved",
+        providerReady,
+        expiresAt: row.expiresAt,
+        now,
+        scanStatus: row.scanStatus,
+      })
+    }
+  }
+
+  const updatedStories = await db
     .update(stories)
     .set({
       status: nextStatus,
@@ -336,11 +388,205 @@ export async function approveModeratedStory(input: {
       reviewedAt: new Date(),
       reviewedByUserId: input.reviewerId,
     })
-    .where(eq(stories.id, input.storyId))
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.status, row.status),
+        eq(stories.processingStatus, row.processingStatus),
+        eq(stories.moderationStatus, row.moderationStatus),
+      ),
+    )
+    .returning({ id: stories.id })
 
-  if (nextStatus === "live") {
-    await processStoryCreatorEarnings(input.storyId)
+  if (updatedStories.length > 0 && nextStatus === "live" && row.status !== "live") {
+    await enqueueStoryPublication(input.storyId).catch((error) => {
+      console.error("story_publication_enqueue_failed", {
+        storyId: input.storyId,
+        error,
+      })
+    })
   }
+}
+
+export async function rescanModeratedStory(input: {
+  storyId: string
+  reviewerId: string
+}) {
+  const db = getDb()
+  const [row] = await db
+    .select({
+      id: stories.id,
+      creatorId: stories.creatorId,
+      assetKind: stories.assetKind,
+      mediaUrl: stories.mediaUrl,
+      thumbnailUrl: stories.thumbnailUrl,
+      contentType: stories.contentType,
+      byteSize: stories.byteSize,
+      durationMs: stories.durationMs,
+      caption: stories.caption,
+      status: stories.status,
+      processingStatus: stories.processingStatus,
+      moderationStatus: stories.moderationStatus,
+      storageProvider: stories.storageProvider,
+      expiresAt: stories.expiresAt,
+      mediaAssetId: stories.mediaAssetId,
+      assetProcessingStatus: mediaAssets.processingStatus,
+      providerStatus: mediaAssets.providerStatus,
+      providerPctComplete: mediaAssets.providerPctComplete,
+    })
+    .from(stories)
+    .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.moderationStatus, "flagged"),
+      ),
+    )
+    .limit(1)
+
+  if (!row) {
+    return { status: "missing" as const }
+  }
+
+  const elements = await db
+    .select({
+      kind: storyElements.kind,
+      label: storyElements.label,
+      href: storyElements.href,
+    })
+    .from(storyElements)
+    .where(eq(storyElements.storyId, row.id))
+    .orderBy(asc(storyElements.createdAt))
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.ubeye.ai"
+  const signingRequest = new Request(new URL("/admin", appUrl))
+  const moderationResult = await moderateUserContent({
+    textParts: [row.caption, ...elements.map((element) => element.label)],
+    linkUrls: elements
+      .filter((element) => element.kind === "link")
+      .map((element) => element.href),
+    media: {
+      assetKind: row.assetKind,
+      contentType:
+        row.contentType ?? (row.assetKind === "image" ? "image/jpeg" : "video/mp4"),
+      byteSize: row.byteSize ?? 0,
+      durationMs: row.durationMs,
+      mediaUrl:
+        publicStoryMediaUrl(row.mediaUrl, signingRequest, { signed: true }) ??
+        row.mediaUrl,
+      thumbnailUrl: publicStoryMediaUrl(row.thumbnailUrl, signingRequest, {
+        signed: true,
+      }),
+    },
+  })
+  const moderation =
+    moderationResult.action === "approve" && moderationResult.error
+      ? resultFromSignals({
+          provider: moderationResult.provider,
+          signals: [
+            {
+              key: "scanner_unavailable",
+              confidence: 1,
+              reason: "Moderation scanner was unavailable; content requires review.",
+              source: "system",
+            },
+          ],
+          rawResult: moderationResult.rawResult,
+          error: moderationResult.error,
+        })
+      : moderationResult
+  const now = new Date()
+  const scanStatus =
+    moderation.action === "approve"
+      ? "passed"
+      : moderation.action === "reject"
+        ? "failed"
+        : "flagged"
+  const moderationStatus =
+    moderation.action === "approve"
+      ? "approved"
+      : moderation.action === "reject"
+        ? "rejected"
+        : "flagged"
+  let nextStatus: "live" | "processing" | "expired" | "removed"
+
+  if (moderation.action === "reject") {
+    nextStatus = "removed"
+  } else if (moderation.action === "hold") {
+    nextStatus = row.expiresAt.getTime() <= now.getTime() ? "expired" : "processing"
+  } else if (row.expiresAt.getTime() <= now.getTime()) {
+    nextStatus = "expired"
+  } else {
+    const providerReady =
+      row.storageProvider === "cloudflare-stream"
+        ? isProviderReady({
+            readyToStream:
+              row.assetProcessingStatus === "ready" || row.providerStatus === "ready",
+            state: row.providerStatus ?? null,
+            pctComplete: row.providerPctComplete ?? null,
+          })
+        : row.assetProcessingStatus === "ready"
+
+    nextStatus = deriveStoryPublicationStatus({
+      currentStatus: row.status as "processing" | "live" | "expired" | "removed",
+      moderationStatus,
+      providerReady,
+      expiresAt: row.expiresAt,
+      now,
+      scanStatus,
+    })
+  }
+
+  await applyMediaModerationResult({
+    mediaAssetId: row.mediaAssetId,
+    actorUserId: input.reviewerId,
+    result: moderation,
+  })
+
+  const updatedStories = await db
+    .update(stories)
+    .set({
+      status: nextStatus,
+      moderationStatus,
+      moderationReason: moderation.reason,
+      reviewedAt: moderation.action === "hold" ? null : now,
+      reviewedByUserId: moderation.action === "hold" ? null : input.reviewerId,
+    })
+    .where(
+      and(
+        eq(stories.id, row.id),
+        eq(stories.status, row.status),
+        eq(stories.moderationStatus, row.moderationStatus),
+      ),
+    )
+    .returning({ id: stories.id })
+
+  if (updatedStories.length === 0) {
+    return { status: "stale" as const }
+  }
+
+  await recordModerationCheck({
+    targetKind: "story",
+    targetId: row.id,
+    actorUserId: input.reviewerId,
+    mediaAssetId: row.mediaAssetId,
+    result: moderation,
+  }).catch(() => undefined)
+
+  if (moderation.action === "reject") {
+    await reverseUnpaidStoryEarnings(row.id)
+  }
+
+  if (nextStatus === "live" && row.status !== "live") {
+    await enqueueStoryPublication(row.id).catch((error) => {
+      console.error("story_publication_enqueue_failed", {
+        storyId: row.id,
+        error,
+      })
+    })
+  }
+
+  return { status: moderation.action as "approve" | "hold" | "reject" }
 }
 
 export async function rejectModeratedStory(input: {

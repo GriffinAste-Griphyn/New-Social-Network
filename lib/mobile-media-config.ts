@@ -1,5 +1,6 @@
-type RuntimeMediaConfig = {
+export type RuntimeMediaConfig = {
   version: string
+  rolloutProfile: "baseline" | "preheat-canary"
   imageDerivativeUploadEnabled: boolean
   qoeAccessLogSampleRate: number
   uploadChunkBytes: number
@@ -66,20 +67,28 @@ function booleanEnv(name: string, fallback: boolean) {
   return ["1", "true", "yes", "on"].includes(raw)
 }
 
-export function getMobileMediaConfig(input: { clientBuild?: number | null } = {}): RuntimeMediaConfig {
+export function getMobileMediaConfig(input: {
+  clientBuild?: number | null
+  canaryBucket?: number | null
+} = {}): RuntimeMediaConfig {
   const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 255
+  const aggressiveConfigEnabled = booleanEnv(
+    "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
+    true,
+  )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-07-10.4",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-12.1",
+    rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
-      false,
+      true,
     ),
     qoeAccessLogSampleRate: floatEnv("MOBILE_QOE_ACCESS_LOG_SAMPLE_RATE", 1, {
       min: 0,
       max: 1,
     }),
-    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 8 * 1024 * 1024, {
+    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 3 * 1024 * 1024, {
       min: 256 * 1024,
       max: 32 * 1024 * 1024,
     }),
@@ -89,54 +98,59 @@ export function getMobileMediaConfig(input: { clientBuild?: number | null } = {}
       { min: 128 * 1024 * 1024, max: 2 * 1024 * 1024 * 1024 },
     ),
     imagePreheatLimit: {
-      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 1, {
-        min: 1,
-        max: 2,
-      }),
-      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 2, {
+      constrained: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED", 2, {
         min: 1,
         max: 4,
       }),
+      standard: integerEnv("MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD", 4, {
+        min: 1,
+        max: 8,
+      }),
     },
     stackPreheatLimit: {
-      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 1, {
+      constrained: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED", 2, {
         min: 1,
-        max: 2,
+        max: 4,
       }),
-      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", 2, {
+      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", aggressiveConfigEnabled ? 4 : 2, {
         min: 1,
-        max: 3,
+        max: 8,
       }),
     },
     preparedPlayerLimit: {
       constrained: 0,
       standard: supportsSafePlayerPreparation
-        ? integerEnv("MOBILE_PREPARED_PLAYER_LIMIT_STANDARD", 1, {
-            min: 0,
-            max: 1,
-          })
+        ? integerEnv(
+            "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
+            aggressiveConfigEnabled ? 4 : 2,
+            {
+              min: 0,
+              max: 4,
+            },
+          )
         : 0,
     },
     persistentVideoPreheatLimit: {
-      constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", 0, {
+      constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", aggressiveConfigEnabled ? 2 : 1, {
         min: 0,
-        max: 3,
+        max: 4,
       }),
-      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", 0, {
+      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", aggressiveConfigEnabled ? 4 : 2, {
         min: 0,
-        max: 8,
+        max: 6,
       }),
     },
     startupStreamingPeakBitRate: {
       constrained: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        6_000_000,
-        { min: 2_000_000, max: 10_000_000 },
+        aggressiveConfigEnabled ? 4_000_000 : 6_000_000,
+        { min: 2_000_000, max: 16_000_000 },
       ),
-      standard: integerEnv("MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD", 10_000_000, {
-        min: 1_500_000,
-        max: 12_000_000,
-      }),
+      standard: integerEnv(
+        "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
+        aggressiveConfigEnabled ? 8_000_000 : 10_000_000,
+        { min: 1_500_000, max: 20_000_000 },
+      ),
     },
     startupStreamingMaximumResolution: {
       constrained: {

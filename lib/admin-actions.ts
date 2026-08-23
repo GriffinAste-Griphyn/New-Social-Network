@@ -6,6 +6,7 @@ import { redirect } from "next/navigation"
 import {
   approveModeratedStory,
   rejectModeratedStory,
+  rescanModeratedStory,
   requireAdminSession,
   settleAdminCreatorPayout,
 } from "@/lib/admin-store"
@@ -99,6 +100,29 @@ export async function rejectModeratedStoryAction(formData: FormData) {
 
   revalidatePath("/admin")
   redirect("/admin?moderation=removed")
+}
+
+export async function rescanModeratedStoryAction(formData: FormData) {
+  await enforceAdminOrigin()
+  const session = await requireAdminSession()
+  await enforceAdminMutation(session.id)
+  const storyId = getStoryId(formData)
+
+  if (!storyId) {
+    redirect("/admin?error=Choose%20a%20story%20to%20re-scan.")
+  }
+
+  const result = await rescanModeratedStory({
+    storyId,
+    reviewerId: session.id,
+  })
+
+  if (result.status === "missing" || result.status === "stale") {
+    redirect("/admin?error=That%20story%20is%20no%20longer%20awaiting%20review.")
+  }
+
+  revalidatePath("/admin")
+  redirect(`/admin?moderation=rescanned-${result.status}`)
 }
 
 export async function reviewSafetyReportAction(formData: FormData) {

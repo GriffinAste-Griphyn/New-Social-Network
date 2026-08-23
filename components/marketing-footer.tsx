@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { NonTradVentureLink } from "@/components/non-trad-venture-link"
 
 const footerLinks = [
   { label: "Privacy Policy", href: "/privacy" },
@@ -28,6 +29,9 @@ export function MarketingFooter() {
             </Link>
           ))}
         </nav>
+      </div>
+      <div className="flex justify-center bg-[#09090b] px-4 py-8">
+        <NonTradVentureLink />
       </div>
     </footer>
   )

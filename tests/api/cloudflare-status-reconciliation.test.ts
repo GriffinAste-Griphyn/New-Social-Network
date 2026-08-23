@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { processStoryCreatorEarnings } from "@/lib/creator-earnings"
-import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
-import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import { recordCloudflareStreamUploadStatus } from "@/lib/media-upload-sessions"
+import { enqueueStoryPublication } from "@/lib/story-publication"
 import {
   createCloudflareStreamThumbnailMediaUrl,
-  setCloudflareStreamThumbnailToLastFrame,
+  setCloudflareStreamThumbnailAtDefaultTime,
 } from "@/lib/story-storage"
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))
@@ -19,19 +17,13 @@ vi.mock("@/lib/media-upload-sessions", async () => {
 
   return { ...actual, recordCloudflareStreamUploadStatus: vi.fn() }
 })
-vi.mock("@/lib/creator-earnings", () => ({
-  processStoryCreatorEarnings: vi.fn(),
-}))
-vi.mock("@/lib/creator-notifications", () => ({
-  notifyCreatorStoryPosted: vi.fn(),
-}))
-vi.mock("@/lib/feed-snapshot-store", () => ({
-  invalidateMobileFeedSnapshotsForCreator: vi.fn(),
+vi.mock("@/lib/story-publication", () => ({
+  enqueueStoryPublication: vi.fn(),
 }))
 vi.mock("@/lib/story-storage", () => ({
   createCloudflareStreamThumbnailMediaUrl: vi.fn(),
   getCloudflareStreamVideoDetails: vi.fn(),
-  setCloudflareStreamThumbnailToLastFrame: vi.fn(),
+  setCloudflareStreamThumbnailAtDefaultTime: vi.fn(),
 }))
 
 describe("Cloudflare upload reconciliation", () => {
@@ -115,21 +107,16 @@ describe("Cloudflare upload reconciliation", () => {
     const select = vi.fn(() => ({
       from: vi.fn(() => storyQuery),
     }))
-    const mediaWhere = vi.fn().mockResolvedValue(undefined)
-    const mediaSet = vi.fn(() => ({ where: mediaWhere }))
     const storyReturning = vi.fn().mockResolvedValue([])
     const storyWhere = vi.fn(() => ({ returning: storyReturning }))
     const storySet = vi.fn(() => ({ where: storyWhere }))
-    const update = vi
-      .fn()
-      .mockReturnValueOnce({ set: mediaSet })
-      .mockReturnValueOnce({ set: storySet })
+    const update = vi.fn().mockReturnValue({ set: storySet })
     vi.mocked(getDb).mockReturnValue({ select, update } as never)
     vi.mocked(recordCloudflareStreamUploadStatus).mockResolvedValue(null)
     vi.mocked(createCloudflareStreamThumbnailMediaUrl).mockReturnValue(
       "/api/story-media/cloudflare-stream/11111111111111111111111111111111/thumbnails/thumbnail.jpg",
     )
-    vi.mocked(setCloudflareStreamThumbnailToLastFrame).mockResolvedValue(
+    vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockResolvedValue(
       undefined,
     )
     const details = {
@@ -153,8 +140,74 @@ describe("Cloudflare upload reconciliation", () => {
 
     expect(result).toEqual({ status: "stale", storyId: story.id })
     expect(storyReturning).toHaveBeenCalledTimes(1)
-    expect(processStoryCreatorEarnings).not.toHaveBeenCalled()
-    expect(notifyCreatorStoryPosted).not.toHaveBeenCalled()
-    expect(invalidateMobileFeedSnapshotsForCreator).not.toHaveBeenCalled()
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(enqueueStoryPublication).not.toHaveBeenCalled()
+  })
+
+  it("enqueues durable publication only after the ready transition commits", async () => {
+    const story = {
+      id: "story_ready",
+      mediaAssetId: "media_ready",
+      storageKey: "22222222222222222222222222222222",
+      thumbnailUrl: null,
+      durationMs: 7_200,
+      byteSize: 123_456,
+      width: 1080,
+      height: 1920,
+      expiresAt: new Date(Date.now() + 60_000),
+      status: "processing" as const,
+      processingStatus: "processing",
+      moderationStatus: "approved",
+      assetProcessingStatus: "processing" as const,
+      assetScanStatus: "passed",
+      previousProviderPctComplete: 75,
+    }
+    const limit = vi.fn().mockResolvedValue([story])
+    const storyQuery = {
+      innerJoin: vi.fn(),
+      where: vi.fn(() => ({ limit })),
+    }
+    storyQuery.innerJoin.mockImplementation(() => storyQuery)
+    const select = vi.fn(() => ({ from: vi.fn(() => storyQuery) }))
+    const storyReturning = vi.fn().mockResolvedValue([{ id: story.id }])
+    const storyWhere = vi.fn(() => ({ returning: storyReturning }))
+    const mediaWhere = vi.fn().mockResolvedValue(undefined)
+    const update = vi
+      .fn()
+      .mockReturnValueOnce({ set: vi.fn(() => ({ where: storyWhere })) })
+      .mockReturnValueOnce({ set: vi.fn(() => ({ where: mediaWhere })) })
+    vi.mocked(getDb).mockReturnValue({ select, update } as never)
+    vi.mocked(recordCloudflareStreamUploadStatus).mockResolvedValue(null)
+    vi.mocked(createCloudflareStreamThumbnailMediaUrl).mockReturnValue(
+      "/api/story-media/cloudflare-stream/22222222222222222222222222222222/thumbnails/thumbnail.jpg",
+    )
+    vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockResolvedValue(
+      undefined,
+    )
+    vi.mocked(enqueueStoryPublication).mockResolvedValue("run_ready")
+    const { syncCloudflareStreamStoryStatus } = await import(
+      "@/lib/stories/cloudflare-status"
+    )
+
+    const result = await syncCloudflareStreamStoryStatus({
+      uid: story.storageKey,
+      details: {
+        readyToStream: true,
+        state: "ready",
+        pctComplete: 100,
+        errorReason: null,
+        byteSize: 123_456,
+        durationMs: 7_200,
+        width: 1080,
+        height: 1920,
+      },
+    })
+
+    expect(result).toEqual({
+      status: "live",
+      processingStatus: "ready",
+      storyId: story.id,
+    })
+    expect(enqueueStoryPublication).toHaveBeenCalledWith(story.id)
   })
 })

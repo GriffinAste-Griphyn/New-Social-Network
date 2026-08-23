@@ -52,6 +52,10 @@ vi.mock("@/lib/story-storage", async () => {
   }
 })
 
+vi.mock("@/lib/stories/cloudflare-status", () => ({
+  refreshProcessingCloudflareStories: vi.fn().mockResolvedValue(undefined),
+}))
+
 const session = {
   id: "user_123",
   email: "creator@example.com",
@@ -161,25 +165,11 @@ describe("story upload and mobile feed API", () => {
     const { POST } = await import("@/app/api/mobile/stories/route")
     const response = await POST(formRequest("/api/mobile/stories", formData))
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(426)
     expect(await responseJson(response)).toMatchObject({
-      ok: true,
-      storyId: createdStoryId,
-      asset: {
-        assetKind: "image",
-        mediaUrl: "https://cdn.example.com/api/story-media/stories/story.jpg",
-        thumbnailUrl:
-          "https://cdn.example.com/api/story-media/stories/story-thumb.jpg",
-      },
+      error: "Update UBEYE to post stories with the current media pipeline.",
     })
-    expect(createStory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session,
-        caption: "Testing #Coffee",
-        explicitBrandTags: ["coffeeco"],
-        storedAsset,
-      }),
-    )
+    expect(createStory).not.toHaveBeenCalled()
   })
 
   it("rejects story uploads without a complete mobile session", async () => {
@@ -190,9 +180,9 @@ describe("story upload and mobile feed API", () => {
       formRequest("/api/mobile/stories", new FormData()),
     )
 
-    expect(response.status).toBe(401)
+    expect(response.status).toBe(426)
     expect(await responseJson(response)).toMatchObject({
-      error: "Sign in before uploading stories.",
+      error: "Update UBEYE to post stories with the current media pipeline.",
     })
     expect(saveStoryAsset).not.toHaveBeenCalled()
   })
@@ -209,11 +199,11 @@ describe("story upload and mobile feed API", () => {
     const { POST } = await import("@/app/api/mobile/stories/route")
     const response = await POST(formRequest("/api/mobile/stories", formData))
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(426)
     expect(await responseJson(response)).toMatchObject({
-      error: "Story upload failed. Try again.",
+      error: "Update UBEYE to post stories with the current media pipeline.",
     })
-    expect(removeStoredStoryAsset).toHaveBeenCalledWith(storedAsset)
+    expect(removeStoredStoryAsset).not.toHaveBeenCalled()
   })
 
   it("surfaces upload validation errors to mobile clients", async () => {
@@ -230,9 +220,9 @@ describe("story upload and mobile feed API", () => {
     const { POST } = await import("@/app/api/mobile/stories/route")
     const response = await POST(formRequest("/api/mobile/stories", formData))
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(426)
     expect(await responseJson(response)).toMatchObject({
-      error: "Production story uploads require Blob storage.",
+      error: "Update UBEYE to post stories with the current media pipeline.",
     })
   })
 
@@ -283,7 +273,9 @@ describe("story upload and mobile feed API", () => {
     const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store")
+    expect(response.headers.get("Cache-Control")).toBe(
+      "private, max-age=5, stale-while-revalidate=30",
+    )
     expect(payload).toMatchObject({
       ok: true,
       session: {
@@ -336,6 +328,8 @@ describe("story upload and mobile feed API", () => {
     )
 
     expect(response.status).toBe(200)
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store")
+    expect(response.headers.get("Cache-Control")).toBe(
+      "private, max-age=5, stale-while-revalidate=30",
+    )
   })
 })

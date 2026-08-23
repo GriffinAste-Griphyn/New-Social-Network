@@ -86,7 +86,10 @@ function versionMediaUrl(value: string | null, version: string | null | undefine
 
   try {
     const url = new URL(value)
-    if (url.hostname.endsWith("cloudflarestream.com")) {
+    if (
+      url.protocol === "data:" ||
+      url.hostname.endsWith("cloudflarestream.com")
+    ) {
       return value
     }
 

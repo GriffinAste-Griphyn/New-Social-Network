@@ -295,6 +295,27 @@
       "when": 1785525600000,
       "tag": "0041_feed_events",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1786392135000,
+      "tag": "0042_media_upload_session_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1786474800000,
+      "tag": "0043_story_publication_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1786482000000,
+      "tag": "0044_aggressive_media_feed_foundation",
+      "breakpoints": true
     }
   ]
 }

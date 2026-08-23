@@ -18,18 +18,24 @@ private func applyVideoRotationAngle(_ angle: CGFloat, to connection: AVCaptureC
 }
 
 enum StoryCaptureQuality {
-    static let hevcVideoBitrate = 12_000_000
-    static let h264VideoBitrate = 16_000_000
+    static let hevcVideoBitrate = 15_000_000
+    static let h264VideoBitrate = 20_000_000
+    static let hevc4KVideoBitrate = 28_000_000
+    static let h2644KVideoBitrate = 32_000_000
     static let videoFrameRate = 30
-    static let videoKeyFrameInterval = 60
+    static let videoKeyFrameInterval = 30
 
     static func preferredCodec(from availableCodecs: [AVVideoCodecType]) -> AVVideoCodecType? {
         availableCodecs.first(where: { $0 == .hevc }) ??
             availableCodecs.first(where: { $0 == .h264 })
     }
 
-    static func videoBitrate(for codec: AVVideoCodecType) -> Int {
-        codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
+    static func videoBitrate(for codec: AVVideoCodecType, is4K: Bool) -> Int {
+        if is4K {
+            return codec == .hevc ? hevc4KVideoBitrate : h2644KVideoBitrate
+        }
+
+        return codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
     }
 }
 
@@ -61,7 +67,9 @@ final class CameraController: NSObject, ObservableObject {
     private var isConfigured = false
     private var captureRotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var configuredMaxPhotoDimensions: CMVideoDimensions?
+    private var zoomGestureStartFactor: CGFloat?
     private let frontCameraPhotoMaxPixels = 12_000_000
+    private let maximumUserZoomFactor: CGFloat = 10
 
     func requestAccessAndConfigure() async {
         if authorizationStatus == .notDetermined {
@@ -226,12 +234,15 @@ final class CameraController: NSObject, ObservableObject {
             videoInput = nextInput
             cameraPosition = nextPosition
             activeVideoDevice = camera
+            configureSessionPreset(for: camera)
+            resetZoom(for: camera)
             captureRotationCoordinator = AVCaptureDevice.RotationCoordinator(
                 device: camera,
                 previewLayer: nil
             )
             previewFrameSampler.clear()
             configurePhotoOutput(for: camera)
+            configureMovieVideoOutputSettings()
             updateOutputOrientation()
         } else if let videoInput, session.canAddInput(videoInput) {
             session.addInput(videoInput)
@@ -245,7 +256,7 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         session.beginConfiguration()
-        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
+        session.sessionPreset = .high
         session.usesApplicationAudioSession = true
         session.automaticallyConfiguresApplicationAudioSession = false
 
@@ -265,6 +276,8 @@ final class CameraController: NSObject, ObservableObject {
         session.addInput(input)
         videoInput = input
         activeVideoDevice = input.device
+        configureSessionPreset(for: input.device)
+        resetZoom(for: input.device)
         captureRotationCoordinator = AVCaptureDevice.RotationCoordinator(
             device: input.device,
             previewLayer: nil
@@ -287,6 +300,49 @@ final class CameraController: NSObject, ObservableObject {
         isConfigured = true
     }
 
+    func updateZoomGesture(magnification: CGFloat) {
+        guard magnification.isFinite, magnification > 0,
+              let device = activeVideoDevice else {
+            return
+        }
+
+        if zoomGestureStartFactor == nil {
+            zoomGestureStartFactor = device.videoZoomFactor
+        }
+
+        guard let zoomGestureStartFactor else {
+            return
+        }
+
+        setZoomFactor(zoomGestureStartFactor * magnification, on: device)
+    }
+
+    func endZoomGesture() {
+        zoomGestureStartFactor = nil
+    }
+
+    private func resetZoom(for device: AVCaptureDevice) {
+        zoomGestureStartFactor = nil
+        setZoomFactor(1, on: device)
+    }
+
+    private func setZoomFactor(_ requestedFactor: CGFloat, on device: AVCaptureDevice) {
+        let minimumFactor = max(device.minAvailableVideoZoomFactor, 1)
+        let maximumFactor = max(
+            minimumFactor,
+            min(device.maxAvailableVideoZoomFactor, maximumUserZoomFactor)
+        )
+        let factor = min(max(requestedFactor, minimumFactor), maximumFactor)
+
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.videoZoomFactor = factor
+        } catch {
+            MediaPerformance.mark("capture_zoom_configuration_failed")
+        }
+    }
+
     private func configureMovieVideoOutputSettings() {
         guard let videoConnection = movieOutput.connection(with: .video) else {
             MediaPerformance.mark("capture_video_connection_missing")
@@ -298,7 +354,8 @@ final class CameraController: NSObject, ObservableObject {
             MediaPerformance.mark("capture_video_custom_codec_unavailable")
             return
         }
-        let bitrate = StoryCaptureQuality.videoBitrate(for: codec)
+        let is4K = session.sessionPreset == .hd4K3840x2160
+        let bitrate = StoryCaptureQuality.videoBitrate(for: codec, is4K: is4K)
         movieOutput.setOutputSettings(
             [
                 AVVideoCodecKey: codec,
@@ -311,7 +368,29 @@ final class CameraController: NSObject, ObservableObject {
             for: videoConnection
         )
         MediaPerformance.mark(
-            "capture_video_settings codec=\(codec.rawValue) bitrate=\(bitrate) fps=\(StoryCaptureQuality.videoFrameRate) gop=\(StoryCaptureQuality.videoKeyFrameInterval)"
+            "capture_video_settings codec=\(codec.rawValue) bitrate=\(bitrate) resolution=\(is4K ? "4k" : "1080p") fps=\(StoryCaptureQuality.videoFrameRate) gop=\(StoryCaptureQuality.videoKeyFrameInterval)"
+        )
+    }
+
+    private func configureSessionPreset(for device: AVCaptureDevice) {
+        let hasProClassMemory = ProcessInfo.processInfo.physicalMemory >= 6 * 1_024 * 1_024 * 1_024
+        let supports4K =
+            hasProClassMemory &&
+            device.position == .back &&
+            device.supportsSessionPreset(.hd4K3840x2160) &&
+            session.canSetSessionPreset(.hd4K3840x2160)
+        let preferredPreset: AVCaptureSession.Preset = supports4K
+            ? .hd4K3840x2160
+            : .hd1920x1080
+
+        if session.canSetSessionPreset(preferredPreset) {
+            session.sessionPreset = preferredPreset
+        } else if session.canSetSessionPreset(.high) {
+            session.sessionPreset = .high
+        }
+
+        MediaPerformance.mark(
+            "capture_session_preset value=\(session.sessionPreset.rawValue) pro_class=\(supports4K)"
         )
     }
 
@@ -565,12 +644,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             previewHandler(previewImage)
         }
 
-        guard let data = photo.fileDataRepresentation(),
-              let upload = StoryImageUpload(
-                data: data,
-                fallbackFileName: "story-photo",
-                displayImage: previewImage
-              ) else {
+        guard let data = photo.fileDataRepresentation() else {
             MediaPerformance.measure(
                 "photo_capture_failed position=\(Self.cameraLabel(for: metadata.cameraPosition)) reason=file_data",
                 since: metadata.startedAt
@@ -579,16 +653,31 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             return
         }
 
-        let cameraLabel = Self.cameraLabel(for: metadata.cameraPosition)
-        MediaPerformance.measure(
-            "photo_capture_file_data position=\(cameraLabel) bytes=\(data.count)",
-            since: flattenStartedAt
-        )
-        MediaPerformance.measure(
-            "photo_capture_ready position=\(cameraLabel) bytes=\(data.count)",
-            since: metadata.startedAt
-        )
-        completion(.success(upload))
+        Task {
+            guard let upload = await StoryImageUpload.prepare(
+                data: data,
+                fallbackFileName: "story-photo",
+                displayImage: previewImage
+            ) else {
+                MediaPerformance.measure(
+                    "photo_capture_failed position=\(Self.cameraLabel(for: self.metadata.cameraPosition)) reason=transcode",
+                    since: self.metadata.startedAt
+                )
+                self.completion(.failure(APIClientError.invalidResponse))
+                return
+            }
+
+            let cameraLabel = Self.cameraLabel(for: self.metadata.cameraPosition)
+            MediaPerformance.measure(
+                "photo_capture_file_data position=\(cameraLabel) bytes=\(data.count)",
+                since: flattenStartedAt
+            )
+            MediaPerformance.measure(
+                "photo_capture_ready position=\(cameraLabel) bytes=\(data.count)",
+                since: self.metadata.startedAt
+            )
+            self.completion(.success(upload))
+        }
     }
 
     private static func previewImage(from photo: AVCapturePhoto) -> UIImage? {

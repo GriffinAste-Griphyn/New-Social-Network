@@ -134,7 +134,7 @@ final class StoryVideoGeometryNormalizerTests: XCTestCase {
 
 final class StoryVideoUploadPipelineTests: XCTestCase {
     func testCommonAppleVideoContainersAndCodecsUseStreamPassthrough() {
-        for (fileExtension, codec) in [("mov", "avc1"), ("mp4", "hvc1"), ("m4v", "hev1")] {
+        for (fileExtension, codec) in [("mov", "avc1"), ("mp4", "hvc1"), ("m4v", "hvc1")] {
             let inspection = makeInspection(fileExtension: fileExtension, codecTypes: [codec])
             XCTAssertTrue(inspection.hasStreamSupportedContainer)
             XCTAssertTrue(inspection.isStreamCompatibleInput)
@@ -144,12 +144,62 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     func testUnsupportedContainerOrCodecRequiresNormalization() {
         XCTAssertFalse(makeInspection(fileExtension: "avi", codecTypes: ["avc1"]).isStreamCompatibleInput)
         XCTAssertFalse(makeInspection(fileExtension: "mov", codecTypes: ["vp09"]).isStreamCompatibleInput)
+        XCTAssertFalse(makeInspection(fileExtension: "mov", codecTypes: ["hev1"]).isStreamCompatibleInput)
         XCTAssertFalse(makeInspection(fileExtension: "mp4", codecTypes: []).isStreamCompatibleInput)
+        XCTAssertFalse(
+            makeInspection(fileExtension: "mp4", codecTypes: ["avc1"], hasFastStart: false)
+                .isStreamCompatibleInput
+        )
+        XCTAssertTrue(
+            makeInspection(fileExtension: "mp4", codecTypes: ["avc1"], hasFastStart: false)
+                .canRemuxForStream
+        )
+        XCTAssertFalse(
+            makeInspection(fileExtension: "mov", codecTypes: ["vp09"], hasFastStart: false)
+                .canRemuxForStream
+        )
     }
 
-    func testCaptureQualityBalances1080pQualityAndUploadLatency() {
-        XCTAssertEqual(StoryCaptureQuality.videoBitrate(for: .hevc), 12_000_000)
-        XCTAssertEqual(StoryCaptureQuality.videoBitrate(for: .h264), 16_000_000)
+    func testFastStartInspectionRequiresMoovBeforeMediaData() async throws {
+        let fastStartURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fast-start-\(UUID().uuidString).mp4")
+        let slowStartURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slow-start-\(UUID().uuidString).mp4")
+        defer {
+            try? FileManager.default.removeItem(at: fastStartURL)
+            try? FileManager.default.removeItem(at: slowStartURL)
+        }
+
+        func atom(_ type: String) -> Data {
+            Data([0, 0, 0, 8] + Array(type.utf8))
+        }
+
+        try (atom("ftyp") + atom("moov") + atom("mdat")).write(to: fastStartURL)
+        try (atom("ftyp") + atom("mdat") + atom("moov")).write(to: slowStartURL)
+
+        let fastStart = try await StoryUploadFileIO.hasFastStartMoov(at: fastStartURL)
+        let slowStart = try await StoryUploadFileIO.hasFastStartMoov(at: slowStartURL)
+        XCTAssertTrue(fastStart)
+        XCTAssertFalse(slowStart)
+    }
+
+    func testCaptureQualityPreservesHighQualityBeforeAdaptiveTranscode() {
+        XCTAssertEqual(
+            StoryCaptureQuality.videoBitrate(for: .hevc, is4K: false),
+            15_000_000
+        )
+        XCTAssertEqual(
+            StoryCaptureQuality.videoBitrate(for: .h264, is4K: false),
+            20_000_000
+        )
+        XCTAssertEqual(
+            StoryCaptureQuality.videoBitrate(for: .hevc, is4K: true),
+            28_000_000
+        )
+        XCTAssertEqual(
+            StoryCaptureQuality.videoBitrate(for: .h264, is4K: true),
+            32_000_000
+        )
         XCTAssertEqual(
             StoryCaptureQuality.preferredCodec(from: [.h264, .hevc]),
             .hevc
@@ -159,7 +209,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             .h264
         )
         XCTAssertEqual(StoryCaptureQuality.videoFrameRate, 30)
-        XCTAssertEqual(StoryCaptureQuality.videoKeyFrameInterval, 60)
+        XCTAssertEqual(StoryCaptureQuality.videoKeyFrameInterval, 30)
     }
 
     func testVideoUploadResponsePersistsOwnerBoundSession() throws {
@@ -256,18 +306,19 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         }
         defer { session.invalidateAndCancel() }
 
-        let api = APIClient(session: session)
+        let api = APIClient(
+            session: session,
+            tusChunkUploader: { request, bodyFileURL in
+                try await session.upload(for: request, fromFile: bodyFileURL)
+            }
+        )
         let upload = VideoUploadResponse(
             ok: true,
             uid: "stream-123",
             uploadSessionId: "session-123",
             uploadUrl: URL(string: "https://upload.example.test/files/stream-123")!,
             uploadProtocol: "tus",
-            thumbnailPathname: nil,
-            thumbnailUploadUrl: nil,
-            thumbnailClientToken: nil,
-            thumbnailContentType: nil,
-            maxThumbnailSizeBytes: nil
+            poster: nil
         )
 
         try await api.uploadVideoFile(fileURL: sourceURL, upload: upload, maxChunkBytes: 5)
@@ -278,7 +329,11 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Tus-Resumable"), "1.0.0")
     }
 
-    private func makeInspection(fileExtension: String, codecTypes: [String]) -> StoryVideoInspection {
+    private func makeInspection(
+        fileExtension: String,
+        codecTypes: [String],
+        hasFastStart: Bool = true
+    ) -> StoryVideoInspection {
         StoryVideoInspection(
             source: .library,
             originalURL: URL(fileURLWithPath: "/tmp/clip.\(fileExtension)"),
@@ -286,7 +341,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             durationMs: 1_000,
             naturalSize: CGSize(width: 1080, height: 1920),
             preferredTransform: .identity,
-            codecTypes: codecTypes
+            codecTypes: codecTypes,
+            hasFastStart: hasFastStart
         )
     }
 

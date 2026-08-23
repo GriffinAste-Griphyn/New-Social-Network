@@ -1,11 +1,11 @@
 "use client"
 
-import Image from "next/image"
 import { useEffect, useRef } from "react"
 import { Play, Sparkles, TrendingUp } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { StoryMediaFrame } from "@/components/app/story-media-frame"
 import type { FeedStory } from "@/lib/story-store"
 
 type StoryViewportProps = {
@@ -62,28 +62,16 @@ export function StoryViewport({ story }: StoryViewportProps) {
   }
 
   return (
-    <section className="flex min-h-[720px] flex-col justify-between overflow-hidden rounded-[28px] bg-neutral-950 shadow-[0_32px_72px_rgba(10,10,10,0.24)]">
-      <div className="relative flex-1">
-        {story.assetKind === "video" ? (
-          <video
-            key={story.mediaUrl}
-            src={story.mediaUrl}
-            poster={story.thumbnailUrl ?? undefined}
-            className="absolute inset-0 h-full w-full object-cover"
-            autoPlay
-            muted
-            loop
-            playsInline
-          />
-        ) : (
-          <Image
-            src={story.mediaUrl}
-            alt={`${story.creator} featured story`}
-            fill
-            sizes="(min-width: 1024px) 720px, 100vw"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        )}
+    <section className="overflow-hidden rounded-[28px] bg-neutral-950 shadow-[0_32px_72px_rgba(10,10,10,0.24)]">
+      <StoryMediaFrame
+        assetKind={story.assetKind}
+        mediaUrl={story.mediaUrl}
+        thumbnailUrl={story.thumbnailUrl}
+        alt={`${story.creator} featured story`}
+        sizes="(min-width: 1024px) 405px, 100vw"
+        className="mx-auto max-w-[405px]"
+        preloadImage
+      >
         <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/10 to-black/75" />
 
         <div className="relative flex h-full flex-col justify-between p-5 text-white">
@@ -160,7 +148,7 @@ export function StoryViewport({ story }: StoryViewportProps) {
             </div>
           </div>
         </div>
-      </div>
+      </StoryMediaFrame>
     </section>
   )
 }

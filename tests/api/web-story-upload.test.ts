@@ -17,6 +17,7 @@ import {
   getStoryByStoredAssetForOwner,
   getStoryUploadStatusForOwner,
 } from "@/lib/story-store"
+import { storyMediaContract } from "@/lib/story-media-contract"
 import {
   createCloudflareStreamStoredVideoAsset,
   createCloudflareStreamTusUpload,
@@ -26,7 +27,7 @@ import {
   removeCloudflareStreamVideoByUid,
   removeStoryAsset,
   removeStoredStoryAsset,
-  setCloudflareStreamThumbnailToLastFrame,
+  setCloudflareStreamThumbnailAtDefaultTime,
 } from "@/lib/story-storage"
 
 vi.mock("@vercel/blob/client", () => ({
@@ -98,7 +99,7 @@ vi.mock("@/lib/story-storage", async () => {
     removeCloudflareStreamVideoByUid: vi.fn(),
     removeStoryAsset: vi.fn(),
     removeStoredStoryAsset: vi.fn(),
-    setCloudflareStreamThumbnailToLastFrame: vi.fn(),
+    setCloudflareStreamThumbnailAtDefaultTime: vi.fn(),
   }
 })
 
@@ -150,11 +151,12 @@ const replacementUploadSession = {
 
 const imageAsset = {
   assetKind: "image" as const,
-  mediaUrl: "/api/story-media/stories/web-direct/creator_123/story.jpg",
-  thumbnailUrl: "/api/story-media/stories/web-direct/creator_123/story-thumb.jpg",
+  mediaUrl: "/api/story-media/stories/web-direct/creator_123/story-display.avif",
+  thumbnailUrl: "/api/story-media/stories/web-direct/creator_123/story-thumb.webp",
+  placeholderUrl: `thumbhash:${Buffer.alloc(25, 7).toString("base64url")}`,
   storageProvider: "vercel-blob" as const,
-  storageKey: "stories/web-direct/creator_123/story.jpg",
-  contentType: "image/jpeg",
+  storageKey: "stories/web-direct/creator_123/story-display.avif",
+  contentType: "image/avif",
   byteSize: 1234,
   checksum: "a".repeat(64),
   width: 1080,
@@ -233,7 +235,7 @@ describe("web direct story upload API", () => {
       width: null,
       height: null,
     })
-    vi.mocked(setCloudflareStreamThumbnailToLastFrame).mockResolvedValue(undefined)
+    vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockResolvedValue(undefined)
     vi.mocked(createStory).mockResolvedValue(
       "33333333-3333-4333-8333-333333333333",
     )
@@ -272,26 +274,35 @@ describe("web direct story upload API", () => {
         fileName: "story.jpg",
         contentType: "image/jpeg",
         byteSize: 1024,
+        displayContentType: "image/avif",
       }),
     )
     const payload = await responseJson(response)
 
     expect(response.status).toBe(200)
-    expect(generateClientTokenFromReadWriteToken).toHaveBeenCalledWith(
+    expect(generateClientTokenFromReadWriteToken).toHaveBeenCalledTimes(2)
+    expect(generateClientTokenFromReadWriteToken).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
-        allowedContentTypes: ["image/jpeg"],
-        maximumSizeInBytes: 25 * 1024 * 1024,
-        allowOverwrite: false,
+        maximumSizeInBytes:
+          storyMediaContract.upload.maxImageDisplayDerivativeBytes,
+      }),
+    )
+    expect(generateClientTokenFromReadWriteToken).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        maximumSizeInBytes:
+          storyMediaContract.upload.maxImageThumbnailDerivativeBytes,
       }),
     )
     expect(payload).toMatchObject({
       ok: true,
       assetKind: "image",
-      clientToken: "blob_client_token",
-      contentType: "image/jpeg",
+      display: { clientToken: "blob_client_token", contentType: "image/avif" },
+      thumbnail: { clientToken: "blob_client_token", contentType: "image/webp" },
     })
-    expect(String(payload.pathname)).toMatch(
-      /^stories\/web-direct\/creator_123\/.+\.jpg$/,
+    expect(String(payload.basePathname)).toMatch(
+      /^stories\/web-direct\/creator_123\/.+$/,
     )
   })
 
@@ -336,6 +347,53 @@ describe("web direct story upload API", () => {
       uid: "11111111111111111111111111111111",
       uploadProtocol: "tus",
     })
+  })
+
+  it("uses the same 512 MB video envelope for web and mobile", async () => {
+    const { POST } = await import("@/app/api/stories/upload/route")
+    const acceptedBytes = 400 * 1024 * 1024
+    const accepted = await POST(
+      jsonRequest("/api/stories/upload", {
+        assetKind: "video",
+        fileName: "story.mov",
+        contentType: "video/quicktime",
+        byteSize: acceptedBytes,
+      }),
+    )
+
+    expect(accepted.status).toBe(200)
+    expect(createCloudflareStreamTusUpload).toHaveBeenCalledWith({
+      fileName: "story.mov",
+      uploadLengthBytes: acceptedBytes,
+      maxDurationSeconds: 120,
+    })
+
+    vi.clearAllMocks()
+    const oversized = await POST(
+      jsonRequest("/api/stories/upload", {
+        assetKind: "video",
+        fileName: "story.mp4",
+        contentType: "video/mp4",
+        byteSize: 512 * 1024 * 1024 + 1,
+      }),
+    )
+    expect(oversized.status).toBe(400)
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+  })
+
+  it("rejects undocumented video containers before creating a provider upload", async () => {
+    const { POST } = await import("@/app/api/stories/upload/route")
+    const response = await POST(
+      jsonRequest("/api/stories/upload", {
+        assetKind: "video",
+        fileName: "story.avi",
+        contentType: "video/x-msvideo",
+        byteSize: 12 * 1024 * 1024,
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
   })
 
   it("returns an already-created web replacement when its first response was lost", async () => {
@@ -446,7 +504,7 @@ describe("web direct story upload API", () => {
     })
   })
 
-  it("falls back to the legacy multipart path for local storage", async () => {
+  it("fails closed instead of using a local storage fallback", async () => {
     process.env.STORY_STORAGE_PROVIDER = "local"
     const { POST } = await import("@/app/api/stories/upload/route")
     const response = await POST(
@@ -460,12 +518,10 @@ describe("web direct story upload API", () => {
 
     const payload = await responseJson(response)
 
-    expect(response.status, JSON.stringify(payload)).toBe(200)
-    expect(payload).toMatchObject({
-      ok: true,
-      assetKind: "image",
-      uploadProtocol: "legacy",
-    })
+    expect(response.status, JSON.stringify(payload)).toBe(503)
+    expect(payload.error).toBe(
+      "Story uploads require private Vercel Blob storage.",
+    )
   })
 
   it("completes a direct Blob image story", async () => {
@@ -473,12 +529,24 @@ describe("web direct story upload API", () => {
     const response = await POST(
       jsonRequest("/api/stories/complete", {
         assetKind: "image",
-        pathname: "stories/web-direct/creator_123/story.jpg",
-        contentType: "image/jpeg",
-        byteSize: 1234,
-        checksum: "a".repeat(64),
-        width: 1080,
-        height: 1920,
+        basePathname: "stories/web-direct/creator_123/story",
+        displayDerivative: {
+          pathname: "stories/web-direct/creator_123/story-display.avif",
+          contentType: "image/avif",
+          byteSize: 1234,
+          checksum: "a".repeat(64),
+          width: 1080,
+          height: 1920,
+        },
+        thumbnailDerivative: {
+          pathname: "stories/web-direct/creator_123/story-thumb.webp",
+          contentType: "image/webp",
+          byteSize: 456,
+          checksum: "b".repeat(64),
+          width: 360,
+          height: 640,
+        },
+        thumbHash: Buffer.alloc(25, 7).toString("base64url"),
         caption: "Direct image",
         brandTags: "CoffeeCo",
       }),
@@ -488,13 +556,25 @@ describe("web direct story upload API", () => {
 
     expect(response.status, JSON.stringify(completedPayload)).toBe(200)
     expect(createDirectBlobStoryImageAsset).toHaveBeenCalledWith({
-      pathname: "stories/web-direct/creator_123/story.jpg",
+      basePathname: "stories/web-direct/creator_123/story",
       ownerUserId: "creator_123",
-      contentType: "image/jpeg",
-      byteSize: 1234,
-      checksum: "a".repeat(64),
-      width: 1080,
-      height: 1920,
+      displayDerivative: {
+        pathname: "stories/web-direct/creator_123/story-display.avif",
+        contentType: "image/avif",
+        byteSize: 1234,
+        checksum: "a".repeat(64),
+        width: 1080,
+        height: 1920,
+      },
+      thumbnailDerivative: {
+        pathname: "stories/web-direct/creator_123/story-thumb.webp",
+        contentType: "image/webp",
+        byteSize: 456,
+        checksum: "b".repeat(64),
+        width: 360,
+        height: 640,
+      },
+      thumbHash: Buffer.alloc(25, 7).toString("base64url"),
     })
     expect(createStory).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -509,7 +589,7 @@ describe("web direct story upload API", () => {
       asset: {
         assetKind: "image",
         thumbnailUrl:
-          "https://app.example.com/api/story-media/stories/web-direct/creator_123/story-thumb.jpg",
+          "https://app.example.com/api/story-media/stories/web-direct/creator_123/story-thumb.webp",
       },
     })
   })
@@ -520,10 +600,24 @@ describe("web direct story upload API", () => {
     const response = await POST(
       jsonRequest("/api/stories/complete", {
         assetKind: "image",
-        pathname: "stories/web-direct/creator_123/story.jpg",
-        contentType: "image/jpeg",
-        byteSize: 1234,
-        checksum: "a".repeat(64),
+        basePathname: "stories/web-direct/creator_123/story",
+        displayDerivative: {
+          pathname: "stories/web-direct/creator_123/story-display.avif",
+          contentType: "image/avif",
+          byteSize: 1234,
+          checksum: "a".repeat(64),
+          width: 1080,
+          height: 1920,
+        },
+        thumbnailDerivative: {
+          pathname: "stories/web-direct/creator_123/story-thumb.webp",
+          contentType: "image/webp",
+          byteSize: 456,
+          checksum: "b".repeat(64),
+          width: 360,
+          height: 640,
+        },
+        thumbHash: Buffer.alloc(25, 7).toString("base64url"),
       }),
     )
 

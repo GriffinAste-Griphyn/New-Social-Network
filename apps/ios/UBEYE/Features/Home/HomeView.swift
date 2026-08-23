@@ -5,7 +5,9 @@ import AVKit
 final class FeedStore: ObservableObject {
     @Published var feed: MobileFeedResponse?
     @Published var isLoading = false
+    @Published private(set) var isLoadingNextPage = false
     @Published var error: String?
+    @Published private(set) var authenticationFailed = false
     private var storyStackPrefetchTask: Task<Void, Never>?
     private var lastNetworkLoadAt: Date?
     private var uploadedStoryOverrides: [StoryUploadResponse] = []
@@ -21,6 +23,7 @@ final class FeedStore: ObservableObject {
             isLoading = true
         }
         error = nil
+        authenticationFailed = false
 
         let restoreInterval = useDiskCache && feed == nil
             ? MediaPerformance.beginInterval("feed_disk_restore source=disk")
@@ -64,6 +67,9 @@ final class FeedStore: ObservableObject {
             )
         } catch {
             MediaPerformance.cancelInterval(networkInterval, reason: "failed")
+            if let statusCode = (error as? APIClientError)?.statusCode {
+                authenticationFailed = statusCode == 401 || statusCode == 403
+            }
             if feed == nil {
                 self.error = error.localizedDescription
             } else {
@@ -91,6 +97,49 @@ final class FeedStore: ObservableObject {
         await load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
     }
 
+    func loadNextPage(api: APIClient, mediaEngine: MediaEngine) async {
+        guard !isLoadingNextPage,
+              let current = feed,
+              let cursor = current.nextCursor,
+              !cursor.isEmpty else {
+            return
+        }
+
+        isLoadingNextPage = true
+        defer { isLoadingNextPage = false }
+
+        do {
+            let page = try await api.mobileFeed(cursor: cursor)
+            let existingStories = current.followingTimelineStories ?? current.followingStories
+            let existingIds = Set(existingStories.map(\.id))
+            let appendedStories = page.verticalFollowingStories.filter { !existingIds.contains($0.id) }
+            let mergedStories = existingStories + appendedStories
+
+            feed = MobileFeedResponse(
+                ok: current.ok,
+                session: current.session,
+                followingProfiles: current.followingProfiles,
+                followingStories: current.followingStories,
+                followingTimelineStories: mergedStories,
+                nextCursor: page.nextCursor,
+                discoverTiles: current.discoverTiles,
+                initialStoryStacks: current.initialStoryStacks,
+                suggestedAccounts: current.suggestedAccounts,
+                myStory: current.myStory
+            )
+            appendedStories.forEach { story in
+                mediaEngine.prefetchStoryStacks(
+                    ids: [story.id],
+                    api: api,
+                    priority: .background,
+                    limit: 1
+                )
+            }
+        } catch {
+            MediaPerformance.mark("feed_refresh_failed source=next_page")
+        }
+    }
+
     func warmStoryOpen(storyId: String, in feed: MobileFeedResponse, api: APIClient, mediaEngine: MediaEngine) {
         let ids = storyStackPrefetchIds(from: feed)
         let adjacentIds = adjacentStoryIds(to: storyId, in: ids)
@@ -116,9 +165,22 @@ final class FeedStore: ObservableObject {
             return
         }
 
+        let resolvedStoryIds = Set(
+            current.myStory.items.compactMap { story in
+                story.isProcessingVideo ? nil : story.id
+            }
+        )
+        uploadedStoryOverrides.removeAll { response in
+            resolvedStoryIds.contains(response.storyId)
+        }
+
         feed = uploadedStoryOverrides.reduce(current) { partialFeed, response in
             feedWithUploadedStory(response, in: partialFeed)
         }
+    }
+
+    func markUploadedStoryLive(_ storyId: String) {
+        uploadedStoryOverrides.removeAll { $0.storyId == storyId }
     }
 
     private func feedWithUploadedStory(_ response: StoryUploadResponse, in current: MobileFeedResponse) -> MobileFeedResponse {
@@ -167,6 +229,7 @@ final class FeedStore: ObservableObject {
             followingProfiles: current.followingProfiles,
             followingStories: current.followingStories,
             followingTimelineStories: current.followingTimelineStories,
+            nextCursor: current.nextCursor,
             discoverTiles: current.discoverTiles,
             initialStoryStacks: current.initialStoryStacks,
             suggestedAccounts: current.suggestedAccounts,
@@ -233,9 +296,12 @@ final class FeedStore: ObservableObject {
             return Array(ids.prefix(3).filter { $0 != storyId })
         }
 
-        let lowerBound = max(ids.startIndex, index - 2)
-        let upperBound = min(ids.index(before: ids.endIndex), index + 2)
-        return ids[lowerBound...upperBound].filter { $0 != storyId }
+        var seen = Set<Int>()
+        return [index + 1, index - 1, index + 2]
+            .filter { candidate in
+                ids.indices.contains(candidate) && seen.insert(candidate).inserted
+            }
+            .map { ids[$0] }
     }
 
     func removeDeletedStory(_ storyId: String) {
@@ -277,6 +343,7 @@ final class FeedStore: ObservableObject {
             followingProfiles: current.followingProfiles,
             followingStories: followingStories,
             followingTimelineStories: followingTimelineStories,
+            nextCursor: current.nextCursor,
             discoverTiles: discoverTiles,
             initialStoryStacks: initialStoryStacks,
             suggestedAccounts: current.suggestedAccounts,
@@ -287,6 +354,7 @@ final class FeedStore: ObservableObject {
 
 struct HomeView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var mediaEngine: MediaEngine
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
@@ -298,12 +366,15 @@ struct HomeView: View {
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
     @State private var selectedDiscoverCreator: DiscoverCreator?
+    @State private var selectedFailedUpload: PendingStoryUpload?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
+
+                    uploadNoticeBanner
 
                     if store.isLoading && store.feed == nil {
                         HomeFeedLoadingSkeleton()
@@ -329,16 +400,24 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
-            .overlay(alignment: .top) {
-                uploadNoticeBanner
-                    .padding(.horizontal, UBEYEMetrics.screenInset)
-                    .padding(.top, UBEYEMetrics.topAvatarTopInset + UBEYEMetrics.topAvatar + 12)
-                    .allowsHitTesting(false)
-                    .zIndex(5)
+            .onChange(of: pendingUploadFailureKey, initial: true) { _, failureKey in
+                guard failureKey != nil,
+                      let upload = pendingStoryUploads.latestVisibleUpload,
+                      upload.isFailed else {
+                    return
+                }
+
+                storyUploadNotice.showFailed(message: upload.displayErrorMessage)
             }
-            .animation(.easeOut(duration: 0.16), value: storyUploadNotice.state)
             .task {
                 await store.load(api: api, mediaEngine: mediaEngine)
+            }
+            .onChange(of: store.authenticationFailed) { _, authenticationFailed in
+                guard authenticationFailed else {
+                    return
+                }
+
+                auth.handleAuthenticationFailure(api: api)
             }
             .task(id: uploadedStoryRegistrationKey) {
                 applyUploadedStoryRegistrations()
@@ -361,7 +440,11 @@ struct HomeView: View {
                     }
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { notification in
+                if let storyId = notification.object as? String {
+                    store.markUploadedStoryLive(storyId)
+                }
+
                 Task {
                     api.invalidateStoryStacks(ids: ["my-story"])
                     await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
@@ -400,11 +483,35 @@ struct HomeView: View {
                     }
                 )
             }
+            .alert(item: $selectedFailedUpload) { upload in
+                Alert(
+                    title: Text("Story upload failed"),
+                    message: Text(upload.displayErrorMessage),
+                    primaryButton: .default(Text("Retry")) {
+                        retryPendingUpload(upload)
+                    },
+                    secondaryButton: .destructive(Text("Remove")) {
+                        pendingStoryUploads.remove(id: upload.id)
+                        if pendingStoryUploads.latestVisibleUpload == nil {
+                            storyUploadNotice.state = nil
+                        }
+                    }
+                )
+            }
         }
     }
 
     private var uploadedStoryRegistrationKey: String {
         uploadedStoryRegistrations.map(\.storyId).joined(separator: ",")
+    }
+
+    private var pendingUploadFailureKey: String? {
+        guard let upload = pendingStoryUploads.latestVisibleUpload,
+              upload.isFailed else {
+            return nil
+        }
+
+        return "\(upload.id)|\(upload.retryCount)|\(upload.errorMessage ?? "")"
     }
 
     private func applyUploadedStoryRegistrations() {
@@ -444,56 +551,42 @@ struct HomeView: View {
     @ViewBuilder
     private var uploadNoticeBanner: some View {
         if storyUploadNotice.state != nil {
-            HStack(spacing: 10) {
-                UploadNoticeIcon(
-                    systemImage: storyUploadNotice.systemImage,
-                    isSpinning: storyUploadNotice.isProcessing
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(storyUploadNotice.title)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.ubeyeInk)
-                    Text(storyUploadNotice.message)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.ubeyeMuted)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 8)
-            }
-            .padding(12)
-            .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.ubeyeBorder, lineWidth: 1)
+            StoryUploadNoticeBanner(
+                title: uploadNoticeTitle,
+                message: storyUploadNotice.message,
+                systemImage: storyUploadNotice.systemImage,
+                progress: uploadNoticeProgress,
+                showsIndeterminateProgress: storyUploadNotice.state == .processing
             )
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.snappy(duration: 0.3), value: storyUploadNotice.state)
         }
     }
 
-    private struct UploadNoticeIcon: View {
-        let systemImage: String
-        let isSpinning: Bool
-
-        var body: some View {
-            TimelineView(.animation(paused: !isSpinning)) { context in
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .rotationEffect(.degrees(rotationDegrees(at: context.date)))
-                    .frame(width: 30, height: 30)
-                    .background(
-                        Color.ubeyeRed,
-                        in: Circle()
-                    )
-            }
+    private var uploadNoticeTitle: String {
+        guard storyUploadNotice.state == .posting else {
+            return storyUploadNotice.title
         }
 
-        private func rotationDegrees(at date: Date) -> Double {
-            guard isSpinning else {
-                return 0
-            }
-            return date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
+        guard let upload = pendingStoryUploads.latestVisibleUpload else {
+            return storyUploadNotice.title
+        }
+
+        if upload.state == .completing {
+            return "Finishing upload…"
+        }
+
+        return "Uploading · \(Int((upload.displayProgress * 100).rounded()))%"
+    }
+
+    private var uploadNoticeProgress: Double? {
+        switch storyUploadNotice.state {
+        case .posting:
+            pendingStoryUploads.latestVisibleUpload?.displayProgress ?? 0
+        case .posted:
+            1
+        case .processing, .review, .failed, nil:
+            nil
         }
     }
 
@@ -513,7 +606,7 @@ struct HomeView: View {
                         pendingUpload: pendingStoryUploads.latestVisibleUpload
                     ) {
                         if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
-                            retryPendingUpload(pendingUpload)
+                            selectedFailedUpload = pendingUpload
                         } else if feed.myStory.hasActiveStory {
                             store.warmStoryOpen(
                                 storyId: "my-story",
@@ -565,6 +658,10 @@ struct HomeView: View {
                 onPendingUploadRetried(response)
             } catch {
                 MediaPerformance.mark("pending_story_upload_retry_failed id=\(upload.id)")
+                storyUploadNotice.showFailed(
+                    message: pendingStoryUploads.upload(id: upload.id)?.displayErrorMessage
+                        ?? error.localizedDescription
+                )
             }
         }
     }
@@ -755,12 +852,18 @@ struct MyStoryHomeCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 if let overlays = myStory.latestTextOverlays, !overlays.isEmpty {
-                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 9, horizontalPadding: 6, verticalPadding: 3)
+                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
                         .frame(width: 132, height: 192)
                 }
 
-                if let pendingUpload {
-                    pendingStatus(upload: pendingUpload)
+                if isAwaitingReady {
+                    Color.black.opacity(0.08)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .allowsHitTesting(false)
+                }
+
+                if pendingUpload?.isFailed == true {
+                    failedUploadBadge
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(9)
                 }
@@ -770,7 +873,7 @@ struct MyStoryHomeCard: View {
                         .fill(Color.ubeyeRed)
                         .frame(width: 8, height: 8)
                     Text("My Story")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 14, weight: .semibold, design: .default))
                         .lineLimit(1)
                 }
                 .foregroundStyle(.white)
@@ -780,7 +883,7 @@ struct MyStoryHomeCard: View {
             .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(myStory.hasActiveStory ? "Play My Story" : "My Story")
+        .accessibilityLabel(cardAccessibilityLabel)
         .accessibilityHint(
             myStory.hasActiveStory
                 ? "Opens your story playback."
@@ -788,29 +891,30 @@ struct MyStoryHomeCard: View {
         )
     }
 
-    private func pendingStatus(upload: PendingStoryUpload) -> some View {
-        HStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .stroke(.white.opacity(0.24), lineWidth: 2)
-                Circle()
-                    .trim(from: 0, to: upload.isFailed ? 1 : upload.displayProgress)
-                    .stroke(
-                        upload.isFailed ? Color.ubeyeRed : .white,
-                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
+    private var isAwaitingReady: Bool {
+        pendingUpload?.isFailed == false || myStory.items.last?.isProcessingVideo == true
+    }
 
-                Image(systemName: upload.isFailed ? "exclamationmark" : "arrow.up")
-                    .font(.system(size: 8, weight: .black))
-                    .foregroundStyle(.white)
+    private var cardAccessibilityLabel: String {
+        if let pendingUpload {
+            if pendingUpload.isFailed {
+                return "My Story, upload failed"
             }
-            .frame(width: 18, height: 18)
+            return "My Story, upload in progress"
+        }
+        if myStory.items.last?.isProcessingVideo == true {
+            return "My Story, video processing"
+        }
+        return myStory.hasActiveStory ? "Play My Story" : "My Story"
+    }
 
-            Text(upload.statusLabel)
+    private var failedUploadBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13, weight: .bold))
+            Text("Upload failed")
                 .font(.system(size: 10, weight: .black))
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 7)
@@ -824,19 +928,67 @@ struct MyStoryHomeCard: View {
 
 }
 
+private struct StoryUploadNoticeBanner: View {
+    let title: String
+    let message: String
+    let systemImage: String
+    let progress: Double?
+    let showsIndeterminateProgress: Bool
+
+    private var showsProgress: Bool {
+        progress != nil || showsIndeterminateProgress
+    }
+
+    var body: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Color.ubeyeRed, in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.ubeyeInk)
+                        .contentTransition(.numericText())
+                    Text(message)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            if showsProgress {
+                Group {
+                    if showsIndeterminateProgress {
+                        ProgressView()
+                    } else {
+                        ProgressView(value: progress ?? 0, total: 1)
+                    }
+                }
+                .progressViewStyle(.linear)
+                .tint(Color.ubeyeRed)
+                .animation(.easeInOut(duration: 0.25), value: progress)
+            }
+        }
+        .padding(12)
+        .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.ubeyeBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct MyStoryCardSkeleton: View {
     var body: some View {
-        ZStack {
-            UBEYESkeletonBlock()
-
-            VStack(alignment: .leading, spacing: 8) {
-                UBEYESkeletonLine(width: 72, height: 10)
-                UBEYESkeletonLine(width: 48, height: 10)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            .padding(12)
-        }
-        .accessibilityHidden(true)
+        UBEYESkeletonBlock()
+            .accessibilityHidden(true)
     }
 }
 
@@ -861,18 +1013,16 @@ struct StoryThumb: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             if let overlays = story.textOverlays, !overlays.isEmpty {
-                StoryThumbnailOverlayView(overlays: overlays, fontSize: 9, horizontalPadding: 6, verticalPadding: 3)
+                StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
                     .frame(width: 132, height: 192)
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(story.creator)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-            }
-            .padding(10)
-            .frame(width: 132, height: 192, alignment: .bottomLeading)
+            Text(story.creator)
+                .font(.system(size: 14, weight: .semibold, design: .default))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(12)
+                .frame(width: 132, height: 192, alignment: .bottomLeading)
         }
         .frame(width: 132, height: 192)
         .ubeyeMediaCardChrome()
@@ -923,6 +1073,7 @@ struct DiscoverGrid: View {
                     .ubeyeMediaCardChrome()
                 }
                 .buttonStyle(.plain)
+                .id(tile.id)
                 .onAppear {
                     onAppear(tile)
                 }
@@ -1037,9 +1188,9 @@ struct StoryMediaView: View {
             }
         } else if story.assetKind == .video {
             AutoPlayVideoPlayer(
-                url: story.playbackMediaUrl,
+                source: story.playbackSource,
                 thumbnailUrl: story.playbackThumbnailUrl,
-                preloadUrls: MediaPlaybackQuality.preloadURLs(for: story)
+                preloadSources: MediaPlaybackQuality.preloadSources(for: story)
             )
         } else {
             CachedAsyncImage(url: story.playbackMediaUrl) { image in

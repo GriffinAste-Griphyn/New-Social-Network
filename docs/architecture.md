@@ -174,6 +174,19 @@ That keeps creator balances understandable and payout operations sane.
 
 ## Feed architecture
 
+### Current production path
+
+- Story publication records a durable dispatch and starts a Vercel Workflow. Idempotent
+  steps handle earnings, Redis timeline fanout, push notification, and snapshot invalidation.
+- Following creates backfill recent creator stories; unfollow removes that creator's members.
+- `GET /api/mobile/feed?cursor=...&limit=20` returns a bounded manifest and an opaque `nextCursor` based on `lastUploadedAt + id`.
+- Redis holds the 60-second fresh / five-minute stale feed snapshot. Postgres remains the durable source of truth, not the response-cache layer.
+- Feed delivery falls back to a stale Redis snapshot when live candidate generation fails.
+- `feed_events` is the append-only behavior stream for impressions, completions, skips, hides, and rewatches. `feed_impressions` remains the compatibility aggregate input until scoring jobs migrate.
+
+If Upstash credentials are absent in development, the app skips snapshot/timeline cache
+writes and uses database candidate generation. Production fails closed without Upstash.
+
 ### v1 flow
 
 1. user opens `For You`

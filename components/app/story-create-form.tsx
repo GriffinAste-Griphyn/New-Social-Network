@@ -13,6 +13,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { storyMediaInputAccept } from "@/lib/story-media-contract"
 import { cn } from "@/lib/utils"
 
 const overlayBounds = {
@@ -22,6 +23,15 @@ const overlayBounds = {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+function isVideoFile(file: File) {
+  return (
+    file.type.startsWith("video/") ||
+    ["mp4", "mov", "webm"].includes(
+      file.name.split(".").pop()?.toLowerCase() ?? "",
+    )
+  )
 }
 
 export function StoryCreateForm() {
@@ -108,21 +118,22 @@ export function StoryCreateForm() {
       <input type="hidden" name="linkUrl" value={linkUrl.trim()} />
 
       <section className="overflow-hidden rounded-[28px] bg-[#050608] shadow-[0_24px_70px_rgba(15,23,42,0.18)] lg:rounded-[8px]">
-        <div className="relative mx-auto flex min-h-[72svh] max-w-[520px] items-center justify-center overflow-hidden bg-neutral-950 lg:min-h-[760px] lg:max-w-none">
+        <div className="relative mx-auto flex aspect-[9/16] w-full max-w-[405px] items-center justify-center overflow-hidden bg-neutral-950">
           {previewUrl ? (
-            file?.type.startsWith("video/") ? (
+            file && isVideoFile(file) ? (
               <video
                 src={previewUrl}
-                className="absolute inset-0 h-full w-full object-cover"
+                aria-label="Selected story preview"
+                className="absolute inset-0 h-full w-full object-contain"
                 controls
                 playsInline
               />
             ) : (
-              // eslint-disable-next-line @next/next/no-img-element
+              /* eslint-disable-next-line @next/next/no-img-element */
               <img
                 src={previewUrl}
                 alt="Selected story preview"
-                className="absolute inset-0 h-full w-full object-cover"
+                className="absolute inset-0 h-full w-full object-contain"
               />
             )
           ) : (
@@ -252,7 +263,7 @@ export function StoryCreateForm() {
               id="media"
               name="media"
               type="file"
-              accept="image/*,video/*"
+              accept={storyMediaInputAccept}
               capture="environment"
               required
               className="sr-only"

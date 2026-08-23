@@ -42,11 +42,12 @@ STORY_VIDEO_PROCESSOR=cloudflare-stream
 CLOUDFLARE_STREAM_ACCOUNT_ID=...
 CLOUDFLARE_STREAM_API_TOKEN=...
 CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN=...
+CLOUDFLARE_STREAM_WEBHOOK_SECRET=...
 # Temporary build-250 compatibility. Headerless clients stop preparing progressive
 # video stories at this timestamp (default: 2026-08-09T00:00:00Z); completion has
 # a 24-hour grace period. Set ALLOW_LEGACY_ORIGINAL_VIDEO_UPLOADS=false to retire now.
 LEGACY_ORIGINAL_VIDEO_UPLOADS_UNTIL=2026-08-09T00:00:00Z
-# Optional but recommended for high-volume playback token generation:
+# Required in production for local playback-token generation:
 CLOUDFLARE_STREAM_SIGNING_KEY_ID=...
 CLOUDFLARE_STREAM_SIGNING_KEY_JWK=...
 # or CLOUDFLARE_STREAM_SIGNING_KEY_PEM=...
@@ -55,11 +56,26 @@ CLOUDFLARE_STREAM_SIGNING_KEY_JWK=...
 Private original Blob media is served through `/api/story-media/...`, which
 requires an authenticated session or a short-lived signed media URL issued by
 the mobile API. Direct image uploads publish normalized display/poster
-derivatives as public Blob CDN assets while keeping originals private.
+derivatives as private Blob assets and send a tiny inline placeholder.
+
+Production also requires durable feed/publication infrastructure:
+
+```bash
+# Direct Upstash credentials, or the KV_REST_API_* variables injected by the
+# Vercel Upstash Marketplace integration.
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+CRON_SECRET=...
+# 0 keeps the stronger iOS preheat profile disabled; raise gradually.
+MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0
+```
+
+Install the Vercel Workflow integration before deployment. Vercel invokes the
+publication/Stream reconciliation route every minute using `CRON_SECRET`.
 
 ## Admin setup
 
-The admin portal is available at `/admin`. `griffin.aste@gmail.com` is included
+The admin portal is available at `/admin`. `griffin@ubeye.ai` is included
 as a built-in admin. In production, set `ADMIN_EMAILS` to add more
 comma-separated account emails:
 

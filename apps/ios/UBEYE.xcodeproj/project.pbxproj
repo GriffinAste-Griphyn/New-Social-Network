@@ -16,6 +16,7 @@
 		2D535C911A940A71FCAFD632 /* StoryVideoUploadPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF425320C4454522B6EB4E42 /* StoryVideoUploadPipeline.swift */; };
 		2E652C712BBBCCC2AAC54C34 /* MediaPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF0753F45EF0E26F9ED7724 /* MediaPerformanceTests.swift */; };
 		2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */; };
+		3A72F9757CD3DFEE8D812132 /* SDWebImageWebPCoder in Frameworks */ = {isa = PBXBuildFile; productRef = E09E7044A35900C4B67A3A9B /* SDWebImageWebPCoder */; };
 		41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12112239A2105E9146475DBB /* FollowingManagementView.swift */; };
 		456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */; };
 		51ADBD536257CD6560F637EC /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA619704F081F3123B00D7 /* ProfileView.swift */; };
@@ -30,12 +31,14 @@
 		A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */; };
 		A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */; };
 		A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */; };
+		AD89FAD5C6EC764CC90397BC /* ThumbHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A17262BABB67CA0E2EA127 /* ThumbHash.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
 		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
 		E7288E47377376D238B7C1CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1427E7CB5130FC83F36A8F19 /* Assets.xcassets */; };
 		EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */; };
+		F271D8C627F47C3A51C0A901 /* StoryMediaCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */; };
 		ED73DCACD198363C47B0C2E3 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B74604130A946A9568F391B /* CameraController.swift */; };
 		FF53BF35C46EF6494703843E /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E023E109362F9ED0305266 /* Theme.swift */; };
 /* End PBXBuildFile section */
@@ -73,6 +76,7 @@
 		710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizer.swift; sourceTree = "<group>"; };
 		73BDBCA8966387ED9F236329 /* UBEYE.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = UBEYE.entitlements; sourceTree = "<group>"; };
 		7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryStackViewer.swift; sourceTree = "<group>"; };
+		89A17262BABB67CA0E2EA127 /* ThumbHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbHash.swift; sourceTree = "<group>"; };
 		8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepliesView.swift; sourceTree = "<group>"; };
 		9B74604130A946A9568F391B /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizerTests.swift; sourceTree = "<group>"; };
@@ -86,7 +90,19 @@
 		CEFA619704F081F3123B00D7 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 		D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
 		DF425320C4454522B6EB4E42 /* StoryVideoUploadPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoUploadPipeline.swift; sourceTree = "<group>"; };
+		F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryMediaCanvas.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C1BC819D9AD359A18D6FEAAD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3A72F9757CD3DFEE8D812132 /* SDWebImageWebPCoder in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		0830FB4DF29994A3898D9630 = {
@@ -119,6 +135,7 @@
 				C7A88ED49CB2B0BC0AC34977 /* App */,
 				DC4B2DCD4A1C4A3006D0E56D /* Auth */,
 				482E1437B9D2A39B6960F97F /* Features */,
+				952E28C82785847AF48F8D85 /* Media */,
 				18C8761D3ACB754CDA1A23DF /* Networking */,
 			);
 			path = UBEYE;
@@ -183,9 +200,18 @@
 			path = UBEYETests;
 			sourceTree = "<group>";
 		};
+		952E28C82785847AF48F8D85 /* Media */ = {
+			isa = PBXGroup;
+			children = (
+				89A17262BABB67CA0E2EA127 /* ThumbHash.swift */,
+			);
+			path = Media;
+			sourceTree = "<group>";
+		};
 		B162A719C6CF9C6CCD068F8F /* Stories */ = {
 			isa = PBXGroup;
 			children = (
+				F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */,
 				7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */,
 				C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */,
 			);
@@ -253,6 +279,7 @@
 			buildPhases = (
 				93CCFB6FB6A9B6A677B2B0A1 /* Sources */,
 				1700F43356EE45EBFECD061B /* Resources */,
+				C1BC819D9AD359A18D6FEAAD /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -260,6 +287,7 @@
 			);
 			name = UBEYE;
 			packageProductDependencies = (
+				E09E7044A35900C4B67A3A9B /* SDWebImageWebPCoder */,
 			);
 			productName = UBEYE;
 			productReference = B6E7EDD6CA1B0244C2B467FE /* UBEYE.app */;
@@ -292,6 +320,9 @@
 			);
 			mainGroup = 0830FB4DF29994A3898D9630;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FA56CDDBAD42939A6B5E226C /* XCRemoteSwiftPackageReference "SDWebImageWebPCoder" */,
+			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
@@ -340,11 +371,13 @@
 				AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */,
 				A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */,
 				EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */,
+				F271D8C627F47C3A51C0A901 /* StoryMediaCanvas.swift in Sources */,
 				A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */,
 				9A7C136B1E52B4EC743C9234 /* StoryUploadCoordinator.swift in Sources */,
 				2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */,
 				2D535C911A940A71FCAFD632 /* StoryVideoUploadPipeline.swift in Sources */,
 				FF53BF35C46EF6494703843E /* Theme.swift in Sources */,
+				AD89FAD5C6EC764CC90397BC /* ThumbHash.swift in Sources */,
 				A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -376,7 +409,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 255;
+				CURRENT_PROJECT_VERSION = 318;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -384,7 +417,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.9;
+				MARKETING_VERSION = 1.0.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.griffinaste.ubeye;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -477,7 +510,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 255;
+				CURRENT_PROJECT_VERSION = 318;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -485,7 +518,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.9;
+				MARKETING_VERSION = 1.0.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.griffinaste.ubeye;
 				PROVISIONING_PROFILE_SPECIFIER = "UBEYE App Store 2026";
 				SDKROOT = iphoneos;
@@ -609,6 +642,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FA56CDDBAD42939A6B5E226C /* XCRemoteSwiftPackageReference "SDWebImageWebPCoder" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SDWebImage/SDWebImageWebPCoder.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E09E7044A35900C4B67A3A9B /* SDWebImageWebPCoder */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA56CDDBAD42939A6B5E226C /* XCRemoteSwiftPackageReference "SDWebImageWebPCoder" */;
+			productName = SDWebImageWebPCoder;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0B0AF6B50DCCDECEA7A75FAB /* Project object */;
 }

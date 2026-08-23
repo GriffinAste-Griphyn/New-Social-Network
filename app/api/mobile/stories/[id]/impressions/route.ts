@@ -14,6 +14,7 @@ export const runtime = "nodejs"
 const impressionSchema = z.object({
   viewedMs: z.number().min(0).max(10 * 60 * 1000).default(0),
   completed: z.boolean().default(false),
+  hidden: z.boolean().default(false),
 })
 
 export async function POST(
@@ -58,6 +59,7 @@ export async function POST(
     viewerId: session.id,
     viewedMs: parsed.data.viewedMs,
     completed: parsed.data.completed,
+    hidden: parsed.data.hidden,
   })
 
   return NextResponse.json({ ok: true, ...result })

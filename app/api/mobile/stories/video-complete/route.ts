@@ -8,6 +8,7 @@ import {
   isCloudflareStreamFullyReady,
   markMediaUploadSessionCompleted,
   MediaUploadSessionError,
+  mergeCloudflareStreamProviderDetails,
   recordCloudflareStreamUploadStatus,
   releaseMediaUploadSessionCompletion,
 } from "@/lib/media-upload-sessions"
@@ -16,13 +17,11 @@ import {
   getExistingMobileVideoStoryCompletion,
 } from "@/lib/stories/mobile-video-completion"
 import {
-  createCloudflareStreamClientThumbnailPathname,
-  createCloudflareStreamClientThumbnailUrl,
+  createDirectBlobStoryVideoPosterUrl,
   createCloudflareStreamStoredVideoAsset,
   getCloudflareStreamVideoDetails,
-  isAllowedOriginalQualityVideoThumbnailContentType,
-  maxCloudflareStreamClientThumbnailUploadBytes,
-  setCloudflareStreamThumbnailToLastFrame,
+  maxStoryVideoPosterUploadBytes,
+  setCloudflareStreamThumbnailAtDefaultTime,
   StoryUploadError,
   type StoredStoryAsset,
 } from "@/lib/story-storage"
@@ -31,8 +30,20 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import { isSupportedStoryVideoInputContentType } from "@/lib/story-media-contract"
 
 export const runtime = "nodejs"
+
+const minimumRequiredVideoPosterBuild = 306
+
+const videoPosterSchema = z.object({
+  pathname: z.string().trim().min(1).max(500),
+  contentType: z.literal("image/jpeg"),
+  byteSize: z.number().int().positive().max(maxStoryVideoPosterUploadBytes),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/i),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+})
 
 const completeVideoSchema = z.object({
   uid: z.string().regex(/^[a-f0-9]{32}$/i),
@@ -42,26 +53,13 @@ const completeVideoSchema = z.object({
     .trim()
     .min(1)
     .max(120)
-    .refine((value) => value.toLowerCase().startsWith("video/"))
+    .refine(isSupportedStoryVideoInputContentType)
     .default("video/mp4"),
   byteSize: z.number().int().nonnegative().default(0),
   durationMs: z.number().int().positive().nullable().optional(),
   width: z.number().int().positive().nullable().optional(),
   height: z.number().int().positive().nullable().optional(),
-  thumbnailPathname: z.string().trim().min(1).max(500).nullable().optional(),
-  thumbnailContentType: z.string().trim().min(1).max(120).nullable().optional(),
-  thumbnailByteSize: z
-    .number()
-    .int()
-    .positive()
-    .max(maxCloudflareStreamClientThumbnailUploadBytes)
-    .nullable()
-    .optional(),
-  thumbnailChecksum: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/i)
-    .nullable()
-    .optional(),
+  poster: videoPosterSchema.nullable().optional(),
   caption: z.string().default(""),
   brandTags: z.string().default(""),
   stickers: z.string().default(""),
@@ -95,7 +93,6 @@ function logVideoCompleteEvent(
 
 export async function POST(request: Request) {
   let storedAsset: StoredStoryAsset | undefined
-  let uploadedThumbnailUrl: string | null = null
   let claimedUploadSession:
     | Awaited<
         ReturnType<typeof claimMediaUploadSessionForCompletion>
@@ -143,12 +140,32 @@ export async function POST(request: Request) {
       )
     }
 
+    const clientBuild = Number.parseInt(
+      request.headers.get("x-ubeye-app-build") ?? "",
+      10,
+    )
+    if (
+      Number.isFinite(clientBuild) &&
+      clientBuild >= minimumRequiredVideoPosterBuild &&
+      !parsed.data.poster
+    ) {
+      logVideoCompleteEvent("complete_missing_poster", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        clientBuild,
+      })
+      return NextResponse.json(
+        { error: "Could not finish the video poster upload." },
+        { status: 400 },
+      )
+    }
+
     logVideoCompleteEvent("complete_started", {
       userId: session.id,
       uid: parsed.data.uid,
       byteSize: parsed.data.byteSize,
       durationMs: parsed.data.durationMs ?? null,
-      hasClientThumbnail: Boolean(parsed.data.thumbnailPathname),
+      hasClientPoster: Boolean(parsed.data.poster),
     })
 
     const uploadClaim = await claimMediaUploadSessionForCompletion({
@@ -197,9 +214,15 @@ export async function POST(request: Request) {
     const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
       uploadClaim.session,
     )
-    const cloudflareDetails = await getCloudflareStreamVideoDetails(
+    const observedCloudflareDetails = await getCloudflareStreamVideoDetails(
       parsed.data.uid,
     ).catch(() => retainedCloudflareDetails)
+    const cloudflareDetails = observedCloudflareDetails
+      ? mergeCloudflareStreamProviderDetails(
+          retainedCloudflareDetails,
+          observedCloudflareDetails,
+        )
+      : retainedCloudflareDetails
 
     if (cloudflareDetails) {
       await recordCloudflareStreamUploadStatus({
@@ -216,42 +239,28 @@ export async function POST(request: Request) {
       )
     }
 
-    if (parsed.data.thumbnailPathname) {
-      const expectedThumbnailPathname = createCloudflareStreamClientThumbnailPathname(
-        session.id,
-        parsed.data.uid,
-      )
+    const posterUrl = parsed.data.poster
+      ? await createDirectBlobStoryVideoPosterUrl({
+          uid: parsed.data.uid,
+          poster: parsed.data.poster,
+        })
+      : null
 
-      if (
-        parsed.data.thumbnailPathname !== expectedThumbnailPathname ||
-        !parsed.data.thumbnailContentType ||
-        !isAllowedOriginalQualityVideoThumbnailContentType(
-          parsed.data.thumbnailContentType,
-        ) ||
-        !parsed.data.thumbnailByteSize ||
-        !parsed.data.thumbnailChecksum
-      ) {
-        throw new MediaUploadSessionError(
-          "Could not verify the story video thumbnail.",
-          400,
-        )
-      }
-
-      uploadedThumbnailUrl = await createCloudflareStreamClientThumbnailUrl({
-        pathname: parsed.data.thumbnailPathname,
-        contentType: parsed.data.thumbnailContentType,
-        byteSize: parsed.data.thumbnailByteSize,
+    try {
+      await setCloudflareStreamThumbnailAtDefaultTime(parsed.data.uid)
+    } catch (error) {
+      logVideoCompleteEvent("cloudflare_thumbnail_configuration_failed", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        reason: error instanceof Error ? error.message : "unknown",
       })
     }
-
-    await setCloudflareStreamThumbnailToLastFrame(parsed.data.uid).catch(
-      () => undefined,
-    )
 
     storedAsset = createCloudflareStreamStoredVideoAsset({
       uid: parsed.data.uid,
       contentType: parsed.data.contentType,
       byteSize: parsed.data.byteSize,
+      thumbnailUrl: posterUrl,
       durationMs: parsed.data.durationMs ?? cloudflareDetails?.durationMs ?? null,
       width: parsed.data.width ?? cloudflareDetails?.width ?? null,
       height: parsed.data.height ?? cloudflareDetails?.height ?? null,
@@ -265,10 +274,6 @@ export async function POST(request: Request) {
           ? 100
           : null),
     })
-    storedAsset = uploadedThumbnailUrl
-      ? { ...storedAsset, thumbnailUrl: uploadedThumbnailUrl }
-      : storedAsset
-
     const completion = await completeMobileVideoStory({
       request,
       session,

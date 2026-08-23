@@ -102,7 +102,7 @@ enum StoryVideoGeometryNormalizer {
         let videoComposition = AVMutableVideoComposition()
         videoComposition.instructions = [instruction]
         videoComposition.renderSize = plan.renderSize
-        videoComposition.frameDuration = await frameDuration(for: sourceVideoTrack)
+        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
 
         return (composition, videoComposition)
     }
@@ -121,13 +121,4 @@ enum StoryVideoGeometryNormalizer {
         (try? await asset.loadTracks(withMediaType: .audio)) ?? []
     }
 
-    private static func frameDuration(for track: AVAssetTrack) async -> CMTime {
-        let fps = (try? await track.load(.nominalFrameRate)) ?? 0
-
-        guard fps.isFinite, fps > 0 else {
-            return CMTime(value: 1, timescale: 30)
-        }
-
-        return CMTime(value: 1, timescale: CMTimeScale(max(1, Int(round(fps)))))
-    }
 }

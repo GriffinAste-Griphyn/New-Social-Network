@@ -250,6 +250,17 @@ extension StoryCard {
     var isPlayableVideo: Bool {
         assetKind == .video && !isProcessingVideo
     }
+
+    var playbackIdentity: String {
+        stablePlaybackIdentity(
+            storyId: id,
+            rendition: renditions?.playback
+        )
+    }
+
+    var playbackSource: StoryVideoPlaybackSource {
+        StoryVideoPlaybackSource(identity: playbackIdentity, url: playbackMediaUrl)
+    }
 }
 
 struct DiscoverTile: Codable, Identifiable, Hashable {
@@ -297,6 +308,7 @@ struct MobileFeedResponse: Codable {
     let followingProfiles: [FollowingProfile]
     let followingStories: [StoryCard]
     let followingTimelineStories: [StoryCard]?
+    let nextCursor: String?
     let discoverTiles: [DiscoverTile]
     let initialStoryStacks: [String: StoryStackResponse]?
     let suggestedAccounts: [SuggestedAccount]
@@ -521,6 +533,34 @@ extension StoryStackItem {
     var isPlayableVideo: Bool {
         assetKind == .video && !isProcessingVideo
     }
+
+    var playbackIdentity: String {
+        stablePlaybackIdentity(
+            storyId: id,
+            rendition: renditions?.playback
+        )
+    }
+
+    var playbackSource: StoryVideoPlaybackSource {
+        StoryVideoPlaybackSource(identity: playbackIdentity, url: playbackMediaUrl)
+    }
+}
+
+private func stablePlaybackIdentity(
+    storyId: String,
+    rendition: StoryMediaRendition?
+) -> String {
+    if let storageKey = rendition?.storageKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !storageKey.isEmpty {
+        return "storage:\(storageKey)"
+    }
+
+    if let checksum = rendition?.checksum?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !checksum.isEmpty {
+        return "checksum:\(checksum)"
+    }
+
+    return "story:\(storyId)"
 }
 
 struct StoryInteractionResponse: Codable {
@@ -668,29 +708,18 @@ struct ImageUploadPart: Codable, Hashable {
 
 struct ImageUploadResponse: Codable {
     let ok: Bool
-    let pathname: String
-    let uploadUrl: URL
-    let clientToken: String
-    let contentType: String
-    let maxSizeBytes: Int64
-    let access: String?
-    let original: ImageUploadPart?
-    let display: ImageUploadPart?
-    let thumbnail: ImageUploadPart?
-    let placeholder: ImageUploadPart?
+    let basePathname: String
+    let display: ImageUploadPart
+    let thumbnail: ImageUploadPart
 }
 
-extension ImageUploadResponse {
-    var originalPart: ImageUploadPart {
-        original ?? ImageUploadPart(
-            pathname: pathname,
-            uploadUrl: uploadUrl,
-            clientToken: clientToken,
-            contentType: contentType,
-            maxSizeBytes: maxSizeBytes,
-            access: access
-        )
-    }
+struct BlobUploadResult: Codable {
+    let url: URL
+    let downloadUrl: URL?
+    let pathname: String
+    let contentType: String?
+    let contentDisposition: String?
+    let etag: String?
 }
 
 struct PreparedImageDerivativeUpload: Codable, Hashable {
@@ -725,6 +754,7 @@ struct MobileMediaConfigResponse: Codable {
         }
 
         let version: String
+        let rolloutProfile: String?
         let imageDerivativeUploadEnabled: Bool
         let qoeAccessLogSampleRate: Double
         let uploadChunkBytes: Int
@@ -747,20 +777,7 @@ struct VideoUploadResponse: Codable, Hashable {
     let uploadSessionId: String?
     let uploadUrl: URL
     let uploadProtocol: String?
-    let thumbnailPathname: String?
-    let thumbnailUploadUrl: URL?
-    let thumbnailClientToken: String?
-    let thumbnailContentType: String?
-    let maxThumbnailSizeBytes: Int64?
-}
-
-struct OriginalVideoBlobUploadResult: Codable {
-    let url: URL
-    let downloadUrl: URL?
-    let pathname: String
-    let contentType: String?
-    let contentDisposition: String?
-    let etag: String?
+    let poster: ImageUploadPart?
 }
 
 struct StoryStatusResponse: Codable {

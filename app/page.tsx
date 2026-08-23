@@ -1,8 +1,9 @@
 import Link from "next/link"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { ArrowRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { NonTradVentureLink } from "@/components/non-trad-venture-link"
 
 const mobileAppHref = "https://apps.apple.com/us/app/ubeye/id6768760562"
 const advertiserSignInHref = "/login?next=%2Fadvertiser"
@@ -27,6 +28,12 @@ export const metadata: Metadata = {
     title: "UBEYE | The post-work income platform",
     description: "UBEYE | The post-work income platform",
   },
+}
+
+export const viewport: Viewport = {
+  themeColor: "#050505",
+  colorScheme: "dark",
+  viewportFit: "cover",
 }
 
 function SiteHeader() {
@@ -95,9 +102,9 @@ export default function HomePage() {
                 In the pursuit of AGI, human attention and consciousness will become the new gold.
               </p>
               <p className="mt-6 max-w-2xl text-base leading-8 text-white/66 md:text-lg">
-                UBEYE turns that idea into a social product: people post stories,
-                people spend attention, advertisers fund the signal, and users can
-                share in the value they helped create.
+                UBEYE is a social experiment in wealth redistribution: people post
+                stories, people spend attention, advertisers pay for attention,
+                and users can share in the value they helped create.
               </p>
 
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
@@ -122,6 +129,9 @@ export default function HomePage() {
           </div>
         </section>
       </main>
+      <footer className="flex justify-center border-t border-white/10 bg-[#09090b] px-4 py-8">
+        <NonTradVentureLink />
+      </footer>
     </div>
   )
 }

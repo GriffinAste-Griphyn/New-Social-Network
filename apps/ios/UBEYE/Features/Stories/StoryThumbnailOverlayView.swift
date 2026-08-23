@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum StoryTextOverlayAppearance {
+    static let fontSize: CGFloat = 16
+    static let letterSpacing: CGFloat = 0.2
+    static let horizontalPadding: CGFloat = 10
+    static let verticalPadding: CGFloat = 5
+    static let minimumWidth: CGFloat = 56
+    static let cornerRadius: CGFloat = 6
+    static let horizontalScreenInset: CGFloat = 24
+    static let thumbnailCornerRadius: CGFloat = 4
+}
+
 struct StoryThumbnailOverlayView: View {
     let overlays: [StoryTextOverlay]
     var fontSize: CGFloat = 10
@@ -52,43 +63,56 @@ struct StoryThumbnailOverlayView: View {
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, verticalPadding)
         .frame(maxWidth: maxWidth)
-        .background(.black.opacity(0.46), in: Capsule())
+        .background(
+            .black.opacity(0.46),
+            in: RoundedRectangle(
+                cornerRadius: StoryTextOverlayAppearance.thumbnailCornerRadius,
+                style: .continuous
+            )
+        )
     }
 
     private func quoteReplyCard(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
+        let cardWidth = min(maxWidth, max(fontSize * 14, 72))
+        let cardCornerRadius = max(fontSize * 0.75, 4)
+
+        return VStack(alignment: .leading, spacing: max(fontSize * 0.35, 2)) {
+            HStack(spacing: max(fontSize * 0.55, 3)) {
                 quoteAvatar(overlay)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(overlay.sourceActorName ?? "Reply")
-                        .font(.system(size: max(fontSize - 1, 8), weight: .bold))
+                        .font(.system(size: max(fontSize - 1, 6), weight: .semibold))
                         .lineLimit(1)
 
                     if let handle = overlay.sourceActorHandle, !handle.isEmpty {
                         Text("@\(handle)")
-                            .font(.system(size: max(fontSize - 3, 7), weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.72))
+                            .font(.system(size: max(fontSize - 2, 5), weight: .regular))
+                            .foregroundStyle(.white.opacity(0.68))
                             .lineLimit(1)
                     }
                 }
             }
 
             Text(overlay.label)
-                .font(.system(size: max(fontSize, 9), weight: .bold))
+                .font(.system(size: max(fontSize, 7), weight: .medium))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, horizontalPadding + 1)
-        .padding(.vertical, verticalPadding + 2)
-        .frame(width: min(maxWidth, 118), alignment: .leading)
-        .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(.white.opacity(0.18), lineWidth: 0.7)
+        .padding(.horizontal, max(horizontalPadding, 4))
+        .padding(.vertical, max(verticalPadding, 3))
+        .frame(width: cardWidth, alignment: .leading)
+        .background(
+            .black.opacity(0.7),
+            in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(.white.opacity(0.2), lineWidth: max(fontSize * 0.06, 0.5))
+        )
+        .shadow(color: .black.opacity(0.22), radius: max(fontSize * 0.35, 2), y: 1)
     }
 
     private func quoteAvatar(_ overlay: StoryTextOverlay) -> some View {
@@ -97,10 +121,10 @@ struct StoryThumbnailOverlayView: View {
                 .fill(Color.ubeyeRed)
 
             Text(quoteInitial(for: overlay))
-                .font(.system(size: max(fontSize - 2, 7), weight: .black))
+                .font(.system(size: max(fontSize - 1, 5), weight: .black))
                 .foregroundStyle(.white)
         }
-        .frame(width: max(fontSize + 9, 16), height: max(fontSize + 9, 16))
+        .frame(width: max(fontSize + 6, 12), height: max(fontSize + 6, 12))
     }
 
     private func quoteInitial(for overlay: StoryTextOverlay) -> String {

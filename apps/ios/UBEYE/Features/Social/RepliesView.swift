@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -6,16 +7,31 @@ final class RepliesStore: ObservableObject {
     @Published var isLoading = false
     @Published var error: String?
     @Published var deletingReplyIds: Set<String> = []
+    private var loadGeneration = 0
 
     func load(api: APIClient) async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         error = nil
+        defer {
+            if generation == loadGeneration {
+                isLoading = false
+            }
+        }
+
         do {
-            inbox = try await api.get("/api/mobile/stories/inbox/interactions")
+            let response: StoryInteractionInboxResponse = try await api.get("/api/mobile/stories/inbox/interactions")
+            guard generation == loadGeneration, !Task.isCancelled else {
+                return
+            }
+            inbox = response
         } catch {
+            guard generation == loadGeneration, !error.isCancellation else {
+                return
+            }
             self.error = error.localizedDescription
         }
-        isLoading = false
     }
 
     func deleteReply(id: String, api: APIClient) async {
@@ -32,7 +48,9 @@ final class RepliesStore: ObservableObject {
             try await api.deleteStoryInteraction(id: id)
         } catch {
             inbox = previousInbox
-            self.error = error.localizedDescription
+            if !error.isCancellation {
+                self.error = error.localizedDescription
+            }
         }
 
         deletingReplyIds.remove(id)
@@ -48,6 +66,17 @@ final class RepliesStore: ObservableObject {
             interactions: inbox.interactions.filter { $0.id != id },
             sentInteractions: inbox.sentInteractions.filter { $0.id != id }
         )
+    }
+}
+
+private extension Error {
+    var isCancellation: Bool {
+        if self is CancellationError {
+            return true
+        }
+
+        let nsError = self as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 }
 

@@ -3,10 +3,8 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 import { env } from "@/lib/env"
 
 export const storyMediaRoutePrefix = "/api/story-media"
-export const localStoryUrlPrefix = "/uploads/stories"
-export const localStoryMediaPrefix = "local"
 export const cloudflareStreamMediaPrefix = "cloudflare-stream"
-export const storyMediaAccessTokenTtlMs = 60 * 60 * 1000
+export const storyMediaAccessTokenTtlMs = 2 * 60 * 60 * 1000
 
 const storyMediaAccessTokenBucketMs = 30 * 60 * 1000
 
@@ -96,34 +94,6 @@ export function buildStoryMediaRoute(pathname: string) {
   return `${storyMediaRoutePrefix}/${encodeStoryMediaPathname(pathname)}`
 }
 
-export function buildLocalStoryMediaPathname(fileName: string) {
-  return `${localStoryMediaPrefix}/${fileName}`
-}
-
-export function getLocalStoryMediaPathname(mediaUrl: string) {
-  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
-  const normalizedUrl =
-    baseUrl && mediaUrl.startsWith(baseUrl)
-      ? mediaUrl.slice(baseUrl.length)
-      : mediaUrl
-
-  if (normalizedUrl.startsWith(`${storyMediaRoutePrefix}/${localStoryMediaPrefix}/`)) {
-    return normalizedUrl
-      .slice(storyMediaRoutePrefix.length + 1)
-      .split("/")
-      .map((segment) => decodeURIComponent(segment))
-      .join("/")
-  }
-
-  if (normalizedUrl.startsWith(`${localStoryUrlPrefix}/`)) {
-    const fileName = normalizedUrl.slice(localStoryUrlPrefix.length + 1)
-
-    return buildLocalStoryMediaPathname(fileName)
-  }
-
-  return null
-}
-
 export function buildCloudflareStreamPathname(uid: string) {
   return `${cloudflareStreamMediaPrefix}/${uid}/manifest/video.m3u8`
 }
@@ -204,7 +174,7 @@ export function getStoryMediaAccessTokenMaxAgeSeconds(
 
   const secondsRemaining = Math.floor((expiresAtMs - Date.now()) / 1000)
 
-  return Math.max(0, Math.min(secondsRemaining, 30 * 60))
+  return Math.max(0, Math.min(secondsRemaining, 2 * 60 * 60))
 }
 
 export function publicStoryMediaUrl(
@@ -217,10 +187,8 @@ export function publicStoryMediaUrl(
   }
 
   const blobPathname = getPrivateVercelBlobPathname(value)
-  const localStoryMediaPathname = getLocalStoryMediaPathname(value)
   const cloudflareStreamPathname = getCloudflareStreamPathname(value)
-  const mediaPathname =
-    blobPathname ?? localStoryMediaPathname ?? cloudflareStreamPathname
+  const mediaPathname = blobPathname ?? cloudflareStreamPathname
   const mediaUrl = mediaPathname ? buildStoryMediaRoute(mediaPathname) : value
 
   if (!request) {

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
@@ -12,6 +14,13 @@ function clientBuild(request: Request) {
   )
 
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function canaryBucket(identity: string) {
+  return Number.parseInt(
+    createHash("sha256").update(identity).digest("hex").slice(0, 8),
+    16,
+  ) % 100
 }
 
 export async function GET(request: Request) {
@@ -33,7 +42,12 @@ export async function GET(request: Request) {
   return NextResponse.json(
     {
       ok: true,
-      media: getMobileMediaConfig({ clientBuild: clientBuild(request) }),
+      media: getMobileMediaConfig({
+        clientBuild: clientBuild(request),
+        canaryBucket: canaryBucket(
+          request.headers.get("X-Device-Id")?.trim() || session.id,
+        ),
+      }),
     },
     {
       headers: {

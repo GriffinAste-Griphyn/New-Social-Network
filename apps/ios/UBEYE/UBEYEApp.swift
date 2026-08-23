@@ -29,6 +29,12 @@ struct UBEYEApp: App {
                 push.didFailToRegister(error)
             }
         }
+        AppDelegate.onBackgroundNotification = { userInfo, completion in
+            Task { @MainActor in
+                let result = await push.handleBackgroundNotification(userInfo, api: api)
+                completion(result)
+            }
+        }
     }
 
     var body: some Scene {

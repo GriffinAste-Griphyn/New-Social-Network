@@ -34,22 +34,23 @@ final class AuthStore: ObservableObject {
         }
 
         didAttemptSessionRestore = true
-        defer { isRestoringSession = false }
 
-        guard let stored = loadStoredAccount() else {
+        if let stored = loadStoredAccount() {
+            applySession(stored, api: api)
+        } else {
+            api.authToken = nil
+        }
+
+        isRestoringSession = false
+    }
+
+    func handleAuthenticationFailure(api: APIClient) {
+        guard account != nil else {
             return
         }
 
-        applySession(stored, api: api)
-
-        do {
-            _ = try await api.mobileFeed()
-        } catch {
-            if (error as? APIClientError)?.statusCode == 401 ||
-                (error as? APIClientError)?.statusCode == 403 {
-                self.error = "Your saved session could not be verified. Try again or sign in manually."
-            }
-        }
+        signOut(api: api)
+        error = "Your saved session expired. Sign in again."
     }
 
     func login(email: String, password: String, api: APIClient) async {
@@ -261,7 +262,6 @@ final class AuthStore: ObservableObject {
         api.clearCurrentUserMediaCache()
         Task {
             await MediaFileDiskCache.shared.removeAll()
-            HLSAssetDownloadCoordinator.shared.removeAll()
         }
         api.authToken = nil
         stage = .landing

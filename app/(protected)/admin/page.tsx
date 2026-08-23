@@ -8,6 +8,7 @@ import {
   Flag,
   Link2,
   LogOut,
+  RefreshCw,
   ShieldAlert,
   Trash2,
   Users,
@@ -17,6 +18,7 @@ import {
 import {
   approveModeratedStoryAction,
   rejectModeratedStoryAction,
+  rescanModeratedStoryAction,
   reviewSafetyReportAction,
   settleCreatorPayoutAction,
 } from "@/lib/admin-actions"
@@ -103,6 +105,18 @@ function flashMessage(params: Awaited<AdminPageProps["searchParams"]>) {
 
   if (params.moderation === "removed") {
     return { tone: "success" as const, message: "Story removed." }
+  }
+
+  if (params.moderation === "rescanned-approve") {
+    return { tone: "success" as const, message: "Story re-scanned and approved." }
+  }
+
+  if (params.moderation === "rescanned-reject") {
+    return { tone: "success" as const, message: "Story re-scanned and removed." }
+  }
+
+  if (params.moderation === "rescanned-hold") {
+    return { tone: "error" as const, message: "Story still requires safety review." }
   }
 
   if (params.moderation === "report-actioned") {
@@ -389,6 +403,14 @@ function ModerationRow({ story }: { story: AdminModerationStory }) {
       </div>
 
       <div className="flex gap-2 lg:flex-col">
+        <form action={rescanModeratedStoryAction}>
+          <input type="hidden" name="storyId" value={story.id} />
+          <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-4 text-sm font-medium text-[#1d4ed8]">
+            <RefreshCw className="size-4" />
+            Re-scan
+          </button>
+        </form>
+
         <form action={approveModeratedStoryAction}>
           <input type="hidden" name="storyId" value={story.id} />
           <button className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-[#111827] px-4 text-sm font-medium text-white">

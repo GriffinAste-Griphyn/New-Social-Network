@@ -1,6 +1,6 @@
 # Production Media Pipeline Plan
 
-Date: July 9, 2026
+Date: August 10, 2026
 
 ## Outcome
 
@@ -32,6 +32,8 @@ with real QoE data.
    receive resources; speculative full HLS package downloads are not part of launch.
 10. Playback progress follows `AVPlayer` media time. Buffering pauses progress, end of
     media advances exactly once, and a prolonged stall performs a bounded recovery.
+11. Publication side effects run in a durable Workflow after the story transaction;
+    a one-minute reconciliation scan repairs any missed dispatch.
 
 ## State model
 
@@ -79,12 +81,19 @@ Webhook delivery, status polling, completion, and moderation approval all call t
 reconciliation rule. This makes event ordering irrelevant and repairs earlier partial
 states instead of relying on one happy-path sequence.
 
+When that transition first reaches `live`, an idempotent durable workflow performs
+earnings, follower timeline fanout, push notification, and feed-snapshot invalidation.
+The dispatch table records each completed effect. Notification delivery is claimed once;
+the other effects can be retried safely. The publishing request does not wait for fanout.
+
 ## iOS ingest
 
 1. Capture portrait video at 1080p/30 fps with a network-appropriate source bitrate.
    Avoid generating an 18 Mbps source when the delivery ladder cannot benefit from it.
 2. Normalize only when container/codec/geometry requires it; keep passthrough exports
    when AVFoundation can produce a provider-compatible result without re-encoding.
+   Compatible slow-start files first receive a fast-start passthrough remux; only files
+   that still fail provider compatibility are transcoded.
 3. Prepare the owner-bound Cloudflare upload session.
 4. Upload with TUS chunks and persist enough local state to resume after a transient
    network interruption or app relaunch.
@@ -98,7 +107,8 @@ states instead of relying on one happy-path sequence.
 1. Resolve only the playback rendition for viewing. The original rendition is not a
    quality override.
 2. Warm metadata and the player item before presentation when user intent is known.
-3. Keep one active player and a small adjacent pool keyed by canonical playback URL.
+3. Keep one active player and up to two canary-controlled adjacent players keyed by
+   canonical playback URL.
 4. Never prune the requested player before acquisition.
 5. Prefer short forward buffering and adaptive startup limits over full-package
    speculative downloads.
@@ -110,12 +120,15 @@ states instead of relying on one happy-path sequence.
 
 ## Images and thumbnails
 
-- Upload a display image plus bounded derivatives and placeholder metadata.
+- Upload a 1080 x 1920-bounded display image and a 360 x 640-bounded thumbnail from
+  the client. Carry the tiny JPEG placeholder inline in the completion payload.
+- Fill letterboxed canvas space with a darkened blurred version of the source image.
 - Use decoded-memory and byte-bounded disk caches with request coalescing.
 - Prefetch visible/adjacent thumbnails, not an unbounded feed window.
-- Use the Stream thumbnail for video placeholders so the transition to HLS is stable.
-- A later release should add server-side format negotiation and measured AVIF/WebP/JPEG
-  quality ladders once production device and bandwidth distributions are available.
+- Score several video frames by luminance and contrast for the client poster; use the
+  Stream thumbnail as the server fallback so the transition to HLS remains stable.
+- Keep server-side JPEG generation only as a compatibility fallback for clients that do
+  not submit verified derivatives; do not synchronously generate AVIF/WebP sidecars.
 
 ## QoE service levels
 
@@ -164,7 +177,7 @@ media duration, warm/cold state, and provider delivery type.
 
 1. Run all local quality gates.
 2. Create a release snapshot containing only the reviewed implementation.
-3. Apply the additive database migration to production.
+3. Apply the additive publication-dispatch table and live-feed partial-index migration.
 4. Verify schema state and existing media rows.
 5. Deploy a Vercel preview from the release snapshot and run health/API smoke checks.
 6. Promote the exact verified artifact to production.
@@ -181,8 +194,8 @@ media duration, warm/cold state, and provider delivery type.
 - Roll back the Vercel deployment if health checks, auth behavior, or media reconciliation
   regress. Do not drop the new table/indexes during an incident.
 - The iOS rollout can be held in TestFlight while the preceding build remains available.
-- Runtime media limits stay server-configurable so prefetch/player pressure can be reduced
-  without another App Store build.
+- Runtime media limits stay server-configurable and deterministically canaryable so
+  prefetch/player pressure can be reduced without another App Store build.
 
 ## Follow-on phases
 
@@ -194,7 +207,8 @@ TikTok/Instagram scale remains an iterative program:
    and retryable provider reconciliation.
 3. Add byte-budgeted cache eviction informed by device storage pressure and actual reuse.
 4. Tune the Cloudflare encoding/delivery profile from VMAF/SSIM and startup measurements.
-5. Add image format negotiation and quality ladders backed by visual evaluation.
+5. Tune the current AVIF/WebP/JPEG quality ladder using encoded bits-per-pixel telemetry
+   and visual evaluation.
 6. Introduce cursor-based feed candidate generation and CDN-friendly manifests so feed
    depth does not cap discovery quality.
 7. Run controlled experiments for prefetch window, startup bitrate, buffer duration, and

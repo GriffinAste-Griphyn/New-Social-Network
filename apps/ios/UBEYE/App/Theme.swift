@@ -299,6 +299,7 @@ enum MediaPerformance {
         "image_derivatives_prepared",
         "image_derivative_upload_failed",
         "background_upload_resume",
+        "silent_push_prewarm",
         "story_open",
         "story_open_warm",
         "story_stack_cache_clear",
@@ -316,6 +317,7 @@ enum MediaPerformance {
         "video_disk_cache_hit",
         "video_dismissed",
         "video_ended",
+        "video_player_pool_hit",
         "video_retry",
         "video_recovered",
         "video_startup",
@@ -640,7 +642,7 @@ final class MediaControlConfig {
     private init() {}
 
     var imageDerivativeUploadEnabled: Bool {
-        read { $0?.imageDerivativeUploadEnabled ?? false }
+        read { $0?.imageDerivativeUploadEnabled ?? true }
     }
 
     var qoeAccessLogSampleRate: Double {
@@ -648,7 +650,7 @@ final class MediaControlConfig {
     }
 
     var uploadChunkBytes: Int {
-        read { $0?.uploadChunkBytes ?? 8 * 1024 * 1024 }
+        read { $0?.uploadChunkBytes ?? 3 * 1024 * 1024 }
     }
 
     var mediaFileCacheMaxBytes: Int {
@@ -660,29 +662,29 @@ final class MediaControlConfig {
         mediaConfig = config
         lock.unlock()
 
-        MediaPerformance.mark("media_qoe_config version=\(config.version) cacheBytes=\(config.mediaFileCacheMaxBytes)")
+        MediaPerformance.mark("media_qoe_config version=\(config.version) profile=\(config.rolloutProfile ?? "baseline") cacheBytes=\(config.mediaFileCacheMaxBytes)")
     }
 
     func imagePreheatLimit(isLimited: Bool) -> Int {
-        readLimit(\.imagePreheatLimit, isLimited: isLimited, fallback: isLimited ? 18 : 64)
+        readLimit(\.imagePreheatLimit, isLimited: isLimited, fallback: isLimited ? 2 : 4)
     }
 
     func stackPreheatLimit(isLimited: Bool) -> Int {
-        readLimit(\.stackPreheatLimit, isLimited: isLimited, fallback: isLimited ? 5 : 16)
+        readLimit(\.stackPreheatLimit, isLimited: isLimited, fallback: isLimited ? 2 : 4)
     }
 
     func preparedPlayerLimit(isLimited: Bool) -> Int {
-        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: 0)
+        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 0 : 4)
     }
 
     func persistentVideoPreheatLimit(isLimited: Bool) -> Int {
-        readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 1 : 5)
+        readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 2 : 4)
     }
 
     func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
             guard let pair = $0?.startupStreamingPeakBitRate else {
-                return isLimited ? 6_000_000 : 10_000_000
+                return isLimited ? 4_000_000 : 8_000_000
             }
 
             return isLimited ? pair.constrained : pair.standard
@@ -797,6 +799,7 @@ actor MediaFileDiskCache {
 
     private let rootURL: URL
     private let fileManager = FileManager.default
+    private let minimumAvailableCapacity: Int64 = 512 * 1024 * 1024
     private var maxCacheBytes: Int {
         MediaControlConfig.shared.mediaFileCacheMaxBytes
     }
@@ -844,6 +847,11 @@ actor MediaFileDiskCache {
         }
 
         let startedAt = Date()
+        let sourceBytes = ((try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        guard prepareCapacity(forAdditionalBytes: sourceBytes) else {
+            MediaPerformance.mark("media_file_cache_skip kind=\(kind.rawValue) reason=storage_pressure")
+            return nil
+        }
         let finalURL = fileURL(
             for: url,
             contentType: contentType(forLocalFile: sourceURL, kind: kind)
@@ -889,6 +897,12 @@ actor MediaFileDiskCache {
                 return nil
             }
 
+            let downloadedBytes = ((try? temporaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            guard prepareCapacity(forAdditionalBytes: downloadedBytes) else {
+                MediaPerformance.mark("media_file_cache_skip kind=\(kind.rawValue) reason=storage_pressure")
+                return nil
+            }
+
             let finalURL = fileURL(
                 for: url,
                 contentType: httpResponse.mimeType ?? response.mimeType
@@ -918,7 +932,7 @@ actor MediaFileDiskCache {
 
         switch kind {
         case .image:
-            return ["jpg", "jpeg", "png", "webp", "heic"].contains(pathExtension) || pathExtension.isEmpty
+            return ["jpg", "jpeg", "png", "webp", "heic", "avif"].contains(pathExtension) || pathExtension.isEmpty
         case .video:
             return ["mp4", "mov", "m4v"].contains(pathExtension)
         }
@@ -941,6 +955,8 @@ actor MediaFileDiskCache {
             return "image/png"
         case "webp":
             return "image/webp"
+        case "avif":
+            return "image/avif"
         case "mp4", "m4v":
             return "video/mp4"
         case "mov":
@@ -969,7 +985,7 @@ actor MediaFileDiskCache {
         }
 
         let key = cacheKey(for: url)
-        let fallbackExtensions = ["mp4", "mov", "m4v", "jpg", "jpeg", "png", "webp", "heic", "media"]
+        let fallbackExtensions = ["mp4", "mov", "m4v", "jpg", "jpeg", "png", "webp", "heic", "avif", "media"]
         var seen = Set<URL>()
         return ([defaultURL] + fallbackExtensions.map {
             rootURL.appendingPathComponent("\(key).\($0)", isDirectory: false)
@@ -1011,6 +1027,8 @@ actor MediaFileDiskCache {
             return "png"
         case "image/webp":
             return "webp"
+        case "image/avif":
+            return "avif"
         case "video/mp4":
             return "mp4"
         case "video/quicktime":
@@ -1020,7 +1038,19 @@ actor MediaFileDiskCache {
         }
     }
 
-    private func pruneIfNeeded() {
+    private func prepareCapacity(forAdditionalBytes bytes: Int) -> Bool {
+        pruneIfNeeded(additionalBytes: bytes)
+
+        guard let values = try? rootURL.deletingLastPathComponent().resourceValues(
+            forKeys: [.volumeAvailableCapacityKey]
+        ), let availableCapacity = values.volumeAvailableCapacity else {
+            return true
+        }
+
+        return Int64(availableCapacity) - Int64(max(bytes, 0)) >= minimumAvailableCapacity
+    }
+
+    private func pruneIfNeeded(additionalBytes: Int = 0) {
         guard let files = try? fileManager.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
@@ -1037,8 +1067,17 @@ actor MediaFileDiskCache {
             )
         }
         var totalBytes = records.reduce(0) { $0 + $1.size }
+        let availableCapacity = try? rootURL.deletingLastPathComponent().resourceValues(
+            forKeys: [.volumeAvailableCapacityKey]
+        ).volumeAvailableCapacity
+        let isUnderStoragePressure = availableCapacity.map {
+            Int64($0) - Int64(max(additionalBytes, 0)) < minimumAvailableCapacity
+        } ?? false
+        let targetBytes = isUnderStoragePressure
+            ? min(maxCacheBytes / 2, max(0, maxCacheBytes - additionalBytes))
+            : max(0, maxCacheBytes - additionalBytes)
 
-        guard totalBytes > maxCacheBytes else {
+        guard totalBytes > targetBytes else {
             return
         }
 
@@ -1046,253 +1085,9 @@ actor MediaFileDiskCache {
             try? fileManager.removeItem(at: record.url)
             totalBytes -= record.size
 
-            if totalBytes <= maxCacheBytes {
+            if totalBytes <= targetBytes {
                 break
             }
-        }
-    }
-}
-
-@MainActor
-final class HLSAssetDownloadCoordinator: NSObject {
-    static let shared = HLSAssetDownloadCoordinator()
-
-    private let fileManager = FileManager.default
-    private let persistedDownloadsKey = "com.ubeye.hls.downloaded-assets"
-    private var activeTasks: [URL: AVAssetDownloadTask] = [:]
-    private var downloadedPackageURLs: [URL: URL] = [:]
-    private var failedAt: [URL: Date] = [:]
-    private let retryWindow: TimeInterval = 300
-
-    private lazy var downloadSession: AVAssetDownloadURLSession = {
-        let configuration = URLSessionConfiguration.background(
-            withIdentifier: "com.griffinaste.ubeye.hls-downloads"
-        )
-        configuration.allowsCellularAccess = false
-        configuration.allowsExpensiveNetworkAccess = false
-        configuration.allowsConstrainedNetworkAccess = false
-        configuration.sessionSendsLaunchEvents = false
-
-        let queue = OperationQueue()
-        queue.name = "ubeye.hls-downloads"
-        queue.maxConcurrentOperationCount = 1
-
-        return AVAssetDownloadURLSession(
-            configuration: configuration,
-            assetDownloadDelegate: self,
-            delegateQueue: queue
-        )
-    }()
-
-    private override init() {
-        super.init()
-        restoreDownloadedPackages()
-    }
-
-    func localAssetURL(for remoteURL: URL) -> URL? {
-        guard isHTTPStreamingPlaylist(remoteURL) else {
-            return nil
-        }
-
-        let identityURL = cacheIdentityURL(for: remoteURL)
-        guard let packageURL = storedPackageURL(for: identityURL) else {
-            return nil
-        }
-
-        MediaPerformance.mark("hls_asset_package_hit url=\(remoteURL.lastPathComponent)")
-        return packageURL
-    }
-
-    func preheat(urls: [URL], limit: Int) {
-        guard limit > 0 else {
-            return
-        }
-
-        var seen = Set<URL>()
-        let now = Date()
-        let candidates = urls
-            .filter { isHTTPStreamingPlaylist($0) }
-            .map { (remoteURL: $0, identityURL: cacheIdentityURL(for: $0)) }
-            .filter { seen.insert($0.identityURL).inserted }
-            .filter { candidate in
-                storedPackageURL(for: candidate.identityURL) == nil &&
-                    activeTasks[candidate.identityURL] == nil &&
-                    shouldRetry(identityURL: candidate.identityURL, now: now)
-            }
-            .prefix(limit)
-
-        for candidate in candidates {
-            startDownload(remoteURL: candidate.remoteURL, identityURL: candidate.identityURL)
-        }
-    }
-
-    func removeAll() {
-        for task in activeTasks.values {
-            task.cancel()
-        }
-        activeTasks.removeAll()
-
-        for packageURL in downloadedPackageURLs.values {
-            try? fileManager.removeItem(at: packageURL)
-        }
-        downloadedPackageURLs.removeAll()
-        failedAt.removeAll()
-        persistDownloadedPackages()
-    }
-
-    private func startDownload(remoteURL: URL, identityURL: URL) {
-        let asset = AVURLAsset(url: remoteURL)
-        let options: [String: Any] = [
-            AVAssetDownloadTaskMinimumRequiredMediaBitrateKey: NetworkQualityMonitor.shared.isConstrained
-                ? 1_500_000
-                : 3_000_000
-        ]
-
-        guard let task = downloadSession.makeAssetDownloadTask(
-            asset: asset,
-            assetTitle: assetTitle(for: remoteURL),
-            assetArtworkData: nil,
-            options: options
-        ) else {
-            failedAt[identityURL] = Date()
-            MediaPerformance.mark("hls_asset_download_failed url=\(remoteURL.lastPathComponent)")
-            return
-        }
-
-        task.taskDescription = identityURL.absoluteString
-        activeTasks[identityURL] = task
-        task.resume()
-        MediaPerformance.mark("hls_asset_download_start url=\(remoteURL.lastPathComponent)")
-    }
-
-    private func finishDownload(identityURL: URL, location: URL) {
-        downloadedPackageURLs[identityURL] = location
-        failedAt[identityURL] = nil
-        persistDownloadedPackages()
-        MediaPerformance.mark("hls_asset_download_finished url=\(identityURL.lastPathComponent)")
-    }
-
-    private func completeTask(identityURL: URL, error: Error?) {
-        activeTasks[identityURL] = nil
-
-        guard let error else {
-            return
-        }
-
-        let nsError = error as NSError
-        guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else {
-            return
-        }
-
-        failedAt[identityURL] = Date()
-        MediaPerformance.mark("hls_asset_download_failed url=\(identityURL.lastPathComponent)")
-    }
-
-    private func shouldRetry(identityURL: URL, now: Date) -> Bool {
-        guard let failedAt = failedAt[identityURL] else {
-            return true
-        }
-
-        return now.timeIntervalSince(failedAt) > retryWindow
-    }
-
-    private func storedPackageURL(for identityURL: URL) -> URL? {
-        guard let packageURL = downloadedPackageURLs[identityURL] else {
-            return nil
-        }
-
-        guard fileManager.fileExists(atPath: packageURL.path) else {
-            downloadedPackageURLs[identityURL] = nil
-            persistDownloadedPackages()
-            return nil
-        }
-
-        return packageURL
-    }
-
-    private func restoreDownloadedPackages() {
-        guard let stored = UserDefaults.standard.dictionary(forKey: persistedDownloadsKey) as? [String: String] else {
-            return
-        }
-
-        downloadedPackageURLs = stored.reduce(into: [:]) { result, entry in
-            guard let identityURL = URL(string: entry.key),
-                  let packageURL = URL(string: entry.value),
-                  fileManager.fileExists(atPath: packageURL.path) else {
-                return
-            }
-            result[identityURL] = packageURL
-        }
-
-        if downloadedPackageURLs.count != stored.count {
-            persistDownloadedPackages()
-        }
-    }
-
-    private func persistDownloadedPackages() {
-        let stored = downloadedPackageURLs.reduce(into: [String: String]()) { result, entry in
-            result[entry.key.absoluteString] = entry.value.absoluteString
-        }
-        UserDefaults.standard.set(stored, forKey: persistedDownloadsKey)
-    }
-
-    private func cacheIdentityURL(for url: URL) -> URL {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url
-        }
-
-        components.queryItems = components.queryItems?
-            .filter {
-                let name = $0.name.lowercased()
-                return name != "token" && name != "v"
-            }
-            .sorted { $0.name < $1.name }
-
-        return components.url ?? url
-    }
-
-    private func assetTitle(for url: URL) -> String {
-        let title = url.deletingPathExtension().lastPathComponent
-        guard title.isEmpty else {
-            return title
-        }
-
-        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
-            .prefix(6)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return "story-hls-\(digest)"
-    }
-}
-
-extension HLSAssetDownloadCoordinator: AVAssetDownloadDelegate {
-    nonisolated func urlSession(
-        _ session: URLSession,
-        assetDownloadTask: AVAssetDownloadTask,
-        didFinishDownloadingTo location: URL
-    ) {
-        guard let description = assetDownloadTask.taskDescription,
-              let identityURL = URL(string: description) else {
-            return
-        }
-
-        Task { @MainActor in
-            HLSAssetDownloadCoordinator.shared.finishDownload(identityURL: identityURL, location: location)
-        }
-    }
-
-    nonisolated func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didCompleteWithError error: Error?
-    ) {
-        guard let description = task.taskDescription,
-              let identityURL = URL(string: description) else {
-            return
-        }
-
-        Task { @MainActor in
-            HLSAssetDownloadCoordinator.shared.completeTask(identityURL: identityURL, error: error)
         }
     }
 }
@@ -1316,14 +1111,17 @@ final class MediaImageCache {
     private var queuedPreheatURLs = Set<URL>()
     private var preheatQueue: [URL] = []
     private var activePreheats: [URL: ActivePreheat] = [:]
-    private let maxDecodedPixelDimension: CGFloat = 2_560
-    private let maxCachedImageCost = 24 * 1024 * 1024
-    private let maxConcurrentPreheats = 2
+    private let maxDecodedPixelDimension: CGFloat
+    private let maxCachedImageCost: Int
+    private let maxConcurrentPreheats = 4
     private let maxPreheatWorkItems = 16
 
     private init() {
-        cache.countLimit = 120
-        cache.totalCostLimit = 64 * 1024 * 1024
+        let hasProClassMemory = ProcessInfo.processInfo.physicalMemory >= 6 * 1_024 * 1_024 * 1_024
+        maxDecodedPixelDimension = hasProClassMemory ? 3_840 : 2_560
+        maxCachedImageCost = hasProClassMemory ? 48 * 1_024 * 1_024 : 24 * 1_024 * 1_024
+        cache.countLimit = hasProClassMemory ? 200 : 120
+        cache.totalCostLimit = hasProClassMemory ? 256 * 1_024 * 1_024 : 96 * 1_024 * 1_024
     }
 
     func cachedImage(for url: URL?) -> UIImage? {
@@ -1409,6 +1207,19 @@ final class MediaImageCache {
     }
 
     private func loadUncachedImage(for url: URL) async -> UIImage? {
+        if url.scheme?.lowercased() == "thumbhash",
+           let image = Self.image(fromThumbHashURL: url) {
+            return image
+        }
+
+        if url.scheme?.lowercased() == "data",
+           let separator = url.absoluteString.firstIndex(of: ","),
+           url.absoluteString[..<separator].lowercased() == "data:image/jpeg;base64",
+           let data = Data(base64Encoded: String(url.absoluteString[url.absoluteString.index(after: separator)...])),
+           let image = await ImageDecodePipeline.decode(data: data, maxPixelDimension: maxDecodedPixelDimension) {
+            return image
+        }
+
         if url.isFileURL,
            let image = await ImageDecodePipeline.decode(contentsOf: url, maxPixelDimension: maxDecodedPixelDimension) {
             return image
@@ -1456,6 +1267,38 @@ final class MediaImageCache {
         } catch {
             return nil
         }
+    }
+
+    private static func image(fromThumbHashURL url: URL) -> UIImage? {
+        var encoded = String(url.absoluteString.dropFirst("thumbhash:".count))
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while encoded.count.isMultiple(of: 4) == false {
+            encoded.append("=")
+        }
+        guard let hash = Data(base64Encoded: encoded), hash.count >= 5 else {
+            return nil
+        }
+        let (width, height, rgba) = thumbHashToRGBA(hash: hash)
+        guard width > 0, height > 0,
+              let provider = CGDataProvider(data: rgba as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: true,
+                intent: .defaultIntent
+              ) else {
+            return nil
+        }
+        return UIImage(cgImage: image)
     }
 
     private func drainPreheatQueue() {
@@ -1649,7 +1492,11 @@ enum MediaPreheater {
     }
 
     @MainActor
-    static func preheat(stack: StoryStack, around index: Int = 0) {
+    static func preheat(
+        stack: StoryStack,
+        around index: Int = 0,
+        preheatVideoAssets: Bool = true
+    ) {
         let nearbyItems = orderedNearbyStoryItems(in: stack, around: index)
         let imageUrls = nearbyItems.flatMap { item -> [URL] in
             var urls: [URL] = []
@@ -1666,10 +1513,14 @@ enum MediaPreheater {
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
+        guard preheatVideoAssets else {
+            return
+        }
+
         let videoUrls = nearbyItems
             .filter(\.isPlayableVideo)
             .map(\.playbackMediaUrl)
-        let videoLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
+        let videoLimit = min(NetworkQualityMonitor.shared.persistentVideoPreheatLimit, 4)
 
         Task {
             await MediaVideoPreheater.shared.preheat(
@@ -1685,7 +1536,7 @@ enum MediaPreheater {
         }
 
         var seen = Set<Int>()
-        return [index, index + 1, index - 1]
+        return [index, index + 1, index - 1, index + 2]
             .filter { candidate in
                 stack.items.indices.contains(candidate) && seen.insert(candidate).inserted
             }
@@ -1696,12 +1547,30 @@ enum MediaPreheater {
 actor MediaVideoPreheater {
     static let shared = MediaVideoPreheater()
 
-    private var activeUrls = Set<URL>()
+    private struct ActivePreheat {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
+    private var activePreheats: [URL: ActivePreheat] = [:]
     private var recentlyPreheatedAt: [URL: Date] = [:]
+    private var isSuspended = false
     private let recentPreheatWindow: TimeInterval = 90
 
+    func suspend() {
+        isSuspended = true
+        for preheat in activePreheats.values {
+            preheat.task.cancel()
+        }
+        activePreheats.removeAll()
+    }
+
+    func resume() {
+        isSuspended = false
+    }
+
     func preheat(_ urls: [URL], limit: Int) {
-        guard limit > 0 else {
+        guard !isSuspended, limit > 0 else {
             return
         }
 
@@ -1710,7 +1579,7 @@ actor MediaVideoPreheater {
         let candidates = urls
             .filter { seen.insert($0).inserted }
             .filter { url in
-                guard !activeUrls.contains(url) else {
+                guard activePreheats[url] == nil else {
                     return false
                 }
 
@@ -1730,24 +1599,29 @@ actor MediaVideoPreheater {
         pruneRecentEntries(now: now)
 
         for url in candidates {
-            activeUrls.insert(url)
-            Task.detached(priority: .utility) { [weak self] in
-                await Self.preheatOne(url)
-                await self?.finish(url)
+            let preheatID = UUID()
+            let task = Task.detached(priority: .utility) { [weak self] in
+                let completed = await Self.preheatOne(url)
+                await self?.finish(url, id: preheatID, completed: completed)
             }
+            activePreheats[url] = ActivePreheat(id: preheatID, task: task)
         }
     }
 
-    private static func preheatOne(_ url: URL) async {
+    private static func preheatOne(_ url: URL) async -> Bool {
         let preheatInterval = MediaPerformance.beginInterval(
             "video_asset_preheated mode=manifest url=\(url.lastPathComponent)"
         )
+        guard !Task.isCancelled else {
+            MediaPerformance.cancelInterval(preheatInterval, reason: "cancelled")
+            return false
+        }
         let playbackURL: URL
 
-        if isHTTPStreamingPlaylist(url) {
-            playbackURL = await HLSAssetDownloadCoordinator.shared.localAssetURL(for: url) ?? url
-        } else {
+        if !isHTTPStreamingPlaylist(url) {
             playbackURL = await MediaFileDiskCache.shared.cachedFileURL(for: url) ?? url
+        } else {
+            playbackURL = url
         }
 
         let asset = AVURLAsset(url: playbackURL)
@@ -1755,20 +1629,34 @@ actor MediaVideoPreheater {
         do {
             _ = try await asset.load(.isPlayable)
             _ = try? await asset.load(.duration)
+            guard !Task.isCancelled else {
+                MediaPerformance.cancelInterval(preheatInterval, reason: "cancelled")
+                return false
+            }
             MediaPerformance.endInterval(
                 preheatInterval,
                 event: "video_asset_preheated url=\(url.lastPathComponent)",
                 upload: false
             )
+            return true
         } catch {
-            MediaPerformance.cancelInterval(preheatInterval, reason: "failed")
+            MediaPerformance.cancelInterval(
+                preheatInterval,
+                reason: Task.isCancelled ? "cancelled" : "failed"
+            )
             MediaPerformance.mark("video_asset_preheat_failed url=\(url.lastPathComponent)")
+            return false
         }
     }
 
-    private func finish(_ url: URL) {
-        activeUrls.remove(url)
-        recentlyPreheatedAt[url] = Date()
+    private func finish(_ url: URL, id: UUID, completed: Bool) {
+        guard activePreheats[url]?.id == id else {
+            return
+        }
+        activePreheats[url] = nil
+        if completed {
+            recentlyPreheatedAt[url] = Date()
+        }
     }
 
     private func pruneRecentEntries(now: Date) {

@@ -40,15 +40,10 @@ const clientDerivativeSchema = z.object({
 })
 
 const completeImageSchema = z.object({
-  pathname: z.string().trim().min(1).max(500),
-  contentType: z.string().trim().min(1).max(120),
-  byteSize: z.number().int().positive(),
-  checksum: z.string().regex(/^[a-f0-9]{64}$/i),
-  width: z.number().int().positive().nullable().optional(),
-  height: z.number().int().positive().nullable().optional(),
-  displayDerivative: clientDerivativeSchema.nullable().optional(),
-  thumbnailDerivative: clientDerivativeSchema.nullable().optional(),
-  placeholderDerivative: clientDerivativeSchema.nullable().optional(),
+  basePathname: z.string().trim().min(1).max(500),
+  displayDerivative: clientDerivativeSchema,
+  thumbnailDerivative: clientDerivativeSchema,
+  thumbHash: z.string().trim().min(20).max(80).regex(/^[A-Za-z0-9_-]+$/),
   caption: z.string().default(""),
   brandTags: z.string().default(""),
   stickers: z.string().default(""),
@@ -140,8 +135,47 @@ function publicAssetResponse(storedAsset: StoredStoryAsset, request: Request) {
   }
 }
 
+type ImageCompletionStage =
+  | "verify-variants"
+  | "validate-caption"
+  | "validate-brand-tags"
+  | "validate-elements"
+  | "create-story"
+  | "read-story"
+
+function imageCompletionFailure(stage: ImageCompletionStage, error: unknown) {
+  if (error instanceof z.ZodError) {
+    const message =
+      stage === "validate-caption"
+        ? "Captions must be 220 characters or fewer."
+        : stage === "validate-brand-tags"
+          ? "Each brand tag must be 2–32 characters."
+          : "Story text must be 220 characters or fewer, link labels 64 or fewer, and links must be valid URLs."
+
+    return { code: "invalid_story_details", message, status: 400 }
+  }
+
+  if (error instanceof StoryUploadError) {
+    return {
+      code:
+        stage === "verify-variants"
+          ? "image_variant_verification_failed"
+          : "story_completion_rejected",
+      message: error.message,
+      status: 400,
+    }
+  }
+
+  return {
+    code: "story_completion_failed",
+    message: "Could not publish the story. Try again.",
+    status: 500,
+  }
+}
+
 export async function POST(request: Request) {
   let storedAsset: StoredStoryAsset | undefined
+  let stage: ImageCompletionStage = "verify-variants"
 
   try {
     const session = await getCompleteMobileSession(request)
@@ -174,23 +208,30 @@ export async function POST(request: Request) {
     )
 
     if (!parsed.success) {
+      console.error("story_image_completion_failed", {
+        stage: "validate-payload",
+        code: "invalid_completion_payload",
+        issues: parsed.error.issues.map((issue) => ({
+          code: issue.code,
+          path: issue.path.join("."),
+        })),
+      })
       return NextResponse.json(
-        { error: "Could not finish the image upload." },
+        {
+          error: "The app sent incomplete image details. Update UBEYE and retry.",
+          code: "invalid_completion_payload",
+        },
         { status: 400 },
       )
     }
 
+    stage = "verify-variants"
     storedAsset = await createDirectBlobStoryImageAsset({
-      pathname: parsed.data.pathname,
+      basePathname: parsed.data.basePathname,
       ownerUserId: session.id,
-      contentType: parsed.data.contentType,
-      byteSize: parsed.data.byteSize,
-      checksum: parsed.data.checksum,
-      width: parsed.data.width ?? null,
-      height: parsed.data.height ?? null,
-      displayDerivative: toClientDerivative(parsed.data.displayDerivative),
-      thumbnailDerivative: toClientDerivative(parsed.data.thumbnailDerivative),
-      placeholderDerivative: toClientDerivative(parsed.data.placeholderDerivative),
+      displayDerivative: toClientDerivative(parsed.data.displayDerivative)!,
+      thumbnailDerivative: toClientDerivative(parsed.data.thumbnailDerivative)!,
+      thumbHash: parsed.data.thumbHash,
     })
 
     const moderationMediaUrl =
@@ -202,15 +243,26 @@ export async function POST(request: Request) {
       { signed: true },
     )
     const formData = imageFieldsToFormData(parsed.data)
+
+    stage = "validate-caption"
+    const caption = parseStoryCaption(formData.get("caption"))
+    stage = "validate-brand-tags"
+    const explicitBrandTags = parseBrandTags(formData.get("brandTags"))
+    stage = "validate-elements"
+    const elements = parseStoryElements(formData)
+
+    stage = "create-story"
     const storyId = await createStory({
       session,
-      caption: parseStoryCaption(formData.get("caption")),
-      explicitBrandTags: parseBrandTags(formData.get("brandTags")),
-      elements: parseStoryElements(formData),
+      caption,
+      explicitBrandTags,
+      elements,
       storedAsset,
       moderationMediaUrl,
       moderationThumbnailUrl,
     })
+
+    stage = "read-story"
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
     const textOverlays = await getStoryTextOverlaysForOwner(storyId, session.id)
 
@@ -238,14 +290,19 @@ export async function POST(request: Request) {
       await removeStoredStoryAsset(storedAsset).catch(() => undefined)
     }
 
+    const failure = imageCompletionFailure(stage, error)
+    console.error("story_image_completion_failed", {
+      stage,
+      code: failure.code,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
     return NextResponse.json(
       {
-        error:
-          error instanceof StoryUploadError || error instanceof Error
-            ? error.message
-            : "Could not finish the image upload.",
+        error: failure.message,
+        code: failure.code,
       },
-      { status: 400 },
+      { status: failure.status },
     )
   }
 }

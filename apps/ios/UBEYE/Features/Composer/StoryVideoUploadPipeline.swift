@@ -4,6 +4,7 @@ import Foundation
 
 enum StoryVideoUploadStrategy: String {
     case streamPassthrough
+    case streamRemux
     case normalized
 }
 
@@ -23,6 +24,7 @@ struct StoryVideoInspection {
     let naturalSize: CGSize?
     let preferredTransform: CGAffineTransform?
     let codecTypes: [String]
+    let hasFastStart: Bool
 
     var hasStreamSupportedContainer: Bool {
         switch originalURL.pathExtension.lowercased() {
@@ -34,11 +36,19 @@ struct StoryVideoInspection {
     }
 
     var isStreamCompatibleInput: Bool {
-        guard hasStreamSupportedContainer, !codecTypes.isEmpty else {
+        hasStreamSupportedContainer && hasFastStart && hasStreamSupportedCodecs
+    }
+
+    var canRemuxForStream: Bool {
+        hasStreamSupportedContainer && hasStreamSupportedCodecs
+    }
+
+    private var hasStreamSupportedCodecs: Bool {
+        guard !codecTypes.isEmpty else {
             return false
         }
 
-        let supportedCodecs = Set(["avc1", "avc3", "hvc1", "hev1"])
+        let supportedCodecs = Set(["avc1", "hvc1"])
         return codecTypes.allSatisfy { supportedCodecs.contains($0.lowercased()) }
     }
 
@@ -50,6 +60,7 @@ struct StoryVideoInspection {
             naturalSize.map { "natural=\(Int($0.width))x\(Int($0.height))" },
             preferredTransform.map { "transform=\(Self.transformSummary($0))" },
             codecTypes.isEmpty ? "codecs=none" : "codecs=\(codecTypes.joined(separator: "."))",
+            "fastStart=\(hasFastStart)",
             "streamContainer=\(hasStreamSupportedContainer)",
             "streamCompatible=\(isStreamCompatibleInput)",
         ]
@@ -188,7 +199,7 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
-    private static let maxUploadBytes: Int64 = 512 * 1024 * 1024
+    private static let maxUploadBytes = StoryMediaContract.maximumVideoUploadBytes
 
     static func prepare(
         url: URL,
@@ -213,9 +224,42 @@ enum StoryVideoUploadNormalizer {
             )
         }
 
-        let reason = inspection.byteSize > maxUploadBytes
-            ? "large_input"
-            : "container_or_codec"
+        if inspection.byteSize <= maxUploadBytes,
+           inspection.canRemuxForStream,
+           let remuxedURL = await fastStartRemuxedVideoURL(for: url) {
+            do {
+                let byteSize = try await StoryUploadFileIO.fileSize(at: remuxedURL)
+                let hasFastStart = try await StoryUploadFileIO.hasFastStartMoov(at: remuxedURL)
+                guard byteSize <= maxUploadBytes, hasFastStart else {
+                    try? FileManager.default.removeItem(at: remuxedURL)
+                    throw APIClientError.invalidResponse
+                }
+
+                let durationMs = await videoDurationMs(for: remuxedURL)
+                MediaPerformance.mark(
+                    "video_upload_strategy stream_remux sourceBytes=\(inspection.byteSize) preparedBytes=\(byteSize) durationMs=\(durationMs ?? 0)"
+                )
+                return PreparedStoryVideo(
+                    url: remuxedURL,
+                    durationMs: durationMs,
+                    byteSize: byteSize,
+                    strategy: .streamRemux,
+                    inspection: inspection
+                )
+            } catch {
+                try? FileManager.default.removeItem(at: remuxedURL)
+                MediaPerformance.mark("video_upload_remux_validation_failed")
+            }
+        }
+
+        let reason: String
+        if inspection.byteSize > maxUploadBytes {
+            reason = "large_input"
+        } else if !inspection.hasFastStart {
+            reason = "moov_after_media"
+        } else {
+            reason = "container_or_codec"
+        }
         MediaPerformance.mark("video_upload_stream_normalization_required reason=\(reason) \(inspection.diagnosticSummary)")
 
         let normalizedURL = try await normalizedVideoURL(
@@ -228,7 +272,7 @@ enum StoryVideoUploadNormalizer {
 
         do {
             let durationMs = await videoDurationMs(for: normalizedURL)
-            let byteSize = try videoFileSize(for: normalizedURL)
+            let byteSize = try await StoryUploadFileIO.fileSize(at: normalizedURL)
 
             if byteSize > maxUploadBytes {
                 throw APIClientError.server("Story videos are capped at 512 MB.", 0)
@@ -239,7 +283,7 @@ enum StoryVideoUploadNormalizer {
             }
 
             MediaPerformance.mark(
-                "video_upload_strategy normalized source=\(source.diagnosticName) bytes=\(byteSize) durationMs=\(durationMs ?? 0)"
+                "video_upload_strategy normalized source=\(source.diagnosticName) sourceBytes=\(inspection.byteSize) preparedBytes=\(byteSize) durationMs=\(durationMs ?? 0)"
             )
             return PreparedStoryVideo(
                 url: normalizedURL,
@@ -256,7 +300,8 @@ enum StoryVideoUploadNormalizer {
 
     private static func inspect(url: URL, source: StoryVideoUpload.Source) async throws -> StoryVideoInspection {
         let asset = AVURLAsset(url: url)
-        let byteSize = try videoFileSize(for: url)
+        let byteSize = try await StoryUploadFileIO.fileSize(at: url)
+        let hasFastStart = try await StoryUploadFileIO.hasFastStartMoov(at: url)
         let durationMs = await videoDurationMs(for: url)
         let videoTrack = await firstVideoTrack(in: asset)
         let naturalSize: CGSize?
@@ -295,7 +340,8 @@ enum StoryVideoUploadNormalizer {
             durationMs: durationMs,
             naturalSize: naturalSize,
             preferredTransform: preferredTransform,
-            codecTypes: codecTypeNames.sorted()
+            codecTypes: codecTypeNames.sorted(),
+            hasFastStart: hasFastStart
         )
     }
 
@@ -329,7 +375,7 @@ enum StoryVideoUploadNormalizer {
             await exportVideo(export)
 
             if export.status == .completed {
-                let byteSize = (try? videoFileSize(for: outputURL)) ?? 0
+                let byteSize = (try? await StoryUploadFileIO.fileSize(at: outputURL)) ?? 0
 
                 if byteSize <= maxUploadBytes {
                     let mode = mirrorsHorizontally ? "mirrored" : "standard"
@@ -350,6 +396,42 @@ enum StoryVideoUploadNormalizer {
         }
 
         return nil
+    }
+
+    private static func fastStartRemuxedVideoURL(for url: URL) async -> URL? {
+        let asset = AVURLAsset(url: url)
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("story-remux-\(UUID().uuidString).mp4")
+
+        guard await AVAssetExportSession.compatibility(
+            ofExportPreset: AVAssetExportPresetPassthrough,
+            with: asset,
+            outputFileType: .mp4
+        ), let export = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetPassthrough
+        ), export.supportedFileTypes.contains(.mp4) else {
+            return nil
+        }
+
+        export.outputURL = outputURL
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+        if let timeRange = await alignedPlayableTimeRange(for: asset) {
+            export.timeRange = timeRange
+        }
+
+        await exportVideo(export)
+        guard export.status == .completed else {
+            try? FileManager.default.removeItem(at: outputURL)
+            let nsError = export.error as NSError?
+            MediaPerformance.mark(
+                "video_upload_remux_failed status=\(export.status.rawValue) code=\(nsError?.code ?? 0)"
+            )
+            return nil
+        }
+
+        return outputURL
     }
 
     private static func exportSession(
@@ -377,7 +459,9 @@ enum StoryVideoUploadNormalizer {
             exportTimeRange = CMTimeRange(start: .zero, duration: timeRange.duration)
         } else {
             exportAsset = asset
-            videoComposition = nil
+            let cappedFrameRateComposition = AVMutableVideoComposition(propertiesOf: asset)
+            cappedFrameRateComposition.frameDuration = CMTime(value: 1, timescale: 30)
+            videoComposition = cappedFrameRateComposition
             exportTimeRange = timeRange
         }
 
@@ -392,6 +476,18 @@ enum StoryVideoUploadNormalizer {
 
         if let exportTimeRange {
             export.timeRange = exportTimeRange
+            let durationSeconds = CMTimeGetSeconds(exportTimeRange.duration)
+            if durationSeconds.isFinite, durationSeconds > 0 {
+                let isConstrained = await MainActor.run {
+                    NetworkQualityMonitor.shared.isConstrained
+                }
+                let targetBitsPerSecond = isConstrained
+                    ? 6_256_000
+                    : 8_256_000
+                export.fileLengthLimit = Int64(
+                    ceil(durationSeconds * Double(targetBitsPerSecond) / 8)
+                )
+            }
         }
 
         return export
@@ -400,7 +496,6 @@ enum StoryVideoUploadNormalizer {
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
             AVAssetExportPreset1920x1080,
-            AVAssetExportPresetHighestQuality,
             AVAssetExportPreset1280x720,
         ]
         var presets: [String] = []
@@ -465,11 +560,7 @@ enum StoryVideoUploadNormalizer {
     }
 
     private static func firstVideoTrack(in asset: AVURLAsset) async -> AVAssetTrack? {
-        if #available(iOS 16.0, *) {
-            return (try? await asset.loadTracks(withMediaType: .video))?.first
-        }
-
-        return asset.tracks(withMediaType: .video).first
+        (try? await asset.loadTracks(withMediaType: .video))?.first
     }
 
     private static func codecTypes(from formatDescriptions: [CMFormatDescription]) -> [String] {
@@ -491,15 +582,6 @@ enum StoryVideoUploadNormalizer {
         ]
 
         return String(String.UnicodeScalarView(scalars.compactMap { $0 }))
-    }
-
-    private static func videoFileSize(for url: URL) throws -> Int64 {
-        guard let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber,
-              size.int64Value > 0 else {
-            throw APIClientError.invalidResponse
-        }
-
-        return size.int64Value
     }
 
     private static func videoDurationMs(for url: URL) async -> Int? {

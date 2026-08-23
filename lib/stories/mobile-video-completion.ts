@@ -149,30 +149,33 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
           processingStatus:
             storyStatus?.processingStatus ?? input.asset.processingStatus,
         },
-        original: input.asset.originalMediaUrl
-          ? {
-              mediaUrl:
-                publicStoryMediaUrl(
-                  input.asset.originalMediaUrl,
-                  input.request,
-                  { signed: true },
-                ) ?? input.asset.originalMediaUrl,
-              thumbnailUrl: publicStoryMediaUrl(
-                input.asset.originalThumbnailUrl ?? null,
-                input.request,
-                { signed: true },
-              ),
-              storageProvider: input.asset.originalStorageProvider ?? null,
-              storageKey: input.asset.originalStorageKey ?? null,
-              contentType: input.asset.originalContentType ?? null,
-              byteSize: input.asset.originalByteSize ?? null,
-              checksum: input.asset.originalChecksum ?? null,
-              width: input.asset.originalWidth ?? null,
-              height: input.asset.originalHeight ?? null,
-              durationMs: input.asset.originalDurationMs ?? null,
-              processingStatus: "ready",
-            }
-          : null,
+        original:
+          input.asset.storageProvider === "cloudflare-stream"
+            ? null
+            : input.asset.originalMediaUrl
+              ? {
+                  mediaUrl:
+                    publicStoryMediaUrl(
+                      input.asset.originalMediaUrl,
+                      input.request,
+                      { signed: true },
+                    ) ?? input.asset.originalMediaUrl,
+                  thumbnailUrl: publicStoryMediaUrl(
+                    input.asset.originalThumbnailUrl ?? null,
+                    input.request,
+                    { signed: true },
+                  ),
+                  storageProvider: input.asset.originalStorageProvider ?? null,
+                  storageKey: input.asset.originalStorageKey ?? null,
+                  contentType: input.asset.originalContentType ?? null,
+                  byteSize: input.asset.originalByteSize ?? null,
+                  checksum: input.asset.originalChecksum ?? null,
+                  width: input.asset.originalWidth ?? null,
+                  height: input.asset.originalHeight ?? null,
+                  durationMs: input.asset.originalDurationMs ?? null,
+                  processingStatus: "ready",
+                }
+              : null,
       },
     },
     processingStatus: storyStatus?.processingStatus ?? input.asset.processingStatus,

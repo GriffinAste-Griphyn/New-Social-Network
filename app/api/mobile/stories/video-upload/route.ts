@@ -10,14 +10,18 @@ import {
   retireMediaUploadSession,
 } from "@/lib/media-upload-sessions"
 import {
-  createCloudflareStreamDirectUpload,
-  createCloudflareStreamClientThumbnailPathname,
   createCloudflareStreamTusUpload,
-  maxCloudflareStreamClientThumbnailUploadBytes,
+  directStoryVideoPosterPathname,
+  maxStoryVideoPosterUploadBytes,
   maxStoryVideoUploadBytes,
+  removeDirectBlobStoryVideoPoster,
   removeCloudflareStreamVideoByUid,
   StoryUploadError,
 } from "@/lib/story-storage"
+import {
+  isSupportedStoryVideoInputContentType,
+  storyMediaContract,
+} from "@/lib/story-media-contract"
 import {
   enforceRequestRateLimits,
   mutationRateLimits,
@@ -26,7 +30,8 @@ import {
 
 export const runtime = "nodejs"
 
-const maxMobileStoryVideoDurationSeconds = 120
+const maxMobileStoryVideoDurationSeconds =
+  storyMediaContract.upload.maxVideoDurationSeconds
 
 const videoUploadSchema = z.object({
   clientUploadId: z.string().uuid().optional(),
@@ -37,26 +42,18 @@ const videoUploadSchema = z.object({
     .trim()
     .min(1)
     .max(120)
-    .refine((value) => value.toLowerCase().startsWith("video/"))
-    .optional(),
+    .refine(isSupportedStoryVideoInputContentType),
   byteSize: z
     .number()
     .int()
     .positive()
-    .max(maxStoryVideoUploadBytes)
-    .optional(),
+    .max(maxStoryVideoUploadBytes),
   maxDurationSeconds: z
     .number()
     .int()
     .min(1)
     .max(maxMobileStoryVideoDurationSeconds)
     .default(maxMobileStoryVideoDurationSeconds),
-  maxSizeBytes: z
-    .number()
-    .int()
-    .min(1024)
-    .max(maxStoryVideoUploadBytes)
-    .optional(),
 })
 
 function logVideoUploadEvent(
@@ -75,41 +72,67 @@ function logVideoUploadEvent(
   )
 }
 
-async function createThumbnailUploadFields(input: {
-  userId: string
-  uid: string
-}) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return {}
-  }
+function blobApiUploadUrl(pathname: string) {
+  const baseUrl =
+    process.env.VERCEL_BLOB_API_URL ||
+    process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL ||
+    "https://blob.vercel-storage.com"
+  const url = new URL(baseUrl)
 
-  const thumbnailPathname = createCloudflareStreamClientThumbnailPathname(
-    input.userId,
-    input.uid,
-  )
-  const thumbnailClientToken = await generateClientTokenFromReadWriteToken({
-    pathname: thumbnailPathname,
-    allowedContentTypes: ["image/jpeg"],
-    maximumSizeInBytes: maxCloudflareStreamClientThumbnailUploadBytes,
-    validUntil: Date.now() + 15 * 60 * 1000,
-    addRandomSuffix: false,
-    allowOverwrite: false,
-    cacheControlMaxAge: 60 * 60 * 24 * 30,
-  })
-  const blobApiUrl =
-    process.env.VERCEL_BLOB_API_URL ??
-    process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL ??
-    "https://vercel.com/api/blob"
+  url.searchParams.set("pathname", pathname)
+
+  return url.toString()
+}
+
+function assertVideoPosterUploadsConfigured() {
+  if (
+    process.env.STORY_STORAGE_PROVIDER !== "vercel-blob" ||
+    !process.env.BLOB_READ_WRITE_TOKEN
+  ) {
+    throw new MediaUploadSessionError(
+      "Video poster uploads are not configured.",
+      503,
+    )
+  }
+}
+
+async function createVideoPosterUploadPart(uid: string) {
+  assertVideoPosterUploadsConfigured()
+
+  const pathname = directStoryVideoPosterPathname(uid)
+  let clientToken: string
+
+  try {
+    clientToken = await generateClientTokenFromReadWriteToken({
+      pathname,
+      allowedContentTypes: ["image/jpeg"],
+      maximumSizeInBytes: maxStoryVideoPosterUploadBytes,
+      validUntil: Date.now() + 15 * 60 * 1000,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    })
+  } catch {
+    throw new MediaUploadSessionError(
+      "Could not prepare the video poster upload.",
+      503,
+    )
+  }
 
   return {
-    thumbnailPathname,
-    thumbnailUploadUrl: `${blobApiUrl}/?pathname=${encodeURIComponent(
-      thumbnailPathname,
-    )}`,
-    thumbnailClientToken,
-    thumbnailContentType: "image/jpeg",
-    maxThumbnailSizeBytes: maxCloudflareStreamClientThumbnailUploadBytes,
+    pathname,
+    uploadUrl: blobApiUploadUrl(pathname),
+    clientToken,
+    contentType: "image/jpeg",
+    maxSizeBytes: maxStoryVideoPosterUploadBytes,
+    access: "private" as const,
   }
+}
+
+async function removeAbandonedVideoUpload(uid: string) {
+  await Promise.allSettled([
+    removeCloudflareStreamVideoByUid(uid),
+    removeDirectBlobStoryVideoPoster(uid),
+  ])
 }
 
 export async function POST(request: Request) {
@@ -152,6 +175,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    assertVideoPosterUploadsConfigured()
+
     if (parsed.data.replaceUploadSessionId && !parsed.data.clientUploadId) {
       throw new MediaUploadSessionError(
         "A client upload id is required to replace an upload session.",
@@ -181,19 +206,15 @@ export async function POST(request: Request) {
       })
 
       if (retired) {
-        await removeCloudflareStreamVideoByUid(retired.storageKey).catch(
-          () => undefined,
-        )
+        await removeAbandonedVideoUpload(retired.storageKey)
       }
       reusableSession = null
     }
 
     if (reusableSession) {
-      const thumbnailUploadFields = await createThumbnailUploadFields({
-        userId: session.id,
-        uid: reusableSession.storageKey,
-      }).catch(() => ({}))
-
+      const poster = await createVideoPosterUploadPart(
+        reusableSession.storageKey,
+      )
       logVideoUploadEvent("prepare_reused", {
         userId: session.id,
         uid: reusableSession.storageKey,
@@ -207,7 +228,7 @@ export async function POST(request: Request) {
         uid: reusableSession.storageKey,
         uploadUrl: reusableSession.uploadUrl,
         uploadProtocol: reusableSession.uploadProtocol,
-        ...thumbnailUploadFields,
+        poster,
       })
     }
 
@@ -216,19 +237,13 @@ export async function POST(request: Request) {
       fileName: parsed.data.fileName,
       byteSize: parsed.data.byteSize ?? null,
       maxDurationSeconds: parsed.data.maxDurationSeconds,
-      protocol: parsed.data.byteSize ? "tus" : "form",
+      protocol: "tus",
     })
-    const upload = parsed.data.byteSize
-      ? await createCloudflareStreamTusUpload({
-          fileName: parsed.data.fileName,
-          uploadLengthBytes: parsed.data.byteSize,
-          maxDurationSeconds: parsed.data.maxDurationSeconds,
-        })
-      : await createCloudflareStreamDirectUpload({
-          fileName: parsed.data.fileName,
-          maxDurationSeconds: parsed.data.maxDurationSeconds,
-          maxSizeBytes: parsed.data.maxSizeBytes,
-        })
+    const upload = await createCloudflareStreamTusUpload({
+      fileName: parsed.data.fileName,
+      uploadLengthBytes: parsed.data.byteSize,
+      maxDurationSeconds: parsed.data.maxDurationSeconds,
+    })
 
     let uploadSession
 
@@ -251,26 +266,16 @@ export async function POST(request: Request) {
     }
 
     if (uploadSession.storageKey !== upload.uid) {
-      await removeCloudflareStreamVideoByUid(upload.uid).catch(() => undefined)
+      await removeAbandonedVideoUpload(upload.uid)
     }
 
-    const thumbnailUploadFields = await createThumbnailUploadFields({
-      userId: session.id,
-      uid: uploadSession.storageKey,
-    }).catch((error) => {
-      console.error("Could not prepare Cloudflare story thumbnail upload.", {
-        uid: upload.uid,
-        error,
-      })
-      return {}
-    })
+    const poster = await createVideoPosterUploadPart(uploadSession.storageKey)
 
     logVideoUploadEvent("prepare_succeeded", {
       userId: session.id,
       uid: uploadSession.storageKey,
       uploadSessionId: uploadSession.id,
       protocol: uploadSession.uploadProtocol,
-      thumbnailUpload: Boolean("thumbnailUploadUrl" in thumbnailUploadFields),
     })
 
     return NextResponse.json({
@@ -279,7 +284,7 @@ export async function POST(request: Request) {
       uid: uploadSession.storageKey,
       uploadUrl: uploadSession.uploadUrl,
       uploadProtocol: uploadSession.uploadProtocol,
-      ...thumbnailUploadFields,
+      poster,
     })
   } catch (error) {
     logVideoUploadEvent("prepare_failed", {

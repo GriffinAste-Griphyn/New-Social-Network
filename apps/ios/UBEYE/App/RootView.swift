@@ -33,6 +33,7 @@ private struct SessionRestoreView: View {
 
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
+    @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var storyUploadNotice = StoryUploadNoticeStore()
     @StateObject private var storyUploadCoordinator = StoryUploadCoordinator()
     @State private var selectedTab: AppTab = .home
@@ -97,6 +98,10 @@ struct MainTabView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             AppBottomBar(selectedTab: $selectedTab)
         }
+        .ignoresSafeArea(
+            selectedTab == .post ? .keyboard : [],
+            edges: .bottom
+        )
         .overlay(alignment: .topTrailing) {
             FixedAccountAvatarOverlay {
                 isShowingProfile = true
@@ -106,6 +111,16 @@ struct MainTabView: View {
         }
         .sheet(isPresented: $isShowingProfile) {
             ProfileView()
+        }
+        .task {
+            let resumed = await pendingStoryUploads.resumeInterruptedUploads(api: api)
+            for response in resumed {
+                storyUploadCoordinator.register(
+                    response,
+                    api: api,
+                    notice: storyUploadNotice
+                )
+            }
         }
     }
 }
@@ -117,6 +132,7 @@ final class StoryUploadNoticeStore: ObservableObject {
         case processing
         case posted
         case review(String?)
+        case failed(String)
     }
 
     @Published var state: State?
@@ -125,13 +141,15 @@ final class StoryUploadNoticeStore: ObservableObject {
     var title: String {
         switch state {
         case .posting:
-            "Posting to your story"
+            "Uploading story…"
         case .processing:
-            "Added to your story"
+            "Processing video…"
         case .posted:
             "Added to your story"
         case .review:
             "Story is under review"
+        case .failed:
+            "Story upload failed"
         case nil:
             ""
         }
@@ -140,13 +158,15 @@ final class StoryUploadNoticeStore: ObservableObject {
     var message: String {
         switch state {
         case .posting:
-            "Your story is visible locally while the upload finishes."
+            "Your story is visible in My Story while it uploads."
         case .processing:
-            "Your video is visible in My Story and will play after processing finishes."
+            "Your video is visible in My Story and will play when processing finishes."
         case .posted:
-            "Your story is live."
+            "Your story is ready to play."
         case .review(let reason):
             reason ?? "It will appear if it passes safety review."
+        case .failed(let message):
+            message
         case nil:
             ""
         }
@@ -157,18 +177,16 @@ final class StoryUploadNoticeStore: ObservableObject {
         case .posting:
             "arrow.up.circle.fill"
         case .processing:
-            "arrow.triangle.2.circlepath"
+            "video.fill"
         case .posted:
             "checkmark.circle.fill"
         case .review:
             "shield.lefthalf.filled"
+        case .failed:
+            "exclamationmark.circle.fill"
         case nil:
             "checkmark.circle.fill"
         }
-    }
-
-    var isProcessing: Bool {
-        state == .posting || state == .processing
     }
 
     func showPosting() {
@@ -195,6 +213,11 @@ final class StoryUploadNoticeStore: ObservableObject {
     func showReview(reason: String?) {
         dismissTask?.cancel()
         state = .review(reason)
+    }
+
+    func showFailed(message: String) {
+        dismissTask?.cancel()
+        state = .failed(message)
     }
 }
 

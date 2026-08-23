@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/media-upload-cleanup",
+      "schedule": "20 3 * * *"
+    },
+    {
+      "path": "/api/cron/story-publication-reconcile",
+      "schedule": "15 4 * * *"
+    }
+  ]
+}

@@ -1,8 +1,4 @@
 import { get, head } from "@vercel/blob"
-import { createReadStream } from "node:fs"
-import { stat } from "node:fs/promises"
-import path from "node:path"
-import { Readable } from "node:stream"
 import { and, or, eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
 
@@ -10,38 +6,21 @@ import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
+import { getStoryMediaCacheControl } from "@/lib/story-media/cache-control"
 import {
   createCloudflareStreamPlaybackUrl,
   createCloudflareStreamThumbnailUrl,
-  getStoryMediaAccessTokenMaxAgeSeconds,
   parseCloudflareStreamMediaPathname,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 
-const storyUploadDirectory = path.join(process.cwd(), "public", "uploads", "stories")
-const localStoryMediaPrefix = "local"
-const localStoryUrlPrefix = "/uploads/stories"
-
 function encodeStoryMediaPathname(pathname: string) {
   return pathname
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/")
-}
-
-function isSafeLocalStoryMediaPathname(pathname: string) {
-  const segments = pathname.split("/")
-
-  return (
-    segments.length === 2 &&
-    segments[0] === localStoryMediaPrefix &&
-    Boolean(segments[1]) &&
-    segments[1] !== "." &&
-    segments[1] !== ".." &&
-    !segments[1].includes("/")
-  )
 }
 
 function isSafeStoryBlobPathname(pathname: string) {
@@ -55,7 +34,6 @@ function isSafeStoryBlobPathname(pathname: string) {
 
 function isSafeStoryMediaPathname(pathname: string) {
   return (
-    isSafeLocalStoryMediaPathname(pathname) ||
     isSafeStoryBlobPathname(pathname) ||
     Boolean(parseCloudflareStreamMediaPathname(pathname))
   )
@@ -136,75 +114,6 @@ function rangeNotSatisfiable(size: number) {
   })
 }
 
-function getStoryMediaCacheControl(request: Request, mediaPathname: string) {
-  const token = new URL(request.url).searchParams.get("token")
-  const signedMaxAgeSeconds = getStoryMediaAccessTokenMaxAgeSeconds(
-    mediaPathname,
-    token,
-  )
-
-  if (signedMaxAgeSeconds > 0) {
-    return `public, max-age=${signedMaxAgeSeconds}, stale-while-revalidate=60`
-  }
-
-  return "private, no-store"
-}
-
-function getLocalStoryMediaFileName(mediaPathname: string) {
-  if (!isSafeLocalStoryMediaPathname(mediaPathname)) {
-    return null
-  }
-
-  return mediaPathname.slice(localStoryMediaPrefix.length + 1)
-}
-
-function getLocalStoryMediaContentType(fileName: string) {
-  const extension = path.extname(fileName).toLowerCase()
-
-  switch (extension) {
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg"
-    case ".png":
-      return "image/png"
-    case ".webp":
-      return "image/webp"
-    case ".mp4":
-      return "video/mp4"
-    case ".webm":
-      return "video/webm"
-    default:
-      return "application/octet-stream"
-  }
-}
-
-async function getLocalStoryMediaMetadata(mediaPathname: string) {
-  const fileName = getLocalStoryMediaFileName(mediaPathname)
-
-  if (!fileName) {
-    return null
-  }
-
-  try {
-    const fileStats = await stat(path.join(storyUploadDirectory, fileName))
-
-    if (!fileStats.isFile()) {
-      return null
-    }
-
-    return {
-      fileName,
-      size: fileStats.size,
-      contentType: getLocalStoryMediaContentType(fileName),
-      etag: `W/"${fileStats.size.toString(16)}-${Math.round(
-        fileStats.mtimeMs,
-      ).toString(16)}"`,
-    }
-  } catch {
-    return null
-  }
-}
-
 async function getBlobMetadata(blobPathname: string) {
   try {
     return await head(blobPathname)
@@ -220,10 +129,6 @@ async function getBlobMetadata(blobPathname: string) {
 async function getStoryForMediaPathname(mediaPathname: string) {
   const encodedRoute = `/api/story-media/${encodeStoryMediaPathname(mediaPathname)}`
   const decodedRoute = `/api/story-media/${mediaPathname}`
-  const localFileName = getLocalStoryMediaFileName(mediaPathname)
-  const localUploadsRoute = localFileName
-    ? `${localStoryUrlPrefix}/${localFileName}`
-    : null
   const cloudflareStreamMedia = parseCloudflareStreamMediaPathname(mediaPathname)
 
   const [story] = await getDb()
@@ -247,8 +152,6 @@ async function getStoryForMediaPathname(mediaPathname: string) {
         eq(stories.thumbnailUrl, encodedRoute),
         eq(stories.mediaUrl, decodedRoute),
         eq(stories.thumbnailUrl, decodedRoute),
-        localUploadsRoute ? eq(stories.mediaUrl, localUploadsRoute) : undefined,
-        localUploadsRoute ? eq(stories.thumbnailUrl, localUploadsRoute) : undefined,
       ),
     )
     .limit(1)
@@ -272,12 +175,6 @@ async function getStoryForMediaPathname(mediaPathname: string) {
         eq(storyInteractions.mediaThumbnailUrl, encodedRoute),
         eq(storyInteractions.mediaUrl, decodedRoute),
         eq(storyInteractions.mediaThumbnailUrl, decodedRoute),
-        localUploadsRoute
-          ? eq(storyInteractions.mediaUrl, localUploadsRoute)
-          : undefined,
-        localUploadsRoute
-          ? eq(storyInteractions.mediaThumbnailUrl, localUploadsRoute)
-          : undefined,
       ),
     )
     .limit(1)
@@ -312,66 +209,6 @@ async function canServeStoryMedia(request: Request, mediaPathname: string) {
   )
 }
 
-async function serveLocalStoryMedia(request: Request, mediaPathname: string) {
-  const metadata = await getLocalStoryMediaMetadata(mediaPathname)
-
-  if (!metadata) {
-    return notFound()
-  }
-
-  const isVideo = metadata.contentType.startsWith("video/")
-  const requestedRange = isVideo ? request.headers.get("range") : null
-  const byteRange = parseByteRange(requestedRange, metadata.size)
-
-  if (requestedRange && !byteRange) {
-    return rangeNotSatisfiable(metadata.size)
-  }
-
-  const headers = new Headers({
-    "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
-    ETag: metadata.etag,
-    "Content-Type": metadata.contentType,
-  })
-
-  if (isVideo) {
-    headers.set("Accept-Ranges", "bytes")
-  }
-
-  if (byteRange) {
-    const contentLength = byteRange.end - byteRange.start + 1
-
-    headers.set("Content-Length", contentLength.toString())
-    headers.set(
-      "Content-Range",
-      `bytes ${byteRange.start}-${byteRange.end}/${metadata.size}`,
-    )
-
-    return new Response(
-      Readable.toWeb(
-        createReadStream(path.join(storyUploadDirectory, metadata.fileName), {
-          start: byteRange.start,
-          end: byteRange.end,
-        }),
-      ) as ReadableStream,
-      {
-        status: 206,
-        headers,
-      },
-    )
-  }
-
-  headers.set("Content-Length", metadata.size.toString())
-
-  return new Response(
-    Readable.toWeb(
-      createReadStream(path.join(storyUploadDirectory, metadata.fileName)),
-    ) as ReadableStream,
-    {
-      headers,
-    },
-  )
-}
-
 export async function GET(
   request: Request,
   context: { params: Promise<{ pathname: string[] }> },
@@ -379,8 +216,6 @@ export async function GET(
   const { pathname } = await context.params
   const mediaPathname = pathname.join("/")
   const cloudflareStreamMedia = parseCloudflareStreamMediaPathname(mediaPathname)
-  const localMediaFileName = getLocalStoryMediaFileName(mediaPathname)
-
   if (!isSafeStoryMediaPathname(mediaPathname)) {
     return notFound()
   }
@@ -400,16 +235,15 @@ export async function GET(
       "Cache-Control",
       getStoryMediaCacheControl(request, mediaPathname),
     )
+    response.headers.set(
+      "CDN-Cache-Control",
+      getStoryMediaCacheControl(request, mediaPathname).replace("private", "public") + ", s-maxage=7200",
+    )
 
     return response
   }
 
-  if (localMediaFileName) {
-    return serveLocalStoryMedia(request, mediaPathname)
-  }
-
   const blobPathname = mediaPathname
-
   const blobMetadata = await getBlobMetadata(blobPathname)
 
   if (!blobMetadata) {
@@ -442,10 +276,10 @@ export async function GET(
 
   const headers = new Headers({
     "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
+    "CDN-Cache-Control": getStoryMediaCacheControl(request, mediaPathname).replace("private", "public") + ", s-maxage=7200",
     ETag: result.blob.etag || blobMetadata.etag,
     "X-Content-Type-Options": "nosniff",
   })
-
   if (result.statusCode === 304) {
     return new Response(null, {
       status: 304,

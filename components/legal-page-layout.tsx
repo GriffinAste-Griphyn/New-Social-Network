@@ -1,6 +1,7 @@
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
+import { NonTradVentureLink } from "@/components/non-trad-venture-link"
 
 type LegalSection = {
   title: string
@@ -67,6 +68,9 @@ function LegalFooter() {
             </Link>
           ))}
         </nav>
+      </div>
+      <div className="flex justify-center border-t border-white/10 px-4 py-8">
+        <NonTradVentureLink />
       </div>
     </footer>
   )

@@ -241,6 +241,103 @@ describe("content moderation", () => {
     )
   })
 
+  it("scans the compatible WebP thumbnail for AVIF image stories", async () => {
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        id: "modr_test",
+        model: "omni-moderation-latest",
+        results: [
+          {
+            flagged: false,
+            categories: {},
+            category_scores: {},
+          },
+        ],
+      }),
+    )
+
+    const result = await moderateUserContent({
+      textParts: [],
+      media: {
+        assetKind: "image",
+        contentType: "image/avif",
+        byteSize: 30_733,
+        mediaUrl: "https://www.ubeye.ai/api/story-media/story-display.avif?token=test",
+        thumbnailUrl:
+          "https://www.ubeye.ai/api/story-media/story-thumb.webp?token=test",
+      },
+    })
+
+    const openAiRequest = JSON.parse(
+      (fetchMock.mock.calls[0]?.[1] as RequestInit).body as string,
+    )
+
+    expect(result.action).toBe("approve")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(openAiRequest.input[0].image_url.url).toBe(
+      "https://www.ubeye.ai/api/story-media/story-thumb.webp?token=test",
+    )
+  })
+
+  it("falls back to the thumbnail when OpenAI rejects the primary image format", async () => {
+    vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")
+    vi.stubEnv("OPENAI_API_KEY", "test-key")
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              message: "Unsupported format: image/example",
+              type: "invalid_request_error",
+              param: "input",
+              code: "invalid_image_format",
+            },
+          },
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "modr_test",
+          model: "omni-moderation-latest",
+          results: [
+            {
+              flagged: false,
+              categories: {},
+              category_scores: {},
+            },
+          ],
+        }),
+      )
+
+    const result = await moderateUserContent({
+      textParts: [],
+      media: {
+        assetKind: "image",
+        contentType: "image/example",
+        byteSize: 30_733,
+        mediaUrl: "https://www.ubeye.ai/api/story-media/story-display.example?token=test",
+        thumbnailUrl:
+          "https://www.ubeye.ai/api/story-media/story-thumb.webp?token=test",
+      },
+    })
+
+    const fallbackRequest = JSON.parse(
+      (fetchMock.mock.calls[1]?.[1] as RequestInit).body as string,
+    )
+
+    expect(result.action).toBe("approve")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fallbackRequest.input[0].image_url.url).toBe(
+      "https://www.ubeye.ai/api/story-media/story-thumb.webp?token=test",
+    )
+  })
+
   it("retries transient OpenAI media download failures before holding", async () => {
     vi.useFakeTimers()
     vi.stubEnv("CONTENT_MODERATION_PROVIDER", "openai")

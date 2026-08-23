@@ -176,6 +176,35 @@ function isRetryableOpenAiMediaError(result: ContentModerationResult) {
   )
 }
 
+function isUnsupportedOpenAiImageFormatError(result: ContentModerationResult) {
+  if (!result.error) {
+    return false
+  }
+
+  return (
+    result.categories.some((category) => category.key === "scanner_unavailable") &&
+    /(?:invalid_image_format|unsupported (?:image )?format)/i.test(result.error)
+  )
+}
+
+function uniqueAbsoluteUrls(
+  urls: Array<string | null | undefined>,
+): string[] {
+  return Array.from(new Set(urls.filter(isAbsoluteHttpUrl)))
+}
+
+function moderationImageCandidates(input: MediaModerationInput) {
+  if (input.assetKind === "video") {
+    return uniqueAbsoluteUrls([input.thumbnailUrl ?? input.mediaUrl])
+  }
+
+  const displayFormatNeedsFallback = input.contentType.toLowerCase() === "image/avif"
+
+  return displayFormatNeedsFallback
+    ? uniqueAbsoluteUrls([input.thumbnailUrl, input.mediaUrl])
+    : uniqueAbsoluteUrls([input.mediaUrl, input.thumbnailUrl])
+}
+
 function approvedDeferredVideoThumbnailModeration(
   error: string,
 ): ContentModerationResult {
@@ -232,11 +261,6 @@ export async function moderateMediaContent(
     return approvedModerationResult
   }
 
-  const scanUrl =
-    input.assetKind === "image"
-      ? input.mediaUrl
-      : input.thumbnailUrl ?? input.mediaUrl
-
   if (provider !== "openai") {
     if (productionRequiresProvider()) {
       return resultFromSignals({
@@ -257,7 +281,9 @@ export async function moderateMediaContent(
     return approvedModerationResult
   }
 
-  if (!isAbsoluteHttpUrl(scanUrl)) {
+  const scanCandidates = moderationImageCandidates(input)
+
+  if (scanCandidates.length === 0) {
     return resultFromSignals({
       provider: "openai",
       signals: [
@@ -272,14 +298,33 @@ export async function moderateMediaContent(
     })
   }
 
-  const reviewableImageUrl = await resolveReviewableImageUrl({
-    assetKind: input.assetKind,
-    scanUrl,
-  })
+  let lastResult: ContentModerationResult | null = null
+  let lastResolutionError: string | null = null
 
-  if (!reviewableImageUrl.ok) {
-    return approvedDeferredVideoThumbnailModeration(reviewableImageUrl.error)
+  for (const scanUrl of scanCandidates) {
+    const reviewableImageUrl = await resolveReviewableImageUrl({
+      assetKind: input.assetKind,
+      scanUrl,
+    })
+
+    if (!reviewableImageUrl.ok) {
+      lastResolutionError = reviewableImageUrl.error
+      continue
+    }
+
+    const result = await moderateReviewableImageUrl(reviewableImageUrl.url)
+    lastResult = result
+
+    if (!isUnsupportedOpenAiImageFormatError(result)) {
+      return result
+    }
   }
 
-  return moderateReviewableImageUrl(reviewableImageUrl.url)
+  if (lastResult) {
+    return lastResult
+  }
+
+  return approvedDeferredVideoThumbnailModeration(
+    lastResolutionError ?? "Media was not available for safety scanning.",
+  )
 }

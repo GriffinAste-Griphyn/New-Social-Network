@@ -14,17 +14,25 @@ export async function GET() {
     cloudflareCustomerSubdomain: isConfigured(
       process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN,
     ),
-    blobToken: isConfigured(process.env.BLOB_READ_WRITE_TOKEN),
     cloudflareWebhookSecret: isConfigured(
       process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET,
     ),
+    cloudflareSigningKeyId: isConfigured(
+      process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID,
+    ),
+    cloudflareSigningKeyMaterial:
+      isConfigured(process.env.CLOUDFLARE_STREAM_SIGNING_KEY_JWK) ||
+      isConfigured(process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM),
   }
   const requiredOk =
     checks.storyVideoProcessor &&
     checks.cloudflareAccountId &&
     checks.cloudflareApiToken &&
     checks.cloudflareCustomerSubdomain &&
-    (process.env.NODE_ENV !== "production" || checks.cloudflareWebhookSecret)
+    (process.env.NODE_ENV !== "production" ||
+      (checks.cloudflareWebhookSecret &&
+        checks.cloudflareSigningKeyId &&
+        checks.cloudflareSigningKeyMaterial))
 
   return NextResponse.json(
     {
@@ -32,8 +40,6 @@ export async function GET() {
       service: "ubeye-video",
       checks,
       optional: {
-        blobToken:
-          "Enables client-uploaded poster thumbnails. Video upload can still work without it.",
         cloudflareWebhookSecret:
           process.env.NODE_ENV === "production"
             ? "Required in production so Cloudflare can promote processed videos immediately."

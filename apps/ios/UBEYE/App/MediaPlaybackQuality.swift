@@ -2,6 +2,22 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
+struct StoryVideoPlaybackSource: Hashable {
+    let identity: String
+    let url: URL
+
+    func representsSameMedia(as other: StoryVideoPlaybackSource?) -> Bool {
+        identity == other?.identity
+    }
+
+    static func urlBacked(_ url: URL) -> StoryVideoPlaybackSource {
+        StoryVideoPlaybackSource(
+            identity: StoryVideoPlaybackPool.canonicalURL(for: url).absoluteString,
+            url: url
+        )
+    }
+}
+
 enum MediaPlaybackQuality {
     @MainActor
     static var preferredStreamingPeakBitRate: Double {
@@ -25,12 +41,12 @@ enum MediaPlaybackQuality {
     }
 
     @MainActor
-    static func preloadURLs(for card: StoryCard) -> [URL] {
+    static func preloadSources(for card: StoryCard) -> [StoryVideoPlaybackSource] {
         guard card.isPlayableVideo else {
             return []
         }
 
-        return [card.playbackMediaUrl]
+        return [card.playbackSource]
     }
 
     @MainActor
