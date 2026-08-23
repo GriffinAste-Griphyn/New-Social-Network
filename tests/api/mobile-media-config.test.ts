@@ -20,6 +20,8 @@ const mediaConfigEnvironmentNames = [
   "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED",
   "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD",
   "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD_CANARY",
+  "MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD",
+  "MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS",
   "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
   "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED_CANARY",
   "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
@@ -41,20 +43,22 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-08-23.1",
+      version: "2026-08-23.2",
       rolloutProfile: "preheat-canary",
       imageDerivativeUploadEnabled: true,
       imagePreheatLimit: { constrained: 2, standard: 4 },
       stackPreheatLimit: { constrained: 2, standard: 4 },
       preparedPlayerLimit: { constrained: 0, standard: 0 },
       persistentVideoPreheatLimit: { constrained: 2, standard: 4 },
+      offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
+      offlineHLSCacheMaxAssets: 0,
       startupStreamingPeakBitRate: {
-        constrained: 4_000_000,
-        standard: 8_000_000,
+        constrained: 2_000_000,
+        standard: 3_000_000,
       },
       startupStreamingMaximumResolution: {
-        constrained: { width: 720, height: 1280 },
-        standard: { width: 1080, height: 1920 },
+        constrained: { width: 540, height: 960 },
+        standard: { width: 720, height: 1280 },
       },
     })
   })
@@ -65,6 +69,8 @@ describe("mobile media runtime config", () => {
     process.env.MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED = "99"
     process.env.MOBILE_PREPARED_PLAYER_LIMIT_STANDARD = "99"
     process.env.MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD = "-5"
+    process.env.MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD = "99"
+    process.env.MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS = "99"
 
     expect(getMobileMediaConfig()).toMatchObject({
       imagePreheatLimit: { standard: 8 },
@@ -74,6 +80,23 @@ describe("mobile media runtime config", () => {
     })
     expect(getMobileMediaConfig({ clientBuild: 255 })).toMatchObject({
       preparedPlayerLimit: { constrained: 1, standard: 4 },
+      offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
+      offlineHLSCacheMaxAssets: 0,
+    })
+    expect(getMobileMediaConfig({ clientBuild: 320 })).toMatchObject({
+      offlineHLSPreheatLimit: { constrained: 0, standard: 1 },
+      offlineHLSCacheMaxAssets: 3,
+    })
+  })
+
+  it("enables bounded offline HLS caching only for build 320 and newer", () => {
+    expect(getMobileMediaConfig({ clientBuild: 319 })).toMatchObject({
+      offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
+      offlineHLSCacheMaxAssets: 0,
+    })
+    expect(getMobileMediaConfig({ clientBuild: 320 })).toMatchObject({
+      offlineHLSPreheatLimit: { constrained: 0, standard: 1 },
+      offlineHLSCacheMaxAssets: 2,
     })
   })
 
@@ -102,8 +125,8 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 1, standard: 4 },
       persistentVideoPreheatLimit: { constrained: 2, standard: 4 },
       startupStreamingPeakBitRate: {
-        constrained: 4_000_000,
-        standard: 8_000_000,
+        constrained: 2_000_000,
+        standard: 3_000_000,
       },
     })
     process.env.MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED = "false"
@@ -113,9 +136,10 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 0, standard: 2 },
       persistentVideoPreheatLimit: { constrained: 1, standard: 2 },
       startupStreamingPeakBitRate: {
-        constrained: 6_000_000,
-        standard: 10_000_000,
+        constrained: 4_000_000,
+        standard: 6_000_000,
       },
+      offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
     })
   })
 })

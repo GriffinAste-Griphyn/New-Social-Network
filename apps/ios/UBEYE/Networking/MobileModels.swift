@@ -259,7 +259,11 @@ extension StoryCard {
     }
 
     var playbackSource: StoryVideoPlaybackSource {
-        StoryVideoPlaybackSource(identity: playbackIdentity, url: playbackMediaUrl)
+        StoryVideoPlaybackSource(
+            identity: playbackIdentity,
+            url: playbackMediaUrl,
+            durationSeconds: durationSeconds
+        )
     }
 }
 
@@ -542,7 +546,11 @@ extension StoryStackItem {
     }
 
     var playbackSource: StoryVideoPlaybackSource {
-        StoryVideoPlaybackSource(identity: playbackIdentity, url: playbackMediaUrl)
+        StoryVideoPlaybackSource(
+            identity: playbackIdentity,
+            url: playbackMediaUrl,
+            durationSeconds: durationSeconds
+        )
     }
 }
 
@@ -763,6 +771,8 @@ struct MobileMediaConfigResponse: Codable {
         let stackPreheatLimit: LimitPair
         let preparedPlayerLimit: LimitPair
         let persistentVideoPreheatLimit: LimitPair
+        let offlineHLSPreheatLimit: LimitPair
+        let offlineHLSCacheMaxAssets: Int
         let startupStreamingPeakBitRate: BitRatePair
         let startupStreamingMaximumResolution: ResolutionPair
     }

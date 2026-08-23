@@ -2623,10 +2623,19 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             let selected = MediaPlaybackQuality.preferredPlaybackURL(defaultURL: url)
             let selectedSource = StoryVideoPlaybackSource(
                 identity: source.identity,
-                url: selected.url
+                url: selected.url,
+                durationSeconds: source.durationSeconds
             )
             let prepared = await playerPool?.takePreparedPlayer(for: selectedSource)
-            let resolved = prepared == nil ? await resolvePlaybackURL(for: selected.url) : nil
+            let resolved = prepared == nil
+                ? await resolvePlaybackURL(
+                    for: StoryVideoPlaybackSource(
+                        identity: source.identity,
+                        url: selected.url,
+                        durationSeconds: source.durationSeconds
+                    )
+                )
+                : nil
 
             guard self.isCurrentPlayback(
                 generation: generation,
@@ -2641,7 +2650,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             activePlaybackURL = playbackURL
             let delivery = playbackDelivery(for: selected.url)
             let cacheState = prepared?.cacheState ?? resolved?.cacheState ?? "miss"
-            let playerSource = prepared == nil ? "fresh" : "pooled"
+            let playerSource = prepared?.handoffStage == .staged
+                ? "staged"
+                : (prepared == nil ? "fresh" : "pooled")
             let prerollState = prepared?.wasPrerolled == true ? "ready" : "required"
             startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) preroll=\(prerollState) quality=\(selected.quality) url=\(selected.url.lastPathComponent)"
             MediaPerformance.mark("video_startup \(startupMetadata)")
@@ -2766,6 +2777,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
             self.playbackPhase = .prerolling
             attachedPlayer.pause()
+            let prerollStartedAt = Date()
             let didPreroll = await attachedPlayer.preroll(atRate: 1)
             guard didPreroll,
                   !Task.isCancelled,
@@ -2783,8 +2795,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
             self.seekTask = nil
             self.hasCompletedPreroll = true
-            MediaPerformance.mark(
-                "video_prerolled position_ms=\(Int(targetSeconds * 1_000))"
+            MediaPerformance.measure(
+                "video_prerolled position_ms=\(Int(targetSeconds * 1_000))",
+                since: prerollStartedAt
             )
             self.beginAwaitingFirstFrame(
                 player: attachedPlayer,
@@ -2819,11 +2832,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
+        let expectedDuration = expectedDurationSeconds
         let source = StoryVideoPlaybackSource(
             identity: activeIdentity,
-            url: activeURL
+            url: activeURL,
+            durationSeconds: expectedDuration
         )
-        let expectedDuration = expectedDurationSeconds
         cleanupCurrentPlayer(reason: nil)
         self.activeIdentity = activeIdentity
         self.activeURL = activeURL
@@ -2873,7 +2887,14 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         return player
     }
 
-    private func resolvePlaybackURL(for url: URL) async -> (playbackURL: URL, cacheState: String) {
+    private func resolvePlaybackURL(
+        for source: StoryVideoPlaybackSource
+    ) async -> (playbackURL: URL, cacheState: String) {
+        if let localHLSURL = await HLSOfflineCache.shared.cachedPlaybackURL(for: source) {
+            return (localHLSURL, "hls_package")
+        }
+
+        let url = source.url
         let canPersistVideo = await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video)
 
         if canPersistVideo,
@@ -3351,7 +3372,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         startPlayback(
             source: StoryVideoPlaybackSource(
                 identity: retryIdentity,
-                url: retryURL
+                url: retryURL,
+                durationSeconds: expectedDuration
             ),
             playerPool: nil,
             resumeTimeSeconds: resumeTimeSeconds
@@ -3491,7 +3513,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return nil
         }
 
-        return StoryVideoPlaybackSource(identity: activeIdentity, url: activeURL)
+        return StoryVideoPlaybackSource(
+            identity: activeIdentity,
+            url: activeURL,
+            durationSeconds: expectedDurationSeconds
+        )
     }
 
     private func isCurrentPlayer(_ player: AVPlayer, generation: Int) -> Bool {

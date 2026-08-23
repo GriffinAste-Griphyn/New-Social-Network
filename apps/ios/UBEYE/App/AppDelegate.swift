@@ -37,6 +37,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
+        if identifier == HLSOfflineCache.sessionIdentifier {
+            Task {
+                await HLSOfflineCache.shared.attachSystemCompletionHandler(
+                    completionHandler
+                )
+            }
+            return
+        }
+
         guard identifier == BackgroundTusUploadTransport.sessionIdentifier else {
             completionHandler()
             return

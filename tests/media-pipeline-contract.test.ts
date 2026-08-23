@@ -112,15 +112,21 @@ describe("aggressive media pipeline contract", () => {
 
   it("ships the current aggressive preheat and startup defaults", () => {
     delete process.env.MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED
-    const config = getMobileMediaConfig({ clientBuild: 285 })
+    const config = getMobileMediaConfig({ clientBuild: 320 })
 
     expect(config.persistentVideoPreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.preparedPlayerLimit).toEqual({ constrained: 1, standard: 4 })
     expect(config.stackPreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.imagePreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.startupStreamingPeakBitRate).toEqual({
-      constrained: 4_000_000,
-      standard: 8_000_000,
+      constrained: 2_000_000,
+      standard: 3_000_000,
     })
+    expect(config.startupStreamingMaximumResolution).toEqual({
+      constrained: { width: 540, height: 960 },
+      standard: { width: 720, height: 1280 },
+    })
+    expect(config.offlineHLSPreheatLimit).toEqual({ constrained: 0, standard: 1 })
+    expect(config.offlineHLSCacheMaxAssets).toBe(2)
   })
 })

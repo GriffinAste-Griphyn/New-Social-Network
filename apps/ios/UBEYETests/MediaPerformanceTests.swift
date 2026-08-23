@@ -741,6 +741,48 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
+    func testPlayerPoolImmediatelyTransfersAStagedLoadingPlayer() async {
+        let source = StoryVideoPlaybackSource(
+            identity: "story:staged",
+            url: URL(string: "https://example.com/staged-video.m3u8")!
+        )
+        let expectedPlayer = AVPlayer()
+        let pool = StoryVideoPlaybackPool(
+            maxPreparedPlayers: 1,
+            stagedPlayerBuilder: { requestedSource, publishStaged in
+                XCTAssertEqual(requestedSource, source)
+                try? await Task.sleep(for: .milliseconds(15))
+                let staged = StoryVideoPlaybackPool.PreparedPlayer(
+                    player: expectedPlayer,
+                    playbackURL: requestedSource.url,
+                    cacheState: "miss",
+                    handoffStage: .staged
+                )
+                publishStaged(staged)
+                try? await Task.sleep(for: .seconds(1))
+                return StoryVideoPlaybackPool.PreparedPlayer(
+                    player: expectedPlayer,
+                    playbackURL: requestedSource.url,
+                    cacheState: "miss",
+                    wasPrerolled: true
+                )
+            }
+        )
+
+        pool.prepare(sources: [source], activeIdentity: source.identity)
+        let startedAt = Date()
+        let prepared = await pool.takePreparedPlayer(
+            for: source,
+            waitUpTo: .milliseconds(100)
+        )
+
+        XCTAssertTrue(prepared?.player === expectedPlayer)
+        XCTAssertEqual(prepared?.handoffStage, .staged)
+        XCTAssertFalse(prepared?.wasPrerolled ?? true)
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.25)
+    }
+
+    @MainActor
     func testPlayerPoolPromotesActiveSourceWhenLaunchWarmMisses() async {
         let active = StoryVideoPlaybackSource(
             identity: "story:active",
@@ -866,6 +908,50 @@ final class MediaPerformanceTests: XCTestCase {
                 currentSeconds: 0.2
             )
         )
+    }
+
+    func testOfflineHLSPolicyClampsUnsafeLimits() {
+        let policy = HLSOfflineCache.Policy(
+            maximumAssets: -4,
+            maximumBytes: -1,
+            expiration: -20
+        )
+
+        XCTAssertEqual(policy.maximumAssets, 0)
+        XCTAssertEqual(policy.maximumBytes, 0)
+        XCTAssertEqual(policy.expiration, 0)
+        XCTAssertEqual(HLSOfflineCache.Policy().maximumAssets, 2)
+        XCTAssertEqual(
+            HLSOfflineCache.Policy().maximumBytes,
+            128 * 1024 * 1024
+        )
+    }
+
+    func testOfflineHLSOnlyAcceptsBoundedOnDemandCandidates() {
+        let eligible = StoryVideoPlaybackSource(
+            identity: "story:short",
+            url: URL(string: "https://example.com/short.m3u8")!,
+            durationSeconds: 12
+        )
+        let long = StoryVideoPlaybackSource(
+            identity: "story:long",
+            url: URL(string: "https://example.com/long.m3u8")!,
+            durationSeconds: 90
+        )
+        let unknown = StoryVideoPlaybackSource(
+            identity: "story:unknown",
+            url: URL(string: "https://example.com/unknown.m3u8")!
+        )
+        let progressive = StoryVideoPlaybackSource(
+            identity: "story:mp4",
+            url: URL(string: "https://example.com/video.mp4")!,
+            durationSeconds: 10
+        )
+
+        XCTAssertTrue(HLSOfflineCache.isEligibleForOfflineCache(eligible))
+        XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(long))
+        XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(unknown))
+        XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(progressive))
     }
 
     private func makeTestImageData(width: Int, height: Int) -> Data {

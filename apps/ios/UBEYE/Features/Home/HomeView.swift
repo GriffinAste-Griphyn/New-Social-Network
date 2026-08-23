@@ -29,6 +29,11 @@ final class FeedStore: ObservableObject {
             ? MediaPerformance.beginInterval("feed_disk_restore source=disk")
             : nil
         if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
+            let cachedStoryIds = storyStackPrefetchIds(from: cached)
+            mediaEngine.prepareInitialStoryStacks(
+                ids: cachedStoryIds,
+                embeddedStacks: cached.initialStoryStacks
+            )
             feed = cached
             applyUploadedStoryOverridesIfNeeded()
             if let restoreInterval {
@@ -47,6 +52,11 @@ final class FeedStore: ObservableObject {
         do {
             let response = try await api.mobileFeed()
             lastNetworkLoadAt = Date()
+            let responseStoryIds = storyStackPrefetchIds(from: response)
+            mediaEngine.prepareInitialStoryStacks(
+                ids: responseStoryIds,
+                embeddedStacks: response.initialStoryStacks
+            )
             feed = response
             applyUploadedStoryOverridesIfNeeded()
             MediaPerformance.endInterval(networkInterval, event: "feed_load source=network")
@@ -603,7 +613,18 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     MyStoryHomeCard(
                         myStory: feed.myStory,
-                        pendingUpload: pendingStoryUploads.latestVisibleUpload
+                        pendingUpload: pendingStoryUploads.latestVisibleUpload,
+                        onPress: {
+                            guard feed.myStory.hasActiveStory else {
+                                return
+                            }
+                            store.warmStoryOpen(
+                                storyId: "my-story",
+                                in: feed,
+                                api: api,
+                                mediaEngine: mediaEngine
+                            )
+                        }
                     ) {
                         if let pendingUpload = pendingStoryUploads.latestVisibleUpload, pendingUpload.isFailed {
                             selectedFailedUpload = pendingUpload
@@ -619,7 +640,17 @@ struct HomeView: View {
                     }
 
                     ForEach(feed.followingStories) { story in
-                        StoryThumb(story: story)
+                        StoryThumb(
+                            story: story,
+                            onPress: {
+                                store.warmStoryOpen(
+                                    storyId: story.id,
+                                    in: feed,
+                                    api: api,
+                                    mediaEngine: mediaEngine
+                                )
+                            }
+                        )
                             .onAppear {
                                 mediaEngine.prefetchStoryStacks(
                                     ids: [story.id],
@@ -682,6 +713,7 @@ struct HomeView: View {
                 DiscoverGrid(
                     tiles: feed.discoverTiles,
                     onAppear: prefetchDiscoverTile,
+                    onPress: prewarmDiscoverTile,
                     onTap: openDiscoverTile
                 )
                 .zIndex(0)
@@ -709,6 +741,19 @@ struct HomeView: View {
             )
         }
         selectedStory = StoryRoute(id: storyId, source: .discover)
+    }
+
+    private func prewarmDiscoverTile(_ tile: DiscoverTile) {
+        let storyId = tile.activeStoryId ?? tile.id
+        guard let feed = store.feed else {
+            return
+        }
+        store.warmStoryOpen(
+            storyId: storyId,
+            in: feed,
+            api: api,
+            mediaEngine: mediaEngine
+        )
     }
 
     private func followDiscoverCreator(_ creator: DiscoverCreator) async -> Bool {
@@ -831,6 +876,7 @@ struct SectionHeader: View {
 struct MyStoryHomeCard: View {
     let myStory: MyStorySummary
     var pendingUpload: PendingStoryUpload?
+    var onPress: () -> Void = {}
     let action: () -> Void
 
     var body: some View {
@@ -883,6 +929,7 @@ struct MyStoryHomeCard: View {
             .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
+        .storyPressPrewarm(onPress)
         .accessibilityLabel(cardAccessibilityLabel)
         .accessibilityHint(
             myStory.hasActiveStory
@@ -994,6 +1041,7 @@ private struct MyStoryCardSkeleton: View {
 
 struct StoryThumb: View {
     let story: StoryCard
+    var onPress: () -> Void = {}
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -1026,12 +1074,14 @@ struct StoryThumb: View {
         }
         .frame(width: 132, height: 192)
         .ubeyeMediaCardChrome()
+        .storyPressPrewarm(onPress)
     }
 }
 
 struct DiscoverGrid: View {
     let tiles: [DiscoverTile]
     var onAppear: (DiscoverTile) -> Void = { _ in }
+    var onPress: (DiscoverTile) -> Void = { _ in }
     let onTap: (DiscoverTile) -> Void
 
     private let columns = [
@@ -1073,6 +1123,9 @@ struct DiscoverGrid: View {
                     .ubeyeMediaCardChrome()
                 }
                 .buttonStyle(.plain)
+                .storyPressPrewarm {
+                    onPress(tile)
+                }
                 .id(tile.id)
                 .onAppear {
                     onAppear(tile)

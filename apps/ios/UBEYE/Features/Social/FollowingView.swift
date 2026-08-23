@@ -38,7 +38,17 @@ struct FollowingView: View {
                             .padding(.top, 24)
                         } else {
                             ForEach(stories) { story in
-                                FollowingStoryFeedCard(story: story) {
+                                FollowingStoryFeedCard(
+                                    story: story,
+                                    onPress: {
+                                        store.warmStoryOpen(
+                                            storyId: story.id,
+                                            in: feed,
+                                            api: api,
+                                            mediaEngine: mediaEngine
+                                        )
+                                    }
+                                ) {
                                     store.warmStoryOpen(
                                         storyId: story.id,
                                         in: feed,
@@ -179,6 +189,7 @@ private struct FollowingStoryLoadingCard: View {
 
 private struct FollowingStoryFeedCard: View {
     let story: StoryCard
+    var onPress: () -> Void = {}
     let action: () -> Void
 
     var body: some View {
@@ -242,6 +253,7 @@ private struct FollowingStoryFeedCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        .storyPressPrewarm(onPress)
         .accessibilityLabel("\(story.creator)'s story")
     }
 }

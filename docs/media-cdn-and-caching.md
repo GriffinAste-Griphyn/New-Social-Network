@@ -12,7 +12,11 @@ The mobile media path is intentionally layered:
 4. Cloudflare Stream serves signed adaptive HLS; Vercel Blob stores private image/original assets.
 5. The origin route authorizes private media and never exposes an unsigned original.
 
-HLS playlists are not copied into the progressive file cache. A playlist without its segment and key graph is not an offline asset and stale signed manifests are actively harmful. Prepared players are the bounded warm path for streaming video.
+HLS playlists are not copied into the progressive file cache. A playlist without its
+segment and key graph is not an offline asset and stale signed manifests are actively
+harmful. Prepared players are the primary warm path. A separate, system-managed
+`AVAssetDownloadURLSession` cache may retain at most two complete predicted VOD packages;
+it never stores a standalone manifest.
 
 ## Images
 
@@ -45,6 +49,10 @@ The repository does not yet run a separate imgproxy service. Add it only as a Ve
 
 Cloudflare Stream owns the bitrate ladder. iOS applies a startup peak bitrate and maximum resolution while the first frame is hidden, then `MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately after `video_first_frame`. This gives the player a low-cost startup choice without pinning the rest of playback to 540p/720p.
 
+The aggressive build-320 defaults are 3 Mbps / 720p on standard paths and 2 Mbps /
+540p on constrained paths. These are startup ceilings only; full adaptive quality resumes
+after the first frame.
+
 After the cached feed restores, iOS selectively prepares one early playable video from
 each initially visible story stack, bounded by the runtime player limit. A successful
 AVFoundation preroll is carried through pool handoff and reused by the viewer. The viewer
@@ -52,12 +60,27 @@ only uses immediate playback after that successful preroll; an unprepared video 
 the conservative cold-start path. Constrained/cellular sessions prepare at most one
 speculative player.
 
+If background preparation is still in progress, the pool publishes the player at the
+staged-item boundary and transfers that exact player to the viewer. The viewer continues
+readiness and preroll on the same item, avoiding the former handoff wait and duplicate
+manifest/segment request. Preparation no longer loads asset duration on the startup path.
+
+Finger-down prediction and pre-publication embedded-stack warming move exact-story work
+ahead of navigation. Full HLS package downloads are limited to assets with a known
+duration of 30 seconds or less, wait for a 1.2-second idle window, use a
+single discretionary Wi-Fi-only task, retain at most two assets / 128 MB for 24 hours,
+and are cancelled when an active story viewer appears.
+
 Targets:
 
 - warm first frame p50 below 350 ms;
 - good-network first frame p95 below 900 ms;
 - startup stalls below 1%;
 - no more than the server-configured prepared player count.
+
+Stage telemetry includes `video_player_pool_wait`, `video_player_staged`,
+`video_player_prepared`, `video_preroll_reused`, and `video_prerolled`, allowing cold,
+staged, pooled, and offline-package starts to be compared independently.
 
 ## Disk eviction
 
@@ -82,6 +105,8 @@ Production has no process-local snapshot fallback: missing Redis credentials fai
   Marketplace equivalents `KV_REST_API_URL` / `KV_REST_API_TOKEN`
 - `MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED=true`
 - `MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0` initially, then a measured gradual rollout
+- `MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD=1` for build 320+, or `0` as the kill switch
+- `MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS=2` (hard-clamped to 3)
 - `CRON_SECRET` for authenticated Vercel media-session cleanup
 - Workflow runtime variables provisioned by the Vercel Workflow integration
 - Cloudflare Stream account, token, customer subdomain, and signing key

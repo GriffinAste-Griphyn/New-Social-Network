@@ -5,6 +5,17 @@ import Foundation
 struct StoryVideoPlaybackSource: Hashable {
     let identity: String
     let url: URL
+    let durationSeconds: TimeInterval?
+
+    init(
+        identity: String,
+        url: URL,
+        durationSeconds: TimeInterval? = nil
+    ) {
+        self.identity = identity
+        self.url = url
+        self.durationSeconds = durationSeconds
+    }
 
     func representsSameMedia(as other: StoryVideoPlaybackSource?) -> Bool {
         identity == other?.identity
@@ -13,7 +24,8 @@ struct StoryVideoPlaybackSource: Hashable {
     static func urlBacked(_ url: URL) -> StoryVideoPlaybackSource {
         StoryVideoPlaybackSource(
             identity: StoryVideoPlaybackPool.canonicalURL(for: url).absoluteString,
-            url: url
+            url: url,
+            durationSeconds: nil
         )
     }
 }
@@ -27,6 +39,11 @@ enum MediaPlaybackQuality {
     @MainActor
     static var preferredStreamingMaximumResolution: CGSize {
         NetworkQualityMonitor.shared.startupStreamingMaximumResolution
+    }
+
+    @MainActor
+    static var offlineStreamingPeakBitRate: Double {
+        min(NetworkQualityMonitor.shared.startupStreamingPeakBitRate, 2_000_000)
     }
 
     @MainActor

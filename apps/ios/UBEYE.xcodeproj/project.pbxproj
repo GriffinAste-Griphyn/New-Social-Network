@@ -12,10 +12,12 @@
 		1711D1E6D918705F3AD50112 /* AuthStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C41C9A89DCD2F208021A68A /* AuthStore.swift */; };
 		1AD6BCC4CD515B5BC44FF4ED /* PushNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */; };
 		209C07B0805239729E7550C9 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */; };
+		255C8ACC23818516BB2441B2 /* HLSOfflineCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78085C32E4F7CCB340157B82 /* HLSOfflineCache.swift */; };
 		2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */; };
 		2D535C911A940A71FCAFD632 /* StoryVideoUploadPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF425320C4454522B6EB4E42 /* StoryVideoUploadPipeline.swift */; };
 		2E652C712BBBCCC2AAC54C34 /* MediaPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF0753F45EF0E26F9ED7724 /* MediaPerformanceTests.swift */; };
 		2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */; };
+		3386B356A4FD9EAE6DC7D45D /* StoryMediaCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A44C48E341BC120DEE6E53EF /* StoryMediaCanvas.swift */; };
 		3A72F9757CD3DFEE8D812132 /* SDWebImageWebPCoder in Frameworks */ = {isa = PBXBuildFile; productRef = E09E7044A35900C4B67A3A9B /* SDWebImageWebPCoder */; };
 		41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12112239A2105E9146475DBB /* FollowingManagementView.swift */; };
 		456276AF5926E1FE8D5A01B3 /* DesignFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */; };
@@ -38,7 +40,6 @@
 		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
 		E7288E47377376D238B7C1CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1427E7CB5130FC83F36A8F19 /* Assets.xcassets */; };
 		EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */; };
-		F271D8C627F47C3A51C0A901 /* StoryMediaCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */; };
 		ED73DCACD198363C47B0C2E3 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B74604130A946A9568F391B /* CameraController.swift */; };
 		FF53BF35C46EF6494703843E /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E023E109362F9ED0305266 /* Theme.swift */; };
 /* End PBXBuildFile section */
@@ -75,11 +76,13 @@
 		6C41C9A89DCD2F208021A68A /* AuthStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthStore.swift; sourceTree = "<group>"; };
 		710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizer.swift; sourceTree = "<group>"; };
 		73BDBCA8966387ED9F236329 /* UBEYE.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = UBEYE.entitlements; sourceTree = "<group>"; };
+		78085C32E4F7CCB340157B82 /* HLSOfflineCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSOfflineCache.swift; sourceTree = "<group>"; };
 		7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryStackViewer.swift; sourceTree = "<group>"; };
 		89A17262BABB67CA0E2EA127 /* ThumbHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbHash.swift; sourceTree = "<group>"; };
 		8A5958A6E79E2E80B485F7B3 /* RepliesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepliesView.swift; sourceTree = "<group>"; };
 		9B74604130A946A9568F391B /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizerTests.swift; sourceTree = "<group>"; };
+		A44C48E341BC120DEE6E53EF /* StoryMediaCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryMediaCanvas.swift; sourceTree = "<group>"; };
 		A6FC832199482683DD788D9D /* MediaEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaEngine.swift; sourceTree = "<group>"; };
 		AB6B0AFBB6D5AF2456E22286 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingView.swift; sourceTree = "<group>"; };
@@ -90,7 +93,6 @@
 		CEFA619704F081F3123B00D7 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 		D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
 		DF425320C4454522B6EB4E42 /* StoryVideoUploadPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoUploadPipeline.swift; sourceTree = "<group>"; };
-		F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryMediaCanvas.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -211,7 +213,7 @@
 		B162A719C6CF9C6CCD068F8F /* Stories */ = {
 			isa = PBXGroup;
 			children = (
-				F271D8C627F47C3A51C0A902 /* StoryMediaCanvas.swift */,
+				A44C48E341BC120DEE6E53EF /* StoryMediaCanvas.swift */,
 				7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */,
 				C1448A570359FB85F8135D45 /* StoryThumbnailOverlayView.swift */,
 			);
@@ -223,6 +225,7 @@
 			children = (
 				062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */,
 				024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */,
+				78085C32E4F7CCB340157B82 /* HLSOfflineCache.swift */,
 				A6FC832199482683DD788D9D /* MediaEngine.swift */,
 				69B57991CDEC6ED6639A348C /* MediaPlaybackQuality.swift */,
 				075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */,
@@ -360,6 +363,7 @@
 				C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */,
 				41C0166ED01A9744D2B54502 /* FollowingManagementView.swift in Sources */,
 				0D1863BA957CAA57945368E4 /* FollowingView.swift in Sources */,
+				255C8ACC23818516BB2441B2 /* HLSOfflineCache.swift in Sources */,
 				2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */,
 				03E12EC442CBCF298798C41C /* KeychainStore.swift in Sources */,
 				591D2D226C03B3857EEE6C75 /* MediaEngine.swift in Sources */,
@@ -370,8 +374,8 @@
 				8B749B6B28A94F2B4B6F344F /* RepliesView.swift in Sources */,
 				AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */,
 				A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */,
+				3386B356A4FD9EAE6DC7D45D /* StoryMediaCanvas.swift in Sources */,
 				EC7A89CB07438F67382C0A66 /* StoryStackViewer.swift in Sources */,
-				F271D8C627F47C3A51C0A901 /* StoryMediaCanvas.swift in Sources */,
 				A5E825E0B331124B20D0F62C /* StoryThumbnailOverlayView.swift in Sources */,
 				9A7C136B1E52B4EC743C9234 /* StoryUploadCoordinator.swift in Sources */,
 				2603AF00D70763AD85CF6047 /* StoryVideoGeometryNormalizer.swift in Sources */,
@@ -409,7 +413,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 319;
+				CURRENT_PROJECT_VERSION = 320;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -510,7 +514,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 319;
+				CURRENT_PROJECT_VERSION = 320;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

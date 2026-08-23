@@ -31,8 +31,12 @@ These should be measured with existing `MediaPerformance` events:
 - `video_stalled`
 - `video_recovered`
 - `video_player_pool_hit`
+- `video_player_pool_wait`
+- `video_player_staged`
+- `video_player_prepared`
+- `video_preroll_reused`
+- `video_prerolled`
 - `video_disk_cache_hit`
-- `video_player_pool_hit`
 - `video_retry`
 
 ## Architecture
@@ -65,11 +69,16 @@ Keep a small bounded set of prepared `AVPlayer` instances:
 - One active player bound to the visible layer.
 - Up to the remotely configured prepared-player limit for visible/adjacent stories.
 - Seed one early playable video per initially visible stack after feed restoration.
+- Start that embedded-stack preparation before the restored/network feed is published.
 - Keep one selectively prepared player on constrained/cellular connections.
 - Prepared players are keyed by canonical media URL.
 - Taking a prepared player preserves a completed preroll when it is already at the
   requested position; any seek invalidates that preroll.
-- A bounded handoff timeout does not destroy in-flight preparation.
+- Publish a staged player as soon as its `AVPlayerItem` exists. The active viewer takes
+  ownership of that same loading player immediately instead of waiting for background
+  preroll or creating a duplicate HLS request.
+- A short bounded handoff timeout covers only local URL resolution; it does not put a
+  350 ms delay on the cold path.
 
 The viewer promotes the exact active source when launch warming missed. A successfully
 prerolled player is attached and started immediately behind the poster rather than being
@@ -83,11 +92,30 @@ Current cache layers stay, but scheduling is centralized:
 - `MediaImageCache` for decoded thumbnails/images.
 - `MediaFileDiskCache` for progressive media files and images.
 - `AVPlayer`/`AVURLAsset` warming for the active item and a small adjacent window.
+- `HLSOfflineCache` for at most one predicted Wi-Fi download (known duration up to
+  30 seconds) and two retained VOD
+  packages, subject to a 128 MB application ceiling and a 24-hour system purge policy.
 
 The progressive file cache intentionally does not persist `.m3u8` playlists. Launch-time
-prefetch never starts a full `AVAssetDownloadURLSession` package download: AVFoundation's
-streaming cache and a bounded prepared-player pool provide the useful warm path without
-competing with visible playback for bandwidth or retaining multiple stories on disk.
+prefetch schedules an offline HLS package only after a 1.2-second idle window, only when
+the story viewer is not active, and never on cellular, constrained, or expensive paths.
+The package download is discretionary and is cancelled before it starts if playback wins
+the race; any already-running speculative download is cancelled when the story viewer
+appears. Active playback never waits for a package download.
+
+### Prediction
+
+- The embedded first-stack manifest is prepared before the feed becomes interactive.
+- A zero-distance simultaneous press gesture warms the exact story on initial finger-down.
+- A 500 ms engine debounce coalesces the subsequent completed-tap warm request.
+- Scroll and button gestures retain their existing behavior because prediction is
+  simultaneous and does not own navigation.
+
+### Startup quality
+
+Aggressive startup defaults are capped at 3 Mbps / 720 x 1280 on standard paths and
+2 Mbps / 540 x 960 on constrained paths. The limits are removed immediately after the
+first decoded frame, restoring the full Cloudflare adaptive ladder for ongoing playback.
 
 ### Feed Manifest
 
@@ -118,8 +146,9 @@ The mobile API exposes the same `renditions.playback` and `renditions.original` 
 6. Reduce high-frequency SwiftUI invalidation in story progress updates.
 7. Add dual-rendition schema/API support for playback and original media metadata.
 8. Add original-rendition background attach after normalized video upload.
-9. Add network-aware prefetch throttling, memory-warning cleanup, and HLS package download groundwork.
-10. Validate with iOS build/tests and Next lint/build where environment permits.
+9. Add network-aware prefetch throttling, memory-warning cleanup, and HLS package downloads.
+10. Add staged player ownership, touch-down prediction, and per-stage startup telemetry.
+11. Validate with iOS build/tests and Next lint/build where environment permits.
 
 ## Rollback Strategy
 
@@ -129,4 +158,4 @@ This work lives on `codex/mobile-media-engine-refactor`. Rollback is a branch sw
 - Feed manifest changes in API route/model files.
 - Upload rendition changes in composer/upload pipeline files.
 - Dual-rendition storage changes in `0035_story_original_renditions.sql`, schema, story-store, and mobile API response builders.
-- HLS package download support in `Theme.swift` and playback URL resolution in the media engine/viewer.
+- HLS package download support in `HLSOfflineCache.swift` and playback URL resolution in the media engine/viewer.

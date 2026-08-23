@@ -17,10 +17,12 @@ final class MediaEngine: ObservableObject {
     private var idleCleanupTask: Task<Void, Never>?
     private var backgroundPrefetchTask: Task<Void, Never>?
     private var visibleStackWarmTask: Task<Void, Never>?
+    private var offlineHLSPreheatTask: Task<Void, Never>?
     private var memoryWarningObserver: NSObjectProtocol?
     private var lastFeedPreheatKey: String?
     private var lastFeedPreheatAt = Date.distantPast
     private var isStoryViewerActive = false
+    private var lastStoryOpenWarm: (id: String, at: Date)?
 
     init() {
         memoryWarningObserver = NotificationCenter.default.addObserver(
@@ -132,6 +134,13 @@ final class MediaEngine: ObservableObject {
     func warmStoryOpen(storyId: String, adjacentIds: [String], api: APIClient) {
         idleCleanupTask?.cancel()
 
+        if let lastStoryOpenWarm,
+           lastStoryOpenWarm.id == storyId,
+           Date().timeIntervalSince(lastStoryOpenWarm.at) < 0.5 {
+            return
+        }
+        lastStoryOpenWarm = (storyId, Date())
+
         let ids = uniqueNonEmptyIds([storyId] + adjacentIds)
 
         guard !ids.isEmpty else {
@@ -153,15 +162,51 @@ final class MediaEngine: ObservableObject {
         }
     }
 
+    func prepareInitialStoryStacks(
+        ids: [String],
+        embeddedStacks: [String: StoryStackResponse]?
+    ) {
+        guard !isStoryViewerActive,
+              let embeddedStacks else {
+            return
+        }
+
+        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 4)
+        guard playerLimit > 0 else {
+            return
+        }
+
+        let orderedStacks = uniqueNonEmptyIds(ids).compactMap {
+            embeddedStacks[$0]?.story
+        }
+        let sources = Self.initialVideoSources(
+            in: orderedStacks,
+            limit: playerLimit
+        )
+        guard !sources.isEmpty else {
+            return
+        }
+
+        storyVideoPlaybackPool.prepare(sources: sources, activeIdentity: nil)
+        scheduleOfflineHLSPreheat(sources: sources)
+        MediaPerformance.mark(
+            "media_engine_embedded_video_warm candidates=\(sources.count) limit=\(playerLimit)"
+        )
+    }
+
     func prepare(stack: StoryStack, around index: Int, activeIdentity: String?) {
         MediaPreheater.preheat(
             stack: stack,
             around: index,
             preheatVideoAssets: !NetworkQualityMonitor.shared.isConstrained
         )
+        let sources = adjacentVideoSources(in: stack, around: index)
         storyVideoPlaybackPool.prepare(
-            sources: adjacentVideoSources(in: stack, around: index),
+            sources: sources,
             activeIdentity: activeIdentity
+        )
+        scheduleOfflineHLSPreheat(
+            sources: sources.filter { $0.identity != activeIdentity }
         )
     }
 
@@ -173,6 +218,11 @@ final class MediaEngine: ObservableObject {
         backgroundPrefetchTask = nil
         visibleStackWarmTask?.cancel()
         visibleStackWarmTask = nil
+        offlineHLSPreheatTask?.cancel()
+        offlineHLSPreheatTask = nil
+        Task(priority: .utility) {
+            await HLSOfflineCache.shared.suspendSpeculativeDownloads()
+        }
     }
 
     func storyViewerDidDisappear() {
@@ -199,6 +249,8 @@ final class MediaEngine: ObservableObject {
         backgroundPrefetchTask = nil
         visibleStackWarmTask?.cancel()
         visibleStackWarmTask = nil
+        offlineHLSPreheatTask?.cancel()
+        offlineHLSPreheatTask = nil
         storyVideoPlaybackPool.removeAll()
         MediaImageCache.shared.removeAll()
         MediaPerformance.mark("media_engine_clear reason=\(reason)")
@@ -244,9 +296,40 @@ final class MediaEngine: ObservableObject {
         }
 
         storyVideoPlaybackPool.prepare(sources: sources, activeIdentity: nil)
+        scheduleOfflineHLSPreheat(sources: sources)
         MediaPerformance.mark(
             "media_engine_visible_video_warm candidates=\(sources.count) limit=\(playerLimit)"
         )
+    }
+
+    private func scheduleOfflineHLSPreheat(
+        sources: [StoryVideoPlaybackSource]
+    ) {
+        guard !sources.isEmpty else {
+            return
+        }
+
+        offlineHLSPreheatTask?.cancel()
+        offlineHLSPreheatTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard let self,
+                  !Task.isCancelled,
+                  !isStoryViewerActive else {
+                return
+            }
+            let limit = NetworkQualityMonitor.shared.offlineHLSPreheatLimit
+            let maximumAssets = NetworkQualityMonitor.shared.offlineHLSCacheMaxAssets
+            guard limit > 0, maximumAssets > 0 else {
+                offlineHLSPreheatTask = nil
+                return
+            }
+            await HLSOfflineCache.shared.preheat(
+                sources,
+                limit: limit,
+                policy: .init(maximumAssets: maximumAssets)
+            )
+            offlineHLSPreheatTask = nil
+        }
     }
 
     static func initialVideoSources(
@@ -317,24 +400,33 @@ final class MediaEngine: ObservableObject {
 
 @MainActor
 final class StoryVideoPlaybackPool: ObservableObject {
-    nonisolated static let defaultHandoffWait: Duration = .milliseconds(350)
+    nonisolated static let defaultHandoffWait: Duration = .milliseconds(80)
 
     struct PreparedPlayer {
+        enum HandoffStage: String {
+            case staged
+            case ready
+            case prerolled
+        }
+
         let player: AVPlayer
         let playbackURL: URL
         let cacheState: String
         let wasPrerolled: Bool
+        let handoffStage: HandoffStage
 
         init(
             player: AVPlayer,
             playbackURL: URL,
             cacheState: String,
-            wasPrerolled: Bool = false
+            wasPrerolled: Bool = false,
+            handoffStage: HandoffStage? = nil
         ) {
             self.player = player
             self.playbackURL = playbackURL
             self.cacheState = cacheState
             self.wasPrerolled = wasPrerolled
+            self.handoffStage = handoffStage ?? (wasPrerolled ? .prerolled : .ready)
         }
     }
 
@@ -343,11 +435,20 @@ final class StoryVideoPlaybackPool: ObservableObject {
         let task: Task<Void, Never>
     }
 
+    private struct StagedPlayer {
+        let preparationID: UUID
+        let prepared: PreparedPlayer
+    }
+
     private var preparedPlayers: [String: PreparedPlayer] = [:]
+    private var stagedPlayers: [String: StagedPlayer] = [:]
     private var prepareTasks: [String: Preparation] = [:]
     private var desiredIdentities = Set<String>()
     private var acquiringIdentities = Set<String>()
-    private let playerBuilder: (URL) async -> PreparedPlayer?
+    private let playerBuilder: (
+        StoryVideoPlaybackSource,
+        @escaping @MainActor (PreparedPlayer) -> Void
+    ) async -> PreparedPlayer?
     private let preparedPlayerLimitOverride: Int?
     private var maxPreparedPlayers: Int {
         min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 4)
@@ -362,7 +463,20 @@ final class StoryVideoPlaybackPool: ObservableObject {
         maxPreparedPlayers: Int,
         playerBuilder: @escaping (URL) async -> PreparedPlayer?
     ) {
-        self.playerBuilder = playerBuilder
+        self.playerBuilder = { source, _ in
+            await playerBuilder(source.url)
+        }
+        preparedPlayerLimitOverride = max(0, maxPreparedPlayers)
+    }
+
+    init(
+        maxPreparedPlayers: Int,
+        stagedPlayerBuilder: @escaping (
+            StoryVideoPlaybackSource,
+            @escaping @MainActor (PreparedPlayer) -> Void
+        ) async -> PreparedPlayer?
+    ) {
+        playerBuilder = stagedPlayerBuilder
         preparedPlayerLimitOverride = max(0, maxPreparedPlayers)
     }
 
@@ -381,6 +495,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
         if let prepared = await checkOutPreparedPlayer(for: identity) {
             logPoolWait(result: "hit", url: source.url, startedAt: waitStartedAt)
             return prepared
+        }
+
+        if let staged = await checkOutStagedPlayer(for: identity) {
+            logPoolWait(result: "staged_handoff", url: source.url, startedAt: waitStartedAt)
+            return staged
         }
 
         guard let preparation = prepareTasks[identity] else {
@@ -404,6 +523,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
                 return prepared
             }
 
+            if let staged = await checkOutStagedPlayer(for: identity) {
+                logPoolWait(result: "staged_handoff", url: source.url, startedAt: waitStartedAt)
+                return staged
+            }
+
             guard prepareTasks[identity]?.id == preparation.id else {
                 break
             }
@@ -414,6 +538,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
         if let prepared = await checkOutPreparedPlayer(for: identity) {
             logPoolWait(result: "handoff", url: source.url, startedAt: waitStartedAt)
             return prepared
+        }
+
+        if let staged = await checkOutStagedPlayer(for: identity) {
+            logPoolWait(result: "staged_handoff", url: source.url, startedAt: waitStartedAt)
+            return staged
         }
 
         // The active viewer can fall back without destroying work that is already in
@@ -451,6 +580,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         if let activeIdentity {
             if promotedActiveSource != nil ||
                 preparedPlayers[activeIdentity] != nil ||
+                stagedPlayers[activeIdentity] != nil ||
                 prepareTasks[activeIdentity] != nil {
                 // Preserve a player that was warmed immediately before navigation long
                 // enough for the active viewer to claim it. If launch warming missed,
@@ -467,6 +597,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         for source in sourcesToPrepare {
             let identity = source.identity
             guard preparedPlayers[identity] == nil,
+                  stagedPlayers[identity] == nil,
                   prepareTasks[identity] == nil else {
                 continue
             }
@@ -477,15 +608,34 @@ final class StoryVideoPlaybackPool: ObservableObject {
                     return
                 }
 
+                let prepareStartedAt = Date()
                 let prepareInterval = MediaPerformance.beginInterval("video_player_prepared url=\(source.url.lastPathComponent)")
-                guard let prepared = await self.playerBuilder(source.url),
-                      !Task.isCancelled else {
+                let prepared = await self.playerBuilder(source) { [weak self] staged in
+                    self?.publishStagedPlayer(
+                        staged,
+                        for: identity,
+                        preparationID: preparationID,
+                        startedAt: prepareStartedAt,
+                        sourceURL: source.url
+                    )
+                }
+                guard let prepared else {
                     MediaPerformance.cancelInterval(prepareInterval, reason: "failed_or_cancelled")
                     self.finishPreparation(id: preparationID, for: identity)
                     return
                 }
 
+                guard !Task.isCancelled,
+                      self.prepareTasks[identity]?.id == preparationID else {
+                    MediaPerformance.cancelInterval(
+                        prepareInterval,
+                        reason: "staged_handoff_or_cancelled"
+                    )
+                    return
+                }
+
                 self.finishPreparation(id: preparationID, for: identity)
+                self.stagedPlayers[identity] = nil
                 guard self.desiredIdentities.contains(identity) || self.acquiringIdentities.contains(identity) else {
                     prepared.player.pause()
                     MediaPerformance.cancelInterval(prepareInterval, reason: "no_longer_adjacent")
@@ -496,7 +646,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
                 MediaPerformance.endInterval(
                     prepareInterval,
                     event: "video_player_prepared preroll=\(prepared.wasPrerolled ? "ready" : "asset_only") url=\(source.url.lastPathComponent)",
-                    upload: false
+                    upload: true
                 )
                 self.prune(keeping: self.desiredIdentities)
             }
@@ -556,6 +706,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
             prepared.player.pause()
         }
         preparedPlayers.removeAll()
+        for staged in stagedPlayers.values {
+            staged.prepared.player.cancelPendingPrerolls()
+            staged.prepared.player.pause()
+        }
+        stagedPlayers.removeAll()
         desiredIdentities.removeAll()
         acquiringIdentities.removeAll()
     }
@@ -580,19 +735,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
         return components.url ?? url
     }
 
-    private static func buildPreparedPlayer(for url: URL) async -> PreparedPlayer? {
-        let resolved = await resolvePlaybackURL(for: url)
+    private static func buildPreparedPlayer(
+        for source: StoryVideoPlaybackSource,
+        onStaged: @escaping @MainActor (PreparedPlayer) -> Void
+    ) async -> PreparedPlayer? {
+        let resolved = await resolvePlaybackURL(for: source)
         let asset = AVURLAsset(url: resolved.playbackURL)
-
-        do {
-            guard try await asset.load(.isPlayable) else {
-                return nil
-            }
-            _ = try? await asset.load(.duration)
-        } catch {
-            MediaPerformance.mark("video_player_prepare_failed url=\(url.lastPathComponent)")
-            return nil
-        }
 
         let item = AVPlayerItem(asset: asset)
         configureStreamingHints(for: item, playbackURL: resolved.playbackURL)
@@ -603,6 +751,18 @@ final class StoryVideoPlaybackPool: ObservableObject {
         player.actionAtItemEnd = .pause
         player.automaticallyWaitsToMinimizeStalling = true
         player.pause()
+        let staged = PreparedPlayer(
+            player: player,
+            playbackURL: resolved.playbackURL,
+            cacheState: resolved.cacheState,
+            handoffStage: .staged
+        )
+        onStaged(staged)
+
+        guard !Task.isCancelled else {
+            return staged
+        }
+
         let isReadyToPreroll = await waitUntilReadyToPreroll(player: player, item: item)
         let wasPrerolled: Bool
         if isReadyToPreroll, !Task.isCancelled {
@@ -616,7 +776,8 @@ final class StoryVideoPlaybackPool: ObservableObject {
             player: player,
             playbackURL: resolved.playbackURL,
             cacheState: resolved.cacheState,
-            wasPrerolled: wasPrerolled
+            wasPrerolled: wasPrerolled,
+            handoffStage: wasPrerolled ? .prerolled : .ready
         )
     }
 
@@ -654,7 +815,14 @@ final class StoryVideoPlaybackPool: ObservableObject {
         return canPreroll(playerStatus: player.status, itemStatus: item.status)
     }
 
-    private static func resolvePlaybackURL(for url: URL) async -> (playbackURL: URL, cacheState: String) {
+    private static func resolvePlaybackURL(
+        for source: StoryVideoPlaybackSource
+    ) async -> (playbackURL: URL, cacheState: String) {
+        if let localHLSURL = await HLSOfflineCache.shared.cachedPlaybackURL(for: source) {
+            return (localHLSURL, "hls_package")
+        }
+
+        let url = source.url
         let canPersistVideo = await MediaFileDiskCache.shared.supportsPersistence(url: url, kind: .video)
 
         if canPersistVideo,
@@ -706,7 +874,51 @@ final class StoryVideoPlaybackPool: ObservableObject {
             wasPrerolled: Self.retainsPreroll(
                 wasPrerolled: prepared.wasPrerolled,
                 neededSeek: neededSeek
-            )
+            ),
+            handoffStage: Self.retainsPreroll(
+                wasPrerolled: prepared.wasPrerolled,
+                neededSeek: neededSeek
+            ) ? .prerolled : .ready
+        )
+    }
+
+    private func checkOutStagedPlayer(for identity: String) async -> PreparedPlayer? {
+        guard let staged = stagedPlayers.removeValue(forKey: identity),
+              prepareTasks[identity]?.id == staged.preparationID else {
+            return nil
+        }
+
+        prepareTasks[identity]?.task.cancel()
+        prepareTasks[identity] = nil
+        desiredIdentities.remove(identity)
+        staged.prepared.player.cancelPendingPrerolls()
+        staged.prepared.player.pause()
+        MediaPerformance.mark(
+            "video_player_pool_hit handoff=staged preroll=required url=\(staged.prepared.playbackURL.lastPathComponent)"
+        )
+        return staged.prepared
+    }
+
+    private func publishStagedPlayer(
+        _ prepared: PreparedPlayer,
+        for identity: String,
+        preparationID: UUID,
+        startedAt: Date,
+        sourceURL: URL
+    ) {
+        guard prepareTasks[identity]?.id == preparationID,
+              desiredIdentities.contains(identity) || acquiringIdentities.contains(identity) else {
+            prepared.player.pause()
+            return
+        }
+
+        stagedPlayers[identity] = StagedPlayer(
+            preparationID: preparationID,
+            prepared: prepared
+        )
+        MediaPerformance.measure(
+            "video_player_staged url=\(sourceURL.lastPathComponent)",
+            since: startedAt
         )
     }
 
@@ -742,12 +954,16 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         preparation.task.cancel()
         prepareTasks[identity] = nil
+        stagedPlayers[identity]?.prepared.player.cancelPendingPrerolls()
+        stagedPlayers[identity]?.prepared.player.pause()
+        stagedPlayers[identity] = nil
     }
 
     private func logPoolWait(result: String, url: URL, startedAt: Date) {
         let waitMilliseconds = Int(max(0, Date().timeIntervalSince(startedAt) * 1_000))
-        MediaPerformance.mark(
-            "video_player_pool_wait result=\(result) wait_ms=\(waitMilliseconds) url=\(url.lastPathComponent)"
+        MediaPerformance.measure(
+            "video_player_pool_wait result=\(result) wait_ms=\(waitMilliseconds) url=\(url.lastPathComponent)",
+            since: startedAt
         )
     }
 
@@ -757,6 +973,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
         for identity in Array(prepareTasks.keys) where !retainedIdentities.contains(identity) {
             prepareTasks[identity]?.task.cancel()
             prepareTasks[identity] = nil
+        }
+
+        for identity in Array(stagedPlayers.keys) where !retainedIdentities.contains(identity) {
+            stagedPlayers[identity]?.prepared.player.cancelPendingPrerolls()
+            stagedPlayers[identity]?.prepared.player.pause()
+            stagedPlayers[identity] = nil
         }
 
         for identity in Array(preparedPlayers.keys) where !retainedIdentities.contains(identity) {

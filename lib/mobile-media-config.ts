@@ -21,6 +21,11 @@ export type RuntimeMediaConfig = {
     constrained: number
     standard: number
   }
+  offlineHLSPreheatLimit: {
+    constrained: number
+    standard: number
+  }
+  offlineHLSCacheMaxAssets: number
   startupStreamingPeakBitRate: {
     constrained: number
     standard: number
@@ -72,13 +77,14 @@ export function getMobileMediaConfig(input: {
   canaryBucket?: number | null
 } = {}): RuntimeMediaConfig {
   const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 255
+  const supportsOfflineHLSCaching = (input.clientBuild ?? 0) >= 320
   const aggressiveConfigEnabled = booleanEnv(
     "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
     true,
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.2",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
@@ -149,35 +155,51 @@ export function getMobileMediaConfig(input: {
         max: 6,
       }),
     },
+    offlineHLSPreheatLimit: {
+      constrained: 0,
+      standard: supportsOfflineHLSCaching
+        ? integerEnv(
+            "MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD",
+            aggressiveConfigEnabled ? 1 : 0,
+            { min: 0, max: 1 },
+          )
+        : 0,
+    },
+    offlineHLSCacheMaxAssets: supportsOfflineHLSCaching
+      ? integerEnv("MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS", 2, {
+          min: 0,
+          max: 3,
+        })
+      : 0,
     startupStreamingPeakBitRate: {
       constrained: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        aggressiveConfigEnabled ? 4_000_000 : 6_000_000,
-        { min: 2_000_000, max: 16_000_000 },
+        aggressiveConfigEnabled ? 2_000_000 : 4_000_000,
+        { min: 1_500_000, max: 16_000_000 },
       ),
       standard: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
-        aggressiveConfigEnabled ? 8_000_000 : 10_000_000,
+        aggressiveConfigEnabled ? 3_000_000 : 6_000_000,
         { min: 1_500_000, max: 20_000_000 },
       ),
     },
     startupStreamingMaximumResolution: {
       constrained: {
-        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED", 720, {
+        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED", 540, {
           min: 360,
           max: 1080,
         }),
-        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED", 1280, {
+        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED", 960, {
           min: 640,
           max: 1920,
         }),
       },
       standard: {
-        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_STANDARD", 1080, {
+        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_STANDARD", aggressiveConfigEnabled ? 720 : 1080, {
           min: 540,
           max: 2160,
         }),
-        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_STANDARD", 1920, {
+        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_STANDARD", aggressiveConfigEnabled ? 1280 : 1920, {
           min: 960,
           max: 3840,
         }),

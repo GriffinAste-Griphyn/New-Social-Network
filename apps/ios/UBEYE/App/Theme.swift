@@ -318,6 +318,11 @@ enum MediaPerformance {
         "video_dismissed",
         "video_ended",
         "video_player_pool_hit",
+        "video_player_pool_wait",
+        "video_player_prepared",
+        "video_player_staged",
+        "video_preroll_reused",
+        "video_prerolled",
         "video_retry",
         "video_recovered",
         "video_startup",
@@ -681,10 +686,18 @@ final class MediaControlConfig {
         readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 2 : 4)
     }
 
+    func offlineHLSPreheatLimit(isLimited: Bool) -> Int {
+        readLimit(\.offlineHLSPreheatLimit, isLimited: isLimited, fallback: isLimited ? 0 : 1)
+    }
+
+    var offlineHLSCacheMaxAssets: Int {
+        read { min(max($0?.offlineHLSCacheMaxAssets ?? 2, 0), 3) }
+    }
+
     func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
             guard let pair = $0?.startupStreamingPeakBitRate else {
-                return isLimited ? 4_000_000 : 8_000_000
+                return isLimited ? 2_000_000 : 3_000_000
             }
 
             return isLimited ? pair.constrained : pair.standard
@@ -694,7 +707,9 @@ final class MediaControlConfig {
     func startupStreamingMaximumResolution(isLimited: Bool) -> CGSize {
         read {
             guard let pair = $0?.startupStreamingMaximumResolution else {
-                return isLimited ? CGSize(width: 720, height: 1280) : CGSize(width: 1080, height: 1920)
+                return isLimited
+                    ? CGSize(width: 540, height: 960)
+                    : CGSize(width: 720, height: 1280)
             }
 
             let resolution = isLimited ? pair.constrained : pair.standard
@@ -741,9 +756,10 @@ final class NetworkQualityMonitor {
     private let queue = DispatchQueue(label: "ubeye.network-quality")
     private(set) var isConstrained = false
     private(set) var isCellular = false
+    private(set) var isExpensive = false
 
     private var shouldLimitPreheating: Bool {
-        isConstrained || isCellular
+        isConstrained || isCellular || isExpensive
     }
 
     private var shouldLimitStreamingQuality: Bool {
@@ -766,6 +782,14 @@ final class NetworkQualityMonitor {
         MediaControlConfig.shared.persistentVideoPreheatLimit(isLimited: shouldLimitPreheating)
     }
 
+    var offlineHLSPreheatLimit: Int {
+        MediaControlConfig.shared.offlineHLSPreheatLimit(isLimited: shouldLimitPreheating)
+    }
+
+    var offlineHLSCacheMaxAssets: Int {
+        MediaControlConfig.shared.offlineHLSCacheMaxAssets
+    }
+
     var startupStreamingPeakBitRate: Double {
         MediaControlConfig.shared.startupStreamingPeakBitRate(isLimited: shouldLimitStreamingQuality)
     }
@@ -779,6 +803,7 @@ final class NetworkQualityMonitor {
             Task { @MainActor in
                 self?.isConstrained = path.isConstrained
                 self?.isCellular = path.usesInterfaceType(.cellular)
+                self?.isExpensive = path.isExpensive
             }
         }
         monitor.start(queue: queue)
@@ -1706,5 +1731,32 @@ struct InlineNotice: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke((isError ? Color.ubeyeRed : Color.green).opacity(0.18), lineWidth: 1)
         )
+    }
+}
+
+struct StoryPressPrewarmModifier: ViewModifier {
+    let action: () -> Void
+    @State private var didPrewarmCurrentPress = false
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !didPrewarmCurrentPress else {
+                        return
+                    }
+                    didPrewarmCurrentPress = true
+                    action()
+                }
+                .onEnded { _ in
+                    didPrewarmCurrentPress = false
+                }
+        )
+    }
+}
+
+extension View {
+    func storyPressPrewarm(_ action: @escaping () -> Void) -> some View {
+        modifier(StoryPressPrewarmModifier(action: action))
     }
 }
