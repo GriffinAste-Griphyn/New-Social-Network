@@ -199,6 +199,18 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
+    static let normalizedTargetBitsPerSecond = 8_256_000
+
+    static func normalizedFileLengthLimit(durationSeconds: TimeInterval) -> Int64? {
+        guard durationSeconds.isFinite, durationSeconds > 0 else {
+            return nil
+        }
+
+        return Int64(
+            ceil(durationSeconds * Double(normalizedTargetBitsPerSecond) / 8)
+        )
+    }
+
     private static let maxUploadBytes = StoryMediaContract.maximumVideoUploadBytes
 
     static func prepare(
@@ -477,16 +489,10 @@ enum StoryVideoUploadNormalizer {
         if let exportTimeRange {
             export.timeRange = exportTimeRange
             let durationSeconds = CMTimeGetSeconds(exportTimeRange.duration)
-            if durationSeconds.isFinite, durationSeconds > 0 {
-                let isConstrained = await MainActor.run {
-                    NetworkQualityMonitor.shared.isConstrained
-                }
-                let targetBitsPerSecond = isConstrained
-                    ? 6_256_000
-                    : 8_256_000
-                export.fileLengthLimit = Int64(
-                    ceil(durationSeconds * Double(targetBitsPerSecond) / 8)
-                )
+            if let fileLengthLimit = normalizedFileLengthLimit(
+                durationSeconds: durationSeconds
+            ) {
+                export.fileLengthLimit = fileLengthLimit
             }
         }
 

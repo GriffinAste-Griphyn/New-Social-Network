@@ -126,6 +126,7 @@ export const mobilePerformanceEventName = pgEnum(
     "video_item_ready",
     "video_stalled",
     "video_access_log",
+    "video_quality_ramp",
   ],
 )
 export const feedEventKind = pgEnum("feed_event_kind", [

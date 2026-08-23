@@ -2504,6 +2504,17 @@ enum VideoStartupPolicy {
     }
 }
 
+enum VideoQualityRampPolicy {
+    static let sampleInterval: Duration = .milliseconds(250)
+    static let timeoutSeconds: TimeInterval = 8
+
+    static func hasReached1080p(_ size: CGSize) -> Bool {
+        let shortSide = min(abs(size.width), abs(size.height))
+        let longSide = max(abs(size.width), abs(size.height))
+        return shortSide >= 1_000 && longSide >= 1_800
+    }
+}
+
 @MainActor
 private final class AutoPlayVideoPlaybackController: ObservableObject {
     private enum PlaybackPhase: Equatable {
@@ -2537,7 +2548,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var revealTask: Task<Void, Never>?
     private var seekTask: Task<Void, Never>?
     private var stallRecoveryTask: Task<Void, Never>?
+    private var qualityRampTask: Task<Void, Never>?
     private var playbackStartedAt: Date?
+    private var qualityRampStartedAt: Date?
+    private var qualityRampLastSize = CGSize.zero
     private var startupInterval: MediaPerformance.Interval?
     private var startupMetadata = ""
     private var onReadyForPlayback: () -> Void = {}
@@ -2546,6 +2560,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var playbackRetryCount = 0
     private var layerReadyForDisplay = false
     private var didUploadAccessLog = false
+    private var didUploadQualityRamp = false
+    private var shouldUploadQoE = false
     private var playbackPhase = PlaybackPhase.idle
     private var playbackGeneration = 0
     private var revealTargetSeconds: TimeInterval = 0
@@ -2587,6 +2603,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         layerReadyForDisplay = false
         didFinishPlayback = false
         didUploadAccessLog = false
+        didUploadQualityRamp = false
+        shouldUploadQoE = MediaControlConfig.shared.shouldUploadAccessLog()
+        qualityRampStartedAt = nil
+        qualityRampLastSize = .zero
         lastPublishedProgress = 0
         startPlayback(
             source: source,
@@ -2660,6 +2680,13 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
             player?.pause()
             let next = prepared?.player ?? makeFreshPlayer(playbackURL: playbackURL)
+            if let prepared {
+                MediaPlaybackQuality.applyStreamingHints(
+                    for: next.currentItem,
+                    playbackURL: playbackURL,
+                    profile: prepared.handoffStage == .staged ? .cold : .prepared
+                )
+            }
             next.pause()
             next.isMuted = true
             hasCompletedPreroll = prepared?.wasPrerolled == true
@@ -2903,12 +2930,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     private func configureStreamingHints(for item: AVPlayerItem?, playbackURL: URL) {
-        guard let item, playbackURL.pathExtension.lowercased() == "m3u8" else {
-            return
-        }
-
-        item.preferredPeakBitRate = MediaPlaybackQuality.preferredStreamingPeakBitRate
-        item.preferredMaximumResolution = MediaPlaybackQuality.preferredStreamingMaximumResolution
+        MediaPlaybackQuality.applyStreamingHints(
+            for: item,
+            playbackURL: playbackURL,
+            profile: .cold
+        )
     }
 
     private func playbackDelivery(for url: URL) -> String {
@@ -3059,6 +3085,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             for: player.currentItem,
             playbackURL: activePlaybackURL
         )
+        startQualityRampMonitoring(player: player, generation: generation)
         onReadyForPlayback()
         let metadata = startupMetadata.isEmpty
             ? "url=\(activeURL?.lastPathComponent ?? "unknown")"
@@ -3395,7 +3422,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
     private func logAccessLogIfNeeded(reason: String) {
         guard !didUploadAccessLog,
-              MediaControlConfig.shared.shouldUploadAccessLog(),
+              shouldUploadQoE,
               let event = player?.currentItem?.accessLog()?.events.last else {
             return
         }
@@ -3415,6 +3442,63 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         MediaPerformance.mark(
             "video_access_log reason=\(reason) delivery=\(delivery) observedBitrate=\(observedBitrate) indicatedBitrate=\(indicatedBitrate) width=\(presentationWidth) height=\(presentationHeight) stalls=\(event.numberOfStalls) transferDurationMs=\(transferDurationMs) watchedMs=\(watchedMs) downloadedMs=\(downloadedMs) bytes=\(event.numberOfBytesTransferred) uri=\(uri)"
+        )
+    }
+
+    private func startQualityRampMonitoring(player: AVPlayer, generation: Int) {
+        qualityRampTask?.cancel()
+        qualityRampTask = nil
+
+        guard shouldUploadQoE,
+              activePlaybackURL?.pathExtension.lowercased() == "m3u8" else {
+            return
+        }
+
+        let startedAt = Date()
+        qualityRampStartedAt = startedAt
+        qualityRampTask = Task { @MainActor in
+            while Date().timeIntervalSince(startedAt) < VideoQualityRampPolicy.timeoutSeconds {
+                guard self.isCurrentPlayer(player, generation: generation),
+                      !Task.isCancelled else {
+                    return
+                }
+
+                let size = player.currentItem?.presentationSize ?? .zero
+                self.qualityRampLastSize = size
+                if VideoQualityRampPolicy.hasReached1080p(size) {
+                    self.logQualityRampIfNeeded(result: "reached")
+                    return
+                }
+
+                try? await Task.sleep(for: VideoQualityRampPolicy.sampleInterval)
+            }
+
+            guard self.isCurrentPlayer(player, generation: generation),
+                  !Task.isCancelled else {
+                return
+            }
+            self.logQualityRampIfNeeded(result: "timeout")
+        }
+    }
+
+    private func logQualityRampIfNeeded(result: String) {
+        guard !didUploadQualityRamp,
+              let startedAt = qualityRampStartedAt else {
+            return
+        }
+
+        didUploadQualityRamp = true
+        let event = player?.currentItem?.accessLog()?.events.last
+        let width = Int(max(0, qualityRampLastSize.width).rounded())
+        let height = Int(max(0, qualityRampLastSize.height).rounded())
+        let indicatedBitrate = Int(max(0, event?.indicatedBitrate ?? 0).rounded())
+        let observedBitrate = Int(max(0, event?.observedBitrate ?? 0).rounded())
+        let startupMilliseconds = playbackStartedAt.map {
+            Int(max(0, Date().timeIntervalSince($0)) * 1_000)
+        } ?? 0
+        MediaPerformance.measure(
+            "video_quality_ramp result=\(result) target=1080p width=\(width) height=\(height) indicatedBitrate=\(indicatedBitrate) observedBitrate=\(observedBitrate) startup_ms=\(startupMilliseconds) \(startupMetadata)",
+            since: startedAt
         )
     }
 
@@ -3443,6 +3527,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         seekTask = nil
         stallRecoveryTask?.cancel()
         stallRecoveryTask = nil
+        let qualityRampResult = reason.map { "interrupted_\($0)" } ?? "interrupted"
+        logQualityRampIfNeeded(result: qualityRampResult)
+        qualityRampTask?.cancel()
+        qualityRampTask = nil
 
         if let stallObserver {
             NotificationCenter.default.removeObserver(stallObserver)
@@ -3479,6 +3567,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         didFinishPlayback = false
         lastPublishedProgress = 0
         playbackStartedAt = nil
+        qualityRampStartedAt = nil
+        qualityRampLastSize = .zero
         activePlaybackURL = nil
         expectedDurationSeconds = nil
         startupMetadata = ""

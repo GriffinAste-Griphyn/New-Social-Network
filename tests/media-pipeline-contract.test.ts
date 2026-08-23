@@ -146,6 +146,14 @@ describe("aggressive media pipeline contract", () => {
       constrained: { width: 540, height: 960 },
       standard: { width: 720, height: 1280 },
     })
+    expect(config.preparedStreamingPeakBitRate).toEqual({
+      constrained: 2_000_000,
+      standard: 8_256_000,
+    })
+    expect(config.preparedStreamingMaximumResolution).toEqual({
+      constrained: { width: 540, height: 960 },
+      standard: { width: 1080, height: 1920 },
+    })
     expect(config.offlineHLSPreheatLimit).toEqual({ constrained: 0, standard: 1 })
     expect(config.offlineHLSCacheMaxAssets).toBe(2)
   })

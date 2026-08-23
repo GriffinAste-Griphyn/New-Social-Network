@@ -334,6 +334,7 @@ enum MediaPerformance {
         "video_item_ready",
         "video_stalled",
         "video_access_log",
+        "video_quality_ramp",
     ]
 
     struct Interval {
@@ -717,6 +718,29 @@ final class MediaControlConfig {
         }
     }
 
+    func preparedStreamingPeakBitRate(isLimited: Bool) -> Double {
+        read {
+            guard let pair = $0?.preparedStreamingPeakBitRate else {
+                return isLimited ? 2_000_000 : 8_256_000
+            }
+
+            return isLimited ? pair.constrained : pair.standard
+        }
+    }
+
+    func preparedStreamingMaximumResolution(isLimited: Bool) -> CGSize {
+        read {
+            guard let pair = $0?.preparedStreamingMaximumResolution else {
+                return isLimited
+                    ? CGSize(width: 540, height: 960)
+                    : CGSize(width: 1080, height: 1920)
+            }
+
+            let resolution = isLimited ? pair.constrained : pair.standard
+            return CGSize(width: resolution.width, height: resolution.height)
+        }
+    }
+
     func shouldUploadAccessLog() -> Bool {
         let sampleRate = qoeAccessLogSampleRate
         guard sampleRate > 0 else {
@@ -796,6 +820,14 @@ final class NetworkQualityMonitor {
 
     var startupStreamingMaximumResolution: CGSize {
         MediaControlConfig.shared.startupStreamingMaximumResolution(isLimited: shouldLimitStreamingQuality)
+    }
+
+    var preparedStreamingPeakBitRate: Double {
+        MediaControlConfig.shared.preparedStreamingPeakBitRate(isLimited: shouldLimitPreheating)
+    }
+
+    var preparedStreamingMaximumResolution: CGSize {
+        MediaControlConfig.shared.preparedStreamingMaximumResolution(isLimited: shouldLimitPreheating)
     }
 
     private init() {

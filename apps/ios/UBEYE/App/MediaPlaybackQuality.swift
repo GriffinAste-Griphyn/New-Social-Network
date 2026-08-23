@@ -31,19 +31,35 @@ struct StoryVideoPlaybackSource: Hashable {
 }
 
 enum MediaPlaybackQuality {
-    @MainActor
-    static var preferredStreamingPeakBitRate: Double {
-        NetworkQualityMonitor.shared.startupStreamingPeakBitRate
-    }
-
-    @MainActor
-    static var preferredStreamingMaximumResolution: CGSize {
-        NetworkQualityMonitor.shared.startupStreamingMaximumResolution
+    enum StartupProfile {
+        case cold
+        case prepared
     }
 
     @MainActor
     static var offlineStreamingPeakBitRate: Double {
         min(NetworkQualityMonitor.shared.startupStreamingPeakBitRate, 2_000_000)
+    }
+
+    @MainActor
+    static func applyStreamingHints(
+        for item: AVPlayerItem?,
+        playbackURL: URL?,
+        profile: StartupProfile
+    ) {
+        guard let item,
+              playbackURL?.pathExtension.lowercased() == "m3u8" else {
+            return
+        }
+
+        switch profile {
+        case .cold:
+            item.preferredPeakBitRate = NetworkQualityMonitor.shared.startupStreamingPeakBitRate
+            item.preferredMaximumResolution = NetworkQualityMonitor.shared.startupStreamingMaximumResolution
+        case .prepared:
+            item.preferredPeakBitRate = NetworkQualityMonitor.shared.preparedStreamingPeakBitRate
+            item.preferredMaximumResolution = NetworkQualityMonitor.shared.preparedStreamingMaximumResolution
+        }
     }
 
     @MainActor

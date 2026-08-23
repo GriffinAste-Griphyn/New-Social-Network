@@ -40,6 +40,20 @@ export type RuntimeMediaConfig = {
       height: number
     }
   }
+  preparedStreamingPeakBitRate: {
+    constrained: number
+    standard: number
+  }
+  preparedStreamingMaximumResolution: {
+    constrained: {
+      width: number
+      height: number
+    }
+    standard: {
+      width: number
+      height: number
+    }
+  }
 }
 
 function integerEnv(name: string, fallback: number, bounds: { min: number; max: number }) {
@@ -84,7 +98,7 @@ export function getMobileMediaConfig(input: {
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.2",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.3",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
@@ -201,6 +215,40 @@ export function getMobileMediaConfig(input: {
         }),
         height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_STANDARD", aggressiveConfigEnabled ? 1280 : 1920, {
           min: 960,
+          max: 3840,
+        }),
+      },
+    },
+    preparedStreamingPeakBitRate: {
+      constrained: integerEnv(
+        "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_CONSTRAINED",
+        2_000_000,
+        { min: 1_500_000, max: 8_500_000 },
+      ),
+      standard: integerEnv(
+        "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD",
+        8_256_000,
+        { min: 3_000_000, max: 20_000_000 },
+      ),
+    },
+    preparedStreamingMaximumResolution: {
+      constrained: {
+        width: integerEnv("MOBILE_PREPARED_MAX_WIDTH_CONSTRAINED", 540, {
+          min: 360,
+          max: 1080,
+        }),
+        height: integerEnv("MOBILE_PREPARED_MAX_HEIGHT_CONSTRAINED", 960, {
+          min: 640,
+          max: 1920,
+        }),
+      },
+      standard: {
+        width: integerEnv("MOBILE_PREPARED_MAX_WIDTH_STANDARD", 1080, {
+          min: 720,
+          max: 2160,
+        }),
+        height: integerEnv("MOBILE_PREPARED_MAX_HEIGHT_STANDARD", 1920, {
+          min: 1280,
           max: 3840,
         }),
       },

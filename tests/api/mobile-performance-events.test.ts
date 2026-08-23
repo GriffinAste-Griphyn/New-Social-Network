@@ -66,6 +66,7 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "video_first_frame",
     "video_item_ready",
     "video_stalled",
+    "video_quality_ramp",
   ],
   recordMobilePerformanceEvents: vi.fn(),
 }))
@@ -255,6 +256,43 @@ describe("mobile performance events API", () => {
           metadata: {
             reason: "stall",
             url: "video.m3u8",
+          },
+        }),
+      ],
+    })
+  })
+
+  it("accepts sampled time-to-1080p diagnostics", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          {
+            name: "video_quality_ramp",
+            durationMs: 438,
+            metadata: {
+              result: "reached",
+              target: "1080p",
+              width: "1080",
+              height: "1920",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({
+          name: "video_quality_ramp",
+          durationMs: 438,
+          metadata: {
+            result: "reached",
+            target: "1080p",
+            width: "1080",
+            height: "1920",
           },
         }),
       ],

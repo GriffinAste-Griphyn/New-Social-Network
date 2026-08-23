@@ -834,12 +834,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
     }
 
     private static func configureStreamingHints(for item: AVPlayerItem, playbackURL: URL) {
-        guard playbackURL.pathExtension.lowercased() == "m3u8" else {
-            return
-        }
-
-        item.preferredPeakBitRate = MediaPlaybackQuality.preferredStreamingPeakBitRate
-        item.preferredMaximumResolution = MediaPlaybackQuality.preferredStreamingMaximumResolution
+        MediaPlaybackQuality.applyStreamingHints(
+            for: item,
+            playbackURL: playbackURL,
+            profile: .prepared
+        )
     }
 
     private func checkOutPreparedPlayer(for identity: String) async -> PreparedPlayer? {

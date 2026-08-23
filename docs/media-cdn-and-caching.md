@@ -1,6 +1,6 @@
 # Media CDN and caching
 
-Date: August 10, 2026
+Date: August 23, 2026
 
 ## Request path
 
@@ -47,11 +47,14 @@ The repository does not yet run a separate imgproxy service. Add it only as a Ve
 
 ## Video startup
 
-Cloudflare Stream owns the bitrate ladder. iOS applies a startup peak bitrate and maximum resolution while the first frame is hidden, then `MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately after `video_first_frame`. This gives the player a low-cost startup choice without pinning the rest of playback to 540p/720p.
+Cloudflare Stream owns the bitrate ladder. iOS applies a startup peak bitrate and maximum resolution while the first frame is hidden, then `MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately after `video_first_frame`.
 
-The aggressive build-320 defaults are 3 Mbps / 720p on standard paths and 2 Mbps /
-540p on constrained paths. These are startup ceilings only; full adaptive quality resumes
-after the first frame.
+Cold and merely staged players use the latency-safe profile: 3 Mbps / 720 x 1280 on
+standard paths and 2 Mbps / 540 x 960 on constrained paths. Ready or successfully
+prerolled players use 8.256 Mbps / 1080 x 1920 on strong, non-cellular,
+non-expensive paths. Prepared playback falls back to 2 Mbps / 540 x 960 when the path
+is constrained, cellular, or expensive. These are startup ceilings only; full adaptive
+quality resumes after the first frame.
 
 After the cached feed restores, iOS selectively prepares one early playable video from
 each initially visible story stack, bounded by the runtime player limit. A successful
@@ -81,6 +84,15 @@ Targets:
 Stage telemetry includes `video_player_pool_wait`, `video_player_staged`,
 `video_player_prepared`, `video_preroll_reused`, and `video_prerolled`, allowing cold,
 staged, pooled, and offline-package starts to be compared independently.
+Sampled `video_quality_ramp` events measure elapsed time from the revealed first frame
+until the presented rendition reaches at least practical Full HD (or report timeout or
+interruption), including presentation dimensions and AVFoundation indicated/observed
+bitrate. The same per-playback QoE sampling decision governs both quality-ramp and final
+access-log upload.
+
+Normalized upload exports always retain the 8.256 Mbps quality envelope. Network state
+changes upload scheduling and preheating behavior, but never permanently lowers the
+encoded file that Cloudflare receives.
 
 ## Disk eviction
 
@@ -107,6 +119,9 @@ Production has no process-local snapshot fallback: missing Redis credentials fai
 - `MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0` initially, then a measured gradual rollout
 - `MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD=1` for build 320+, or `0` as the kill switch
 - `MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS=2` (hard-clamped to 3)
+- `MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD=8256000`
+- `MOBILE_PREPARED_MAX_WIDTH_STANDARD=1080`
+- `MOBILE_PREPARED_MAX_HEIGHT_STANDARD=1920`
 - `CRON_SECRET` for authenticated Vercel media-session cleanup
 - Workflow runtime variables provisioned by the Vercel Workflow integration
 

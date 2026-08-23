@@ -38,6 +38,7 @@ These should be measured with existing `MediaPerformance` events:
 - `video_prerolled`
 - `video_disk_cache_hit`
 - `video_retry`
+- `video_quality_ramp`
 
 ## Architecture
 
@@ -113,9 +114,15 @@ appears. Active playback never waits for a package download.
 
 ### Startup quality
 
-Aggressive startup defaults are capped at 3 Mbps / 720 x 1280 on standard paths and
-2 Mbps / 540 x 960 on constrained paths. The limits are removed immediately after the
-first decoded frame, restoring the full Cloudflare adaptive ladder for ongoing playback.
+Cold and staged startup defaults are capped at 3 Mbps / 720 x 1280 on standard paths and
+2 Mbps / 540 x 960 on constrained paths. A ready/prerolled player starts at
+8.256 Mbps / 1080 x 1920 only on strong, non-cellular, non-expensive paths; limited paths
+retain the 2 Mbps / 540 x 960 ceiling. The limits are removed immediately after the first
+decoded frame, restoring the full Cloudflare adaptive ladder for ongoing playback.
+
+The runtime config controls cold and prepared profiles separately so either can be
+rolled back without an app release. `video_quality_ramp` samples the time from first-frame
+reveal to practical Full HD and distinguishes reached, timed-out, and interrupted ramps.
 
 ### Feed Manifest
 
@@ -133,6 +140,9 @@ Every newly composed video goes through the owner-bound Cloudflare TUS pipeline,
 small H.264 MP4/M4V files. Compatible files can skip a local re-encode, but never skip
 adaptive server transcoding. The creator sees a local optimistic preview while processing;
 other users see the story only after full provider readiness and moderation approval.
+When normalization is required, its 8.256 Mbps output envelope is invariant across Wi-Fi,
+cellular, constrained, and expensive network paths; network conditions must not reduce
+the quality of the durable source upload.
 
 The mobile API exposes the same `renditions.playback` and `renditions.original` shape on feed stories, stack stories, video completion responses, and cached stack manifests. iOS always renders from playback helpers and treats the original rendition as quality/archive metadata.
 

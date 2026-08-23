@@ -420,6 +420,42 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(selected.quality, "adaptive_hls")
     }
 
+    func testVideoQualityRampRecognizesPortraitAndLandscape1080p() {
+        XCTAssertTrue(
+            VideoQualityRampPolicy.hasReached1080p(
+                CGSize(width: 1_080, height: 1_920)
+            )
+        )
+        XCTAssertTrue(
+            VideoQualityRampPolicy.hasReached1080p(
+                CGSize(width: 1_920, height: 1_080)
+            )
+        )
+        XCTAssertFalse(
+            VideoQualityRampPolicy.hasReached1080p(
+                CGSize(width: 720, height: 1_280)
+            )
+        )
+        XCTAssertFalse(VideoQualityRampPolicy.hasReached1080p(.zero))
+    }
+
+    func testNormalizedVideoEnvelopeDoesNotDependOnNetworkConditions() {
+        XCTAssertEqual(
+            StoryVideoUploadNormalizer.normalizedTargetBitsPerSecond,
+            8_256_000
+        )
+        XCTAssertEqual(
+            StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 10),
+            10_320_000
+        )
+        XCTAssertNil(
+            StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 0)
+        )
+        XCTAssertNil(
+            StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: .infinity)
+        )
+    }
+
     func testPressPausePolicyOnlyPausesPlayableVideoWhileTouchIsDown() {
         XCTAssertTrue(
             StoryViewerPausePolicy.isPressingPlayableVideo(

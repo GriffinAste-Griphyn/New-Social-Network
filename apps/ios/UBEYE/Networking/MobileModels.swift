@@ -775,6 +775,8 @@ struct MobileMediaConfigResponse: Codable {
         let offlineHLSCacheMaxAssets: Int
         let startupStreamingPeakBitRate: BitRatePair
         let startupStreamingMaximumResolution: ResolutionPair
+        let preparedStreamingPeakBitRate: BitRatePair?
+        let preparedStreamingMaximumResolution: ResolutionPair?
     }
 
     let ok: Bool

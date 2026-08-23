@@ -30,6 +30,12 @@ const mediaConfigEnvironmentNames = [
   "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED",
   "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
   "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
+  "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_CONSTRAINED",
+  "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD",
+  "MOBILE_PREPARED_MAX_WIDTH_CONSTRAINED",
+  "MOBILE_PREPARED_MAX_HEIGHT_CONSTRAINED",
+  "MOBILE_PREPARED_MAX_WIDTH_STANDARD",
+  "MOBILE_PREPARED_MAX_HEIGHT_STANDARD",
 ] as const
 
 describe("mobile media runtime config", () => {
@@ -43,7 +49,7 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-08-23.2",
+      version: "2026-08-23.3",
       rolloutProfile: "preheat-canary",
       imageDerivativeUploadEnabled: true,
       imagePreheatLimit: { constrained: 2, standard: 4 },
@@ -60,6 +66,14 @@ describe("mobile media runtime config", () => {
         constrained: { width: 540, height: 960 },
         standard: { width: 720, height: 1280 },
       },
+      preparedStreamingPeakBitRate: {
+        constrained: 2_000_000,
+        standard: 8_256_000,
+      },
+      preparedStreamingMaximumResolution: {
+        constrained: { width: 540, height: 960 },
+        standard: { width: 1080, height: 1920 },
+      },
     })
   })
 
@@ -71,12 +85,23 @@ describe("mobile media runtime config", () => {
     process.env.MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD = "-5"
     process.env.MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD = "99"
     process.env.MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS = "99"
+    process.env.MOBILE_PREPARED_STREAMING_PEAK_BITRATE_CONSTRAINED = "1"
+    process.env.MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD = "999999999"
+    process.env.MOBILE_PREPARED_MAX_WIDTH_STANDARD = "99999"
+    process.env.MOBILE_PREPARED_MAX_HEIGHT_STANDARD = "1"
 
     expect(getMobileMediaConfig()).toMatchObject({
       imagePreheatLimit: { standard: 8 },
       stackPreheatLimit: { constrained: 1 },
       preparedPlayerLimit: { standard: 0 },
       persistentVideoPreheatLimit: { standard: 0 },
+      preparedStreamingPeakBitRate: {
+        constrained: 1_500_000,
+        standard: 20_000_000,
+      },
+      preparedStreamingMaximumResolution: {
+        standard: { width: 2160, height: 1280 },
+      },
     })
     expect(getMobileMediaConfig({ clientBuild: 255 })).toMatchObject({
       preparedPlayerLimit: { constrained: 1, standard: 4 },
