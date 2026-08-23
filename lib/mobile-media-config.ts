@@ -78,7 +78,7 @@ export function getMobileMediaConfig(input: {
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-12.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.1",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
@@ -118,7 +118,16 @@ export function getMobileMediaConfig(input: {
       }),
     },
     preparedPlayerLimit: {
-      constrained: 0,
+      constrained: supportsSafePlayerPreparation
+        ? integerEnv(
+            "MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED",
+            aggressiveConfigEnabled ? 1 : 0,
+            {
+              min: 0,
+              max: 1,
+            },
+          )
+        : 0,
       standard: supportsSafePlayerPreparation
         ? integerEnv(
             "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",

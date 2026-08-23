@@ -41,7 +41,7 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-08-12.1",
+      version: "2026-08-23.1",
       rolloutProfile: "preheat-canary",
       imageDerivativeUploadEnabled: true,
       imagePreheatLimit: { constrained: 2, standard: 4 },
@@ -62,6 +62,7 @@ describe("mobile media runtime config", () => {
   it("clamps remotely configured limits to safe bounds", () => {
     process.env.MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD = "999"
     process.env.MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED = "0"
+    process.env.MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED = "99"
     process.env.MOBILE_PREPARED_PLAYER_LIMIT_STANDARD = "99"
     process.env.MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD = "-5"
 
@@ -72,7 +73,7 @@ describe("mobile media runtime config", () => {
       persistentVideoPreheatLimit: { standard: 0 },
     })
     expect(getMobileMediaConfig({ clientBuild: 255 })).toMatchObject({
-      preparedPlayerLimit: { constrained: 0, standard: 4 },
+      preparedPlayerLimit: { constrained: 1, standard: 4 },
     })
   })
 
@@ -86,7 +87,7 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 0, standard: 0 },
     })
     expect(getMobileMediaConfig({ clientBuild: 255 })).toMatchObject({
-      preparedPlayerLimit: { constrained: 0, standard: 4 },
+      preparedPlayerLimit: { constrained: 1, standard: 4 },
     })
   })
 
@@ -98,7 +99,7 @@ describe("mobile media runtime config", () => {
     ).toMatchObject({
       rolloutProfile: "preheat-canary",
       stackPreheatLimit: { standard: 4 },
-      preparedPlayerLimit: { constrained: 0, standard: 4 },
+      preparedPlayerLimit: { constrained: 1, standard: 4 },
       persistentVideoPreheatLimit: { constrained: 2, standard: 4 },
       startupStreamingPeakBitRate: {
         constrained: 4_000_000,

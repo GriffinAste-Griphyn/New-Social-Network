@@ -45,6 +45,13 @@ The repository does not yet run a separate imgproxy service. Add it only as a Ve
 
 Cloudflare Stream owns the bitrate ladder. iOS applies a startup peak bitrate and maximum resolution while the first frame is hidden, then `MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately after `video_first_frame`. This gives the player a low-cost startup choice without pinning the rest of playback to 540p/720p.
 
+After the cached feed restores, iOS selectively prepares one early playable video from
+each initially visible story stack, bounded by the runtime player limit. A successful
+AVFoundation preroll is carried through pool handoff and reused by the viewer. The viewer
+only uses immediate playback after that successful preroll; an unprepared video retains
+the conservative cold-start path. Constrained/cellular sessions prepare at most one
+speculative player.
+
 Targets:
 
 - warm first frame p50 below 350 ms;

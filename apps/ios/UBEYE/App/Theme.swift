@@ -674,7 +674,7 @@ final class MediaControlConfig {
     }
 
     func preparedPlayerLimit(isLimited: Bool) -> Int {
-        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 0 : 4)
+        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 1 : 4)
     }
 
     func persistentVideoPreheatLimit(isLimited: Bool) -> Int {

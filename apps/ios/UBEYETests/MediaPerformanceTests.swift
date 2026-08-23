@@ -709,6 +709,165 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.5)
     }
 
+    @MainActor
+    func testPlayerPoolContinuesTimedOutPreparationForLaterClaim() async {
+        let url = URL(string: "https://example.com/continued-video.m3u8")!
+        let expectedPlayer = AVPlayer()
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { requestedURL in
+            try? await Task.sleep(for: .milliseconds(70))
+            return StoryVideoPlaybackPool.PreparedPlayer(
+                player: expectedPlayer,
+                playbackURL: requestedURL,
+                cacheState: "miss",
+                wasPrerolled: true
+            )
+        }
+
+        pool.prepare(urls: [url], activeURL: nil)
+        let timedOut = await pool.takePreparedPlayer(
+            for: url,
+            waitUpTo: .milliseconds(10)
+        )
+        XCTAssertNil(timedOut)
+
+        try? await Task.sleep(for: .milliseconds(100))
+        let prepared = await pool.takePreparedPlayer(
+            for: url,
+            waitUpTo: .milliseconds(10)
+        )
+
+        XCTAssertTrue(prepared?.player === expectedPlayer)
+        XCTAssertTrue(prepared?.wasPrerolled == true)
+    }
+
+    @MainActor
+    func testPlayerPoolPromotesActiveSourceWhenLaunchWarmMisses() async {
+        let active = StoryVideoPlaybackSource(
+            identity: "story:active",
+            url: URL(string: "https://example.com/active.m3u8")!
+        )
+        let adjacent = StoryVideoPlaybackSource(
+            identity: "story:adjacent",
+            url: URL(string: "https://example.com/adjacent.m3u8")!
+        )
+        let expectedPlayer = AVPlayer()
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { sourceURL in
+            try? await Task.sleep(for: .milliseconds(20))
+            return StoryVideoPlaybackPool.PreparedPlayer(
+                player: sourceURL == active.url ? expectedPlayer : AVPlayer(),
+                playbackURL: sourceURL,
+                cacheState: "miss"
+            )
+        }
+
+        pool.prepare(
+            sources: [active, adjacent],
+            activeIdentity: active.identity
+        )
+        let prepared = await pool.takePreparedPlayer(
+            for: active,
+            waitUpTo: .milliseconds(100)
+        )
+
+        XCTAssertTrue(prepared?.player === expectedPlayer)
+        XCTAssertEqual(prepared?.playbackURL, active.url)
+    }
+
+    @MainActor
+    func testVisibleStackWarmSelectsOneEarlyVideoPerStack() {
+        let firstVideo = makeStoryStackItem(id: "video-1", assetKind: .video)
+        let secondVideo = makeStoryStackItem(id: "video-2", assetKind: .video)
+        let stacks = [
+            makeStoryStack(
+                id: "stack-1",
+                items: [
+                    makeStoryStackItem(id: "image-1", assetKind: .image),
+                    firstVideo,
+                ]
+            ),
+            makeStoryStack(
+                id: "stack-2",
+                items: [
+                    makeStoryStackItem(
+                        id: "processing-video",
+                        assetKind: .video,
+                        processingStatus: "processing"
+                    ),
+                    secondVideo,
+                ]
+            ),
+            makeStoryStack(id: "stack-3", items: [firstVideo]),
+        ]
+
+        let sources = MediaEngine.initialVideoSources(in: stacks, limit: 4)
+
+        XCTAssertEqual(sources.map(\.identity), ["story:video-1", "story:video-2"])
+        XCTAssertEqual(sources.map(\.url), [firstVideo.mediaUrl, secondVideo.mediaUrl])
+    }
+
+    @MainActor
+    func testVisibleStackWarmHonorsPlayerLimit() {
+        let stacks = (0..<4).map { index in
+            makeStoryStack(
+                id: "stack-\(index)",
+                items: [makeStoryStackItem(id: "video-\(index)", assetKind: .video)]
+            )
+        }
+
+        XCTAssertEqual(
+            MediaEngine.initialVideoSources(in: stacks, limit: 2).map(\.identity),
+            ["story:video-0", "story:video-1"]
+        )
+        XCTAssertTrue(MediaEngine.initialVideoSources(in: stacks, limit: 0).isEmpty)
+    }
+
+    @MainActor
+    func testSeekInvalidatesPreviouslyCompletedPreroll() {
+        XCTAssertTrue(
+            StoryVideoPlaybackPool.retainsPreroll(
+                wasPrerolled: true,
+                neededSeek: false
+            )
+        )
+        XCTAssertFalse(
+            StoryVideoPlaybackPool.retainsPreroll(
+                wasPrerolled: true,
+                neededSeek: true
+            )
+        )
+        XCTAssertFalse(
+            StoryVideoPlaybackPool.retainsPreroll(
+                wasPrerolled: false,
+                neededSeek: false
+            )
+        )
+    }
+
+    func testVideoStartupFastPathRequiresMatchingCompletedPreroll() {
+        XCTAssertEqual(VideoStartupPolicy.freshForwardBufferDuration, 2)
+        XCTAssertTrue(
+            VideoStartupPolicy.canReuseCompletedPreroll(
+                wasPrerolled: true,
+                targetSeconds: 0,
+                currentSeconds: 0.04
+            )
+        )
+        XCTAssertFalse(
+            VideoStartupPolicy.canReuseCompletedPreroll(
+                wasPrerolled: false,
+                targetSeconds: 0,
+                currentSeconds: 0
+            )
+        )
+        XCTAssertFalse(
+            VideoStartupPolicy.canReuseCompletedPreroll(
+                wasPrerolled: true,
+                targetSeconds: 0,
+                currentSeconds: 0.2
+            )
+        )
+    }
+
     private func makeTestImageData(width: Int, height: Int) -> Data {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -761,6 +920,39 @@ final class MediaPerformanceTests: XCTestCase {
             lastUploadedAt: nil,
             progressPercent: nil,
             timelineSegmentCount: nil
+        )
+    }
+
+    private func makeStoryStack(id: String, items: [StoryStackItem]) -> StoryStack {
+        StoryStack(
+            id: id,
+            creatorId: "creator-\(id)",
+            creator: "Creator",
+            handle: "creator",
+            avatarUrl: nil,
+            items: items
+        )
+    }
+
+    private func makeStoryStackItem(
+        id: String,
+        assetKind: SocialAssetKind,
+        processingStatus: String = "ready"
+    ) -> StoryStackItem {
+        StoryStackItem(
+            id: id,
+            assetKind: assetKind,
+            mediaUrl: URL(string: "https://example.com/\(id).\(assetKind == .video ? "m3u8" : "jpg")")!,
+            thumbnailUrl: nil,
+            placeholderUrl: nil,
+            renditions: nil,
+            title: "",
+            processingStatus: processingStatus,
+            textOverlays: nil,
+            postedAt: "2026-08-23T00:00:00.000Z",
+            durationSeconds: assetKind == .video ? 10 : nil,
+            captionVerticalPercent: nil,
+            stats: nil
         )
     }
 

@@ -63,9 +63,18 @@ Use explicit priorities for preheat work:
 Keep a small bounded set of prepared `AVPlayer` instances:
 
 - One active player bound to the visible layer.
-- Up to three prepared adjacent players.
+- Up to the remotely configured prepared-player limit for visible/adjacent stories.
+- Seed one early playable video per initially visible stack after feed restoration.
+- Keep one selectively prepared player on constrained/cellular connections.
 - Prepared players are keyed by canonical media URL.
-- Taking a prepared player cancels duplicate preparation and seeks to zero.
+- Taking a prepared player preserves a completed preroll when it is already at the
+  requested position; any seek invalidates that preroll.
+- A bounded handoff timeout does not destroy in-flight preparation.
+
+The viewer promotes the exact active source when launch warming missed. A successfully
+prerolled player is attached and started immediately behind the poster rather than being
+prerolled a second time. Cold players continue through the conservative readiness and
+preroll path.
 
 ### MediaCache
 

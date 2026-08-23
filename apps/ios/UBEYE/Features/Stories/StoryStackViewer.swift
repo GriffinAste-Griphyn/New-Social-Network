@@ -2492,6 +2492,21 @@ struct AutoPlayVideoPlayer: View {
     }
 }
 
+enum VideoStartupPolicy {
+    static let freshForwardBufferDuration: TimeInterval = 2
+
+    static func canReuseCompletedPreroll(
+        wasPrerolled: Bool,
+        targetSeconds: TimeInterval,
+        currentSeconds: TimeInterval
+    ) -> Bool {
+        wasPrerolled &&
+            targetSeconds.isFinite &&
+            currentSeconds.isFinite &&
+            abs(currentSeconds - targetSeconds) <= 0.05
+    }
+}
+
 @MainActor
 private final class AutoPlayVideoPlaybackController: ObservableObject {
     private enum PlaybackPhase: Equatable {
@@ -2537,6 +2552,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var playbackPhase = PlaybackPhase.idle
     private var playbackGeneration = 0
     private var revealTargetSeconds: TimeInterval = 0
+    private var hasCompletedPreroll = false
+    private var shouldStartImmediatelyAfterPreroll = false
     private let maxPlaybackRetries = 2
 
     func play(
@@ -2625,7 +2642,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             let delivery = playbackDelivery(for: selected.url)
             let cacheState = prepared?.cacheState ?? resolved?.cacheState ?? "miss"
             let playerSource = prepared == nil ? "fresh" : "pooled"
-            startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) quality=\(selected.quality) url=\(selected.url.lastPathComponent)"
+            let prerollState = prepared?.wasPrerolled == true ? "ready" : "required"
+            startupMetadata = "delivery=\(delivery) cache=\(cacheState) source=\(playerSource) preroll=\(prerollState) quality=\(selected.quality) url=\(selected.url.lastPathComponent)"
             MediaPerformance.mark("video_startup \(startupMetadata)")
 
             if cacheState == "hit" {
@@ -2636,6 +2654,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             let next = prepared?.player ?? makeFreshPlayer(playbackURL: playbackURL)
             next.pause()
             next.isMuted = true
+            hasCompletedPreroll = prepared?.wasPrerolled == true
+            shouldStartImmediatelyAfterPreroll = false
             player = next
             playbackPhase = .awaitingAttachment
             observeReadiness(
@@ -2662,6 +2682,24 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playbackPhase = .positioning
         let targetSeconds = revealTargetSeconds
         attachedPlayer.pause()
+
+        let currentSeconds = attachedPlayer.currentTime().seconds
+        if VideoStartupPolicy.canReuseCompletedPreroll(
+            wasPrerolled: hasCompletedPreroll,
+            targetSeconds: targetSeconds,
+            currentSeconds: currentSeconds
+        ) {
+            MediaPerformance.mark(
+                "video_preroll_reused position_ms=\(Int(targetSeconds * 1_000))"
+            )
+            beginAwaitingFirstFrame(
+                player: attachedPlayer,
+                reason: "pooled_preroll"
+            )
+            return
+        }
+
+        hasCompletedPreroll = false
         seekTask?.cancel()
         seekTask = Task { @MainActor [weak self, weak attachedPlayer] in
             guard let self, let attachedPlayer else {
@@ -2744,13 +2782,35 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             }
 
             self.seekTask = nil
-            self.playbackPhase = .awaitingFirstFrame
+            self.hasCompletedPreroll = true
             MediaPerformance.mark(
                 "video_prerolled position_ms=\(Int(targetSeconds * 1_000))"
             )
-            if self.layerReadyForDisplay {
-                self.attemptRevealVideo(reason: "prerolled")
-            }
+            self.beginAwaitingFirstFrame(
+                player: attachedPlayer,
+                reason: "viewer_preroll"
+            )
+        }
+    }
+
+    private func beginAwaitingFirstFrame(player: AVPlayer, reason: String) {
+        guard self.player === player else {
+            return
+        }
+
+        playbackPhase = .awaitingFirstFrame
+        shouldStartImmediatelyAfterPreroll = hasCompletedPreroll
+
+        if layerReadyForDisplay {
+            attemptRevealVideo(reason: reason)
+        }
+
+        // A successful preroll guarantees media data is available. Starting muted
+        // behind the thumbnail gives AVPlayerLayer a decoded frame to display without
+        // asking AVPlayer to perform another stall-minimizing startup wait.
+        if !isReadyForPlayback, !isPaused, hasCompletedPreroll {
+            player.isMuted = true
+            player.playImmediately(atRate: 1)
         }
     }
 
@@ -2791,7 +2851,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             player.pause()
         case .visible:
             player.isMuted = false
-            player.play()
+            if shouldStartImmediatelyAfterPreroll {
+                shouldStartImmediatelyAfterPreroll = false
+                player.playImmediately(atRate: 1)
+            } else {
+                player.play()
+            }
         default:
             player.pause()
         }
@@ -2799,7 +2864,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
     private func makeFreshPlayer(playbackURL: URL) -> AVPlayer {
         let item = AVPlayerItem(url: playbackURL)
-        item.preferredForwardBufferDuration = 4
+        item.preferredForwardBufferDuration = VideoStartupPolicy.freshForwardBufferDuration
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         configureStreamingHints(for: item, playbackURL: playbackURL)
         let player = AVPlayer(playerItem: item)
@@ -2946,11 +3011,15 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         let generation = playbackGeneration
+        let displayedSeconds = player.currentTime().seconds
+        let hiddenAdvanceSeconds = displayedSeconds.isFinite
+            ? max(0, displayedSeconds - revealTargetSeconds)
+            : 0
         completeReveal(
             player: player,
             generation: generation,
             reason: reason,
-            hiddenAdvanceSeconds: 0
+            hiddenAdvanceSeconds: hiddenAdvanceSeconds
         )
     }
 
@@ -2998,6 +3067,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         if activePlaybackURL?.isFileURL == true {
+            return true
+        }
+
+        if hasCompletedPreroll {
             return true
         }
 
@@ -3392,6 +3465,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         startupMetadata = ""
         playbackPhase = .idle
         revealTargetSeconds = 0
+        hasCompletedPreroll = false
+        shouldStartImmediatelyAfterPreroll = false
     }
 
     private func removeTimeObserver() {
