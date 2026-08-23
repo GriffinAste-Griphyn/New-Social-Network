@@ -2421,12 +2421,9 @@ struct AutoPlayVideoPlayer: View {
                 } placeholder: {
                     Color.black
                 }
-                .transition(
-                    .asymmetric(
-                        insertion: .identity,
-                        removal: .opacity.animation(.easeOut(duration: 0.08))
-                    )
-                )
+                // The Stream poster is the playback start frame. Remove it without
+                // blending so a motion-heavy video cannot expose two frames at once.
+                .transition(.identity)
                 .zIndex(1)
             }
 

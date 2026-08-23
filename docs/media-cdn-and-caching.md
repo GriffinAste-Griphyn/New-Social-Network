@@ -109,6 +109,12 @@ Production has no process-local snapshot fallback: missing Redis credentials fai
 - `MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS=2` (hard-clamped to 3)
 - `CRON_SECRET` for authenticated Vercel media-session cleanup
 - Workflow runtime variables provisioned by the Vercel Workflow integration
+
+Stream video loading posters are requested explicitly at `time=0s`, matching the
+playback start frame for both existing and new uploads. The iOS viewer removes that
+poster atomically after `AVPlayerLayer` reports a displayable frame; it does not
+crossfade between the poster and live video.
+
 - Cloudflare Stream account, token, customer subdomain, and signing key
 - private Vercel Blob token
 

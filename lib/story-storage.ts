@@ -296,12 +296,21 @@ function createSignedCloudflareStreamToken(input: {
   return `${unsignedToken}.${signer.sign(input.privateKey).toString("base64url")}`
 }
 
-function buildCloudflareThumbnailUrl(customerSubdomain: string, playbackId: string) {
+export const cloudflareStreamThumbnailTimestampPct = 0
+
+export function buildCloudflareThumbnailUrl(
+  customerSubdomain: string,
+  playbackId: string,
+) {
   const origin = /^https?:\/\//i.test(customerSubdomain)
     ? customerSubdomain
     : `https://${customerSubdomain}`
   const thumbnailUrl = new URL(`${origin}/${playbackId}/thumbnails/thumbnail.jpg`)
 
+  // Keep the loading poster pixel-aligned with the frame where playback begins.
+  // An explicit value also corrects previously uploaded videos whose provider-level
+  // default thumbnail timestamp was configured later in the video.
+  thumbnailUrl.searchParams.set("time", "0s")
   thumbnailUrl.searchParams.set("width", "1080")
   thumbnailUrl.searchParams.set("height", "1920")
   thumbnailUrl.searchParams.set("fit", "clip")
@@ -320,7 +329,7 @@ function buildCloudflareTusUploadMetadata(input: {
   return [
     `name ${encodeCloudflareTusMetadataValue(input.fileName)}`,
     "requiresignedurls",
-    `thumbnailtimestamppct ${encodeCloudflareTusMetadataValue(0.15)}`,
+    `thumbnailtimestamppct ${encodeCloudflareTusMetadataValue(cloudflareStreamThumbnailTimestampPct)}`,
     `maxdurationseconds ${encodeCloudflareTusMetadataValue(input.maxDurationSeconds)}`,
   ].join(",")
 }
@@ -780,7 +789,7 @@ export async function setCloudflareStreamThumbnailAtDefaultTime(uid: string) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        thumbnailTimestampPct: 0.15,
+        thumbnailTimestampPct: cloudflareStreamThumbnailTimestampPct,
       }),
     },
   )

@@ -8,6 +8,8 @@ import {
   storyMediaContract,
 } from "@/lib/story-media-contract"
 import {
+  buildCloudflareThumbnailUrl,
+  cloudflareStreamThumbnailTimestampPct,
   directStoryImageDisplayPathname,
   directStoryImageThumbnailPathname,
   normalizeStoryImageThumbHash,
@@ -85,6 +87,24 @@ describe("aggressive media pipeline contract", () => {
       `${base}-display.webp`,
     )
     expect(directStoryImageThumbnailPathname(base)).toBe(`${base}-thumb.webp`)
+  })
+
+  it("uses the playback start frame for every Stream loading poster", () => {
+    const thumbnailUrl = new URL(
+      buildCloudflareThumbnailUrl(
+        "customer.example.com",
+        "signed-playback-token",
+      ),
+    )
+
+    expect(cloudflareStreamThumbnailTimestampPct).toBe(0)
+    expect(thumbnailUrl.pathname).toBe(
+      "/signed-playback-token/thumbnails/thumbnail.jpg",
+    )
+    expect(thumbnailUrl.searchParams.get("time")).toBe("0s")
+    expect(thumbnailUrl.searchParams.get("width")).toBe("1080")
+    expect(thumbnailUrl.searchParams.get("height")).toBe("1920")
+    expect(thumbnailUrl.searchParams.get("fit")).toBe("clip")
   })
 
   it("accepts compact URL-safe ThumbHashes and rejects oversized input", () => {
