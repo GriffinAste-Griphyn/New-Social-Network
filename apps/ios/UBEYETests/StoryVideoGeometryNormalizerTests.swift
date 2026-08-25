@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 import XCTest
@@ -212,6 +213,26 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(StoryCaptureQuality.videoKeyFrameInterval, 30)
     }
 
+    func testVideoPosterUsesFirstFrameInsteadOfLaterBrighterFrame() async throws {
+        let videoURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("first-frame-poster-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: videoURL) }
+
+        try await writeVideoWithDistinctFirstFrame(
+            to: videoURL,
+            firstFrame: (red: 180, green: 10, blue: 10),
+            laterFrame: (red: 20, green: 230, blue: 240)
+        )
+
+        let image = try await StoryVideoThumbnailGenerator.firstFrame(for: videoURL)
+        let pixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
+        )
+
+        XCTAssertGreaterThan(Int(pixel[0]), Int(pixel[2]) + 100)
+        XCTAssertEqual(StoryVideoThumbnailGenerator.requestedTime, .zero)
+    }
+
     func testVideoUploadResponsePersistsOwnerBoundSession() throws {
         let data = Data(
             """
@@ -285,6 +306,67 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     }
 
     @MainActor
+    func testStoryViewersUsesURLQueryItemsForInitialAndPaginatedRequests() async throws {
+        let recorder = UploadRequestRecorder()
+        let session = makeSession { request in
+            recorder.append(request)
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = Data(
+                """
+                {
+                  "ok": true,
+                  "viewers": [],
+                  "totalViewers": 0,
+                  "totalViews": 0,
+                  "nextCursor": null
+                }
+                """.utf8
+            )
+            return (response, body)
+        }
+        defer { session.invalidateAndCancel() }
+
+        let api = APIClient(session: session)
+        let cursor = "opaque/+?=cursor"
+        _ = try await api.storyViewers(storyId: "story-123")
+        _ = try await api.storyViewers(storyId: "story-123", cursor: cursor)
+
+        let requests = recorder.requests
+        XCTAssertEqual(requests.count, 2)
+
+        for request in requests {
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.path, "/api/mobile/stories/story-123/viewers")
+            XCTAssertFalse(url.absoluteString.contains("viewers%3F"))
+            let components = try XCTUnwrap(
+                URLComponents(url: url, resolvingAgainstBaseURL: false)
+            )
+            XCTAssertEqual(
+                components.queryItems?.first(where: { $0.name == "limit" })?.value,
+                "50"
+            )
+        }
+
+        let initialComponents = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(requests[0].url), resolvingAgainstBaseURL: false)
+        )
+        XCTAssertNil(initialComponents.queryItems?.first(where: { $0.name == "cursor" }))
+
+        let paginatedComponents = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(requests[1].url), resolvingAgainstBaseURL: false)
+        )
+        XCTAssertEqual(
+            paginatedComponents.queryItems?.first(where: { $0.name == "cursor" })?.value,
+            cursor
+        )
+    }
+
+    @MainActor
     func testTusUploadResumesFromServerOffsetBeforeFirstPatch() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("tus-resume-\(UUID().uuidString).mp4")
@@ -346,6 +428,152 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         )
     }
 
+    private func writeVideoWithDistinctFirstFrame(
+        to url: URL,
+        firstFrame: (red: UInt8, green: UInt8, blue: UInt8),
+        laterFrame: (red: UInt8, green: UInt8, blue: UInt8)
+    ) async throws {
+        let width = 64
+        let height = 64
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height,
+            ]
+        )
+        input.expectsMediaDataInRealTime = false
+
+        guard writer.canAdd(input) else {
+            throw StoryVideoFixtureError.couldNotAddWriterInput
+        }
+        writer.add(input)
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferCGImageCompatibilityKey as String: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+            ]
+        )
+
+        guard writer.startWriting() else {
+            throw writer.error ?? StoryVideoFixtureError.couldNotStartWriter
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        // Repeating the bright later frame extends the clip beyond two seconds,
+        // placing it at the midpoint that the previous scoring algorithm sampled.
+        let frames = [firstFrame, laterFrame, laterFrame]
+        for (index, color) in frames.enumerated() {
+            try await waitUntilReadyForVideoData(input)
+            let pixelBuffer = try makePixelBuffer(
+                width: width,
+                height: height,
+                color: color
+            )
+            let presentationTime = CMTime(seconds: Double(index), preferredTimescale: 600)
+            guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                throw writer.error ?? StoryVideoFixtureError.couldNotAppendFrame
+            }
+        }
+
+        input.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? StoryVideoFixtureError.couldNotFinishWriter
+        }
+    }
+
+    private func waitUntilReadyForVideoData(
+        _ input: AVAssetWriterInput
+    ) async throws {
+        for _ in 0..<200 {
+            if input.isReadyForMoreMediaData {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw StoryVideoFixtureError.writerInputTimedOut
+    }
+
+    private func makePixelBuffer(
+        width: Int,
+        height: Int,
+        color: (red: UInt8, green: UInt8, blue: UInt8)
+    ) throws -> CVPixelBuffer {
+        var pixelBuffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            throw StoryVideoFixtureError.couldNotCreatePixelBuffer(status)
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw StoryVideoFixtureError.pixelBufferHasNoBaseAddress
+        }
+
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        for row in 0..<height {
+            let bytes = baseAddress
+                .advanced(by: row * bytesPerRow)
+                .assumingMemoryBound(to: UInt8.self)
+            for column in 0..<width {
+                let offset = column * 4
+                bytes[offset] = color.blue
+                bytes[offset + 1] = color.green
+                bytes[offset + 2] = color.red
+                bytes[offset + 3] = 255
+            }
+        }
+
+        return pixelBuffer
+    }
+
+    private func rgbaPixel(in image: CGImage, x: Int, y: Int) -> [UInt8]? {
+        guard let pixelImage = image.cropping(
+            to: CGRect(x: x, y: y, width: 1, height: 1)
+        ) else {
+            return nil
+        }
+
+        let bytes = UnsafeMutablePointer<UInt8>.allocate(capacity: 4)
+        defer { bytes.deallocate() }
+        bytes.initialize(repeating: 0, count: 4)
+
+        guard let context = CGContext(
+            data: bytes,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.draw(pixelImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return Array(UnsafeBufferPointer(start: bytes, count: 4))
+    }
+
     private func makeSession(
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) -> URLSession {
@@ -354,6 +582,16 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         configuration.protocolClasses = [UploadURLProtocol.self]
         return URLSession(configuration: configuration)
     }
+}
+
+private enum StoryVideoFixtureError: Error {
+    case couldNotAddWriterInput
+    case couldNotAppendFrame
+    case couldNotCreatePixelBuffer(CVReturn)
+    case couldNotFinishWriter
+    case couldNotStartWriter
+    case pixelBufferHasNoBaseAddress
+    case writerInputTimedOut
 }
 
 private final class UploadRequestRecorder: @unchecked Sendable {

@@ -63,6 +63,7 @@ export const mobilePerformanceEventNames = [
   "video_first_frame",
   "video_item_ready",
   "video_stalled",
+  "video_terminal_failure",
   "video_access_log",
   "video_quality_ramp",
 ] as const

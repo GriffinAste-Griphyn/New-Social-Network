@@ -134,7 +134,7 @@ struct FollowingView: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Following")
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(Color.ubeyeInk)
 
                 if let count = store.feed?.verticalFollowingStories.count, count > 0 {

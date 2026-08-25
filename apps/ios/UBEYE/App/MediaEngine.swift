@@ -171,7 +171,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 4)
+        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
         guard playerLimit > 0 else {
             return
         }
@@ -198,7 +198,7 @@ final class MediaEngine: ObservableObject {
         MediaPreheater.preheat(
             stack: stack,
             around: index,
-            preheatVideoAssets: !NetworkQualityMonitor.shared.isConstrained
+            preheatVideoAssets: false
         )
         let sources = adjacentVideoSources(in: stack, around: index)
         storyVideoPlaybackPool.prepare(
@@ -270,7 +270,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 4)
+        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
         guard playerLimit > 0 else {
             MediaPerformance.mark("media_engine_visible_video_warm disabled")
             return
@@ -311,7 +311,7 @@ final class MediaEngine: ObservableObject {
 
         offlineHLSPreheatTask?.cancel()
         offlineHLSPreheatTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
+            try? await Task.sleep(for: .seconds(5))
             guard let self,
                   !Task.isCancelled,
                   !isStoryViewerActive else {
@@ -451,7 +451,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
     ) async -> PreparedPlayer?
     private let preparedPlayerLimitOverride: Int?
     private var maxPreparedPlayers: Int {
-        min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 4)
+        min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
     }
 
     init() {
@@ -723,7 +723,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         components.queryItems = components.queryItems?
             .filter {
                 let name = $0.name.lowercased()
-                return name != "token" && name != "v"
+                return name != "token" && name != "v" && name != "clientbandwidthhint"
             }
             .sorted {
                 if $0.name == $1.name {

@@ -13,7 +13,7 @@ struct StoryVideoPlaybackSource: Hashable {
         durationSeconds: TimeInterval? = nil
     ) {
         self.identity = identity
-        self.url = url
+        self.url = MediaPlaybackQuality.adaptivePlaybackURL(for: url)
         self.durationSeconds = durationSeconds
     }
 
@@ -22,9 +22,10 @@ struct StoryVideoPlaybackSource: Hashable {
     }
 
     static func urlBacked(_ url: URL) -> StoryVideoPlaybackSource {
-        StoryVideoPlaybackSource(
-            identity: StoryVideoPlaybackPool.canonicalURL(for: url).absoluteString,
-            url: url,
+        let playbackURL = MediaPlaybackQuality.adaptivePlaybackURL(for: url)
+        return StoryVideoPlaybackSource(
+            identity: StoryVideoPlaybackPool.canonicalURL(for: playbackURL).absoluteString,
+            url: playbackURL,
             durationSeconds: nil
         )
     }
@@ -86,7 +87,21 @@ enum MediaPlaybackQuality {
     static func preferredPlaybackURL(
         defaultURL: URL
     ) -> (url: URL, quality: String) {
-        let quality = isHTTPStreamingPlaylist(defaultURL) ? "adaptive_hls" : "playback"
-        return (defaultURL, quality)
+        let playbackURL = adaptivePlaybackURL(for: defaultURL)
+        let quality = isHTTPStreamingPlaylist(playbackURL) ? "adaptive_hls" : "playback"
+        return (playbackURL, quality)
+    }
+
+    nonisolated static func adaptivePlaybackURL(for url: URL) -> URL {
+        guard isHTTPStreamingPlaylist(url),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+
+        let filteredQueryItems = components.queryItems?.filter {
+            $0.name.caseInsensitiveCompare("clientBandwidthHint") != .orderedSame
+        }
+        components.queryItems = filteredQueryItems?.isEmpty == true ? nil : filteredQueryItems
+        return components.url ?? url
     }
 }

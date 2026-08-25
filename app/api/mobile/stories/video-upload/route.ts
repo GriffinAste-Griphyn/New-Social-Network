@@ -136,6 +136,7 @@ async function removeAbandonedVideoUpload(uid: string) {
 }
 
 export async function POST(request: Request) {
+  const uploadStartedAt = new Date()
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
@@ -176,6 +177,7 @@ export async function POST(request: Request) {
 
   try {
     assertVideoPosterUploadsConfigured()
+    let uploadOrderReservedAt = uploadStartedAt
 
     if (parsed.data.replaceUploadSessionId && !parsed.data.clientUploadId) {
       throw new MediaUploadSessionError(
@@ -206,6 +208,7 @@ export async function POST(request: Request) {
       })
 
       if (retired) {
+        uploadOrderReservedAt = retired.createdAt
         await removeAbandonedVideoUpload(retired.storageKey)
       }
       reusableSession = null
@@ -259,6 +262,7 @@ export async function POST(request: Request) {
         expectedContentType: parsed.data.contentType,
         expectedByteSize: parsed.data.byteSize,
         maxDurationSeconds: parsed.data.maxDurationSeconds,
+        createdAt: uploadOrderReservedAt,
       })
     } catch (error) {
       await removeCloudflareStreamVideoByUid(upload.uid).catch(() => undefined)

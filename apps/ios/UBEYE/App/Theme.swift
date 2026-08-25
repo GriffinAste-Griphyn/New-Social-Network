@@ -333,6 +333,7 @@ enum MediaPerformance {
         "video_first_frame",
         "video_item_ready",
         "video_stalled",
+        "video_terminal_failure",
         "video_access_log",
         "video_quality_ramp",
     ]
@@ -435,9 +436,48 @@ enum MediaPerformance {
             MobilePerformanceReporter.shared.record(
                 name: parsed.name,
                 durationMs: durationMs,
-                metadata: parsed.metadata
+                metadata: enrichedMetadata(
+                    for: parsed.name,
+                    eventMetadata: parsed.metadata
+                )
             )
         }
+    }
+
+    @MainActor
+    private static func enrichedMetadata(
+        for name: String,
+        eventMetadata: [String: String]
+    ) -> [String: String] {
+        guard name.hasPrefix("video_") else {
+            return eventMetadata
+        }
+
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: kCFBundleVersionKey as String
+        ) as? String ?? "unknown"
+        let deviceClass: String
+        switch UIDevice.current.userInterfaceIdiom {
+        case .phone:
+            deviceClass = "phone"
+        case .pad:
+            deviceClass = "tablet"
+        case .mac:
+            deviceClass = "mac"
+        default:
+            deviceClass = "other"
+        }
+
+        var metadata = [
+            "build": build,
+            "device_class": deviceClass,
+            "network_class": NetworkQualityMonitor.shared.telemetryNetworkClass,
+            "os": UIDevice.current.systemVersion,
+        ]
+        for (key, value) in eventMetadata where metadata.count < 20 {
+            metadata[key] = value
+        }
+        return metadata
     }
 
     private static func parse(_ event: String) -> (name: String, metadata: [String: String])? {
@@ -680,11 +720,17 @@ final class MediaControlConfig {
     }
 
     func preparedPlayerLimit(isLimited: Bool) -> Int {
-        readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 1 : 4)
+        min(
+            readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 1 : 2),
+            isLimited ? 1 : 2
+        )
     }
 
     func persistentVideoPreheatLimit(isLimited: Bool) -> Int {
-        readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 2 : 4)
+        min(
+            readLimit(\.persistentVideoPreheatLimit, isLimited: isLimited, fallback: isLimited ? 1 : 2),
+            isLimited ? 1 : 2
+        )
     }
 
     func offlineHLSPreheatLimit(isLimited: Bool) -> Int {
@@ -697,24 +743,29 @@ final class MediaControlConfig {
 
     func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
+            let startupCap = isLimited ? 2_000_000.0 : 3_000_000.0
             guard let pair = $0?.startupStreamingPeakBitRate else {
-                return isLimited ? 2_000_000 : 3_000_000
+                return startupCap
             }
 
-            return isLimited ? pair.constrained : pair.standard
+            return min(isLimited ? pair.constrained : pair.standard, startupCap)
         }
     }
 
     func startupStreamingMaximumResolution(isLimited: Bool) -> CGSize {
         read {
+            let startupCap = isLimited
+                ? CGSize(width: 540, height: 960)
+                : CGSize(width: 720, height: 1280)
             guard let pair = $0?.startupStreamingMaximumResolution else {
-                return isLimited
-                    ? CGSize(width: 540, height: 960)
-                    : CGSize(width: 720, height: 1280)
+                return startupCap
             }
 
             let resolution = isLimited ? pair.constrained : pair.standard
-            return CGSize(width: resolution.width, height: resolution.height)
+            return CGSize(
+                width: min(resolution.width, startupCap.width),
+                height: min(resolution.height, startupCap.height)
+            )
         }
     }
 
@@ -724,7 +775,7 @@ final class MediaControlConfig {
                 return isLimited ? 2_000_000 : 8_256_000
             }
 
-            return isLimited ? pair.constrained : pair.standard
+            return isLimited ? min(pair.constrained, 2_000_000) : pair.standard
         }
     }
 
@@ -733,11 +784,17 @@ final class MediaControlConfig {
             guard let pair = $0?.preparedStreamingMaximumResolution else {
                 return isLimited
                     ? CGSize(width: 540, height: 960)
-                    : CGSize(width: 1080, height: 1920)
+                    : StoryMediaContract.playbackPixelSize
             }
 
             let resolution = isLimited ? pair.constrained : pair.standard
-            return CGSize(width: resolution.width, height: resolution.height)
+            guard isLimited else {
+                return CGSize(width: resolution.width, height: resolution.height)
+            }
+            return CGSize(
+                width: min(resolution.width, 540),
+                height: min(resolution.height, 960)
+            )
         }
     }
 
@@ -782,8 +839,25 @@ final class NetworkQualityMonitor {
     private(set) var isCellular = false
     private(set) var isExpensive = false
 
-    private var shouldLimitPreheating: Bool {
+    var isLimitedPath: Bool {
         isConstrained || isCellular || isExpensive
+    }
+
+    var telemetryNetworkClass: String {
+        if isConstrained {
+            return "constrained"
+        }
+        if isCellular {
+            return "cellular"
+        }
+        if isExpensive {
+            return "expensive"
+        }
+        return "standard"
+    }
+
+    private var shouldLimitPreheating: Bool {
+        isLimitedPath
     }
 
     private var shouldLimitStreamingQuality: Bool {

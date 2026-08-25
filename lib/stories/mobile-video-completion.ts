@@ -37,6 +37,7 @@ type CompleteMobileVideoStoryInput = {
   session: CompleteAuthSession
   storedAsset: StoredStoryAsset
   fields: MobileVideoStoryCompletionFields
+  createdAt?: Date
   providerStatusFallback?: string | null
   providerErrorFallback?: string | null
   onStoryCreated?: (storyId: string) => void | Promise<void>
@@ -243,6 +244,7 @@ export async function completeMobileVideoStory(
     storedAsset: input.storedAsset,
     moderationMediaUrl,
     moderationThumbnailUrl,
+    createdAt: input.createdAt,
   })
 
   await input.onStoryCreated?.(storyId)

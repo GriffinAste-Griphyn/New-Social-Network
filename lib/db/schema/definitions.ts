@@ -125,6 +125,7 @@ export const mobilePerformanceEventName = pgEnum(
     "video_first_frame",
     "video_item_ready",
     "video_stalled",
+    "video_terminal_failure",
     "video_access_log",
     "video_quality_ramp",
   ],
@@ -995,23 +996,33 @@ export const storyElements = pgTable(
   ],
 )
 
-export const feedImpressions = pgTable("feed_impressions", {
-  id: text("id").primaryKey(),
-  viewerId: text("viewer_id")
-    .notNull()
-    .references(() => users.id),
-  storyId: text("story_id")
-    .notNull()
-    .references(() => stories.id),
-  score: numeric("score", { precision: 8, scale: 4 }).notNull(),
-  rank: integer("rank").notNull(),
-  completed: boolean("completed").notNull().default(false),
-  hidden: boolean("hidden").notNull().default(false),
-  viewedMs: integer("viewed_ms").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-})
+export const feedImpressions = pgTable(
+  "feed_impressions",
+  {
+    id: text("id").primaryKey(),
+    viewerId: text("viewer_id")
+      .notNull()
+      .references(() => users.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    score: numeric("score", { precision: 8, scale: 4 }).notNull(),
+    rank: integer("rank").notNull(),
+    completed: boolean("completed").notNull().default(false),
+    hidden: boolean("hidden").notNull().default(false),
+    viewedMs: integer("viewed_ms").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("feed_impressions_story_viewer_created_idx").on(
+      table.storyId,
+      table.viewerId,
+      table.createdAt,
+    ),
+  ],
+)
 
 export const feedEvents = pgTable(
   "feed_events",

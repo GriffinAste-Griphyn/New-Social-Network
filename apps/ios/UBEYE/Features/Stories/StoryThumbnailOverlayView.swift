@@ -9,6 +9,10 @@ enum StoryTextOverlayAppearance {
     static let cornerRadius: CGFloat = 6
     static let horizontalScreenInset: CGFloat = 24
     static let thumbnailCornerRadius: CGFloat = 4
+    static let quoteAuthorForeground = Color.white
+    static let quoteCardBackground = Color.black.opacity(0.86)
+    static let quoteMessageForeground = Color.white.opacity(0.94)
+    static let quoteCardBorder = Color.white.opacity(0.14)
 }
 
 struct StoryThumbnailOverlayView: View {
@@ -73,58 +77,71 @@ struct StoryThumbnailOverlayView: View {
     }
 
     private func quoteReplyCard(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
-        let cardWidth = min(maxWidth, max(fontSize * 14, 72))
-        let cardCornerRadius = max(fontSize * 0.75, 4)
+        // Keep the reply legible without letting it dominate a 132×192 tile.
+        // The compact proportions, dark treatment, and restrained tilt
+        // preserve the lightweight comment-sticker character of the source UI.
+        let cardWidth = min(maxWidth, max(fontSize * 10, 60))
+        let cardCornerRadius = max(fontSize * 0.72, 4.5)
+        let avatarSize = max(fontSize + 5, 11)
+        let authorFontSize = max(fontSize * 0.92, 5.5)
+        let messageFontSize = max(fontSize * 0.8, 4.8)
+        let resolvedHorizontalPadding = max(horizontalPadding - 0.5, 3.5)
+        let resolvedVerticalPadding = max(verticalPadding - 0.5, 2.5)
 
-        return VStack(alignment: .leading, spacing: max(fontSize * 0.35, 2)) {
-            HStack(spacing: max(fontSize * 0.55, 3)) {
-                quoteAvatar(overlay)
+        return HStack(alignment: .center, spacing: max(fontSize * 0.42, 2.5)) {
+            quoteAvatar(overlay, size: avatarSize)
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(overlay.sourceActorName ?? "Reply")
-                        .font(.system(size: max(fontSize - 1, 6), weight: .semibold))
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: max(fontSize * 0.06, 0.35)) {
+                Text(overlay.sourceActorName ?? "Reply")
+                    .font(.system(size: authorFontSize, weight: .bold))
+                    .foregroundStyle(StoryTextOverlayAppearance.quoteAuthorForeground)
+                    .lineLimit(1)
 
-                    if let handle = overlay.sourceActorHandle, !handle.isEmpty {
-                        Text("@\(handle)")
-                            .font(.system(size: max(fontSize - 2, 5), weight: .regular))
-                            .foregroundStyle(.white.opacity(0.68))
-                            .lineLimit(1)
-                    }
-                }
+                Text(overlay.label)
+                    .font(.system(size: messageFontSize, weight: .medium))
+                    .foregroundStyle(StoryTextOverlayAppearance.quoteMessageForeground)
+                    .tracking(-0.05)
+                    .lineSpacing(-0.35)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text(overlay.label)
-                .font(.system(size: max(fontSize, 7), weight: .medium))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, max(horizontalPadding, 4))
-        .padding(.vertical, max(verticalPadding, 3))
+        .padding(.horizontal, resolvedHorizontalPadding)
+        .padding(.vertical, resolvedVerticalPadding)
         .frame(width: cardWidth, alignment: .leading)
         .background(
-            .black.opacity(0.7),
+            StoryTextOverlayAppearance.quoteCardBackground,
             in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(.white.opacity(0.2), lineWidth: max(fontSize * 0.06, 0.5))
+                .stroke(StoryTextOverlayAppearance.quoteCardBorder, lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.22), radius: max(fontSize * 0.35, 2), y: 1)
+        .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.75)
+        .rotationEffect(.degrees(-2.5))
     }
 
-    private func quoteAvatar(_ overlay: StoryTextOverlay) -> some View {
-        ZStack {
-            Circle()
-                .fill(Color.ubeyeRed)
+    private func quoteAvatar(_ overlay: StoryTextOverlay, size: CGFloat) -> some View {
+        CachedAsyncImage(url: overlay.sourceActorAvatarUrl) { image in
+            image
+                .resizable()
+                .scaledToFill()
+        } placeholder: {
+            ZStack {
+                Circle()
+                    .fill(Color.ubeyeRed)
 
-            Text(quoteInitial(for: overlay))
-                .font(.system(size: max(fontSize - 1, 5), weight: .black))
-                .foregroundStyle(.white)
+                Text(quoteInitial(for: overlay))
+                    .font(.system(size: max(size * 0.44, 5.5), weight: .black))
+                    .foregroundStyle(.white)
+            }
         }
-        .frame(width: max(fontSize + 6, 12), height: max(fontSize + 6, 12))
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.ubeyeInk.opacity(0.08), lineWidth: 0.5))
     }
 
     private func quoteInitial(for overlay: StoryTextOverlay) -> String {

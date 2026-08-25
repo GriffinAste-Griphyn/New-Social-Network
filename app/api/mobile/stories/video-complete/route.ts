@@ -279,6 +279,7 @@ export async function POST(request: Request) {
       session,
       fields: parsed.data,
       storedAsset,
+      createdAt: uploadClaim.session.createdAt,
       providerStatusFallback: cloudflareDetails?.state ?? null,
       providerErrorFallback: cloudflareDetails?.errorReason ?? null,
     })

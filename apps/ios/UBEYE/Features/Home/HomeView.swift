@@ -650,24 +650,23 @@ struct HomeView: View {
                                     mediaEngine: mediaEngine
                                 )
                             }
-                        )
-                            .onAppear {
-                                mediaEngine.prefetchStoryStacks(
-                                    ids: [story.id],
-                                    api: api,
-                                    priority: .visible,
-                                    limit: 1
-                                )
-                            }
-                            .onTapGesture {
-                                store.warmStoryOpen(
-                                    storyId: story.id,
-                                    in: feed,
-                                    api: api,
-                                    mediaEngine: mediaEngine
-                                )
-                                selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
-                            }
+                        ) {
+                            store.warmStoryOpen(
+                                storyId: story.id,
+                                in: feed,
+                                api: api,
+                                mediaEngine: mediaEngine
+                            )
+                            selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
+                        }
+                        .onAppear {
+                            mediaEngine.prefetchStoryStacks(
+                                ids: [story.id],
+                                api: api,
+                                priority: .visible,
+                                limit: 1
+                            )
+                        }
                     }
                 }
                 .padding(.trailing, UBEYEMetrics.screenInset)
@@ -1042,39 +1041,45 @@ private struct MyStoryCardSkeleton: View {
 struct StoryThumb: View {
     let story: StoryCard
     var onPress: () -> Void = {}
+    let action: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color.ubeyeSubtle
+        Button(action: action) {
+            ZStack(alignment: .bottomLeading) {
+                CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.ubeyeSubtle
+                }
+                .frame(width: 132, height: 192)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.78)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                if let overlays = story.textOverlays, !overlays.isEmpty {
+                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
+                        .frame(width: 132, height: 192)
+                }
+
+                Text(story.creator)
+                    .font(.system(size: 14, weight: .semibold, design: .default))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(12)
+                    .frame(width: 132, height: 192, alignment: .bottomLeading)
             }
             .frame(width: 132, height: 192)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.78)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            if let overlays = story.textOverlays, !overlays.isEmpty {
-                StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
-                    .frame(width: 132, height: 192)
-            }
-
-            Text(story.creator)
-                .font(.system(size: 14, weight: .semibold, design: .default))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .padding(12)
-                .frame(width: 132, height: 192, alignment: .bottomLeading)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .ubeyeMediaCardChrome()
         }
-        .frame(width: 132, height: 192)
-        .ubeyeMediaCardChrome()
+        .buttonStyle(.plain)
         .storyPressPrewarm(onPress)
+        .accessibilityLabel("\(story.creator)'s story")
     }
 }
 

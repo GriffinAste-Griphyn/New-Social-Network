@@ -69,6 +69,7 @@ async function createImageUploadPart(input: {
 }
 
 export async function POST(request: Request) {
+  const uploadStartedAt = new Date()
   const session = await getCompleteMobileSession(request)
 
   if (!session) {
@@ -127,7 +128,11 @@ export async function POST(request: Request) {
     )
   }
 
-  const basePathname = directStoryImagePathname(session.id, parsed.data.fileName)
+  const basePathname = directStoryImagePathname(
+    session.id,
+    parsed.data.fileName,
+    uploadStartedAt,
+  )
   const [display, thumbnail] = await Promise.all([
     createImageUploadPart({
       pathname: directStoryImageDisplayPathname(

@@ -8,6 +8,7 @@ import {
   storyMediaContract,
 } from "@/lib/story-media-contract"
 import {
+  buildCloudflarePlaybackUrl,
   buildCloudflareThumbnailUrl,
   cloudflareStreamThumbnailTimestampPct,
   directStoryImageDisplayPathname,
@@ -107,18 +108,39 @@ describe("aggressive media pipeline contract", () => {
     expect(thumbnailUrl.searchParams.get("fit")).toBe("clip")
   })
 
+  it("keeps the Stream master playlist adaptive", () => {
+    const playbackUrl = new URL(
+      buildCloudflarePlaybackUrl(
+        "customer.example.com",
+        "signed-playback-token",
+      ),
+    )
+
+    expect(playbackUrl.pathname).toBe(
+      "/signed-playback-token/manifest/video.m3u8",
+    )
+    expect(playbackUrl.searchParams.has("clientBandwidthHint")).toBe(false)
+  })
+
   it("accepts compact URL-safe ThumbHashes and rejects oversized input", () => {
     const hash = Buffer.alloc(25, 7).toString("base64url")
     expect(normalizeStoryImageThumbHash(hash)).toBe(hash)
     expect(normalizeStoryImageThumbHash("x".repeat(81))).toBeNull()
   })
 
-  it("publishes Stream video at 95 percent and treats provider errors as terminal", () => {
+  it("publishes Stream video only after every quality level is ready", () => {
     expect(
       isCloudflareStreamFullyReady({
         readyToStream: true,
-        state: "inprogress",
+        state: "ready",
         pctComplete: 95,
+      }),
+    ).toBe(false)
+    expect(
+      isCloudflareStreamFullyReady({
+        readyToStream: true,
+        state: "ready",
+        pctComplete: 100,
       }),
     ).toBe(true)
     expect(
@@ -134,8 +156,8 @@ describe("aggressive media pipeline contract", () => {
     delete process.env.MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED
     const config = getMobileMediaConfig({ clientBuild: 320 })
 
-    expect(config.persistentVideoPreheatLimit).toEqual({ constrained: 2, standard: 4 })
-    expect(config.preparedPlayerLimit).toEqual({ constrained: 1, standard: 4 })
+    expect(config.persistentVideoPreheatLimit).toEqual({ constrained: 2, standard: 2 })
+    expect(config.preparedPlayerLimit).toEqual({ constrained: 1, standard: 2 })
     expect(config.stackPreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.imagePreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.startupStreamingPeakBitRate).toEqual({

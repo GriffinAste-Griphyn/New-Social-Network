@@ -94,7 +94,7 @@ struct RepliesView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(alignment: .center) {
                         Text("Replies")
-                            .font(.system(size: 30, weight: .bold))
+                            .font(.system(size: 30, weight: .semibold))
                         Spacer()
                         TopAvatarSpacer()
                     }
@@ -696,16 +696,12 @@ private struct ReplyThreadStoryCard: View {
             .padding(.leading, 12)
             .padding(.bottom, 14)
         }
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(alignment: .leading) {
-            Color.ubeyeRed
-                .frame(width: 4)
-                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-        }
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.ubeyeBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.ubeyeBorder.opacity(0.9), lineWidth: 1)
         )
+        .shadow(color: Color.ubeyeInk.opacity(0.055), radius: 10, y: 3)
     }
 }
 

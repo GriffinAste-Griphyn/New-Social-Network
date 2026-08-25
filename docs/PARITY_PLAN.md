@@ -77,7 +77,9 @@
 - Keep `createCloudflareStreamTusUpload` + `uploadLengthBytes` — but **increase `MOBILE_UPLOAD_CHUNK_BYTES 8MB → 3MB`** so a 40MB video = 14 chunks, better resume. Your `StoryVideoUploadPipeline` already inspects `hasFastStart` + tries `passthrough → remux → normalize` — perfect, keep it.
 - Add **background `URLSessionConfiguration.background(withIdentifier: "ubeye.upload")`** in `BackgroundTusUploadTransport.shared` + persist `uploadSessionId` + `uploadUrl` in `UserDefaults`/SQLite so kill → resume without re-inspect.
 - Normalize preset order: you try `1920x1080 → 1280x720`. Keep it, but on `isConstrained` **force `1280x720` first** + cap `fileLengthLimit` 6.2 → 4.5 Mbps. Already tiered — wire it.
-- On completion, **eagerly `setCloudflareStreamThumbnailAtDefaultTime`** at 15% — you do — but also request **Cloudflare Stream `thumbnailTimestampPct` 0.15 already**; ensure webhook marks `readyToStream` → `storyPublication` workflow enqueues immediately (you do via `GET /api/cron/story-publication-reconcile` every min — make it **10s** via Vercel Cron).
+- On completion, eagerly keep Cloudflare Stream's `thumbnailTimestampPct` at `0` and
+  request thumbnails with `time=0s`, matching the first-frame client poster. Ensure the
+  webhook marks `readyToStream` before `storyPublication` enqueues.
 
 ### 1C. HLS Playback: Preconnect Is Not Enough
 **Files:** `app/api/mobile/feed/route.ts` (`hlsPreconnectLinks`), `apps/ios/UBEYE/App/MediaEngine.swift`
@@ -166,4 +168,3 @@
 - **Next Tue-Fri:** 3A-3C + upload queue
 
 Do not microservice. Do not graph DB. Do not ML model before `feed_events` has 100k rows.
-

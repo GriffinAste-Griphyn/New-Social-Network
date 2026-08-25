@@ -21,6 +21,7 @@ import {
 import {
   createCloudflareStreamStoredVideoAsset,
   createDirectBlobStoryImageAsset,
+  directStoryImageUploadStartedAt,
   getCloudflareStreamVideoDetails,
   publicStoryMediaUrl,
   removeStoredStoryAsset,
@@ -133,6 +134,7 @@ export async function POST(request: Request) {
   }
 
   let storedAsset: StoredStoryAsset | undefined
+  let storyCreatedAt: Date | undefined
   let claimedUploadSession:
     | Awaited<
         ReturnType<typeof claimMediaUploadSessionForCompletion>
@@ -176,6 +178,8 @@ export async function POST(request: Request) {
     }
 
     if (parsed.data.assetKind === "image") {
+      storyCreatedAt =
+        directStoryImageUploadStartedAt(parsed.data.basePathname) ?? undefined
       storedAsset = await createDirectBlobStoryImageAsset({
         basePathname: parsed.data.basePathname,
         ownerUserId: session.id,
@@ -193,6 +197,7 @@ export async function POST(request: Request) {
         byteSize: parsed.data.byteSize,
       })
       claimedUploadSession = uploadClaim.session
+      storyCreatedAt = uploadClaim.session.createdAt
 
       const existingStory = await getStoryByStoredAssetForOwner({
         ownerId: session.id,
@@ -309,6 +314,7 @@ export async function POST(request: Request) {
       storedAsset,
       moderationMediaUrl,
       moderationThumbnailUrl,
+      createdAt: storyCreatedAt,
     })
 
     if (claimedUploadSession) {

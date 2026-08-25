@@ -212,6 +212,27 @@ final class APIClient: ObservableObject {
         let _: BasicOkResponse = try await deleteEmpty("/api/mobile/stories/interactions/\(id)")
     }
 
+    func storyViewers(
+        storyId: String,
+        cursor: String? = nil,
+        limit: Int = 50
+    ) async throws -> StoryViewersResponse {
+        var queryItems = [
+            URLQueryItem(
+                name: "limit",
+                value: String(min(max(limit, 1), 100))
+            ),
+        ]
+        if let cursor, !cursor.isEmpty {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+
+        return try await get(
+            "/api/mobile/stories/\(storyId)/viewers",
+            queryItems: queryItems
+        )
+    }
+
     func invalidateMobileFeedCache() {
         guard let cacheNamespace else {
             return
@@ -254,7 +275,7 @@ final class APIClient: ObservableObject {
         }
 
         storyStackCache[storyId] = diskCached
-        MediaPreheater.preheat(stack: diskCached.story)
+        MediaPreheater.preheat(stack: diskCached.story, preheatVideoAssets: false)
         return diskCached
     }
 
@@ -315,7 +336,7 @@ final class APIClient: ObservableObject {
                 }
 
                 let response = try await self.fetchStoryStackFromNetwork(storyId: id)
-                MediaPreheater.preheat(stack: response.story)
+                MediaPreheater.preheat(stack: response.story, preheatVideoAssets: false)
                 return response
             }
         }
@@ -333,7 +354,7 @@ final class APIClient: ObservableObject {
         for id in uniqueIds where storyStackCache[id] == nil {
             if let cached = await cachedStoryStack(storyId: id) {
                 storyStackCache[id] = cached
-                MediaPreheater.preheat(stack: cached.story)
+                MediaPreheater.preheat(stack: cached.story, preheatVideoAssets: false)
                 restoredCount += 1
             }
         }
@@ -1185,7 +1206,7 @@ final class APIClient: ObservableObject {
         stacks.forEach { storyId, response in
             storyStackCache[storyId] = response
             storyStackRefreshedAt[storyId] = cachedAt
-            MediaPreheater.preheat(stack: response.story)
+            MediaPreheater.preheat(stack: response.story, preheatVideoAssets: false)
         }
         MediaPerformance.mark("story_stack_manifest_cache source=\(source) count=\(stacks.count)")
     }

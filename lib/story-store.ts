@@ -357,6 +357,7 @@ type CreateStoryInput = {
   explicitBrandTags: string[]
   elements: StoryElementInput[]
   storedAsset: StoredStoryAsset
+  createdAt?: Date
   moderationMediaUrl?: string | null
   moderationThumbnailUrl?: string | null
 }
@@ -1678,6 +1679,7 @@ export async function createStory(input: CreateStoryInput) {
     moderationStatus: moderationStatusFromResult(moderation),
     moderationReason: moderation.reason,
     brandSignalScore: brandSignalScore.toFixed(2),
+    createdAt: input.createdAt ?? now,
   })
 
   await recordModerationCheck({

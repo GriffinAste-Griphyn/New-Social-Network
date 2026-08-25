@@ -1,6 +1,7 @@
 import Image from "next/image"
 import type { ReactNode } from "react"
 
+import { StoryVideoPlayer } from "@/components/app/story-video-player"
 import { storyMediaContract } from "@/lib/story-media-contract"
 import { cn } from "@/lib/utils"
 
@@ -41,18 +42,14 @@ export function StoryMediaFrame({
       )}
     >
       {assetKind === "video" ? (
-        <video
-          key={mediaUrl}
+        <StoryVideoPlayer
           src={mediaUrl}
           poster={thumbnailUrl ?? undefined}
-          aria-label={alt}
-          className="absolute inset-0 z-10 h-full w-full object-contain"
+          ariaLabel={alt}
           autoPlay={videoAutoPlay}
           controls={videoControls}
           loop={videoLoop}
           muted={videoMuted}
-          playsInline
-          preload="metadata"
         />
       ) : (
         <Image

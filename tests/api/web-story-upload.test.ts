@@ -200,6 +200,7 @@ describe("web direct story upload API", () => {
     vi.mocked(releaseMediaUploadSessionCompletion).mockResolvedValue(undefined)
     vi.mocked(retireMediaUploadSession).mockResolvedValue({
       storageKey: uploadSession.storageKey,
+      createdAt: uploadSession.createdAt,
     })
     vi.mocked(getStoryByStoredAssetForOwner).mockResolvedValue(null)
     vi.mocked(generateClientTokenFromReadWriteToken).mockResolvedValue(
@@ -502,6 +503,9 @@ describe("web direct story upload API", () => {
       ownerUserId: session.id,
       storyId: "33333333-3333-4333-8333-333333333333",
     })
+    expect(createStory).toHaveBeenCalledWith(
+      expect.objectContaining({ createdAt: uploadSession.createdAt }),
+    )
   })
 
   it("fails closed instead of using a local storage fallback", async () => {

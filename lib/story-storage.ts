@@ -212,11 +212,16 @@ function getCloudflareStreamConfig() {
   return { accountId, apiToken, customerSubdomain }
 }
 
-function buildCloudflarePlaybackUrl(customerSubdomain: string, playbackId: string) {
+export function buildCloudflarePlaybackUrl(
+  customerSubdomain: string,
+  playbackId: string,
+) {
   const origin = /^https?:\/\//i.test(customerSubdomain)
     ? customerSubdomain
     : `https://${customerSubdomain}`
 
+  // Keep the master playlist adaptive. The clients apply bounded startup
+  // hints and relax them after first frame instead of forcing one rendition.
   return `${origin}/${playbackId}/manifest/video.m3u8`
 }
 
@@ -356,10 +361,38 @@ export function isAllowedDirectStoryImageContentType(contentType: string) {
   return isSupportedStoryImageInputContentType(contentType)
 }
 
-export function directStoryImagePathname(userId: string, fileName: string) {
+export function directStoryImagePathname(
+  userId: string,
+  fileName: string,
+  uploadStartedAt = new Date(),
+) {
   const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_")
   void fileName
-  return `stories/web-direct/${safeUserId}/${randomUUID()}`
+  return `stories/web-direct/${safeUserId}/${uploadStartedAt.getTime()}-${randomUUID()}`
+}
+
+export function directStoryImageUploadStartedAt(
+  basePathname: string,
+  now = new Date(),
+) {
+  const leaf = basePathname.split("/").at(-1) ?? ""
+  const match = leaf.match(
+    /^(\d{13})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  )
+  const timestamp = Number(match?.[1])
+  const earliestAllowed = now.getTime() - 24 * 60 * 60 * 1_000
+  const latestAllowed = now.getTime() + 5 * 60 * 1_000
+
+  if (
+    !match ||
+    !Number.isSafeInteger(timestamp) ||
+    timestamp < earliestAllowed ||
+    timestamp > latestAllowed
+  ) {
+    return null
+  }
+
+  return new Date(timestamp)
 }
 
 export function directStoryImageDisplayPathname(

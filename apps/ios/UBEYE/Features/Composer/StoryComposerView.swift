@@ -611,6 +611,80 @@ private final class StoryVideoThumbnailGenerationBox: @unchecked Sendable {
     }
 }
 
+enum StoryVideoThumbnailGenerator {
+    static let requestedTime = CMTime.zero
+    // Allow at most one common video-frame interval after zero so assets whose
+    // first presentation timestamp is slightly positive still produce a poster.
+    static let requestedTimeToleranceAfter = CMTime(
+        seconds: 0.04,
+        preferredTimescale: 600
+    )
+
+    static func firstFrame(for url: URL) async throws -> CGImage {
+        let generationBox = StoryVideoThumbnailGenerationBox()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let asset = AVURLAsset(url: url)
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 1080, height: 1920)
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = requestedTimeToleranceAfter
+                generationBox.set(generator)
+
+                let lock = NSLock()
+                var didResume = false
+
+                func finish(_ result: Result<CGImage, Error>) {
+                    lock.lock()
+                    guard !didResume else {
+                        lock.unlock()
+                        return
+                    }
+                    didResume = true
+                    lock.unlock()
+                    continuation.resume(with: result)
+                }
+
+                generator.generateCGImagesAsynchronously(
+                    forTimes: [NSValue(time: requestedTime)]
+                ) { _, image, _, result, error in
+                    switch result {
+                    case .succeeded:
+                        if let image {
+                            finish(.success(image))
+                        } else {
+                            finish(.failure(
+                                error ?? APIClientError.server(
+                                    "Could not prepare video thumbnail. Try a different video.",
+                                    0
+                                )
+                            ))
+                        }
+                    case .failed, .cancelled:
+                        finish(.failure(
+                            error ?? APIClientError.server(
+                                "Could not prepare video thumbnail. Try a different video.",
+                                0
+                            )
+                        ))
+                    @unknown default:
+                        finish(.failure(
+                            error ?? APIClientError.server(
+                                "Could not prepare video thumbnail. Try a different video.",
+                                0
+                            )
+                        ))
+                    }
+                }
+            }
+        } onCancel: {
+            generationBox.cancel()
+        }
+    }
+}
+
 private enum ComposerOverlayInputMode: Identifiable {
     case text
     case link
@@ -887,7 +961,6 @@ final class StoryComposerStore: ObservableObject {
             uploadStatus = attempt.phase.statusLabel
             let thumbnailData = try await videoThumbnailData(
                 for: preparedVideo.url,
-                durationMs: preparedVideo.durationMs,
                 overlays: thumbnailOverlaySpecs
             )
 
@@ -925,7 +998,6 @@ final class StoryComposerStore: ObservableObject {
 
     private func videoThumbnailData(
         for url: URL,
-        durationMs: Int?,
         overlays: [StoryThumbnailOverlaySpec]
     ) async throws -> Data {
         do {
@@ -933,7 +1005,6 @@ final class StoryComposerStore: ObservableObject {
                 group.addTask {
                     try await self.generateVideoThumbnailData(
                         for: url,
-                        durationMs: durationMs,
                         overlays: overlays
                     )
                 }
@@ -957,10 +1028,9 @@ final class StoryComposerStore: ObservableObject {
 
     private func generateVideoThumbnailData(
         for url: URL,
-        durationMs: Int?,
         overlays: [StoryThumbnailOverlaySpec]
     ) async throws -> Data {
-        let image = try await generateVideoThumbnailImage(for: url, durationMs: durationMs)
+        let image = try await StoryVideoThumbnailGenerator.firstFrame(for: url)
         // Story overlays are rendered by the viewer. Keeping this fallback image
         // clean prevents the thumbnail caption from appearing underneath the
         // live caption while a video is loading.
@@ -978,150 +1048,6 @@ final class StoryComposerStore: ObservableObject {
         }
 
         return data
-    }
-
-    private func generateVideoThumbnailImage(for url: URL, durationMs: Int?) async throws -> CGImage {
-        let generationBox = StoryVideoThumbnailGenerationBox()
-
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let asset = AVURLAsset(url: url)
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: 1080, height: 1920)
-                generator.requestedTimeToleranceBefore = .zero
-                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.04, preferredTimescale: 600)
-                generationBox.set(generator)
-
-                let lock = NSLock()
-                var didResume = false
-                var remaining = 0
-                var lastError: Error?
-                var candidates: [(image: CGImage, score: Double)] = []
-                let times = videoThumbnailCandidateTimes(durationMs: durationMs)
-                remaining = times.count
-
-                func finish(_ result: Result<CGImage, Error>) {
-                    lock.lock()
-                    guard !didResume else {
-                        lock.unlock()
-                        return
-                    }
-                    didResume = true
-                    lock.unlock()
-                    generator.cancelAllCGImageGeneration()
-                    continuation.resume(with: result)
-                }
-
-                func recordResult(image: CGImage?, error: Error?) {
-                    lock.lock()
-                    guard !didResume else {
-                        lock.unlock()
-                        return
-                    }
-                    remaining -= 1
-                    if let image {
-                        candidates.append((
-                            image: image,
-                            score: Self.videoThumbnailQualityScore(image)
-                        ))
-                    }
-                    if let error {
-                        lastError = error
-                    }
-                    let shouldFinish = remaining <= 0
-                    let bestImage = candidates.max { left, right in
-                        left.score < right.score
-                    }?.image
-                    lock.unlock()
-
-                    if shouldFinish {
-                        if let bestImage {
-                            finish(.success(bestImage))
-                        } else {
-                            finish(.failure(lastError ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)))
-                        }
-                    }
-                }
-
-                generator.generateCGImagesAsynchronously(forTimes: times.map { NSValue(time: $0) }) { _, image, _, result, error in
-                    switch result {
-                    case .succeeded:
-                        recordResult(image: image, error: nil)
-                    case .failed:
-                        recordResult(image: nil, error: error)
-                    case .cancelled:
-                        recordResult(
-                            image: nil,
-                            error: error ?? APIClientError.server("Could not prepare video thumbnail. Try a different video.", 0)
-                        )
-                    @unknown default:
-                        recordResult(image: nil, error: error)
-                    }
-                }
-            }
-        } onCancel: {
-            generationBox.cancel()
-        }
-    }
-
-    nonisolated private static func videoThumbnailQualityScore(_ image: CGImage) -> Double {
-        let sampleWidth = 24
-        let sampleHeight = 24
-        let bytesPerPixel = 4
-        var pixels = [UInt8](
-            repeating: 0,
-            count: sampleWidth * sampleHeight * bytesPerPixel
-        )
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
-            return 0
-        }
-        let didRender = pixels.withUnsafeMutableBytes { bytes -> Bool in
-            guard let context = CGContext(
-                data: bytes.baseAddress,
-                width: sampleWidth,
-                height: sampleHeight,
-                bitsPerComponent: 8,
-                bytesPerRow: sampleWidth * bytesPerPixel,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else {
-                return false
-            }
-            context.interpolationQuality = .low
-            context.draw(
-                image,
-                in: CGRect(x: 0, y: 0, width: sampleWidth, height: sampleHeight)
-            )
-            return true
-        }
-        guard didRender else {
-            return 0
-        }
-
-        var luminanceSum = 0.0
-        var luminanceSquaredSum = 0.0
-        var darkPixels = 0
-        let pixelCount = sampleWidth * sampleHeight
-        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
-            let luminance =
-                0.2126 * Double(pixels[offset]) +
-                0.7152 * Double(pixels[offset + 1]) +
-                0.0722 * Double(pixels[offset + 2])
-            luminanceSum += luminance
-            luminanceSquaredSum += luminance * luminance
-            if luminance < 18 {
-                darkPixels += 1
-            }
-        }
-
-        let mean = luminanceSum / Double(pixelCount)
-        let variance = max(
-            0,
-            luminanceSquaredSum / Double(pixelCount) - mean * mean
-        )
-        let darkRatio = Double(darkPixels) / Double(pixelCount)
-        return mean + sqrt(variance) * 1.5 - darkRatio * 140
     }
 
     private func compositedThumbnailImage(
@@ -1338,26 +1264,6 @@ final class StoryComposerStore: ObservableObject {
         )
     }
 
-    private func videoThumbnailCandidateTimes(durationMs: Int?) -> [CMTime] {
-        let durationSeconds = durationMs.map { max(Double($0) / 1_000, 0.1) } ?? 1
-        let candidateSeconds = [
-            min(0.08, max(durationSeconds - 0.02, 0)),
-            min(0.16, max(durationSeconds - 0.02, 0)),
-            max(durationSeconds * 0.5, 0),
-            0,
-        ]
-        var seen = Set<Int>()
-
-        return candidateSeconds.compactMap { seconds in
-            let milliseconds = Int((seconds * 1_000).rounded())
-            guard !seen.contains(milliseconds) else {
-                return nil
-            }
-            seen.insert(milliseconds)
-            return CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
-        }
-    }
-
     var normalizedLinkUrl: String {
         normalizedUrlString(linkUrl)
     }
@@ -1518,15 +1424,19 @@ struct StoryComposerView: View {
                             .background(.black.opacity(0.34), in: Capsule())
 
                         HStack(alignment: .top) {
-                            Button {
-                                resetCapture(clearQuote: true)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 18, weight: .bold))
-                                    .frame(width: 42, height: 42)
-                                    .background(.black.opacity(0.34), in: Circle())
+                            if hasSelectedMedia {
+                                Button {
+                                    resetCapture(clearQuote: true)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .frame(width: 42, height: 42)
+                                        .background(.black.opacity(0.34), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Discard captured story")
+                                .transition(.scale.combined(with: .opacity))
                             }
-                            .buttonStyle(.plain)
 
                             Spacer()
 

@@ -218,7 +218,7 @@ struct DiscoverView: View {
             }
 
             Text("Discover")
-                .font(.system(size: 30, weight: .bold))
+                .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(Color.ubeyeInk)
 
             Spacer()

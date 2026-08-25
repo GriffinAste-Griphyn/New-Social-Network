@@ -10,6 +10,7 @@ import {
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
   createDirectBlobStoryImageAsset,
+  directStoryImageUploadStartedAt,
   publicStoryMediaUrl,
   removeStoredStoryAsset,
   StoryUploadError,
@@ -260,6 +261,8 @@ export async function POST(request: Request) {
       storedAsset,
       moderationMediaUrl,
       moderationThumbnailUrl,
+      createdAt:
+        directStoryImageUploadStartedAt(parsed.data.basePathname) ?? undefined,
     })
 
     stage = "read-story"

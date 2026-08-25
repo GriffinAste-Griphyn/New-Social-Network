@@ -6,7 +6,10 @@ import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
-import { getStoryMediaCacheControl } from "@/lib/story-media/cache-control"
+import {
+  getStoryMediaCacheControl,
+  getStoryMediaCdnCacheControl,
+} from "@/lib/story-media/cache-control"
 import {
   createCloudflareStreamPlaybackUrl,
   createCloudflareStreamThumbnailUrl,
@@ -230,14 +233,22 @@ export async function GET(
         ? await createCloudflareStreamThumbnailUrl(cloudflareStreamMedia.uid)
         : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
     const response = NextResponse.redirect(remoteUrl, { status: 302 })
+    const isPlaybackManifest = cloudflareStreamMedia.kind === "playback"
 
+    // Stream manifests are dynamic and the redirect target contains an expiring
+    // playback credential. Always mint a current redirect instead of allowing an
+    // edge or browser cache to strand viewers on an expired manifest URL.
     response.headers.set(
       "Cache-Control",
-      getStoryMediaCacheControl(request, mediaPathname),
+      isPlaybackManifest
+        ? "private, no-store"
+        : getStoryMediaCacheControl(request, mediaPathname),
     )
     response.headers.set(
       "CDN-Cache-Control",
-      getStoryMediaCacheControl(request, mediaPathname).replace("private", "public") + ", s-maxage=7200",
+      isPlaybackManifest
+        ? "no-store"
+        : getStoryMediaCdnCacheControl(request, mediaPathname),
     )
 
     return response
@@ -276,7 +287,7 @@ export async function GET(
 
   const headers = new Headers({
     "Cache-Control": getStoryMediaCacheControl(request, mediaPathname),
-    "CDN-Cache-Control": getStoryMediaCacheControl(request, mediaPathname).replace("private", "public") + ", s-maxage=7200",
+    "CDN-Cache-Control": getStoryMediaCdnCacheControl(request, mediaPathname),
     ETag: result.blob.etag || blobMetadata.etag,
     "X-Content-Type-Options": "nosniff",
   })

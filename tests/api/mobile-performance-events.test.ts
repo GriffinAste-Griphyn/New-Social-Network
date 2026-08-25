@@ -66,6 +66,7 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "video_first_frame",
     "video_item_ready",
     "video_stalled",
+    "video_terminal_failure",
     "video_quality_ramp",
   ],
   recordMobilePerformanceEvents: vi.fn(),
@@ -257,6 +258,39 @@ describe("mobile performance events API", () => {
             reason: "stall",
             url: "video.m3u8",
           },
+        }),
+      ],
+    })
+  })
+
+  it("accepts correlated terminal playback failures", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          {
+            name: "video_terminal_failure",
+            metadata: {
+              playback: "playback_123",
+              reason: "stall_recovery_timeout",
+              rebuilds: "1",
+              same_item_recoveries: "1",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({
+          name: "video_terminal_failure",
+          metadata: expect.objectContaining({
+            playback: "playback_123",
+            reason: "stall_recovery_timeout",
+          }),
         }),
       ],
     })

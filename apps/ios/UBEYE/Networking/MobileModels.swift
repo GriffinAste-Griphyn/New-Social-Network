@@ -590,6 +590,23 @@ struct StoryInteractionInboxResponse: Codable {
     let sentInteractions: [SentStoryInteractionEvent]
 }
 
+struct StoryViewersResponse: Codable {
+    let ok: Bool
+    let viewers: [StoryViewerProfile]
+    let totalViewers: Int
+    let totalViews: Int
+    let nextCursor: String?
+}
+
+struct StoryViewerProfile: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let handle: String
+    let imageUrl: URL?
+    let viewCount: Int
+    let lastViewedAt: String
+}
+
 struct StoryInteractionEvent: Codable, Identifiable, Hashable {
     struct Story: Codable, Hashable {
         let assetKind: SocialAssetKind

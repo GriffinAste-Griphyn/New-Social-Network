@@ -81,6 +81,7 @@ async function imageUploadPart(input: {
 }
 
 export async function POST(request: Request) {
+  const uploadStartedAt = new Date()
   const originResponse = enforceSameOriginRequest(request)
   if (originResponse) {
     return originResponse
@@ -140,6 +141,7 @@ export async function POST(request: Request) {
       const basePathname = directStoryImagePathname(
         session.id,
         parsed.data.fileName,
+        uploadStartedAt,
       )
       const [display, thumbnail] = await Promise.all([
         imageUploadPart({
@@ -182,6 +184,7 @@ export async function POST(request: Request) {
       )
     }
 
+    let uploadOrderReservedAt = uploadStartedAt
     let reusableSession = await getReusableMediaUploadSession({
       ownerUserId: session.id,
       clientUploadId: parsed.data.clientUploadId,
@@ -204,6 +207,7 @@ export async function POST(request: Request) {
       })
 
       if (retired) {
+        uploadOrderReservedAt = retired.createdAt
         await removeCloudflareStreamVideoByUid(retired.storageKey).catch(
           () => undefined,
         )
@@ -244,6 +248,7 @@ export async function POST(request: Request) {
         expectedContentType: parsed.data.contentType,
         expectedByteSize: parsed.data.byteSize,
         maxDurationSeconds: maxWebStoryVideoDurationSeconds,
+        createdAt: uploadOrderReservedAt,
       })
     } catch (error) {
       await removeCloudflareStreamVideoByUid(upload.uid).catch(() => undefined)

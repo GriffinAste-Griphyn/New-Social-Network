@@ -64,14 +64,17 @@ const imageAsset = {
   processingStatus: "ready" as const,
 }
 
+const uploadStartedAt = new Date()
+const reservedBasePathname = `stories/web-direct/creator_123/${uploadStartedAt.getTime()}-11111111-1111-4111-8111-111111111111`
+
 function completionRequest(overrides: Record<string, unknown> = {}) {
   return new Request("https://app.example.com/api/mobile/stories/image-complete", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      basePathname: "stories/web-direct/creator_123/story",
+      basePathname: reservedBasePathname,
       displayDerivative: {
-        pathname: "stories/web-direct/creator_123/story-display.avif",
+        pathname: `${reservedBasePathname}-display.avif`,
         contentType: "image/avif",
         byteSize: 1_234,
         checksum: "a".repeat(64),
@@ -79,7 +82,7 @@ function completionRequest(overrides: Record<string, unknown> = {}) {
         height: 1920,
       },
       thumbnailDerivative: {
-        pathname: "stories/web-direct/creator_123/story-thumb.webp",
+        pathname: `${reservedBasePathname}-thumb.webp`,
         contentType: "image/webp",
         byteSize: 456,
         checksum: "b".repeat(64),
@@ -139,5 +142,21 @@ describe("mobile image completion", () => {
     expect(payload.code).toBe("story_completion_failed")
     expect(payload.error).toBe("Could not publish the story. Try again.")
     expect(removeStoredStoryAsset).toHaveBeenCalledWith(imageAsset)
+  })
+
+  it("creates the story with the time reserved when its upload started", async () => {
+    vi.mocked(createStory).mockResolvedValue(
+      "22222222-2222-4222-8222-222222222222",
+    )
+    const { POST } = await import(
+      "@/app/api/mobile/stories/image-complete/route"
+    )
+
+    const response = await POST(completionRequest())
+
+    expect(response.status).toBe(200)
+    expect(createStory).toHaveBeenCalledWith(
+      expect.objectContaining({ createdAt: uploadStartedAt }),
+    )
   })
 })

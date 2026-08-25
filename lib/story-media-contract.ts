@@ -22,6 +22,10 @@ export const storyMediaContract = {
     thumbnailWebpQualities: [0.8, 0.75, 0.7, 0.65, 0.6],
     deliveryQuality: 85,
   },
+  videoPlayback: {
+    bandwidthHintMbps: 8.256,
+    minimumProviderCompletionPercent: 100,
+  },
   imageInputContentTypes: [
     "image/jpeg",
     "image/png",

@@ -5,7 +5,7 @@ Date: August 10, 2026
 ## Outcome
 
 UBEYE media should behave like a modern short-form social product: creators can post
-reliably on imperfect networks, every public video is delivered as adaptive HLS, the
+reliably on imperfect networks, every public video is delivered as high-fidelity HLS, the
 viewer opens from already-warmed metadata and players, and publication never exposes
 an unmoderated or partially transcoded asset.
 
@@ -23,10 +23,11 @@ with real QoE data.
 4. Cloudflare Stream is the only public playback origin for newly uploaded videos.
    Source/original files are archival metadata and never enter the hot playback path.
 5. Provider processing and content moderation are independent state machines.
-6. A story becomes live only when provider processing is fully ready, structural
-   validation passed, and moderation approved it.
+6. A story becomes live only when the provider reports `state=ready` and
+   `pctComplete=100`, structural validation passed, and moderation approved it.
 7. A webhook arriving before client completion is durable state, not a lost event.
-8. Public playback uses a signed adaptive HLS URL and a provider thumbnail; it never
+8. Public playback uses a signed HLS URL pinned to the highest delivery rendition and
+   a provider thumbnail; it never exposes a low-resolution startup rendition or
    downloads a large progressive original to start playback.
 9. Prefetch is intent-based and bounded. The active item and a small adjacent window
    receive resources; speculative full HLS package downloads are not part of launch.
@@ -110,8 +111,9 @@ the other effects can be retried safely. The publishing request does not wait fo
 3. Keep one active player and up to two canary-controlled adjacent players keyed by
    canonical playback URL.
 4. Never prune the requested player before acquisition.
-5. Prefer short forward buffering and adaptive startup limits over full-package
-   speculative downloads.
+5. Prefer short forward buffering and bounded player prewarming. Playback quality is
+   never reduced to improve startup latency; the time-zero poster remains visible
+   until the full-fidelity first frame is ready.
 6. Observe player time, time-control status, item status, failure notifications, and
    end-of-item notifications as the playback source of truth.
 7. Record first frame only after the video output/layer is visibly ready.
@@ -125,8 +127,9 @@ the other effects can be retried safely. The publishing request does not wait fo
 - Fill letterboxed canvas space with a darkened blurred version of the source image.
 - Use decoded-memory and byte-bounded disk caches with request coalescing.
 - Prefetch visible/adjacent thumbnails, not an unbounded feed window.
-- Score several video frames by luminance and contrast for the client poster; use the
-  Stream thumbnail as the server fallback so the transition to HLS remains stable.
+- Extract the first decodable video frame at time zero for the client poster; use the
+  Stream `time=0s` thumbnail as the server fallback so the transition to HLS remains
+  pixel-aligned with playback.
 - Keep server-side JPEG generation only as a compatibility fallback for clients that do
   not submit verified derivatives; do not synchronously generate AVIF/WebP sidecars.
 

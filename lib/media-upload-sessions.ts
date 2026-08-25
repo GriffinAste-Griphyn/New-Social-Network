@@ -4,6 +4,7 @@ import { and, asc, eq, gt, isNull, lte, or } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { mediaUploadSessions, stories } from "@/lib/db/schema"
+import { storyMediaContract } from "@/lib/story-media-contract"
 
 export type CloudflareStreamProviderDetails = {
   readyToStream: boolean
@@ -124,11 +125,18 @@ export function isCloudflareStreamFullyReady(
     "readyToStream" | "state" | "pctComplete"
   >,
 ) {
-  if (details.state === "error" || !details.readyToStream) {
+  if (
+    details.state?.toLowerCase() !== "ready" ||
+    !details.readyToStream
+  ) {
     return false
   }
 
-  return details.pctComplete === null || details.pctComplete >= 95
+  return (
+    details.pctComplete !== null &&
+    details.pctComplete >=
+      storyMediaContract.videoPlayback.minimumProviderCompletionPercent
+  )
 }
 
 export async function getReusableMediaUploadSession(input: {
@@ -183,6 +191,7 @@ export async function createMediaUploadSession(input: {
   expectedContentType?: string | null
   expectedByteSize?: number | null
   maxDurationSeconds?: number | null
+  createdAt?: Date
 }) {
   const now = new Date()
   const session = {
@@ -200,7 +209,7 @@ export async function createMediaUploadSession(input: {
     maxDurationSeconds: input.maxDurationSeconds ?? null,
     status: "prepared",
     expiresAt: new Date(now.getTime() + uploadSessionLifetimeMs),
-    createdAt: now,
+    createdAt: input.createdAt ?? now,
     updatedAt: now,
   }
 
@@ -242,7 +251,10 @@ export async function retireMediaUploadSession(input: {
         eq(mediaUploadSessions.status, "prepared"),
       ),
     )
-    .returning({ storageKey: mediaUploadSessions.storageKey })
+    .returning({
+      storageKey: mediaUploadSessions.storageKey,
+      createdAt: mediaUploadSessions.createdAt,
+    })
 
   if (retired.length === 0) {
     const [existing] = await db

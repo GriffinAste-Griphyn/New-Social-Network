@@ -420,6 +420,43 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(selected.quality, "adaptive_hls")
     }
 
+    @MainActor
+    func testPreferredPlaybackRemovesLegacyFixedBandwidthHint() {
+        let defaultURL = URL(
+            string: "https://example.com/playback/video.m3u8?token=abc&clientBandwidthHint=8.256"
+        )!
+        let selected = MediaPlaybackQuality.preferredPlaybackURL(defaultURL: defaultURL)
+
+        XCTAssertEqual(
+            selected.url,
+            URL(string: "https://example.com/playback/video.m3u8?token=abc")!
+        )
+        XCTAssertEqual(selected.quality, "adaptive_hls")
+    }
+
+    func testStoryNavigationPolicyMovesWithinStackAndFinishesAtEnd() {
+        XCTAssertEqual(
+            StoryNavigationPolicy.action(currentIndex: 0, itemCount: 3, delta: 1),
+            .move(to: 1)
+        )
+        XCTAssertEqual(
+            StoryNavigationPolicy.action(currentIndex: 1, itemCount: 3, delta: -1),
+            .move(to: 0)
+        )
+        XCTAssertEqual(
+            StoryNavigationPolicy.action(currentIndex: 0, itemCount: 3, delta: -1),
+            .stay
+        )
+        XCTAssertEqual(
+            StoryNavigationPolicy.action(currentIndex: 2, itemCount: 3, delta: 1),
+            .finish
+        )
+        XCTAssertEqual(
+            StoryNavigationPolicy.action(currentIndex: 0, itemCount: 0, delta: 1),
+            .stay
+        )
+    }
+
     func testVideoQualityRampRecognizesPortraitAndLandscape1080p() {
         XCTAssertTrue(
             VideoQualityRampPolicy.hasReached1080p(
@@ -499,10 +536,10 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertTrue(policy.shouldPausePlayback)
 
         policy.isPressingPlayableVideo = false
-        policy.isRepliesSheetPresented = true
+        policy.isOwnerSheetPresented = true
         XCTAssertTrue(policy.shouldPausePlayback)
 
-        policy.isRepliesSheetPresented = false
+        policy.isOwnerSheetPresented = false
         policy.sceneIsActive = false
         XCTAssertTrue(policy.shouldPausePlayback)
 
@@ -923,6 +960,8 @@ final class MediaPerformanceTests: XCTestCase {
 
     func testVideoStartupFastPathRequiresMatchingCompletedPreroll() {
         XCTAssertEqual(VideoStartupPolicy.freshForwardBufferDuration, 2)
+        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: false), 5)
+        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: true), 8)
         XCTAssertTrue(
             VideoStartupPolicy.canReuseCompletedPreroll(
                 wasPrerolled: true,
@@ -943,6 +982,41 @@ final class MediaPerformanceTests: XCTestCase {
                 targetSeconds: 0,
                 currentSeconds: 0.2
             )
+        )
+    }
+
+    func testVideoRecoveryPolicyUsesBoundedRecoveryLadder() {
+        XCTAssertEqual(
+            VideoPlaybackRecoveryPolicy.action(
+                itemIsReady: true,
+                currentItemRecoveryCount: 0,
+                playerRebuildCount: 0
+            ),
+            .recoverCurrentItem
+        )
+        XCTAssertEqual(
+            VideoPlaybackRecoveryPolicy.action(
+                itemIsReady: true,
+                currentItemRecoveryCount: 1,
+                playerRebuildCount: 0
+            ),
+            .rebuildPlayer
+        )
+        XCTAssertEqual(
+            VideoPlaybackRecoveryPolicy.action(
+                itemIsReady: false,
+                currentItemRecoveryCount: 0,
+                playerRebuildCount: 0
+            ),
+            .rebuildPlayer
+        )
+        XCTAssertEqual(
+            VideoPlaybackRecoveryPolicy.action(
+                itemIsReady: true,
+                currentItemRecoveryCount: 1,
+                playerRebuildCount: 1
+            ),
+            .fail
         )
     }
 

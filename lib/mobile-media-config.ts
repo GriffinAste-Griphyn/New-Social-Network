@@ -86,6 +86,10 @@ function booleanEnv(name: string, fallback: boolean) {
   return ["1", "true", "yes", "on"].includes(raw)
 }
 
+const fullQualityVideoBitRate = 8_256_000
+const fullQualityVideoWidth = 1_080
+const fullQualityVideoHeight = 1_920
+
 export function getMobileMediaConfig(input: {
   clientBuild?: number | null
   canaryBucket?: number | null
@@ -98,7 +102,7 @@ export function getMobileMediaConfig(input: {
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-23.3",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-25.1",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
@@ -151,7 +155,7 @@ export function getMobileMediaConfig(input: {
       standard: supportsSafePlayerPreparation
         ? integerEnv(
             "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
-            aggressiveConfigEnabled ? 4 : 2,
+            2,
             {
               min: 0,
               max: 4,
@@ -164,7 +168,7 @@ export function getMobileMediaConfig(input: {
         min: 0,
         max: 4,
       }),
-      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", aggressiveConfigEnabled ? 4 : 2, {
+      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", 2, {
         min: 0,
         max: 6,
       }),
@@ -209,14 +213,16 @@ export function getMobileMediaConfig(input: {
         }),
       },
       standard: {
-        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_STANDARD", aggressiveConfigEnabled ? 720 : 1080, {
-          min: 540,
-          max: 2160,
-        }),
-        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_STANDARD", aggressiveConfigEnabled ? 1280 : 1920, {
-          min: 960,
-          max: 3840,
-        }),
+        width: integerEnv(
+          "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
+          aggressiveConfigEnabled ? 720 : 1080,
+          { min: 540, max: 2160 },
+        ),
+        height: integerEnv(
+          "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
+          aggressiveConfigEnabled ? 1280 : 1920,
+          { min: 960, max: 3840 },
+        ),
       },
     },
     preparedStreamingPeakBitRate: {
@@ -227,7 +233,7 @@ export function getMobileMediaConfig(input: {
       ),
       standard: integerEnv(
         "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD",
-        8_256_000,
+        fullQualityVideoBitRate,
         { min: 3_000_000, max: 20_000_000 },
       ),
     },
@@ -243,14 +249,16 @@ export function getMobileMediaConfig(input: {
         }),
       },
       standard: {
-        width: integerEnv("MOBILE_PREPARED_MAX_WIDTH_STANDARD", 1080, {
-          min: 720,
-          max: 2160,
-        }),
-        height: integerEnv("MOBILE_PREPARED_MAX_HEIGHT_STANDARD", 1920, {
-          min: 1280,
-          max: 3840,
-        }),
+        width: integerEnv(
+          "MOBILE_PREPARED_MAX_WIDTH_STANDARD",
+          fullQualityVideoWidth,
+          { min: 720, max: 2160 },
+        ),
+        height: integerEnv(
+          "MOBILE_PREPARED_MAX_HEIGHT_STANDARD",
+          fullQualityVideoHeight,
+          { min: 1280, max: 3840 },
+        ),
       },
     },
   }

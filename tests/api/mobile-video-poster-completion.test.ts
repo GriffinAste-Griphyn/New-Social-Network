@@ -67,6 +67,7 @@ vi.mock("@/lib/story-storage", () => ({
 const uid = "a".repeat(32)
 const posterPathname = `stories/video-posters/${uid}-poster.jpg`
 const posterUrl = `/api/story-media/${posterPathname}`
+const uploadStartedAt = new Date("2026-08-23T14:00:00.000Z")
 
 function completionRequest(input: { build: number; includePoster: boolean }) {
   return new Request("https://app.example.com/api/mobile/stories/video-complete", {
@@ -104,7 +105,11 @@ describe("mobile video poster completion", () => {
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(claimMediaUploadSessionForCompletion).mockResolvedValue({
       state: "claimed",
-      session: { id: "upload-123", ownerUserId: "creator-1" },
+      session: {
+        id: "upload-123",
+        ownerUserId: "creator-1",
+        createdAt: uploadStartedAt,
+      },
     } as never)
     vi.mocked(getExistingMobileVideoStoryCompletion).mockResolvedValue(null)
     vi.mocked(getCloudflareStreamVideoDetails).mockRejectedValue(
@@ -165,6 +170,9 @@ describe("mobile video poster completion", () => {
     })
     expect(createCloudflareStreamStoredVideoAsset).toHaveBeenCalledWith(
       expect.objectContaining({ thumbnailUrl: posterUrl }),
+    )
+    expect(completeMobileVideoStory).toHaveBeenCalledWith(
+      expect.objectContaining({ createdAt: uploadStartedAt }),
     )
   })
 

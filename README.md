@@ -51,6 +51,9 @@ LEGACY_ORIGINAL_VIDEO_UPLOADS_UNTIL=2026-08-09T00:00:00Z
 CLOUDFLARE_STREAM_SIGNING_KEY_ID=...
 CLOUDFLARE_STREAM_SIGNING_KEY_JWK=...
 # or CLOUDFLARE_STREAM_SIGNING_KEY_PEM=...
+# UID of a private, processed canary video. Production health checks mint a
+# signed URL and verify that its HLS manifest is actually reachable.
+CLOUDFLARE_STREAM_HEALTHCHECK_UID=0123456789abcdef0123456789abcdef
 ```
 
 Private original Blob media is served through `/api/story-media/...`, which
