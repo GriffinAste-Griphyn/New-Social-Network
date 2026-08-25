@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/media-processing-reconcile",
-      "schedule": "7 * * * *"
+      "schedule": "5 4 * * *"
     },
     {
       "path": "/api/cron/story-publication-reconcile",

@@ -148,7 +148,7 @@ Vercel calls `/api/cron/media-upload-cleanup` daily. It removes expired incomple
 private-Blob or Cloudflare uploads before deleting their session rows, and prunes
 completed session rows after seven days without deleting published media.
 
-Vercel calls `/api/cron/media-processing-reconcile` hourly. It retries pending
+Vercel calls `/api/cron/media-processing-reconcile` daily. It retries pending
 or failed custom jobs up to the bounded attempt limit; each workflow step and
 rendition path is idempotent.
 
