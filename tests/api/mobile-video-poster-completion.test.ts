@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { head } from "@vercel/blob"
 import { getCompleteMobileSession } from "@/lib/auth"
+import { getDb } from "@/lib/db"
+import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import {
   claimMediaUploadSessionForCompletion,
   markMediaUploadSessionCompleted,
@@ -13,9 +16,18 @@ import {
 import {
   createCloudflareStreamStoredVideoAsset,
   createDirectBlobStoryVideoPosterUrl,
+  createVercelHlsProcessingStoredVideoAsset,
   getCloudflareStreamVideoDetails,
   setCloudflareStreamThumbnailAtDefaultTime,
 } from "@/lib/story-storage"
+
+vi.mock("@vercel/blob", () => ({ head: vi.fn() }))
+
+vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))
+
+vi.mock("@/lib/media-pipeline/jobs", () => ({
+  enqueueMediaProcessing: vi.fn(),
+}))
 
 vi.mock("@/lib/auth", () => ({
   getCompleteMobileSession: vi.fn(),
@@ -58,6 +70,7 @@ vi.mock("@/lib/stories/mobile-video-completion", () => ({
 vi.mock("@/lib/story-storage", () => ({
   createCloudflareStreamStoredVideoAsset: vi.fn(),
   createDirectBlobStoryVideoPosterUrl: vi.fn(),
+  createVercelHlsProcessingStoredVideoAsset: vi.fn(),
   getCloudflareStreamVideoDetails: vi.fn(),
   maxStoryVideoPosterUploadBytes: 2 * 1024 * 1024,
   setCloudflareStreamThumbnailAtDefaultTime: vi.fn(),
@@ -69,7 +82,11 @@ const posterPathname = `stories/video-posters/${uid}-poster.jpg`
 const posterUrl = `/api/story-media/${posterPathname}`
 const uploadStartedAt = new Date("2026-08-23T14:00:00.000Z")
 
-function completionRequest(input: { build: number; includePoster: boolean }) {
+function completionRequest(input: {
+  build: number
+  includePoster: boolean
+  uid?: string
+}) {
   return new Request("https://app.example.com/api/mobile/stories/video-complete", {
     method: "POST",
     headers: {
@@ -77,7 +94,7 @@ function completionRequest(input: { build: number; includePoster: boolean }) {
       "x-ubeye-app-build": String(input.build),
     },
     body: JSON.stringify({
-      uid,
+      uid: input.uid ?? uid,
       uploadSessionId: "upload-123",
       contentType: "video/mp4",
       byteSize: 4_096,
@@ -142,6 +159,10 @@ describe("mobile video poster completion", () => {
     } as never)
     vi.mocked(markMediaUploadSessionCompleted).mockResolvedValue(undefined)
     vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockResolvedValue(undefined)
+    vi.mocked(enqueueMediaProcessing).mockResolvedValue({
+      jobId: "media-job-1",
+      runId: "workflow-run-1",
+    })
   })
 
   it("requires a poster from builds that implement the poster contract", async () => {
@@ -187,5 +208,54 @@ describe("mobile video poster completion", () => {
     expect(createCloudflareStreamStoredVideoAsset).toHaveBeenCalledWith(
       expect.objectContaining({ thumbnailUrl: null }),
     )
+  })
+
+  it("verifies a private original and dispatches custom processing", async () => {
+    const customUid =
+      "media-originals/creator-1/57fd8bc6-296a-499c-8f47-42fbd122403c/source.mp4"
+    vi.mocked(head).mockResolvedValue({
+      pathname: customUid,
+      size: 4_096,
+      contentType: "video/mp4",
+      etag: "source-etag",
+    } as never)
+    vi.mocked(createVercelHlsProcessingStoredVideoAsset).mockReturnValue({
+      assetKind: "video",
+      mediaUrl: `/api/story-media/${customUid}`,
+      thumbnailUrl: posterUrl,
+      storageProvider: "vercel-blob",
+      storageKey: customUid,
+      contentType: "video/mp4",
+      byteSize: 4_096,
+      checksum: "source-etag",
+      width: null,
+      height: null,
+      durationMs: 5_000,
+      processingStatus: "processing",
+    } as never)
+    vi.mocked(getDb).mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ mediaAssetId: "media-123" }],
+          }),
+        }),
+      }),
+    } as never)
+
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      completionRequest({ build: 306, includePoster: true, uid: customUid }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(claimMediaUploadSessionForCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ storageProvider: "vercel-blob", storageKey: customUid }),
+    )
+    expect(createVercelHlsProcessingStoredVideoAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ pathname: customUid, checksum: "source-etag" }),
+    )
+    expect(enqueueMediaProcessing).toHaveBeenCalledWith("media-123")
+    expect(createCloudflareStreamStoredVideoAsset).not.toHaveBeenCalled()
   })
 })

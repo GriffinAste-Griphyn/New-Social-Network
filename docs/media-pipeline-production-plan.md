@@ -1,6 +1,16 @@
 # Production Media Pipeline Plan
 
-Date: August 10, 2026
+Date: August 25, 2026
+
+## Implementation status
+
+The provider-neutral custom pipeline is implemented behind the paired
+`STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` flags.
+Private originals upload directly to Vercel Blob. Versioned Vercel Workflow
+steps inspect them with FFprobe, create a source-appropriate 360p–1080p H.264
+ladder, package two-second CMAF HLS, generate a poster, publish to a distinct
+public Blob store, run structural quality checks, and atomically promote the
+story. Cloudflare is retained only as the migration rollback/drain path.
 
 ## Outcome
 
@@ -20,15 +30,16 @@ with real QoE data.
    provider upload.
 3. Completion is idempotent. Retrying the same completion returns the same story and
    media asset instead of creating duplicates.
-4. Cloudflare Stream is the only public playback origin for newly uploaded videos.
-   Source/original files are archival metadata and never enter the hot playback path.
+4. Newly uploaded custom-pipeline videos use an opaque, versioned public Vercel
+   Blob HLS package. Private originals are archival inputs and never enter the
+   hot playback path.
 5. Provider processing and content moderation are independent state machines.
 6. A story becomes live only when the provider reports `state=ready` and
    `pctComplete=100`, structural validation passed, and moderation approved it.
 7. A webhook arriving before client completion is durable state, not a lost event.
-8. Public playback uses a signed HLS URL pinned to the highest delivery rendition and
-   a provider thumbnail; it never exposes a low-resolution startup rendition or
-   downloads a large progressive original to start playback.
+8. Public playback uses an adaptive master containing only quality-verified
+   renditions and an immutable generated poster; it never exposes the private
+   progressive original.
 9. Prefetch is intent-based and bounded. The active item and a small adjacent window
    receive resources; speculative full HLS package downloads are not part of launch.
 10. Playback progress follows `AVPlayer` media time. Buffering pauses progress, end of
@@ -95,9 +106,9 @@ the other effects can be retried safely. The publishing request does not wait fo
    when AVFoundation can produce a provider-compatible result without re-encoding.
    Compatible slow-start files first receive a fast-start passthrough remux; only files
    that still fail provider compatibility are transcoded.
-3. Prepare the owner-bound Cloudflare upload session.
-4. Upload with TUS chunks and persist enough local state to resume after a transient
-   network interruption or app relaunch.
+3. Prepare an owner-bound private Blob upload session.
+4. Upload the source directly with a short-lived, pathname- and size-bound Blob
+   client token. Persist the prepared session so retries cannot create duplicate stories.
 5. Keep file I/O and checksum/chunk preparation off the main actor.
 6. Complete with the server session/provider key. Treat a repeated completion as success.
 7. Show the creator's local file as an optimistic preview while server processing and
@@ -180,7 +191,8 @@ media duration, warm/cold state, and provider delivery type.
 
 1. Run all local quality gates.
 2. Create a release snapshot containing only the reviewed implementation.
-3. Apply the additive publication-dispatch table and live-feed partial-index migration.
+3. Apply the additive `0049_vercel_hls_media_pipeline.sql` migration while the
+   custom pipeline flag remains disabled.
 4. Verify schema state and existing media rows.
 5. Deploy a Vercel preview from the release snapshot and run health/API smoke checks.
 6. Promote the exact verified artifact to production.
@@ -206,10 +218,10 @@ This release fixes correctness and the largest playback/upload latency traps. Re
 TikTok/Instagram scale remains an iterative program:
 
 1. Build QoE dashboards and automatic regression alerts from production events.
-2. Add a durable media-job queue for multi-frame moderation, perceptual quality checks,
-   and retryable provider reconciliation.
+2. Add multi-frame moderation and perceptual VMAF/SSIM gates to the existing
+   durable media-job workflow.
 3. Add byte-budgeted cache eviction informed by device storage pressure and actual reuse.
-4. Tune the Cloudflare encoding/delivery profile from VMAF/SSIM and startup measurements.
+4. Tune the custom H.264 ladder from VMAF/SSIM and startup measurements.
 5. Tune the current AVIF/WebP/JPEG quality ladder using encoded bits-per-pixel telemetry
    and visual evaluation.
 6. Introduce cursor-based feed candidate generation and CDN-friendly manifests so feed

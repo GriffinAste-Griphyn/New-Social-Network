@@ -411,6 +411,55 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Tus-Resumable"), "1.0.0")
     }
 
+    @MainActor
+    func testPrivateBlobVideoUploadUsesOwnerBoundTokenAndFileTransport() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-source-\(UUID().uuidString).mp4")
+        try Data("private-video".utf8).write(to: sourceURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let recorder = UploadRequestRecorder()
+        let api = APIClient(tusChunkUploader: { request, bodyFileURL in
+            recorder.append(request)
+            XCTAssertEqual(bodyFileURL, sourceURL)
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (Data("{}".utf8), response)
+        })
+        var upload = VideoUploadResponse(
+            ok: true,
+            uid: "media-originals/creator/session/source.mp4",
+            uploadSessionId: "session-blob",
+            uploadUrl: URL(string: "https://blob.vercel-storage.com?pathname=source")!,
+            uploadProtocol: "vercel-blob",
+            poster: nil
+        )
+        upload.source = ImageUploadPart(
+            pathname: upload.uid,
+            uploadUrl: upload.uploadUrl,
+            clientToken: "vercel_blob_client_test_store_token",
+            contentType: "video/mp4",
+            maxSizeBytes: 1_024,
+            access: "private"
+        )
+
+        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer vercel_blob_client_test_store_token"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-vercel-blob-access"), "private")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-content-type"), "video/mp4")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-version"), "12")
+    }
+
     private func makeInspection(
         fileExtension: String,
         codecTypes: [String],

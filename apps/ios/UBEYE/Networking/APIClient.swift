@@ -813,8 +813,21 @@ final class APIClient: ObservableObject {
         maxChunkBytes: Int64 = 50 * 1024 * 1024,
         onProgress: ((Double) -> Void)? = nil
     ) async throws {
+        if upload.uploadProtocol == "vercel-blob" {
+            guard let source = upload.source else {
+                throw APIClientError.server("The media service did not provide a private upload target.", 0)
+            }
+            try await uploadBlobVideoFile(
+                fileURL: fileURL,
+                source: source,
+                onRetry: onRetry,
+                onProgress: onProgress
+            )
+            return
+        }
+
         guard upload.uploadProtocol == "tus" else {
-            throw APIClientError.server("The media service did not provide a resumable upload.", 0)
+            throw APIClientError.server("The media service did not provide a supported upload.", 0)
         }
 
         try await uploadTusVideoFile(
@@ -824,6 +837,51 @@ final class APIClient: ObservableObject {
             maxChunkBytes: maxChunkBytes,
             onProgress: onProgress
         )
+    }
+
+    private func uploadBlobVideoFile(
+        fileURL: URL,
+        source: ImageUploadPart,
+        onRetry: ((String) -> Void)?,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        let byteSize = try await StoryUploadFileIO.fileSize(at: fileURL)
+        guard byteSize > 0, byteSize <= source.maxSizeBytes else {
+            throw APIClientError.server("The prepared video does not match the upload target.", 0)
+        }
+
+        var lastError: Error?
+        onProgress?(0)
+        for attempt in 1...4 {
+            try Task.checkCancellation()
+            do {
+                var request = URLRequest(url: source.uploadUrl)
+                request.httpMethod = "PUT"
+                request.timeoutInterval = Self.largeVideoUploadTimeout
+                request.setValue("Bearer \(source.clientToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(source.access ?? "private", forHTTPHeaderField: "x-vercel-blob-access")
+                request.setValue(source.contentType, forHTTPHeaderField: "x-content-type")
+                request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
+                request.setValue(blobRequestId(clientToken: source.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+                request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
+                request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
+
+                let (data, response) = try await tusChunkUploader(request, fileURL)
+                guard let http = response as? HTTPURLResponse,
+                      200..<300 ~= http.statusCode else {
+                    throw uploadError(data: data, response: response)
+                }
+                onProgress?(1)
+                return
+            } catch {
+                lastError = error
+                guard attempt < 4 else { break }
+                onRetry?("blob_attempt_\(attempt)")
+                try await Task.sleep(for: .milliseconds(700 * attempt))
+            }
+        }
+
+        throw lastError ?? APIClientError.server("Video upload failed.", 0)
     }
 
     private func uploadTusVideoFile(

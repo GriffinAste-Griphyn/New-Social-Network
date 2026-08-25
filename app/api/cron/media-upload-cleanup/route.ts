@@ -1,3 +1,5 @@
+import { del } from "@vercel/blob"
+
 import {
   deleteMediaUploadSessionForCleanup,
   getMediaUploadSessionsForCleanup,
@@ -28,6 +30,17 @@ async function cleanupCandidate(candidate: MediaUploadSessionCleanupCandidate) {
   if (isAbandonedProviderUpload) {
     await Promise.all([
       removeCloudflareStreamVideoByUid(candidate.storageKey),
+      removeDirectBlobStoryVideoPoster(candidate.storageKey),
+    ])
+  }
+
+  if (
+    candidate.status !== "completed" &&
+    candidate.storageProvider === "vercel-blob" &&
+    candidate.storageKey.startsWith("media-originals/")
+  ) {
+    await Promise.all([
+      del(candidate.storageKey),
       removeDirectBlobStoryVideoPoster(candidate.storageKey),
     ])
   }

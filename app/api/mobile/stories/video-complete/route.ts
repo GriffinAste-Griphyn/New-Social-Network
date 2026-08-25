@@ -1,7 +1,11 @@
+import { head } from "@vercel/blob"
+import { eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { getDb } from "@/lib/db"
+import { stories } from "@/lib/db/schema"
 import {
   claimMediaUploadSessionForCompletion,
   cloudflareDetailsFromUploadSession,
@@ -12,6 +16,7 @@ import {
   recordCloudflareStreamUploadStatus,
   releaseMediaUploadSessionCompletion,
 } from "@/lib/media-upload-sessions"
+import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
@@ -19,6 +24,7 @@ import {
 import {
   createDirectBlobStoryVideoPosterUrl,
   createCloudflareStreamStoredVideoAsset,
+  createVercelHlsProcessingStoredVideoAsset,
   getCloudflareStreamVideoDetails,
   maxStoryVideoPosterUploadBytes,
   setCloudflareStreamThumbnailAtDefaultTime,
@@ -46,7 +52,16 @@ const videoPosterSchema = z.object({
 })
 
 const completeVideoSchema = z.object({
-  uid: z.string().regex(/^[a-f0-9]{32}$/i),
+  uid: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .refine(
+      (value) =>
+        /^[a-f0-9]{32}$/i.test(value) ||
+        (value.startsWith("media-originals/") && !value.includes("..")),
+    ),
   uploadSessionId: z.string().trim().min(1).max(100).optional(),
   contentType: z
     .string()
@@ -80,8 +95,10 @@ function logVideoCompleteEvent(
   metadata: Record<string, string | number | boolean | null | undefined>,
 ) {
   console.info(
-    "mobile_video_complete",
     JSON.stringify({
+      level: event.endsWith("failed") ? "error" : "info",
+      message: event,
+      service: "mobile_video_complete",
       event,
       at: new Date().toISOString(),
       ...Object.fromEntries(
@@ -168,10 +185,17 @@ export async function POST(request: Request) {
       hasClientPoster: Boolean(parsed.data.poster),
     })
 
+    // In-flight custom uploads must remain completable after a feature-flag
+    // rollback, so completion follows the owner-bound upload id, not the flag.
+    const useVercelHls = parsed.data.uid.startsWith("media-originals/")
+    const storageProvider = useVercelHls
+      ? ("vercel-blob" as const)
+      : ("cloudflare-stream" as const)
+
     const uploadClaim = await claimMediaUploadSessionForCompletion({
       ownerUserId: session.id,
       uploadSessionId: parsed.data.uploadSessionId,
-      storageProvider: "cloudflare-stream",
+      storageProvider,
       storageKey: parsed.data.uid,
       contentType: parsed.data.contentType,
       byteSize: parsed.data.byteSize,
@@ -181,7 +205,7 @@ export async function POST(request: Request) {
     const existingCompletion = await getExistingMobileVideoStoryCompletion({
       request,
       session,
-      storageProvider: "cloudflare-stream",
+      storageProvider,
       storageKey: parsed.data.uid,
     })
 
@@ -192,6 +216,25 @@ export async function POST(request: Request) {
         storyId: existingCompletion.storyId,
       })
       claimedUploadSession = undefined
+
+      if (useVercelHls && existingCompletion.processingStatus !== "ready") {
+        const [existingStory] = await getDb()
+          .select({ mediaAssetId: stories.mediaAssetId })
+          .from(stories)
+          .where(eq(stories.id, existingCompletion.storyId))
+          .limit(1)
+        if (existingStory) {
+          await enqueueMediaProcessing(existingStory.mediaAssetId).catch(
+            (error) => {
+              console.error("media_processing_reenqueue_failed", {
+                storyId: existingCompletion.storyId,
+                mediaAssetId: existingStory.mediaAssetId,
+                error,
+              })
+            },
+          )
+        }
+      }
 
       logVideoCompleteEvent("complete_reused", {
         userId: session.id,
@@ -209,6 +252,79 @@ export async function POST(request: Request) {
         "The completed upload could not be matched to its story.",
         409,
       )
+    }
+
+    const posterUrl = parsed.data.poster
+      ? await createDirectBlobStoryVideoPosterUrl({
+          uid: parsed.data.uid,
+          poster: parsed.data.poster,
+        })
+      : null
+
+    if (useVercelHls) {
+      const sourceMetadata = await head(parsed.data.uid, {
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      }).catch(() => null)
+      if (
+        !sourceMetadata ||
+        sourceMetadata.size !== parsed.data.byteSize ||
+        sourceMetadata.contentType.toLowerCase() !==
+          parsed.data.contentType.toLowerCase()
+      ) {
+        throw new MediaUploadSessionError(
+          "The private source video is still being verified. Retry in a moment.",
+          409,
+        )
+      }
+
+      storedAsset = createVercelHlsProcessingStoredVideoAsset({
+        pathname: sourceMetadata.pathname,
+        contentType: parsed.data.contentType,
+        byteSize: parsed.data.byteSize,
+        checksum: sourceMetadata.etag,
+        thumbnailUrl: posterUrl,
+        durationMs: parsed.data.durationMs ?? null,
+        width: parsed.data.width ?? null,
+        height: parsed.data.height ?? null,
+      })
+      const completion = await completeMobileVideoStory({
+        request,
+        session,
+        fields: parsed.data,
+        storedAsset,
+        createdAt: uploadClaim.session.createdAt,
+        providerStatusFallback: "queued",
+      })
+      await markMediaUploadSessionCompleted({
+        uploadSessionId: uploadClaim.session.id,
+        ownerUserId: session.id,
+        storyId: completion.storyId,
+      })
+      claimedUploadSession = undefined
+
+      const [createdStory] = await getDb()
+        .select({ mediaAssetId: stories.mediaAssetId })
+        .from(stories)
+        .where(eq(stories.id, completion.storyId))
+        .limit(1)
+      if (createdStory) {
+        await enqueueMediaProcessing(createdStory.mediaAssetId).catch((error) => {
+          console.error("media_processing_enqueue_failed", {
+            storyId: completion.storyId,
+            mediaAssetId: createdStory.mediaAssetId,
+            error,
+          })
+        })
+      }
+
+      logVideoCompleteEvent("complete_succeeded", {
+        userId: session.id,
+        uid: parsed.data.uid,
+        storyId: completion.storyId,
+        processingStatus: completion.processingStatus,
+        moderationStatus: completion.moderationStatus ?? null,
+      })
+      return NextResponse.json(completion)
     }
 
     const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
@@ -238,13 +354,6 @@ export async function POST(request: Request) {
         410,
       )
     }
-
-    const posterUrl = parsed.data.poster
-      ? await createDirectBlobStoryVideoPosterUrl({
-          uid: parsed.data.uid,
-          poster: parsed.data.poster,
-        })
-      : null
 
     try {
       await setCloudflareStreamThumbnailAtDefaultTime(parsed.data.uid)

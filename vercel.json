@@ -5,6 +5,10 @@
       "schedule": "20 3 * * *"
     },
     {
+      "path": "/api/cron/media-processing-reconcile",
+      "schedule": "7 * * * *"
+    },
+    {
       "path": "/api/cron/story-publication-reconcile",
       "schedule": "15 4 * * *"
     }

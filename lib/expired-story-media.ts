@@ -1,3 +1,6 @@
+import path from "node:path"
+
+import { del, list } from "@vercel/blob"
 import {
   and,
   asc,
@@ -16,6 +19,7 @@ import {
   storyInteractions,
   users,
 } from "@/lib/db/schema"
+import { getPrivateVercelBlobPathname } from "@/lib/story-media/access"
 import {
   removeCloudflareStreamVideoByUid,
   removeDirectBlobStoryVideoPoster,
@@ -37,6 +41,8 @@ export type ExpiredStoryMediaCleanupCandidate = Pick<
   | "byteSize"
   | "originalByteSize"
   | "durationMs"
+  | "originalStorageKey"
+  | "pipelineVersion"
 >
 
 const cleanupScanMultiplier = 4
@@ -64,6 +70,8 @@ export async function getExpiredStoryMediaForCleanup(input: {
       byteSize: mediaAssets.byteSize,
       originalByteSize: mediaAssets.originalByteSize,
       durationMs: mediaAssets.durationMs,
+      originalStorageKey: mediaAssets.originalStorageKey,
+      pipelineVersion: mediaAssets.pipelineVersion,
     })
     .from(mediaAssets)
     .where(
@@ -156,6 +164,15 @@ export async function removeExpiredStoryMediaFromStorage(
     ])
   }
 
+  if (
+    candidate.storageProvider === "vercel-blob" &&
+    candidate.pipelineVersion &&
+    candidate.storageKey.startsWith(`media/${candidate.pipelineVersion}/`)
+  ) {
+    await removeVercelHlsPackage(candidate)
+    return
+  }
+
   const providerUrls = Array.from(
     new Set(
       [
@@ -183,6 +200,64 @@ export async function removeExpiredStoryMediaFromStorage(
   }
 
   await Promise.all(providerUrls.map((url) => removeStoryAsset(url)))
+}
+
+async function removeVercelHlsPackage(
+  candidate: ExpiredStoryMediaCleanupCandidate,
+) {
+  const deliveryToken = process.env.MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN
+  const privateToken = process.env.BLOB_READ_WRITE_TOKEN
+  if (!deliveryToken || !privateToken) {
+    throw new Error(
+      "Both private and delivery Blob tokens are required for HLS cleanup.",
+    )
+  }
+
+  const outputPrefix = path.posix.dirname(candidate.storageKey)
+  const expectedPrefix = `media/${candidate.pipelineVersion}/`
+  if (
+    outputPrefix === "." ||
+    !outputPrefix.startsWith(expectedPrefix) ||
+    candidate.storageKey !== `${outputPrefix}/master.m3u8`
+  ) {
+    throw new Error("Refusing to delete an invalid HLS delivery prefix.")
+  }
+
+  let cursor: string | undefined
+  const deliveryObjects: string[] = []
+  do {
+    const page = await list({
+      prefix: `${outputPrefix}/`,
+      cursor,
+      limit: 1_000,
+      token: deliveryToken,
+    })
+    deliveryObjects.push(...page.blobs.map((blob) => blob.url))
+    cursor = page.hasMore ? page.cursor : undefined
+  } while (cursor)
+
+  for (let index = 0; index < deliveryObjects.length; index += 1_000) {
+    await del(deliveryObjects.slice(index, index + 1_000), {
+      token: deliveryToken,
+    })
+  }
+
+  const privateObjects = Array.from(
+    new Set(
+      [
+        candidate.originalStorageKey,
+        candidate.originalMediaUrl
+          ? getPrivateVercelBlobPathname(candidate.originalMediaUrl)
+          : null,
+        candidate.originalThumbnailUrl
+          ? getPrivateVercelBlobPathname(candidate.originalThumbnailUrl)
+          : null,
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  )
+  if (privateObjects.length > 0) {
+    await del(privateObjects, { token: privateToken })
+  }
 }
 
 export async function markExpiredStoryMediaDeleted(

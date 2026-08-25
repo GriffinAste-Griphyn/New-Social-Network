@@ -22,6 +22,7 @@ import {
   applyMediaModerationResult,
   createMediaAssetFromStoredStoryAsset,
 } from "@/lib/media-assets"
+import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import { moderateUserContent } from "@/lib/safety/moderate-content"
 import { recordModerationCheck } from "@/lib/safety/moderation-checks"
 import type { ContentModerationResult } from "@/lib/safety/policy"
@@ -1718,6 +1719,21 @@ export async function createStory(input: CreateStoryInput) {
         positionY: element.positionY ?? "74.00",
       })),
     )
+  }
+
+  if (
+    input.storedAsset.assetKind === "video" &&
+    input.storedAsset.storageProvider === "vercel-blob" &&
+    input.storedAsset.processingStatus === "processing" &&
+    input.storedAsset.originalStorageKey?.startsWith("media-originals/")
+  ) {
+    await enqueueMediaProcessing(mediaAsset.id).catch((error) => {
+      console.error("media_processing_enqueue_failed", {
+        storyId,
+        mediaAssetId: mediaAsset.id,
+        error,
+      })
+    })
   }
 
   if (nextStoryStatus === "live") {

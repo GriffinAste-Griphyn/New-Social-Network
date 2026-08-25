@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { del, head, put } from "@vercel/blob"
 
+import { isVercelHlsPipelineEnabled } from "@/lib/media-pipeline/contracts"
 import {
   buildCloudflareStreamPathname,
   buildCloudflareStreamThumbnailPathname,
@@ -407,11 +408,15 @@ export function directStoryImageThumbnailPathname(basePathname: string) {
 }
 
 export function directStoryVideoPosterPathname(uid: string) {
-  if (!isCloudflareStreamUid(uid)) {
-    throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
+  if (isCloudflareStreamUid(uid)) {
+    return `stories/video-posters/${uid}-poster.jpg`
+  }
+  if (!uid.startsWith("media-originals/") || uid.includes("..")) {
+    throw new StoryUploadError("The video upload id is invalid.")
   }
 
-  return `stories/video-posters/${uid}-poster.jpg`
+  const key = createHash("sha256").update(uid).digest("hex").slice(0, 40)
+  return `stories/video-posters/custom-${key}-poster.jpg`
 }
 
 export type DirectStoryImageClientDerivativeInput = {
@@ -568,11 +573,50 @@ export async function createDirectBlobStoryVideoPosterUrl(input: {
 }
 
 export async function removeDirectBlobStoryVideoPoster(uid: string) {
-  if (!isCloudflareStreamUid(uid)) {
-    return
+  await del(directStoryVideoPosterPathname(uid)).catch(() => undefined)
+}
+
+export function createVercelHlsProcessingStoredVideoAsset(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+  checksum: string
+  thumbnailUrl?: string | null
+  durationMs?: number | null
+  width?: number | null
+  height?: number | null
+}): StoredStoryAsset {
+  if (!input.pathname.startsWith("media-originals/") || input.pathname.includes("..")) {
+    throw new StoryUploadError("The private source video path is invalid.")
   }
 
-  await del(directStoryVideoPosterPathname(uid))
+  const originalUrl = buildStoryMediaRoute(input.pathname)
+  return {
+    assetKind: "video",
+    mediaUrl: originalUrl,
+    thumbnailUrl: input.thumbnailUrl ?? null,
+    placeholderUrl: input.thumbnailUrl ?? null,
+    storageProvider: "vercel-blob",
+    storageKey: input.pathname,
+    originalMediaUrl: originalUrl,
+    originalThumbnailUrl: input.thumbnailUrl ?? null,
+    originalStorageProvider: "vercel-blob",
+    originalStorageKey: input.pathname,
+    originalContentType: input.contentType,
+    originalByteSize: input.byteSize,
+    originalChecksum: input.checksum,
+    originalWidth: input.width ?? null,
+    originalHeight: input.height ?? null,
+    originalDurationMs: input.durationMs ?? null,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    checksum: input.checksum,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+    processingStatus: "processing",
+    providerPctComplete: 0,
+  }
 }
 
 export async function createDirectBlobStoryImageAsset(input: {
@@ -1567,8 +1611,13 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   const { assetKind } = uploadType
   let storedBuffer: Buffer = buffer
   let storedUploadType = uploadType
+  const useVercelHlsPipeline = isVercelHlsPipelineEnabled()
 
-  if (assetKind !== "image" && process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream") {
+  if (
+    assetKind !== "image" &&
+    process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream" &&
+    !useVercelHlsPipeline
+  ) {
     storedBuffer = await normalizeVideoForLocalPlayback(buffer)
     storedUploadType = {
       assetKind: "video",
@@ -1583,18 +1632,30 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   const fileName = `${randomUUID()}.${extension}`
 
   if (
-    process.env.NODE_ENV === "production" &&
-    assetKind === "video" &&
-    process.env.STORY_VIDEO_PROCESSOR !== "cloudflare-stream"
-  ) {
-    assertCloudflareStreamUploadsEnabled()
-  }
-
-  if (
     assetKind === "video" &&
     process.env.STORY_VIDEO_PROCESSOR === "cloudflare-stream"
   ) {
     return saveCloudflareStreamVideo(fileName, storedBuffer, contentType, checksum, metadata)
+  }
+
+  if (
+    assetKind === "video" &&
+    useVercelHlsPipeline
+  ) {
+    const blob = await put(`media-originals/web/${fileName}`, storedBuffer, {
+      access: "private",
+      contentType,
+      addRandomSuffix: false,
+    })
+    return createVercelHlsProcessingStoredVideoAsset({
+      pathname: blob.pathname,
+      contentType,
+      byteSize: storedBuffer.byteLength,
+      checksum,
+      durationMs: metadata.durationMs,
+      width: metadata.width,
+      height: metadata.height,
+    })
   }
 
   return getStoryStorageProvider().save(

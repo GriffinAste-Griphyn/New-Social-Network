@@ -9,7 +9,8 @@ The mobile media path is intentionally layered:
 1. `MediaImageCache` keeps decoded, downsampled `UIImage` instances in a cost-bounded `NSCache`.
 2. `MediaFileDiskCache` keeps progressive images and videos in an LRU bounded by bytes and available device capacity.
 3. `URLCache` and AVFoundation retain transport-level responses and bounded HLS state.
-4. Cloudflare Stream serves signed adaptive HLS; Vercel Blob stores private image/original assets.
+4. The custom pipeline serves opaque, immutable adaptive HLS from a public
+   Vercel Blob store; a separate private Blob store retains originals.
 5. The origin route authorizes private media and never exposes an unsigned original.
 
 HLS playlists are not copied into the progressive file cache. A playlist without its
@@ -47,7 +48,11 @@ The repository does not yet run a separate imgproxy service. Add it only as a Ve
 
 ## Video startup
 
-Cloudflare Stream owns the bitrate ladder. iOS applies a startup peak bitrate and maximum resolution while the first frame is hidden, then `MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately after `video_first_frame`.
+The versioned FFmpeg workflow owns the 360p, 540p, 720p, and 1080p bitrate
+ladder, omitting levels that would upscale the source. iOS applies a startup
+peak bitrate and maximum resolution while the first frame is hidden, then
+`MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately
+after `video_first_frame`.
 
 Cold and merely staged players use the latency-safe profile: 3 Mbps / 720 x 1280 on
 standard paths and 2 Mbps / 540 x 960 on constrained paths. Ready or successfully
@@ -92,7 +97,7 @@ access-log upload.
 
 Normalized upload exports always retain the 8.256 Mbps quality envelope. Network state
 changes upload scheduling and preheating behavior, but never permanently lowers the
-encoded file that Cloudflare receives.
+private original received by the processing workflow.
 
 ## Disk eviction
 
@@ -107,8 +112,9 @@ are never shared between users. Server-side feed snapshots and timeline sorted s
 in Upstash Redis when `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are
 configured. Development without Redis skips this cache and reads database candidates.
 
-Configure Cloudflare Stream and Blob host patterns in `next.config.ts`. Keep authorization
-at the Vercel route boundary; do not vary a public CDN object on an `Authorization` header.
+Configure Blob host patterns in `next.config.ts`. Keep private-original
+authorization at the Vercel route boundary; immutable public HLS objects use
+opaque versioned paths and never vary on an `Authorization` header.
 Production has no process-local snapshot fallback: missing Redis credentials fail closed.
 
 ## Required production configuration
@@ -130,14 +136,21 @@ playback start frame for both existing and new uploads. The iOS viewer removes t
 poster atomically after `AVPlayerLayer` reports a displayable frame; it does not
 crossfade between the poster and live video.
 
-- Cloudflare Stream account, token, customer subdomain, and signing key
-- private Vercel Blob token
+- private Vercel Blob token for originals
+- separate public Vercel Blob token for HLS delivery
+- `STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` only
+  after migration and preview verification
+- Cloudflare credentials only during the rollback/drain window
 
 Roll out image format changes by rendition version. Never change the bytes behind an existing immutable derivative URL.
 
 Vercel calls `/api/cron/media-upload-cleanup` daily. It removes expired incomplete
-Cloudflare uploads before deleting their session rows, and prunes completed session
-rows after seven days without deleting published media.
+private-Blob or Cloudflare uploads before deleting their session rows, and prunes
+completed session rows after seven days without deleting published media.
+
+Vercel calls `/api/cron/media-processing-reconcile` hourly. It retries pending
+or failed custom jobs up to the bounded attempt limit; each workflow step and
+rendition path is idempotent.
 
 Vercel also calls `/api/cron/story-publication-reconcile` every minute. It reconciles up
 to 50 processing Stream stories and starts durable publication work for live stories

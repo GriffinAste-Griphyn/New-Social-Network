@@ -74,6 +74,8 @@ describe("media upload cleanup cron", () => {
       byteSize: 750_000,
       originalByteSize: 250_000,
       durationMs: 60_000,
+      originalStorageKey: null,
+      pipelineVersion: null,
     } satisfies ExpiredStoryMediaCleanupCandidate
     vi.mocked(getMediaUploadSessionsForCleanup).mockResolvedValue([])
     vi.mocked(getExpiredStoryMediaForCleanup).mockResolvedValue([expiredMedia])

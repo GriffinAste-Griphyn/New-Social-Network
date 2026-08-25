@@ -34,6 +34,20 @@ export const mediaScanStatus = pgEnum("media_scan_status", [
   "failed",
   "skipped",
 ])
+export const mediaProcessingJobStatus = pgEnum(
+  "media_processing_job_status",
+  ["pending", "inspecting", "encoding", "publishing", "ready", "error"],
+)
+export const mediaRenditionStatus = pgEnum("media_rendition_status", [
+  "pending",
+  "ready",
+  "error",
+])
+export const mediaQualityStatus = pgEnum("media_quality_status", [
+  "pending",
+  "passed",
+  "failed",
+])
 export const mediaStorageProvider = pgEnum("media_storage_provider", [
   "local",
   "vercel-blob",
@@ -389,6 +403,13 @@ export const mediaAssets = pgTable(
     providerStatus: text("provider_status"),
     providerPctComplete: integer("provider_pct_complete"),
     providerError: text("provider_error"),
+    pipelineVersion: text("pipeline_version"),
+    encoderVersion: text("encoder_version"),
+    workflowRunId: text("workflow_run_id"),
+    qualityStatus: mediaQualityStatus("quality_status")
+      .notNull()
+      .default("pending"),
+    highestVerifiedRendition: text("highest_verified_rendition"),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
     readyAt: timestamp("ready_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -414,6 +435,106 @@ export const mediaAssets = pgTable(
       table.updatedAt,
     ),
     index("media_assets_scan_idx").on(table.scanStatus, table.updatedAt),
+    uniqueIndex("media_assets_workflow_run_idx").on(table.workflowRunId),
+  ],
+)
+
+export const mediaProcessingJobs = pgTable(
+  "media_processing_jobs",
+  {
+    id: text("id").primaryKey(),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    workflowRunId: text("workflow_run_id"),
+    pipelineVersion: text("pipeline_version").notNull(),
+    encoderVersion: text("encoder_version").notNull(),
+    sourcePathname: text("source_pathname").notNull(),
+    outputPrefix: text("output_prefix").notNull(),
+    status: mediaProcessingJobStatus("status").notNull().default("pending"),
+    progressPct: integer("progress_pct").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    failureCode: text("failure_code"),
+    lastError: text("last_error"),
+    sourceMetadata: jsonb("source_metadata"),
+    metrics: jsonb("metrics"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("media_processing_jobs_asset_pipeline_uidx").on(
+      table.mediaAssetId,
+      table.pipelineVersion,
+    ),
+    uniqueIndex("media_processing_jobs_workflow_run_uidx").on(
+      table.workflowRunId,
+    ),
+    uniqueIndex("media_processing_jobs_output_prefix_uidx").on(
+      table.outputPrefix,
+    ),
+    index("media_processing_jobs_status_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+  ],
+)
+
+export const mediaRenditions = pgTable(
+  "media_renditions",
+  {
+    id: text("id").primaryKey(),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    processingJobId: text("processing_job_id")
+      .notNull()
+      .references(() => mediaProcessingJobs.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    label: text("label").notNull(),
+    storageProvider: mediaStorageProvider("storage_provider")
+      .notNull()
+      .default("vercel-blob"),
+    storageKey: text("storage_key").notNull(),
+    mediaUrl: text("media_url").notNull(),
+    contentType: text("content_type").notNull(),
+    codec: text("codec"),
+    width: integer("width"),
+    height: integer("height"),
+    bitrate: integer("bitrate"),
+    durationMs: integer("duration_ms"),
+    byteSize: integer("byte_size").notNull(),
+    checksum: text("checksum").notNull(),
+    status: mediaRenditionStatus("status").notNull().default("pending"),
+    qualityStatus: mediaQualityStatus("quality_status")
+      .notNull()
+      .default("pending"),
+    qualityDetails: jsonb("quality_details"),
+    encoderVersion: text("encoder_version").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("media_renditions_asset_label_encoder_uidx").on(
+      table.mediaAssetId,
+      table.kind,
+      table.label,
+      table.encoderVersion,
+    ),
+    uniqueIndex("media_renditions_storage_key_uidx").on(table.storageKey),
+    index("media_renditions_job_idx").on(
+      table.processingJobId,
+      table.status,
+    ),
   ],
 )
 

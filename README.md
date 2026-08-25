@@ -23,8 +23,8 @@ UBEYE is a story-first social network prototype with:
 Recommended production integrations for the first serious build:
 
 - Neon for Postgres
-- Vercel Blob for private story image storage
-- Cloudflare Stream for story video
+- Vercel Blob for private originals and immutable adaptive media delivery
+- Vercel Workflow plus bundled FFmpeg for story-video processing
 - Stripe Connect for payouts
 
 ## Story media setup
@@ -34,6 +34,28 @@ under `public/uploads/stories`.
 
 Production uploads fail closed unless story media is configured for private
 storage:
+
+The custom Vercel HLS path uses two Blob stores. `BLOB_READ_WRITE_TOKEN` must
+belong to a private store for originals. `MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN`
+must belong to a public store for opaque, versioned HLS packages and posters.
+Apply migration `0049_vercel_hls_media_pipeline.sql` before enabling it.
+
+```bash
+STORY_STORAGE_PROVIDER=vercel-blob
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_private_...
+MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN=vercel_blob_rw_public_...
+STORY_VIDEO_PROCESSOR=vercel-hls
+MEDIA_PIPELINE_ENABLED=true
+```
+
+Deploy the code and migration first with the legacy
+`STORY_VIDEO_PROCESSOR=cloudflare-stream` setting and
+`MEDIA_PIPELINE_ENABLED=false`. After preview validation, change the processor
+to `vercel-hls` and the flag to `true` together. Previously issued Cloudflare
+uploads remain completable, and custom uploads already in flight remain
+completable after a rollback.
+
+The legacy Cloudflare rollback configuration is:
 
 ```bash
 STORY_STORAGE_PROVIDER=vercel-blob
@@ -74,7 +96,7 @@ MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0
 ```
 
 Install the Vercel Workflow integration before deployment. Vercel invokes the
-publication/Stream reconciliation route every minute using `CRON_SECRET`.
+publication and custom-media reconciliation routes using `CRON_SECRET`.
 
 ## Admin setup
 

@@ -16,6 +16,10 @@ vi.mock("@vercel/blob/client", () => ({
   generateClientTokenFromReadWriteToken: vi.fn(),
 }))
 
+vi.mock("@vercel/blob", () => ({
+  del: vi.fn(),
+}))
+
 vi.mock("@/lib/auth", () => ({
   getCompleteMobileSession: vi.fn(),
 }))
@@ -76,6 +80,8 @@ describe("mobile video poster upload preparation", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.STORY_STORAGE_PROVIDER = "vercel-blob"
+    process.env.STORY_VIDEO_PROCESSOR = "cloudflare-stream"
+    process.env.MEDIA_PIPELINE_ENABLED = "false"
     process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_test"
     vi.mocked(getCompleteMobileSession).mockResolvedValue({ id: "creator-1" } as never)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
@@ -128,6 +134,37 @@ describe("mobile video poster upload preparation", () => {
     const response = await POST(uploadRequest())
 
     expect(response.status).toBe(503)
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+  })
+
+  it("issues an owner-bound private Blob source when the custom pipeline is enabled", async () => {
+    process.env.STORY_VIDEO_PROCESSOR = "vercel-hls"
+    process.env.MEDIA_PIPELINE_ENABLED = "true"
+    vi.mocked(createMediaUploadSession).mockImplementation(async (input) => ({
+      id: "upload-custom",
+      storageKey: input.storageKey,
+      uploadUrl: input.uploadUrl,
+      uploadProtocol: input.uploadProtocol,
+    }) as never)
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(uploadRequest())
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.uploadProtocol).toBe("vercel-blob")
+    expect(payload.uid).toMatch(/^media-originals\/creator-1\//)
+    expect(payload.source).toMatchObject({
+      pathname: payload.uid,
+      contentType: "video/mp4",
+      access: "private",
+    })
+    expect(createMediaUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storageProvider: "vercel-blob",
+        uploadProtocol: "vercel-blob",
+      }),
+    )
     expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
   })
 })

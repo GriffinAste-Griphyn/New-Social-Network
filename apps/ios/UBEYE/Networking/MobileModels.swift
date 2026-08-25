@@ -807,6 +807,7 @@ struct VideoUploadResponse: Codable, Hashable {
     let uploadUrl: URL
     let uploadProtocol: String?
     let poster: ImageUploadPart?
+    var source: ImageUploadPart? = nil
 }
 
 struct StoryStatusResponse: Codable {

@@ -32,6 +32,7 @@ const completionClaimRecoveryMs = 15 * 60 * 1_000
 const completedUploadSessionRetentionMs = 7 * 24 * 60 * 60 * 1_000
 
 type MediaUploadSession = typeof mediaUploadSessions.$inferSelect
+type VideoUploadStorageProvider = "cloudflare-stream" | "vercel-blob"
 
 export type MediaUploadSessionCleanupCandidate = Pick<
   MediaUploadSession,
@@ -142,7 +143,7 @@ export function isCloudflareStreamFullyReady(
 export async function getReusableMediaUploadSession(input: {
   ownerUserId: string
   clientUploadId?: string | null
-  storageProvider: "cloudflare-stream"
+  storageProvider: VideoUploadStorageProvider
   expectedContentType?: string | null
   expectedByteSize?: number | null
   maxDurationSeconds?: number | null
@@ -184,7 +185,7 @@ export async function createMediaUploadSession(input: {
   clientUploadId?: string | null
   purpose?: "story" | "story_reply"
   assetKind: "video"
-  storageProvider: "cloudflare-stream"
+  storageProvider: VideoUploadStorageProvider
   storageKey: string
   uploadUrl: string
   uploadProtocol: string
@@ -295,7 +296,7 @@ export async function retireMediaUploadSession(input: {
 export async function claimMediaUploadSessionForCompletion(input: {
   ownerUserId: string
   uploadSessionId?: string | null
-  storageProvider: "cloudflare-stream"
+  storageProvider: VideoUploadStorageProvider
   storageKey: string
   contentType: string
   byteSize: number

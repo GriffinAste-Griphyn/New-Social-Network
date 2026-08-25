@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto"
+
+import { del } from "@vercel/blob"
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client"
 import { NextResponse } from "next/server"
 import { z } from "zod"
@@ -9,6 +12,8 @@ import {
   MediaUploadSessionError,
   retireMediaUploadSession,
 } from "@/lib/media-upload-sessions"
+import { isVercelHlsPipelineEnabled } from "@/lib/media-pipeline/contracts"
+import { originalVideoPathname } from "@/lib/media-pipeline/paths"
 import {
   createCloudflareStreamTusUpload,
   directStoryVideoPosterPathname,
@@ -61,8 +66,10 @@ function logVideoUploadEvent(
   metadata: Record<string, string | number | boolean | null | undefined>,
 ) {
   console.info(
-    "mobile_video_upload",
     JSON.stringify({
+      level: event.endsWith("failed") ? "error" : "info",
+      message: event,
+      service: "mobile_video_upload",
       event,
       at: new Date().toISOString(),
       ...Object.fromEntries(
@@ -128,11 +135,48 @@ async function createVideoPosterUploadPart(uid: string) {
   }
 }
 
+async function createVideoOriginalUploadPart(input: {
+  pathname: string
+  contentType: string
+  byteSize: number
+}) {
+  assertVideoPosterUploadsConfigured()
+
+  let clientToken: string
+  try {
+    clientToken = await generateClientTokenFromReadWriteToken({
+      pathname: input.pathname,
+      allowedContentTypes: [input.contentType],
+      maximumSizeInBytes: input.byteSize,
+      validUntil: Date.now() + 15 * 60 * 1000,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    })
+  } catch {
+    throw new MediaUploadSessionError(
+      "Could not prepare the private video upload.",
+      503,
+    )
+  }
+
+  return {
+    pathname: input.pathname,
+    uploadUrl: blobApiUploadUrl(input.pathname),
+    clientToken,
+    contentType: input.contentType,
+    maxSizeBytes: input.byteSize,
+    access: "private" as const,
+  }
+}
+
 async function removeAbandonedVideoUpload(uid: string) {
-  await Promise.allSettled([
-    removeCloudflareStreamVideoByUid(uid),
-    removeDirectBlobStoryVideoPoster(uid),
-  ])
+  const removals: Promise<unknown>[] = [removeDirectBlobStoryVideoPoster(uid)]
+  if (uid.startsWith("media-originals/")) {
+    removals.push(del(uid))
+  } else {
+    removals.push(removeCloudflareStreamVideoByUid(uid))
+  }
+  await Promise.allSettled(removals)
 }
 
 export async function POST(request: Request) {
@@ -177,6 +221,10 @@ export async function POST(request: Request) {
 
   try {
     assertVideoPosterUploadsConfigured()
+    const useVercelHls = isVercelHlsPipelineEnabled()
+    const storageProvider = useVercelHls
+      ? ("vercel-blob" as const)
+      : ("cloudflare-stream" as const)
     let uploadOrderReservedAt = uploadStartedAt
 
     if (parsed.data.replaceUploadSessionId && !parsed.data.clientUploadId) {
@@ -189,7 +237,7 @@ export async function POST(request: Request) {
     let reusableSession = await getReusableMediaUploadSession({
       ownerUserId: session.id,
       clientUploadId: parsed.data.clientUploadId,
-      storageProvider: "cloudflare-stream",
+      storageProvider,
       expectedContentType: parsed.data.contentType,
       expectedByteSize: parsed.data.byteSize,
       maxDurationSeconds: parsed.data.maxDurationSeconds,
@@ -218,6 +266,13 @@ export async function POST(request: Request) {
       const poster = await createVideoPosterUploadPart(
         reusableSession.storageKey,
       )
+      const source = useVercelHls
+        ? await createVideoOriginalUploadPart({
+            pathname: reusableSession.storageKey,
+            contentType: parsed.data.contentType,
+            byteSize: parsed.data.byteSize,
+          })
+        : null
       logVideoUploadEvent("prepare_reused", {
         userId: session.id,
         uid: reusableSession.storageKey,
@@ -232,6 +287,62 @@ export async function POST(request: Request) {
         uploadUrl: reusableSession.uploadUrl,
         uploadProtocol: reusableSession.uploadProtocol,
         poster,
+        source,
+      })
+    }
+
+    if (useVercelHls) {
+      const extension = parsed.data.contentType === "video/quicktime" ? "mov" : "mp4"
+      const pathname = originalVideoPathname({
+        ownerUserId: session.id,
+        uploadSessionId: randomUUID(),
+        extension,
+      })
+      const source = await createVideoOriginalUploadPart({
+        pathname,
+        contentType: parsed.data.contentType,
+        byteSize: parsed.data.byteSize,
+      })
+      const uploadSession = await createMediaUploadSession({
+        ownerUserId: session.id,
+        clientUploadId: parsed.data.clientUploadId,
+        assetKind: "video",
+        storageProvider: "vercel-blob",
+        storageKey: pathname,
+        uploadUrl: source.uploadUrl,
+        uploadProtocol: "vercel-blob",
+        expectedContentType: parsed.data.contentType,
+        expectedByteSize: parsed.data.byteSize,
+        maxDurationSeconds: parsed.data.maxDurationSeconds,
+        createdAt: uploadOrderReservedAt,
+      })
+      const resolvedSource =
+        uploadSession.storageKey === pathname
+          ? source
+          : await createVideoOriginalUploadPart({
+              pathname: uploadSession.storageKey,
+              contentType: parsed.data.contentType,
+              byteSize: parsed.data.byteSize,
+            })
+      if (uploadSession.storageKey !== pathname) {
+        await del(pathname).catch(() => undefined)
+      }
+      const poster = await createVideoPosterUploadPart(uploadSession.storageKey)
+
+      logVideoUploadEvent("prepare_succeeded", {
+        userId: session.id,
+        uid: uploadSession.storageKey,
+        uploadSessionId: uploadSession.id,
+        protocol: uploadSession.uploadProtocol,
+      })
+      return NextResponse.json({
+        ok: true,
+        uploadSessionId: uploadSession.id,
+        uid: uploadSession.storageKey,
+        uploadUrl: resolvedSource.uploadUrl,
+        uploadProtocol: uploadSession.uploadProtocol,
+        poster,
+        source: resolvedSource,
       })
     }
 
@@ -289,6 +400,7 @@ export async function POST(request: Request) {
       uploadUrl: uploadSession.uploadUrl,
       uploadProtocol: uploadSession.uploadProtocol,
       poster,
+      source: null,
     })
   } catch (error) {
     logVideoUploadEvent("prepare_failed", {
