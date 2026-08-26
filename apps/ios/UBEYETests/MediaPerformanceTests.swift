@@ -7,6 +7,230 @@ import XCTest
 @testable import UBEYE
 
 final class MediaPerformanceTests: XCTestCase {
+    @MainActor
+    func testPerformanceReporterCoalescesRepeatedImmediateFlushRequests() async {
+        let recorder = PerformanceUploadRecorder()
+        let reporter = MobilePerformanceReporter(
+            batchSize: 50,
+            maxBufferSize: 200,
+            flushDelaySeconds: 0.01,
+            minimumRequestSpacingSeconds: 0.05,
+            retryDelaySeconds: 0.1
+        )
+        reporter.configure { events in
+            await recorder.record(events)
+            try await Task.sleep(for: .milliseconds(40))
+        }
+
+        for index in 0..<5 {
+            reporter.record(
+                name: "video_upload_phase",
+                durationMs: nil,
+                metadata: ["index": String(index)]
+            )
+        }
+
+        for _ in 0..<20 {
+            await reporter.flushNow()
+            await Task.yield()
+        }
+        try? await Task.sleep(for: .milliseconds(140))
+
+        let batches = await recorder.batches()
+        XCTAssertEqual(batches.count, 1)
+        XCTAssertEqual(batches.first?.count, 5)
+    }
+
+    @MainActor
+    func testPerformanceReporterSpacesFullBatches() async {
+        let recorder = PerformanceUploadRecorder()
+        let reporter = MobilePerformanceReporter(
+            batchSize: 2,
+            maxBufferSize: 10,
+            flushDelaySeconds: 0.01,
+            minimumRequestSpacingSeconds: 0.08,
+            retryDelaySeconds: 0.1
+        )
+        reporter.configure { events in
+            await recorder.record(events)
+        }
+
+        for index in 0..<4 {
+            reporter.record(
+                name: "api_request",
+                durationMs: index,
+                metadata: ["index": String(index)]
+            )
+        }
+        await reporter.flushNow()
+
+        let deadline = Date().addingTimeInterval(1)
+        while await recorder.count() < 2, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        let batches = await recorder.batches()
+        let timestamps = await recorder.timestamps()
+        XCTAssertEqual(batches.count, 2)
+        XCTAssertEqual(batches.map(\.count), [2, 2])
+        if timestamps.count == 2 {
+            XCTAssertGreaterThanOrEqual(
+                timestamps[1].timeIntervalSince(timestamps[0]),
+                0.07
+            )
+        }
+    }
+
+    func testHomeFeedPresentationPolicyUsesUniqueAboveTheFoldThumbnailsInOrder() {
+        let myStory = URL(string: "https://example.com/my-story.jpg")!
+        let firstFollowing = URL(string: "https://example.com/following-1.jpg")!
+        let secondFollowing = URL(string: "https://example.com/following-2.jpg")!
+        let belowFoldFollowing = URL(string: "https://example.com/following-3.jpg")!
+        let firstDiscover = URL(string: "https://example.com/discover-1.jpg")!
+        let belowFoldDiscover = URL(string: "https://example.com/discover-3.jpg")!
+
+        let urls = HomeFeedMediaPresentationPolicy.requiredThumbnailURLs(
+            myStoryURL: myStory,
+            followingURLs: [firstFollowing, secondFollowing, belowFoldFollowing],
+            discoverURLs: [firstDiscover, myStory, belowFoldDiscover]
+        )
+
+        XCTAssertEqual(urls, [myStory, firstFollowing, secondFollowing, firstDiscover])
+    }
+
+    func testFeedMediaCommitPolicyDefersOnlyAnIncompleteRefresh() {
+        let incomplete = MediaImagePreparationResult(
+            requestedCount: 3,
+            readyCount: 2,
+            timedOut: true
+        )
+        let complete = MediaImagePreparationResult(
+            requestedCount: 3,
+            readyCount: 3,
+            timedOut: false
+        )
+
+        XCTAssertEqual(
+            FeedMediaCommitPolicy.decision(hasPresentedFeed: false, preparation: incomplete),
+            .commit
+        )
+        XCTAssertEqual(
+            FeedMediaCommitPolicy.decision(hasPresentedFeed: true, preparation: incomplete),
+            .deferUntilReady
+        )
+        XCTAssertEqual(
+            FeedMediaCommitPolicy.decision(hasPresentedFeed: true, preparation: complete),
+            .commit
+        )
+    }
+
+    @MainActor
+    func testStableImageLoaderKeepsCurrentImageUntilReplacementIsReady() async throws {
+        let currentURL = URL(string: "https://example.com/current.jpg")!
+        let replacementURL = URL(string: "https://example.com/replacement.jpg")!
+        let currentImage = try XCTUnwrap(UIImage(data: makeTestImageData(width: 8, height: 8)))
+        let replacementImage = try XCTUnwrap(UIImage(data: makeTestImageData(width: 9, height: 9)))
+        let loader = StableImageLoader()
+
+        await loader.load(url: currentURL, retryDelays: []) { _ in currentImage }
+
+        let replacementTask = Task { @MainActor in
+            await loader.load(url: replacementURL, retryDelays: []) { _ in
+                try? await Task.sleep(for: .milliseconds(80))
+                return replacementImage
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(loader.displayedURL, currentURL)
+        XCTAssertNotNil(loader.displayedImage)
+
+        await replacementTask.value
+        XCTAssertEqual(loader.displayedURL, replacementURL)
+        XCTAssertNotNil(loader.displayedImage)
+    }
+
+    @MainActor
+    func testStableImageLoaderRejectsAStaleCompletion() async throws {
+        let staleURL = URL(string: "https://example.com/stale.jpg")!
+        let currentURL = URL(string: "https://example.com/current.jpg")!
+        let staleImage = try XCTUnwrap(UIImage(data: makeTestImageData(width: 7, height: 7)))
+        let currentImage = try XCTUnwrap(UIImage(data: makeTestImageData(width: 8, height: 8)))
+        let loader = StableImageLoader()
+
+        let staleTask = Task { @MainActor in
+            await loader.load(url: staleURL, retryDelays: []) { _ in
+                try? await Task.sleep(for: .milliseconds(100))
+                return staleImage
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+
+        await loader.load(url: currentURL, retryDelays: []) { _ in currentImage }
+        await staleTask.value
+
+        XCTAssertEqual(loader.requestedURL, currentURL)
+        XCTAssertEqual(loader.displayedURL, currentURL)
+    }
+
+    @MainActor
+    func testStableImageLoaderClearsOnlyWhenMediaIsRemoved() async throws {
+        let url = URL(string: "https://example.com/current.jpg")!
+        let image = try XCTUnwrap(UIImage(data: makeTestImageData(width: 8, height: 8)))
+        let loader = StableImageLoader()
+
+        await loader.load(url: url, retryDelays: []) { _ in image }
+        XCTAssertNotNil(loader.displayedImage)
+
+        await loader.load(url: nil, retryDelays: []) { _ in image }
+
+        XCTAssertNil(loader.requestedURL)
+        XCTAssertNil(loader.displayedURL)
+        XCTAssertNil(loader.displayedImage)
+    }
+
+    func testStoryReadinessPolicySeparatesPendingFailureAndLiveStates() {
+        let pending = StoryStatusResponse.Story(
+            id: "story-1",
+            status: "processing",
+            processingStatus: "processing",
+            hasOriginalRendition: true,
+            providerStatus: "processing",
+            providerPctComplete: 35,
+            fullQualityReady: false,
+            providerError: nil,
+            isLive: false,
+            pollAfterMs: 3_000
+        )
+        let failed = StoryStatusResponse.Story(
+            id: "story-1",
+            status: "processing",
+            processingStatus: "error",
+            hasOriginalRendition: true,
+            providerStatus: "error",
+            providerPctComplete: 35,
+            fullQualityReady: false,
+            providerError: "encoder failed",
+            isLive: false,
+            pollAfterMs: nil
+        )
+        let live = StoryStatusResponse.Story(
+            id: "story-1",
+            status: "live",
+            processingStatus: "ready",
+            hasOriginalRendition: true,
+            providerStatus: "enhancing",
+            providerPctComplete: 33,
+            fullQualityReady: false,
+            providerError: nil,
+            isLive: true,
+            pollAfterMs: nil
+        )
+
+        XCTAssertNil(StoryReadinessPolicy.terminalResult(for: pending))
+        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: failed), .failed)
+        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: live), .live)
+    }
+
     func testVideoUploadResponseDecodesPrivatePosterTarget() throws {
         let data = try JSONSerialization.data(withJSONObject: [
             "ok": true,
@@ -457,6 +681,25 @@ final class MediaPerformanceTests: XCTestCase {
         )
     }
 
+    func testStoryMediaBufferKeepsCurrentAndNextItemsMounted() {
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 0, itemCount: 4),
+            [0, 1]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 2, itemCount: 4),
+            [2, 3]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 3, itemCount: 4),
+            [3]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 4, itemCount: 4),
+            []
+        )
+    }
+
     func testVideoQualityRampRecognizesPortraitAndLandscape1080p() {
         XCTAssertTrue(
             VideoQualityRampPolicy.hasReached1080p(
@@ -474,6 +717,65 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
         XCTAssertFalse(VideoQualityRampPolicy.hasReached1080p(.zero))
+    }
+
+    func testVideoQualityRampWaitsForAHealthyForwardBuffer() {
+        XCTAssertEqual(VideoQualityRampPolicy.requiredHealthySamples, 3)
+        XCTAssertFalse(
+            VideoQualityRampPolicy.shouldRelaxStreamingHints(
+                isPlaybackLikelyToKeepUp: false,
+                bufferedAheadSeconds: 12,
+                remainingSeconds: 20
+            )
+        )
+        XCTAssertFalse(
+            VideoQualityRampPolicy.shouldRelaxStreamingHints(
+                isPlaybackLikelyToKeepUp: true,
+                bufferedAheadSeconds: 5.9,
+                remainingSeconds: 20
+            )
+        )
+        XCTAssertTrue(
+            VideoQualityRampPolicy.shouldRelaxStreamingHints(
+                isPlaybackLikelyToKeepUp: true,
+                bufferedAheadSeconds: 6,
+                remainingSeconds: 20
+            )
+        )
+        XCTAssertTrue(
+            VideoQualityRampPolicy.shouldRelaxStreamingHints(
+                isPlaybackLikelyToKeepUp: true,
+                bufferedAheadSeconds: 3,
+                remainingSeconds: 3
+            )
+        )
+    }
+
+    func testVideoCompletionFallbackOnlyAcceptsTheAuthoritativeFinalFrameWindow() {
+        XCTAssertFalse(
+            VideoPlaybackCompletionPolicy.isAtEnd(
+                currentSeconds: 9.4,
+                durationSeconds: 10
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackCompletionPolicy.isAtEnd(
+                currentSeconds: 9.8,
+                durationSeconds: 10
+            )
+        )
+        XCTAssertTrue(
+            VideoPlaybackCompletionPolicy.isAtEnd(
+                currentSeconds: 9.96,
+                durationSeconds: 10
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackCompletionPolicy.isAtEnd(
+                currentSeconds: .nan,
+                durationSeconds: 10
+            )
+        )
     }
 
     func testNormalizedVideoEnvelopeDoesNotDependOnNetworkConditions() {
@@ -783,10 +1085,12 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testPlayerPoolContinuesTimedOutPreparationForLaterClaim() async {
+    func testPlayerPoolCancelsTimedOutPreparationToPreventDuplicateStreaming() async {
         let url = URL(string: "https://example.com/continued-video.m3u8")!
         let expectedPlayer = AVPlayer()
+        var buildCount = 0
         let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { requestedURL in
+            buildCount += 1
             try? await Task.sleep(for: .milliseconds(70))
             return StoryVideoPlaybackPool.PreparedPlayer(
                 player: expectedPlayer,
@@ -809,8 +1113,18 @@ final class MediaPerformanceTests: XCTestCase {
             waitUpTo: .milliseconds(10)
         )
 
-        XCTAssertTrue(prepared?.player === expectedPlayer)
-        XCTAssertTrue(prepared?.wasPrerolled == true)
+        XCTAssertNil(prepared)
+        XCTAssertEqual(buildCount, 1)
+
+        pool.prepare(urls: [url], activeURL: nil)
+        try? await Task.sleep(for: .milliseconds(100))
+        let rebuilt = await pool.takePreparedPlayer(
+            for: url,
+            waitUpTo: .milliseconds(10)
+        )
+        XCTAssertTrue(rebuilt?.player === expectedPlayer)
+        XCTAssertTrue(rebuilt?.wasPrerolled == true)
+        XCTAssertEqual(buildCount, 2)
     }
 
     @MainActor
@@ -889,6 +1203,38 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
+    func testPlayerPoolDoesNotDuplicateAnAlreadyBufferedActiveSource() async {
+        let active = StoryVideoPlaybackSource(
+            identity: "story:active",
+            url: URL(string: "https://example.com/active.m3u8")!
+        )
+        let next = StoryVideoPlaybackSource(
+            identity: "story:next",
+            url: URL(string: "https://example.com/next.m3u8")!
+        )
+        var requestedURLs: [URL] = []
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 2) { url in
+            requestedURLs.append(url)
+            return StoryVideoPlaybackPool.PreparedPlayer(
+                player: AVPlayer(),
+                playbackURL: url,
+                cacheState: "miss",
+                wasPrerolled: true
+            )
+        }
+
+        pool.prepare(
+            sources: [active, next],
+            activeIdentity: active.identity,
+            promoteActiveIfNeeded: false
+        )
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertFalse(requestedURLs.contains(active.url))
+        XCTAssertTrue(requestedURLs.contains(next.url))
+    }
+
+    @MainActor
     func testVisibleStackWarmSelectsOneEarlyVideoPerStack() {
         let firstVideo = makeStoryStackItem(id: "video-1", assetKind: .video)
         let secondVideo = makeStoryStackItem(id: "video-2", assetKind: .video)
@@ -959,7 +1305,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testVideoStartupFastPathRequiresMatchingCompletedPreroll() {
-        XCTAssertEqual(VideoStartupPolicy.freshForwardBufferDuration, 2)
+        XCTAssertEqual(VideoStartupPolicy.freshForwardBufferDuration, 8)
         XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: false), 5)
         XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: true), 8)
         XCTAssertTrue(
@@ -981,6 +1327,80 @@ final class MediaPerformanceTests: XCTestCase {
                 wasPrerolled: true,
                 targetSeconds: 0,
                 currentSeconds: 0.2
+            )
+        )
+    }
+
+    func testVideoStallRecoveryRequiresTimeAdvancementEvenWhenPlayerReportsPlaying() {
+        XCTAssertFalse(
+            VideoStallRecoveryPolicy.hasRecovered(
+                timeControlStatus: .playing,
+                playbackAdvanced: false
+            )
+        )
+        XCTAssertTrue(
+            VideoStallRecoveryPolicy.hasRecovered(
+                timeControlStatus: .waitingToPlayAtSpecifiedRate,
+                playbackAdvanced: true
+            )
+        )
+        XCTAssertFalse(
+            VideoStallRecoveryPolicy.hasRecovered(
+                timeControlStatus: .waitingToPlayAtSpecifiedRate,
+                playbackAdvanced: false
+            )
+        )
+        XCTAssertFalse(
+            VideoStallRecoveryPolicy.hasRecovered(
+                timeControlStatus: .paused,
+                playbackAdvanced: false
+            )
+        )
+    }
+
+    func testVideoPlaybackWatchdogRequiresSustainedVisiblePlaybackWithoutProgress() {
+        XCTAssertTrue(
+            VideoPlaybackWatchdogPolicy.madeProgress(
+                previousSeconds: 4,
+                currentSeconds: 4.05
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackWatchdogPolicy.madeProgress(
+                previousSeconds: 4,
+                currentSeconds: 4.02
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackWatchdogPolicy.shouldDeclareStall(
+                isVisible: true,
+                isPaused: false,
+                didFinish: false,
+                secondsWithoutProgress: 1.24
+            )
+        )
+        XCTAssertTrue(
+            VideoPlaybackWatchdogPolicy.shouldDeclareStall(
+                isVisible: true,
+                isPaused: false,
+                didFinish: false,
+                secondsWithoutProgress: 1.25
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackWatchdogPolicy.shouldDeclareStall(
+                isVisible: true,
+                isPaused: true,
+                didFinish: false,
+                secondsWithoutProgress: 2
+            )
+        )
+        XCTAssertFalse(
+            VideoPlaybackWatchdogPolicy.shouldDeclareStall(
+                isVisible: false,
+                isPaused: false,
+                didFinish: false,
+                secondsWithoutProgress: 2
             )
         )
     }
@@ -1062,6 +1482,80 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(long))
         XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(unknown))
         XCTAssertFalse(HLSOfflineCache.isEligibleForOfflineCache(progressive))
+    }
+
+    func testOfflineHLSCacheOnlyReusesTheSameCanonicalRemoteMedia() {
+        let original = URL(
+            string: "https://cdn.example.com/story/master.m3u8?token=old&v=1"
+        )!
+        let refreshed = URL(
+            string: "https://cdn.example.com/story/master.m3u8?token=new&v=2"
+        )!
+        let replacement = URL(
+            string: "https://cdn.example.com/story-v2/master.m3u8?token=new"
+        )!
+
+        XCTAssertTrue(
+            HLSOfflineCache.representsSameRemoteMedia(original, refreshed)
+        )
+        XCTAssertFalse(
+            HLSOfflineCache.representsSameRemoteMedia(original, replacement)
+        )
+    }
+
+    func testProcessingStoryUsesPrivateOriginalUntilAdaptivePlaybackIsReady() {
+        let adaptiveURL = URL(string: "https://cdn.example.com/media/master.m3u8")!
+        let originalURL = URL(string: "https://app.example.com/api/story-media/media-originals/user/upload/source.mp4?token=test")!
+        let thumbnailURL = URL(string: "https://cdn.example.com/media/poster.jpg")!
+        let item = StoryStackItem(
+            id: "story-processing",
+            assetKind: .video,
+            mediaUrl: adaptiveURL,
+            thumbnailUrl: thumbnailURL,
+            placeholderUrl: thumbnailURL,
+            renditions: StoryMediaRenditions(
+                playback: StoryMediaRendition(
+                    mediaUrl: adaptiveURL,
+                    thumbnailUrl: thumbnailURL,
+                    placeholderUrl: thumbnailURL,
+                    storageProvider: "vercel-blob",
+                    storageKey: "media/hls-v1/output/master.m3u8",
+                    contentType: "application/vnd.apple.mpegurl",
+                    byteSize: nil,
+                    checksum: nil,
+                    width: 540,
+                    height: 960,
+                    durationMs: 10_000,
+                    processingStatus: "processing"
+                ),
+                original: StoryMediaRendition(
+                    mediaUrl: originalURL,
+                    thumbnailUrl: thumbnailURL,
+                    placeholderUrl: thumbnailURL,
+                    storageProvider: "vercel-blob",
+                    storageKey: "media-originals/user/upload/source.mp4",
+                    contentType: "video/mp4",
+                    byteSize: 8_000_000,
+                    checksum: "source-etag",
+                    width: 720,
+                    height: 1_280,
+                    durationMs: 10_000,
+                    processingStatus: "ready"
+                )
+            ),
+            title: "",
+            processingStatus: "processing",
+            textOverlays: nil,
+            postedAt: "2026-08-25T00:00:00.000Z",
+            durationSeconds: 10,
+            captionVerticalPercent: nil,
+            stats: nil
+        )
+
+        XCTAssertFalse(item.isProcessingVideo)
+        XCTAssertTrue(item.isPlayableVideo)
+        XCTAssertEqual(item.playbackMediaUrl, originalURL)
+        XCTAssertTrue(item.playbackIdentity.contains("media-originals/user/upload/source.mp4"))
     }
 
     private func makeTestImageData(width: Int, height: Int) -> Data {
@@ -1242,5 +1736,27 @@ final class MediaPerformanceTests: XCTestCase {
 
         context.draw(pixelImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
         return Array(UnsafeBufferPointer(start: bytes, count: 4))
+    }
+}
+
+private actor PerformanceUploadRecorder {
+    private var recordedBatches: [[MobilePerformanceEventUpload]] = []
+    private var recordedAt: [Date] = []
+
+    func record(_ events: [MobilePerformanceEventUpload]) {
+        recordedBatches.append(events)
+        recordedAt.append(Date())
+    }
+
+    func count() -> Int {
+        recordedBatches.count
+    }
+
+    func batches() -> [[MobilePerformanceEventUpload]] {
+        recordedBatches
+    }
+
+    func timestamps() -> [Date] {
+        recordedAt
     }
 }

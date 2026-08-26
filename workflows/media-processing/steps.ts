@@ -5,7 +5,6 @@ import path from "node:path"
 
 import { get, head, put } from "@vercel/blob"
 import { and, eq } from "drizzle-orm"
-import { FatalError } from "workflow"
 
 import { getDb } from "@/lib/db"
 import {
@@ -14,6 +13,7 @@ import {
   mediaRenditions,
   stories,
 } from "@/lib/db/schema"
+import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import {
   mediaPipelineLimits,
   selectRenditionProfiles,
@@ -35,6 +35,8 @@ import {
 import { renditionPrefix } from "@/lib/media-pipeline/paths"
 import { enqueueStoryPublication } from "@/lib/story-publication"
 import { deriveStoryPublicationStatus } from "@/lib/stories/cloudflare-status"
+
+class MediaProcessingFatalError extends Error {}
 
 type EncodedRendition = {
   profile: MediaRenditionProfile
@@ -81,14 +83,18 @@ function logMediaPipeline(
 
 function privateBlobToken() {
   const token = process.env.BLOB_READ_WRITE_TOKEN
-  if (!token) throw new FatalError("BLOB_READ_WRITE_TOKEN is not configured.")
+  if (!token) {
+    throw new MediaProcessingFatalError(
+      "BLOB_READ_WRITE_TOKEN is not configured.",
+    )
+  }
   return token
 }
 
 function deliveryBlobToken() {
   const token = process.env.MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN
   if (!token) {
-    throw new FatalError(
+    throw new MediaProcessingFatalError(
       "MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN is not configured.",
     )
   }
@@ -132,8 +138,37 @@ async function readJob(jobId: string) {
     .where(eq(mediaProcessingJobs.id, jobId))
     .limit(1)
 
-  if (!job) throw new FatalError(`Media processing job ${jobId} was not found.`)
+  if (!job) {
+    throw new MediaProcessingFatalError(
+      `Media processing job ${jobId} was not found.`,
+    )
+  }
   return job
+}
+
+export async function claimMediaProcessingWorkflowStep(
+  jobId: string,
+  attempt: number,
+) {
+  "use step"
+
+  const [claimed] = await getDb()
+    .update(mediaProcessingJobs)
+    .set({
+      status: "inspecting",
+      progressPct: 1,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(mediaProcessingJobs.id, jobId),
+        eq(mediaProcessingJobs.status, "pending"),
+        eq(mediaProcessingJobs.attempts, attempt),
+      ),
+    )
+    .returning({ id: mediaProcessingJobs.id })
+
+  return Boolean(claimed)
 }
 
 async function readPrivateSource(pathname: string) {
@@ -143,7 +178,9 @@ async function readPrivateSource(pathname: string) {
     useCache: true,
   })
   if (!source || source.statusCode !== 200 || !source.stream) {
-    throw new FatalError("The private source video could not be read.")
+    throw new MediaProcessingFatalError(
+      "The private source video could not be read.",
+    )
   }
   return source
 }
@@ -160,16 +197,24 @@ export async function inspectMediaSourceStep(jobId: string) {
   const sourceHead = await head(job.sourcePathname, {
     token: privateBlobToken(),
   }).catch(() => null)
-  if (!sourceHead) throw new FatalError("The private source video was not found.")
+  if (!sourceHead) {
+    throw new MediaProcessingFatalError(
+      "The private source video was not found.",
+    )
+  }
   if (sourceHead.size > mediaPipelineLimits.maximumSourceBytes) {
-    throw new FatalError("The source video exceeds the processing size limit.")
+    throw new MediaProcessingFatalError(
+      "The source video exceeds the processing size limit.",
+    )
   }
 
   const sourceBlob = await readPrivateSource(job.sourcePathname)
   const source = await inspectMediaStream(sourceBlob.stream)
   const sourceFailure = validateSourceMetadata(source)
   if (sourceFailure) {
-    throw new FatalError(`Media quality control failed: ${sourceFailure}.`)
+    throw new MediaProcessingFatalError(
+      `Media quality control failed: ${sourceFailure}.`,
+    )
   }
 
   await getDb()
@@ -239,7 +284,7 @@ export async function encodeMediaRenditionStep(
 
   await getDb()
     .update(mediaProcessingJobs)
-    .set({ status: "encoding", progressPct: 20, updatedAt: new Date() })
+    .set({ status: "encoding", updatedAt: new Date() })
     .where(eq(mediaProcessingJobs.id, jobId))
 
   const tempDirectory = await mkdtemp(
@@ -402,7 +447,9 @@ export async function publishMasterPlaylistStep(
     (left, right) => left.profile.height - right.profile.height,
   )
   if (ordered.length === 0 || ordered.some((item) => item.segmentCount < 1)) {
-    throw new FatalError("No verified HLS renditions are available to publish.")
+    throw new MediaProcessingFatalError(
+      "No verified HLS renditions are available to publish.",
+    )
   }
 
   const playlist = buildHlsMasterPlaylist(
@@ -416,7 +463,9 @@ export async function publishMasterPlaylistStep(
   )
   const body = Buffer.from(playlist, "utf8")
   const checksum = createHash("sha256").update(body).digest("hex")
-  const blob = await put(`${job.outputPrefix}/master.m3u8`, body, {
+  const renditionLabels = ordered.map((item) => item.profile.label)
+  const masterFileName = `master-${renditionLabels.join("-")}.m3u8`
+  const blob = await put(`${job.outputPrefix}/${masterFileName}`, body, {
     access: "public",
     token: deliveryBlobToken(),
     addRandomSuffix: false,
@@ -442,7 +491,7 @@ export async function publishMasterPlaylistStep(
       checksum,
       status: "ready",
       qualityStatus: "passed",
-      qualityDetails: { renditionCount: ordered.length },
+      qualityDetails: { renditionCount: ordered.length, renditionLabels },
       encoderVersion: job.encoderVersion,
       createdAt: now,
       updatedAt: now,
@@ -462,19 +511,21 @@ export async function publishMasterPlaylistStep(
         checksum,
         status: "ready",
         qualityStatus: "passed",
-        qualityDetails: { renditionCount: ordered.length },
+        qualityDetails: { renditionCount: ordered.length, renditionLabels },
         updatedAt: now,
       },
     })
   await getDb()
     .update(mediaProcessingJobs)
-    .set({ status: "publishing", progressPct: 90, updatedAt: now })
+    .set({ status: "publishing", updatedAt: now })
     .where(eq(mediaProcessingJobs.id, jobId))
 
   logMediaPipeline("info", "master_published", {
     jobId,
     mediaAssetId: job.mediaAssetId,
     renditionCount: ordered.length,
+    renditionLabels,
+    masterFileName,
     byteSize: body.byteLength,
   })
 
@@ -583,38 +634,25 @@ export async function generateMediaPosterStep(
   }
 }
 
-export async function completeMediaProcessingStep(
-  jobId: string,
-  source: MediaSourceMetadata,
-  master: PublishedMaster,
-  poster: PublishedPoster,
-) {
-  "use step"
+async function publishPlayableMediaReferences(input: {
+  job: Awaited<ReturnType<typeof readJob>>
+  source: MediaSourceMetadata
+  master: PublishedMaster
+  poster: PublishedPoster
+  highest: MediaRenditionProfile
+  final: boolean
+  progressPct: number
+  now: Date
+}) {
+  const { job, source, master, poster, highest, final, progressPct, now } = input
+  const db = getDb()
+  const [currentAsset] = await db
+    .select({ readyAt: mediaAssets.readyAt })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.id, job.mediaAssetId))
+    .limit(1)
 
-  const job = await readJob(jobId)
-  const profiles = selectRenditionProfiles(source)
-  const highest = profiles[profiles.length - 1]
-  const now = new Date()
-  const metrics = {
-    renditionCount: profiles.length,
-    sourceDurationMs: source.durationMs,
-    sourceFrameRate: source.frameRate,
-    highestRendition: highest.label,
-  }
-
-  await getDb()
-    .update(mediaProcessingJobs)
-    .set({
-      status: "ready",
-      progressPct: 100,
-      failureCode: null,
-      lastError: null,
-      metrics,
-      finishedAt: now,
-      updatedAt: now,
-    })
-    .where(eq(mediaProcessingJobs.id, jobId))
-  await getDb()
+  await db
     .update(mediaAssets)
     .set({
       storageProvider: "vercel-blob",
@@ -632,20 +670,21 @@ export async function completeMediaProcessingStep(
       originalHeight: source.height,
       originalDurationMs: source.durationMs,
       processingStatus: "ready",
-      providerStatus: "ready",
-      providerPctComplete: 100,
+      providerStatus: final ? "ready" : "enhancing",
+      providerPctComplete: final ? 100 : progressPct,
       providerError: null,
-      qualityStatus: "passed",
+      qualityStatus: final ? "passed" : "pending",
       highestVerifiedRendition: highest.label,
-      readyAt: now,
+      readyAt: currentAsset?.readyAt ?? now,
       lastCheckedAt: now,
       updatedAt: now,
     })
     .where(eq(mediaAssets.id, job.mediaAssetId))
 
-  const linkedStories = await getDb()
+  const linkedStories = await db
     .select({
       id: stories.id,
+      creatorId: stories.creatorId,
       status: stories.status,
       moderationStatus: stories.moderationStatus,
       expiresAt: stories.expiresAt,
@@ -662,7 +701,7 @@ export async function completeMediaProcessingStep(
       expiresAt: story.expiresAt,
       now,
     })
-    await getDb()
+    await db
       .update(stories)
       .set({
         mediaUrl: master.url,
@@ -682,14 +721,168 @@ export async function completeMediaProcessingStep(
       .where(eq(stories.id, story.id))
 
     if (nextStatus === "live" && story.status !== "live") {
-      await enqueueStoryPublication(story.id)
+      // The durable publication outbox is written before Workflow dispatch.
+      // A downstream quota or transient dispatch failure must not roll a
+      // verified, playable video back to an error state.
+      await enqueueStoryPublication(story.id).catch((error) => {
+        logMediaPipeline("error", "story_publication_dispatch_deferred", {
+          jobId: job.id,
+          mediaAssetId: job.mediaAssetId,
+          storyId: story.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
     }
   }
+
+  for (const creatorId of new Set(
+    linkedStories.map((story) => story.creatorId),
+  )) {
+    await invalidateMobileFeedSnapshotsForCreator(creatorId).catch((error) => {
+      logMediaPipeline("error", "media_feed_invalidation_deferred", {
+        jobId: job.id,
+        mediaAssetId: job.mediaAssetId,
+        creatorId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+
+  return linkedStories.length
+}
+
+export async function activatePlayableMediaProcessingStep(
+  jobId: string,
+  source: MediaSourceMetadata,
+  master: PublishedMaster,
+  poster: PublishedPoster,
+  readyProfiles: MediaRenditionProfile[],
+  progressPct: number,
+) {
+  "use step"
+
+  const job = await readJob(jobId)
+  const highest = [...readyProfiles].sort(
+    (left, right) => left.height - right.height,
+  ).at(-1)
+  if (!highest) {
+    throw new MediaProcessingFatalError(
+      "A verified rendition is required for playback.",
+    )
+  }
+  const now = new Date()
+  const monotonicProgress = Math.max(job.progressPct, progressPct)
+
+  await getDb()
+    .update(mediaProcessingJobs)
+    .set({
+      status: "encoding",
+      progressPct: monotonicProgress,
+      failureCode: null,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(eq(mediaProcessingJobs.id, jobId))
+
+  const storyCount = await publishPlayableMediaReferences({
+    job,
+    source,
+    master,
+    poster,
+    highest,
+    final: false,
+    progressPct: monotonicProgress,
+    now,
+  })
+
+  logMediaPipeline("info", "playback_activated", {
+    jobId,
+    mediaAssetId: job.mediaAssetId,
+    storyCount,
+    highestRendition: highest.label,
+    renditionCount: readyProfiles.length,
+    progressPct: monotonicProgress,
+  })
+}
+
+export async function completeMediaProcessingStep(
+  jobId: string,
+  source: MediaSourceMetadata,
+  master: PublishedMaster,
+  poster: PublishedPoster,
+) {
+  "use step"
+
+  const job = await readJob(jobId)
+  const profiles = selectRenditionProfiles(source)
+  const highest = profiles[profiles.length - 1]
+  const now = new Date()
+  const encodedRenditions = await getDb()
+    .select({
+      label: mediaRenditions.label,
+      qualityDetails: mediaRenditions.qualityDetails,
+    })
+    .from(mediaRenditions)
+    .where(
+      and(
+        eq(mediaRenditions.mediaAssetId, job.mediaAssetId),
+        eq(mediaRenditions.kind, "hls-variant"),
+        eq(mediaRenditions.encoderVersion, job.encoderVersion),
+        eq(mediaRenditions.status, "ready"),
+      ),
+    )
+  const encodingMsByRendition = Object.fromEntries(
+    encodedRenditions.map((rendition) => [
+      rendition.label,
+      Number(
+        (rendition.qualityDetails as { encodingMs?: number } | null)
+          ?.encodingMs ?? 0,
+      ),
+    ]),
+  )
+  const metrics = {
+    renditionCount: profiles.length,
+    sourceDurationMs: source.durationMs,
+    sourceFrameRate: source.frameRate,
+    highestRendition: highest.label,
+    processingMs: job.startedAt
+      ? Math.max(0, now.getTime() - job.startedAt.getTime())
+      : null,
+    encodingMsByRendition,
+    encodingMsTotal: Object.values(encodingMsByRendition).reduce(
+      (total, duration) => total + duration,
+      0,
+    ),
+  }
+
+  const storyCount = await publishPlayableMediaReferences({
+    job,
+    source,
+    master,
+    poster,
+    highest,
+    final: true,
+    progressPct: 100,
+    now,
+  })
+
+  await getDb()
+    .update(mediaProcessingJobs)
+    .set({
+      status: "ready",
+      progressPct: 100,
+      failureCode: null,
+      lastError: null,
+      metrics,
+      finishedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(mediaProcessingJobs.id, jobId))
 
   logMediaPipeline("info", "processing_completed", {
     jobId,
     mediaAssetId: job.mediaAssetId,
-    storyCount: linkedStories.length,
+    storyCount,
     highestRendition: highest.label,
     durationMs: source.durationMs,
   })
@@ -701,6 +894,12 @@ export async function failMediaProcessingStep(jobId: string, message: string) {
   const job = await readJob(jobId)
   const now = new Date()
   const safeMessage = message.slice(0, 2_000)
+  const [asset] = await getDb()
+    .select({ processingStatus: mediaAssets.processingStatus })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.id, job.mediaAssetId))
+    .limit(1)
+  const alreadyPlayable = asset?.processingStatus === "ready"
   await getDb()
     .update(mediaProcessingJobs)
     .set({
@@ -714,22 +913,25 @@ export async function failMediaProcessingStep(jobId: string, message: string) {
   await getDb()
     .update(mediaAssets)
     .set({
-      processingStatus: "error",
-      providerStatus: "error",
+      processingStatus: alreadyPlayable ? "ready" : "error",
+      providerStatus: alreadyPlayable ? "enhancement_error" : "error",
       providerError: safeMessage,
-      qualityStatus: "failed",
+      qualityStatus: alreadyPlayable ? "pending" : "failed",
       lastCheckedAt: now,
       updatedAt: now,
     })
     .where(eq(mediaAssets.id, job.mediaAssetId))
-  await getDb()
-    .update(stories)
-    .set({ processingStatus: "error" })
-    .where(eq(stories.mediaAssetId, job.mediaAssetId))
+  if (!alreadyPlayable) {
+    await getDb()
+      .update(stories)
+      .set({ processingStatus: "error" })
+      .where(eq(stories.mediaAssetId, job.mediaAssetId))
+  }
 
   logMediaPipeline("error", "processing_failed", {
     jobId,
     mediaAssetId: job.mediaAssetId,
+    playbackPreserved: alreadyPlayable,
     error: safeMessage,
   })
 }

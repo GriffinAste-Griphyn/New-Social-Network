@@ -1,11 +1,68 @@
 import { and, desc, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm"
-import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories, storyPublishJobs } from "@/lib/db/schema"
-import { publishStoryWorkflow } from "@/workflows/story-publication"
+import {
+  completeStoryPublicationCore,
+  failStoryPublicationCore,
+  fanoutStoryPublicationCore,
+  invalidateStoryPublicationSnapshotsCore,
+  notifyStoryPublicationCore,
+  processStoryPublicationEarningsCore,
+  validateStoryPublicationCore,
+} from "@/workflows/story-publication/steps"
 
 const activeDispatchWindowMs = 10 * 60 * 1_000
+export const maxStoryPublicationAttempts = 4
+const maxDispatchBackoffMs = 6 * 60 * 60 * 1_000
+
+export function storyPublicationRetryDelayMs(attempts: number) {
+  if (attempts <= 0) return 0
+
+  return Math.min(
+    activeDispatchWindowMs * 2 ** Math.max(0, attempts - 1),
+    maxDispatchBackoffMs,
+  )
+}
+
+export function isStoryPublicationDispatchDue(input: {
+  status: string | null
+  attempts: number | null
+  updatedAt: Date | null
+  now?: Date
+}) {
+  if (input.status === "completed") return false
+
+  const attempts = input.attempts ?? 0
+  if (attempts >= maxStoryPublicationAttempts) return false
+  if (attempts === 0 || !input.updatedAt) return true
+
+  const now = input.now ?? new Date()
+  return (
+    input.updatedAt.getTime() <=
+    now.getTime() - storyPublicationRetryDelayMs(attempts)
+  )
+}
+
+async function processStoryPublicationDirect(storyId: string) {
+  const publication = await validateStoryPublicationCore(storyId)
+  if (!publication) return false
+
+  try {
+    await Promise.all([
+      processStoryPublicationEarningsCore(storyId),
+      fanoutStoryPublicationCore(storyId),
+      notifyStoryPublicationCore(storyId),
+      invalidateStoryPublicationSnapshotsCore(storyId),
+    ])
+    await completeStoryPublicationCore(storyId)
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await failStoryPublicationCore(storyId, message)
+    throw error
+  }
+}
 
 export async function enqueueStoryPublication(
   storyId: string,
@@ -29,58 +86,86 @@ export async function enqueueStoryPublication(
   const [dispatch] = await db
     .select({
       status: storyPublishJobs.status,
-      workflowRunId: storyPublishJobs.workflowRunId,
+      attempts: storyPublishJobs.attempts,
       updatedAt: storyPublishJobs.updatedAt,
     })
     .from(storyPublishJobs)
     .where(eq(storyPublishJobs.storyId, storyId))
     .limit(1)
 
-  if (
-    dispatch?.status === "completed" ||
-    (dispatch?.status === "running" &&
-      dispatch.workflowRunId &&
-      dispatch.updatedAt.getTime() > now.getTime() - activeDispatchWindowMs)
-  ) {
-    return dispatch.workflowRunId
-  }
+  if (dispatch?.status === "completed") return storyId
 
-  try {
-    const run = await start(publishStoryWorkflow, [storyId])
-
+  if ((dispatch?.attempts ?? 0) >= maxStoryPublicationAttempts) {
     await db
       .update(storyPublishJobs)
+      .set({ status: "failed", updatedAt: now })
+      .where(eq(storyPublishJobs.storyId, storyId))
+    return null
+  }
+
+  if (
+    dispatch &&
+    !isStoryPublicationDispatchDue({
+      status: dispatch.status,
+      attempts: dispatch.attempts,
+      updatedAt: dispatch.updatedAt,
+      now,
+    })
+  ) {
+    return null
+  }
+
+  const currentStatus = dispatch?.status ?? "pending"
+  const currentAttempts = dispatch?.attempts ?? 0
+  let claimedAttempt: number | null = null
+  try {
+    const [claim] = await db
+      .update(storyPublishJobs)
       .set({
-        workflowRunId: run.runId,
+        workflowRunId: null,
         status: "running",
         attempts: sql`${storyPublishJobs.attempts} + 1`,
         lastError: null,
         updatedAt: now,
       })
-      .where(eq(storyPublishJobs.storyId, storyId))
-
-    return run.runId
-  } catch (error) {
-    await db
-      .update(storyPublishJobs)
-      .set({
-        status: "pending",
-        lastError: (error instanceof Error ? error.message : String(error)).slice(
-          0,
-          2_000,
+      .where(
+        and(
+          eq(storyPublishJobs.storyId, storyId),
+          eq(storyPublishJobs.status, currentStatus),
+          eq(storyPublishJobs.attempts, currentAttempts),
         ),
-        updatedAt: now,
-      })
-      .where(eq(storyPublishJobs.storyId, storyId))
+      )
+      .returning({ attempts: storyPublishJobs.attempts })
+
+    if (!claim) return null
+    claimedAttempt = claim.attempts
+
+    const completed = await processStoryPublicationDirect(storyId)
+    return completed ? storyId : null
+  } catch (error) {
+    if (
+      claimedAttempt !== null &&
+      claimedAttempt >= maxStoryPublicationAttempts
+    ) {
+      await db
+        .update(storyPublishJobs)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(storyPublishJobs.storyId, storyId))
+    }
     throw error
   }
 }
 
 export async function reconcileStoryPublications(input: { limit?: number } = {}) {
   const now = new Date()
-  const staleBefore = new Date(now.getTime() - activeDispatchWindowMs)
+  const requestedLimit = Math.min(Math.max(input.limit ?? 100, 1), 250)
   const rows = await getDb()
-    .select({ id: stories.id })
+    .select({
+      id: stories.id,
+      publishStatus: storyPublishJobs.status,
+      publishAttempts: storyPublishJobs.attempts,
+      publishUpdatedAt: storyPublishJobs.updatedAt,
+    })
     .from(stories)
     .leftJoin(
       storyPublishJobs,
@@ -95,20 +180,28 @@ export async function reconcileStoryPublications(input: { limit?: number } = {})
           isNull(storyPublishJobs.storyId),
           and(
             ne(storyPublishJobs.status, "completed"),
-            or(
-              ne(storyPublishJobs.status, "running"),
-              lt(storyPublishJobs.updatedAt, staleBefore),
-            ),
+            lt(storyPublishJobs.attempts, maxStoryPublicationAttempts),
           ),
         ),
       ),
     )
     .orderBy(desc(stories.createdAt))
-    .limit(Math.min(Math.max(input.limit ?? 100, 1), 250))
+    .limit(250)
+
+  const dueRows = rows
+    .filter((story) =>
+      isStoryPublicationDispatchDue({
+        status: story.publishStatus,
+        attempts: story.publishAttempts,
+        updatedAt: story.publishUpdatedAt,
+        now,
+      }),
+    )
+    .slice(0, requestedLimit)
 
   let enqueued = 0
-  for (let index = 0; index < rows.length; index += 5) {
-    const batch = rows.slice(index, index + 5)
+  for (let index = 0; index < dueRows.length; index += 5) {
+    const batch = dueRows.slice(index, index + 5)
     const results = await Promise.allSettled(
       batch.map((story) =>
         enqueueStoryPublication(story.id, { dispatch: true }),

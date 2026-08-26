@@ -1,6 +1,7 @@
 import { createHook } from "workflow"
 
 import {
+  claimMediaProcessingWorkflowStep,
   completeMediaProcessingStep,
   encodeMediaRenditionStep,
   failMediaProcessingStep,
@@ -20,6 +21,18 @@ export async function processMediaWorkflow(jobId: string, attempt: number) {
     return {
       status: "deduplicated" as const,
       runId: conflict.runId,
+      attempt,
+    }
+  }
+
+  // Media encoding now runs directly in a leased Vercel Function. This guard
+  // lets already-queued legacy Workflow messages finish only when they still
+  // own the exact database attempt, preventing a late queue retry from racing
+  // the direct processor.
+  const claimed = await claimMediaProcessingWorkflowStep(jobId, attempt)
+  if (!claimed) {
+    return {
+      status: "deduplicated" as const,
       attempt,
     }
   }

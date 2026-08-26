@@ -156,6 +156,7 @@ struct StoryVideoUploadAttempt {
             "video_upload_succeeded attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") strategy=\(strategy?.rawValue ?? "unknown") retries=\(retries)",
             since: startedAt
         )
+        MediaPerformance.flushUploadEvents()
     }
 
     mutating func recordFailure(_ error: Error) {
@@ -165,6 +166,7 @@ struct StoryVideoUploadAttempt {
             "video_upload_failed attempt=\(id) phase=\(phase.rawValue) retries=\(retries) reason=\(Self.sanitize(message))",
             since: startedAt
         )
+        MediaPerformance.flushUploadEvents()
     }
 
     var report: String {

@@ -60,4 +60,19 @@ describe("private story media cache policy", () => {
       ),
     ).toBe("no-store")
   })
+
+  it("signs private media originals for owner preview playback", async () => {
+    process.env.AUTH_SECRET = "story-media-cache-test-secret-value"
+    const { publicStoryMediaUrl } = await import("@/lib/story-media/access")
+    const pathname = "media-originals/creator/upload/source.mp4"
+    const mediaUrl = publicStoryMediaUrl(
+      `/api/story-media/${pathname}`,
+      new Request("https://app.example.com/api/mobile/stories/my-story"),
+      { signed: true },
+    )
+
+    expect(mediaUrl).toMatch(
+      /^https:\/\/app\.example\.com\/api\/story-media\/media-originals\/creator\/upload\/source\.mp4\?token=/,
+    )
+  })
 })

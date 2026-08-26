@@ -1,18 +1,49 @@
 import { randomUUID } from "node:crypto"
 
 import { and, asc, eq, isNull, lt, or } from "drizzle-orm"
-import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { mediaAssets, mediaProcessingJobs, stories } from "@/lib/db/schema"
-import { processMediaWorkflow } from "@/workflows/media-processing"
-
-import { mediaEncoderVersion, mediaPipelineVersion } from "./contracts"
+import {
+  maximumMediaProcessingAttempts,
+  mediaEncoderVersion,
+  mediaPipelineVersion,
+} from "./contracts"
 import { createMediaDeliveryPrefix } from "./paths"
 
 export class MediaPipelineDispatchError extends Error {}
 
 const dispatchClaimRecoveryMs = 5 * 60 * 1_000
+const activeDispatchLeaseMs = 15 * 60 * 1_000
+const maximumErrorRetryDelayMs = 2 * 60 * 1_000
+
+export function mediaProcessingRetryDelayMs(attempts: number) {
+  if (attempts <= 0) return 0
+  return Math.min(5_000 * 2 ** Math.max(0, attempts - 1), maximumErrorRetryDelayMs)
+}
+
+function mediaProcessingDispatchRecommended(job: {
+  status: string
+  attempts: number
+  updatedAt: Date
+}) {
+  if (job.status === "ready") return false
+  if (job.attempts >= maximumMediaProcessingAttempts) {
+    // A bounded run can deliberately yield after its final attempt. Give that
+    // pending row one last owner so it transitions to an explicit terminal
+    // error instead of leaving the client on an endless queued state.
+    return job.status === "pending"
+  }
+  if (job.status === "pending") return true
+  if (job.status === "error") {
+    return (
+      job.updatedAt.getTime() <=
+      Date.now() - mediaProcessingRetryDelayMs(job.attempts)
+    )
+  }
+
+  return job.updatedAt.getTime() <= Date.now() - activeDispatchLeaseMs
+}
 
 export async function createMediaProcessingJob(mediaAssetId: string) {
   const db = getDb()
@@ -91,122 +122,53 @@ export async function createMediaProcessingJob(mediaAssetId: string) {
 
 export async function enqueueMediaProcessing(mediaAssetId: string) {
   const job = await createMediaProcessingJob(mediaAssetId)
+  const dispatchRecommended = mediaProcessingDispatchRecommended(job)
 
-  if (
-    job.status === "ready" ||
-    (job.workflowRunId && job.status !== "error")
-  ) {
-    return { jobId: job.id, runId: job.workflowRunId }
+  if (job.status === "ready") {
+    return {
+      jobId: job.id,
+      runId: job.workflowRunId,
+      dispatchRecommended: false,
+    }
   }
 
   if (
-    job.status === "pending" &&
-    job.attempts > 0 &&
-    !job.workflowRunId &&
-    job.updatedAt.getTime() > Date.now() - dispatchClaimRecoveryMs
+    dispatchRecommended &&
+    job.attempts < maximumMediaProcessingAttempts &&
+    (job.status === "pending" || job.status === "error")
   ) {
-    return { jobId: job.id, runId: null }
-  }
+    const now = new Date()
+    const [asset] = await getDb()
+      .select({ processingStatus: mediaAssets.processingStatus })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, mediaAssetId))
+      .limit(1)
+    const alreadyPlayable = asset?.processingStatus === "ready"
 
-  const now = new Date()
-  const claimed = await getDb().transaction(async (tx) => {
-    const [reserved] = await tx
-      .update(mediaProcessingJobs)
-      .set({
-        workflowRunId: null,
-        status: "pending",
-        attempts: job.attempts + 1,
-        lastError: null,
-        failureCode: null,
-        finishedAt: null,
-        startedAt: job.startedAt ?? now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(mediaProcessingJobs.id, job.id),
-          eq(mediaProcessingJobs.status, job.status),
-          eq(mediaProcessingJobs.attempts, job.attempts),
-        ),
-      )
-      .returning({ attempts: mediaProcessingJobs.attempts })
-
-    if (!reserved) return null
-
-    await tx
+    await getDb()
       .update(mediaAssets)
       .set({
-        workflowRunId: null,
         pipelineVersion: job.pipelineVersion,
         encoderVersion: job.encoderVersion,
-        processingStatus: "processing",
+        processingStatus: alreadyPlayable ? "ready" : "processing",
         qualityStatus: "pending",
-        providerStatus: "queued",
-        providerPctComplete: 0,
+        providerStatus: alreadyPlayable ? "enhancing" : "queued",
         providerError: null,
         updatedAt: now,
       })
       .where(eq(mediaAssets.id, mediaAssetId))
-    await tx
-      .update(stories)
-      .set({ processingStatus: "processing" })
-      .where(eq(stories.mediaAssetId, mediaAssetId))
-
-    return reserved
-  })
-
-  if (!claimed) {
-    const [current] = await getDb()
-      .select({ workflowRunId: mediaProcessingJobs.workflowRunId })
-      .from(mediaProcessingJobs)
-      .where(eq(mediaProcessingJobs.id, job.id))
-      .limit(1)
-    return { jobId: job.id, runId: current?.workflowRunId ?? null }
+    if (!alreadyPlayable) {
+      await getDb()
+        .update(stories)
+        .set({ processingStatus: "processing" })
+        .where(eq(stories.mediaAssetId, mediaAssetId))
+    }
   }
 
-  try {
-    const run = await start(processMediaWorkflow, [job.id, claimed.attempts])
-    await getDb()
-      .update(mediaProcessingJobs)
-      .set({
-        workflowRunId: run.runId,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(mediaProcessingJobs.id, job.id),
-          eq(mediaProcessingJobs.attempts, claimed.attempts),
-        ),
-      )
-    await getDb()
-      .update(mediaAssets)
-      .set({
-        workflowRunId: run.runId,
-        updatedAt: new Date(),
-      })
-      .where(eq(mediaAssets.id, mediaAssetId))
-
-    return { jobId: job.id, runId: run.runId }
-  } catch (error) {
-    await getDb()
-      .update(mediaProcessingJobs)
-      .set({
-        status: "error",
-        failureCode: "workflow_dispatch_failed",
-        lastError: (error instanceof Error ? error.message : String(error)).slice(
-          0,
-          2_000,
-        ),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(mediaProcessingJobs.id, job.id),
-          eq(mediaProcessingJobs.attempts, claimed.attempts),
-        ),
-      )
-    throw error
-  }
+  // Encoding is now scheduled by the owning route with Next.js `after()` and
+  // guarded by a database lease. Keeping this function side-effect-light makes
+  // repeated upload completions and status polling safely idempotent.
+  return { jobId: job.id, runId: null, dispatchRecommended }
 }
 
 export async function reconcileMediaProcessingJobs(input: {
@@ -217,7 +179,7 @@ export async function reconcileMediaProcessingJobs(input: {
     .from(mediaProcessingJobs)
     .where(
       and(
-        lt(mediaProcessingJobs.attempts, 3),
+        lt(mediaProcessingJobs.attempts, maximumMediaProcessingAttempts),
         or(
           eq(mediaProcessingJobs.status, "error"),
           and(

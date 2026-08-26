@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from "drizzle-orm"
+import { and, eq, gt, isNull, lt, or } from "drizzle-orm"
 
 import { processStoryCreatorEarnings } from "@/lib/creator-earnings"
 import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
@@ -41,9 +41,7 @@ async function readDispatch(storyId: string) {
   return dispatch ?? null
 }
 
-export async function validateStoryPublicationStep(storyId: string) {
-  "use step"
-
+export async function validateStoryPublicationCore(storyId: string) {
   const publication = await readPublication(storyId)
 
   if (!publication) {
@@ -60,9 +58,7 @@ export async function validateStoryPublicationStep(storyId: string) {
   return publication
 }
 
-export async function processStoryPublicationEarningsStep(storyId: string) {
-  "use step"
-
+export async function processStoryPublicationEarningsCore(storyId: string) {
   const dispatch = await readDispatch(storyId)
   if (dispatch?.earningsCompletedAt || !(await readPublication(storyId))) return
 
@@ -73,9 +69,7 @@ export async function processStoryPublicationEarningsStep(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function fanoutStoryPublicationStep(storyId: string) {
-  "use step"
-
+export async function fanoutStoryPublicationCore(storyId: string) {
   const [dispatch, publication] = await Promise.all([
     readDispatch(storyId),
     readPublication(storyId),
@@ -93,40 +87,56 @@ export async function fanoutStoryPublicationStep(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function notifyStoryPublicationStep(storyId: string) {
-  "use step"
-
+export async function notifyStoryPublicationCore(storyId: string) {
   const publication = await readPublication(storyId)
   if (!publication) return
 
+  const claimedAt = new Date()
+  const staleClaimBefore = new Date(claimedAt.getTime() - 5 * 60 * 1_000)
   const [claim] = await getDb()
     .update(storyPublishJobs)
-    .set({ notificationClaimedAt: new Date(), updatedAt: new Date() })
+    .set({ notificationClaimedAt: claimedAt, updatedAt: claimedAt })
     .where(
       and(
         eq(storyPublishJobs.storyId, storyId),
-        isNull(storyPublishJobs.notificationClaimedAt),
+        isNull(storyPublishJobs.notificationCompletedAt),
+        or(
+          isNull(storyPublishJobs.notificationClaimedAt),
+          lt(storyPublishJobs.notificationClaimedAt, staleClaimBefore),
+        ),
       ),
     )
     .returning({ storyId: storyPublishJobs.storyId })
 
   if (!claim) return
 
-  await notifyCreatorStoryPosted({
-    creatorId: publication.creatorId,
-    creatorName: publication.creatorName ?? "Creator",
-    storyId,
-    caption: publication.caption,
-  })
-  await getDb()
-    .update(storyPublishJobs)
-    .set({ notificationCompletedAt: new Date(), updatedAt: new Date() })
-    .where(eq(storyPublishJobs.storyId, storyId))
+  try {
+    await notifyCreatorStoryPosted({
+      creatorId: publication.creatorId,
+      creatorName: publication.creatorName ?? "Creator",
+      storyId,
+      caption: publication.caption,
+    })
+    await getDb()
+      .update(storyPublishJobs)
+      .set({ notificationCompletedAt: new Date(), updatedAt: new Date() })
+      .where(eq(storyPublishJobs.storyId, storyId))
+  } catch (error) {
+    await getDb()
+      .update(storyPublishJobs)
+      .set({ notificationClaimedAt: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(storyPublishJobs.storyId, storyId),
+          eq(storyPublishJobs.notificationClaimedAt, claimedAt),
+          isNull(storyPublishJobs.notificationCompletedAt),
+        ),
+      )
+    throw error
+  }
 }
 
-export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
-  "use step"
-
+export async function invalidateStoryPublicationSnapshotsCore(storyId: string) {
   const [dispatch, publication] = await Promise.all([
     readDispatch(storyId),
     readPublication(storyId),
@@ -140,9 +150,7 @@ export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function completeStoryPublicationStep(storyId: string) {
-  "use step"
-
+export async function completeStoryPublicationCore(storyId: string) {
   const now = new Date()
   await getDb()
     .update(storyPublishJobs)
@@ -155,9 +163,7 @@ export async function completeStoryPublicationStep(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function failStoryPublicationStep(storyId: string, message: string) {
-  "use step"
-
+export async function failStoryPublicationCore(storyId: string, message: string) {
   await getDb()
     .update(storyPublishJobs)
     .set({
@@ -166,4 +172,39 @@ export async function failStoryPublicationStep(storyId: string, message: string)
       updatedAt: new Date(),
     })
     .where(eq(storyPublishJobs.storyId, storyId))
+}
+
+export async function validateStoryPublicationStep(storyId: string) {
+  "use step"
+  return validateStoryPublicationCore(storyId)
+}
+
+export async function processStoryPublicationEarningsStep(storyId: string) {
+  "use step"
+  return processStoryPublicationEarningsCore(storyId)
+}
+
+export async function fanoutStoryPublicationStep(storyId: string) {
+  "use step"
+  return fanoutStoryPublicationCore(storyId)
+}
+
+export async function notifyStoryPublicationStep(storyId: string) {
+  "use step"
+  return notifyStoryPublicationCore(storyId)
+}
+
+export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
+  "use step"
+  return invalidateStoryPublicationSnapshotsCore(storyId)
+}
+
+export async function completeStoryPublicationStep(storyId: string) {
+  "use step"
+  return completeStoryPublicationCore(storyId)
+}
+
+export async function failStoryPublicationStep(storyId: string, message: string) {
+  "use step"
+  return failStoryPublicationCore(storyId, message)
 }

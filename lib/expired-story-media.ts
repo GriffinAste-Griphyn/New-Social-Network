@@ -214,11 +214,12 @@ async function removeVercelHlsPackage(
   }
 
   const outputPrefix = path.posix.dirname(candidate.storageKey)
+  const masterFileName = path.posix.basename(candidate.storageKey)
   const expectedPrefix = `media/${candidate.pipelineVersion}/`
   if (
     outputPrefix === "." ||
     !outputPrefix.startsWith(expectedPrefix) ||
-    candidate.storageKey !== `${outputPrefix}/master.m3u8`
+    !/^master(?:-[a-z0-9-]+)?\.m3u8$/.test(masterFileName)
   ) {
     throw new Error("Refusing to delete an invalid HLS delivery prefix.")
   }

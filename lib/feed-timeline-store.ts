@@ -45,18 +45,27 @@ export async function fanoutStoryToFollowers(input: {
   ]
   const score = input.createdAt.getTime()
 
-  for (let index = 0; index < viewerIds.length; index += 250) {
-    const viewerBatch = viewerIds.slice(index, index + 250)
-    await redisPipeline(
-      viewerBatch.flatMap((viewerId) => {
-      const key = timelineKey(viewerId)
-      return [
-        ["ZADD", key, score, input.storyId],
-        ["ZREMRANGEBYRANK", key, 0, -(timelineMaxStories + 1)],
-        ["EXPIRE", key, timelineRetentionSeconds],
-      ]
-      }),
-    )
+  try {
+    for (let index = 0; index < viewerIds.length; index += 250) {
+      const viewerBatch = viewerIds.slice(index, index + 250)
+      await redisPipeline(
+        viewerBatch.flatMap((viewerId) => {
+          const key = timelineKey(viewerId)
+          return [
+            ["ZADD", key, score, input.storyId],
+            ["ZREMRANGEBYRANK", key, 0, -(timelineMaxStories + 1)],
+            ["EXPIRE", key, timelineRetentionSeconds],
+          ]
+        }),
+      )
+    }
+    return { cached: true, viewerCount: viewerIds.length }
+  } catch (error) {
+    // Timelines are derived acceleration data. The relational feed remains the
+    // source of truth, so a cache outage must not fail or repeatedly replay the
+    // complete publication workflow.
+    console.warn("Story timeline cache fanout failed.", error)
+    return { cached: false, viewerCount: viewerIds.length }
   }
 }
 

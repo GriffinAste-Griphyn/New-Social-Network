@@ -28,7 +28,8 @@ function encodeStoryMediaPathname(pathname: string) {
 
 function isSafeStoryBlobPathname(pathname: string) {
   return (
-    pathname.startsWith("stories/") &&
+    (pathname.startsWith("stories/") ||
+      pathname.startsWith("media-originals/")) &&
     pathname
       .split("/")
       .every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
@@ -145,6 +146,7 @@ async function getStoryForMediaPathname(mediaPathname: string) {
     .where(
       or(
         eq(stories.storageKey, mediaPathname),
+        eq(stories.originalStorageKey, mediaPathname),
         cloudflareStreamMedia
           ? and(
               eq(stories.storageProvider, "cloudflare-stream"),
@@ -155,6 +157,8 @@ async function getStoryForMediaPathname(mediaPathname: string) {
         eq(stories.thumbnailUrl, encodedRoute),
         eq(stories.mediaUrl, decodedRoute),
         eq(stories.thumbnailUrl, decodedRoute),
+        eq(stories.originalMediaUrl, encodedRoute),
+        eq(stories.originalMediaUrl, decodedRoute),
       ),
     )
     .limit(1)

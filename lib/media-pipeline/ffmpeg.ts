@@ -56,13 +56,20 @@ function frameRate(value?: string) {
 
 async function* webStreamChunks(input: ReadableStream<Uint8Array>) {
   const reader = input.getReader()
+  let completed = false
   try {
     while (true) {
       const result = await reader.read()
-      if (result.done) return
+      if (result.done) {
+        completed = true
+        return
+      }
       yield Buffer.from(result.value)
     }
   } finally {
+    if (!completed) {
+      await reader.cancel().catch(() => undefined)
+    }
     reader.releaseLock()
   }
 }
@@ -74,25 +81,53 @@ function runWithInput(
 ) {
   return new Promise<{ stdout: Buffer; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] })
+    const source = Readable.from(webStreamChunks(input))
     const stdout: Buffer[] = []
     let stderr = ""
+    let sourceError: Error | null = null
+    let settled = false
+
+    const settle = (
+      callback: () => void,
+    ) => {
+      if (settled) return
+      settled = true
+      callback()
+    }
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString("utf8")}`.slice(-64_000)
     })
-    child.on("error", reject)
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      // FFmpeg/FFprobe may intentionally close stdin after reading enough
+      // bytes (for example, once a poster frame is decoded). In that case the
+      // source pipe receives EPIPE even though the child process succeeds.
+      // The child exit code remains the authoritative result.
+      if (error.code !== "EPIPE") {
+        sourceError = error
+        child.kill()
+      }
+    })
+    source.on("error", (error) => {
+      sourceError = error instanceof Error ? error : new Error(String(error))
+      child.stdin.destroy()
+      child.kill()
+    })
+    child.on("error", (error) => settle(() => reject(error)))
     child.on("close", (code) => {
+      source.destroy()
       if (code === 0) {
-        resolve({ stdout: Buffer.concat(stdout), stderr })
+        if (sourceError) settle(() => reject(sourceError))
+        else settle(() => resolve({ stdout: Buffer.concat(stdout), stderr }))
       } else {
-        reject(new Error(`${path.basename(command)} exited ${code}: ${stderr}`))
+        settle(() =>
+          reject(new Error(`${path.basename(command)} exited ${code}: ${stderr}`)),
+        )
       }
     })
 
-    Readable.from(webStreamChunks(input))
-      .on("error", (error) => child.stdin.destroy(error))
-      .pipe(child.stdin)
+    source.pipe(child.stdin)
   })
 }
 

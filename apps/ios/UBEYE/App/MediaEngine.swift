@@ -171,7 +171,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
+        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
         guard playerLimit > 0 else {
             return
         }
@@ -194,7 +194,12 @@ final class MediaEngine: ObservableObject {
         )
     }
 
-    func prepare(stack: StoryStack, around index: Int, activeIdentity: String?) {
+    func prepare(
+        stack: StoryStack,
+        around index: Int,
+        activeIdentity: String?,
+        promoteActiveIfNeeded: Bool = true
+    ) {
         MediaPreheater.preheat(
             stack: stack,
             around: index,
@@ -203,7 +208,8 @@ final class MediaEngine: ObservableObject {
         let sources = adjacentVideoSources(in: stack, around: index)
         storyVideoPlaybackPool.prepare(
             sources: sources,
-            activeIdentity: activeIdentity
+            activeIdentity: activeIdentity,
+            promoteActiveIfNeeded: promoteActiveIfNeeded
         )
         scheduleOfflineHLSPreheat(
             sources: sources.filter { $0.identity != activeIdentity }
@@ -270,7 +276,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
+        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
         guard playerLimit > 0 else {
             MediaPerformance.mark("media_engine_visible_video_warm disabled")
             return
@@ -400,7 +406,7 @@ final class MediaEngine: ObservableObject {
 
 @MainActor
 final class StoryVideoPlaybackPool: ObservableObject {
-    nonisolated static let defaultHandoffWait: Duration = .milliseconds(80)
+    nonisolated static let defaultHandoffWait: Duration = .milliseconds(300)
 
     struct PreparedPlayer {
         enum HandoffStage: String {
@@ -451,7 +457,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
     ) async -> PreparedPlayer?
     private let preparedPlayerLimitOverride: Int?
     private var maxPreparedPlayers: Int {
-        min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 2)
+        min(preparedPlayerLimitOverride ?? NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
     }
 
     init() {
@@ -545,11 +551,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
             return staged
         }
 
-        // The active viewer can fall back without destroying work that is already in
-        // flight. Keeping this one bounded preparation lets a retry/back-navigation
-        // claim it and avoids restarting the same HLS manifest/segment requests.
-        desiredIdentities.insert(identity)
-        logPoolWait(result: "timeout_continued", url: source.url, startedAt: waitStartedAt)
+        // A timed-out preparation must not continue downloading beside the active
+        // player's fresh request. That duplicate HLS traffic can starve both players
+        // and was the source of intermittent mid-story stalls after rapid navigation.
+        cancelPreparation(preparation, for: identity)
+        desiredIdentities.remove(identity)
+        logPoolWait(result: "timeout_cancelled", url: source.url, startedAt: waitStartedAt)
         return nil
     }
 
@@ -565,7 +572,8 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
     func prepare(
         sources: [StoryVideoPlaybackSource],
-        activeIdentity: String?
+        activeIdentity: String?,
+        promoteActiveIfNeeded: Bool = true
     ) {
         let desiredSources = Self.prioritizedSources(
             sources: sources,
@@ -574,10 +582,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
         )
 
         var nextDesiredIdentities = Set(desiredSources.map(\.identity))
-        let promotedActiveSource = activeIdentity.flatMap { identity in
-            sources.first(where: { $0.identity == identity })
-        }
-        if let activeIdentity {
+        let promotedActiveSource = promoteActiveIfNeeded
+            ? activeIdentity.flatMap { identity in
+                sources.first(where: { $0.identity == identity })
+            }
+            : nil
+        if promoteActiveIfNeeded, let activeIdentity {
             if promotedActiveSource != nil ||
                 preparedPlayers[activeIdentity] != nil ||
                 stagedPlayers[activeIdentity] != nil ||
@@ -744,7 +754,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         let item = AVPlayerItem(asset: asset)
         configureStreamingHints(for: item, playbackURL: resolved.playbackURL)
-        item.preferredForwardBufferDuration = 2
+        item.preferredForwardBufferDuration = 8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
 
         let player = AVPlayer(playerItem: item)

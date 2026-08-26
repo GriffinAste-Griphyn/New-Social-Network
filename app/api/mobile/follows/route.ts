@@ -1,5 +1,4 @@
 import { after, NextResponse } from "next/server"
-import { start } from "workflow/api"
 import { z } from "zod"
 import { and, eq, inArray } from "drizzle-orm"
 
@@ -7,7 +6,10 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, users } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
-import { removeCreatorStoriesFromTimeline } from "@/lib/feed-timeline-store"
+import {
+  backfillTimelineForFollow,
+  removeCreatorStoriesFromTimeline,
+} from "@/lib/feed-timeline-store"
 import {
   followUser,
   listFollowingProfiles,
@@ -18,9 +20,8 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
-import { backfillFollowTimelineWorkflow } from "@/workflows/story-publication/follow-backfill"
-
 export const runtime = "nodejs"
+export const maxDuration = 300
 
 const followMutationSchema = z.object({
   creatorId: z.string().min(1),
@@ -122,7 +123,19 @@ export async function POST(request: Request) {
       followeeId,
     })
     after(async () => {
-      await start(backfillFollowTimelineWorkflow, [session.id, followeeId])
+      await Promise.all([
+        backfillTimelineForFollow({
+          followerId: session.id,
+          followeeId,
+        }),
+        invalidateMobileFeedSnapshot(session.id),
+      ]).catch((error) => {
+        console.error("follow_timeline_backfill_failed", {
+          followerId: session.id,
+          followeeId,
+          error,
+        })
+      })
     })
 
     return NextResponse.json({ ok: true })

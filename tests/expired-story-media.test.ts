@@ -101,6 +101,27 @@ describe("expired custom HLS media cleanup", () => {
     )
   })
 
+  it("accepts an immutable versioned master playlist", async () => {
+    vi.mocked(list).mockResolvedValue({
+      blobs: [],
+      hasMore: false,
+    } as Awaited<ReturnType<typeof list>>)
+
+    await removeExpiredStoryMediaFromStorage(
+      customVideoCandidate({
+        storageKey:
+          "media/hls-v1/opaque/master-360p-540p-720p-1080p.m3u8",
+      }),
+    )
+
+    expect(list).toHaveBeenCalledWith({
+      prefix: "media/hls-v1/opaque/",
+      cursor: undefined,
+      limit: 1_000,
+      token: "delivery-token",
+    })
+  })
+
   it("refuses a custom asset whose storage key is not its master playlist", async () => {
     await expect(
       removeExpiredStoryMediaFromStorage(

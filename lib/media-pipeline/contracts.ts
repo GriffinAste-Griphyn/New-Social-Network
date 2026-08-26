@@ -1,5 +1,6 @@
 export const mediaPipelineVersion = "hls-v1"
 export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-v1"
+export const maximumMediaProcessingAttempts = 8
 
 export type MediaSourceMetadata = {
   width: number

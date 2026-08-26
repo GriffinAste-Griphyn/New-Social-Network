@@ -41,6 +41,30 @@ private struct BlobUploadErrorEnvelope: Decodable {
     let error: BlobError?
 }
 
+private struct BlobMultipartPart: Codable, Hashable {
+    let partNumber: Int
+    let etag: String
+}
+
+private struct BlobMultipartUploadState: Codable {
+    let pathname: String
+    let sourceByteSize: Int64
+    let uploadId: String
+    let key: String
+    var completedParts: [BlobMultipartPart]
+}
+
+private struct BlobMultipartCreateResponse: Decodable {
+    let uploadId: String
+    let key: String
+}
+
+private struct BlobMultipartPartResponse: Decodable {
+    let etag: String
+}
+
+private struct BlobMultipartCompleteResponse: Decodable {}
+
 @MainActor
 final class APIClient: ObservableObject {
     typealias TusChunkUploader = (URLRequest, URL) async throws -> (Data, URLResponse)
@@ -68,6 +92,9 @@ final class APIClient: ObservableObject {
     private static let vercelBlobApiVersion = "12"
     private static let mediaPipelineVersion = "hls-v2"
     private static let largeVideoUploadTimeout: TimeInterval = 10 * 60
+    private static let blobMultipartThresholdBytes: Int64 = 16 * 1024 * 1024
+    private static let blobMultipartPartBytes: Int64 = 8 * 1024 * 1024
+    private static let blobMultipartConcurrency = 2
     private let session: URLSession
     private let tusChunkUploader: TusChunkUploader
     private let decoder: JSONDecoder
@@ -850,6 +877,17 @@ final class APIClient: ObservableObject {
             throw APIClientError.server("The prepared video does not match the upload target.", 0)
         }
 
+        if byteSize >= Self.blobMultipartThresholdBytes {
+            try await uploadBlobVideoFileMultipart(
+                fileURL: fileURL,
+                byteSize: byteSize,
+                source: source,
+                onRetry: onRetry,
+                onProgress: onProgress
+            )
+            return
+        }
+
         var lastError: Error?
         onProgress?(0)
         for attempt in 1...4 {
@@ -866,7 +904,13 @@ final class APIClient: ObservableObject {
                 request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
                 request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
 
-                let (data, response) = try await tusChunkUploader(request, fileURL)
+                // Background upload transport owns and removes its body file when
+                // the request completes. Give it a disposable path so the pending
+                // story's only durable source remains available for completion and
+                // for any subsequent retry.
+                let stagedFileURL = try await Self.stageBlobUploadFile(fileURL)
+                defer { try? FileManager.default.removeItem(at: stagedFileURL) }
+                let (data, response) = try await tusChunkUploader(request, stagedFileURL)
                 guard let http = response as? HTTPURLResponse,
                       200..<300 ~= http.statusCode else {
                     throw uploadError(data: data, response: response)
@@ -882,6 +926,376 @@ final class APIClient: ObservableObject {
         }
 
         throw lastError ?? APIClientError.server("Video upload failed.", 0)
+    }
+
+    private func uploadBlobVideoFileMultipart(
+        fileURL: URL,
+        byteSize: Int64,
+        source: ImageUploadPart,
+        onRetry: ((String) -> Void)?,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        var state: BlobMultipartUploadState
+        if let persistedState = try await Self.loadBlobMultipartState(
+            pathname: source.pathname,
+            sourceByteSize: byteSize
+        ) {
+            state = persistedState
+        } else {
+            state = try await createBlobMultipartUploadState(
+                pathname: source.pathname,
+                sourceByteSize: byteSize,
+                source: source
+            )
+        }
+        try await Self.saveBlobMultipartState(state)
+
+        let partCount = Int((byteSize + Self.blobMultipartPartBytes - 1) / Self.blobMultipartPartBytes)
+        var completedParts = Dictionary(
+            uniqueKeysWithValues: state.completedParts.map { ($0.partNumber, $0) }
+        )
+        let completedByteCount = completedParts.keys.reduce(Int64(0)) { total, partNumber in
+            total + Self.blobMultipartByteCount(
+                partNumber: partNumber,
+                totalByteSize: byteSize
+            )
+        }
+        var uploadedBytes = completedByteCount
+        onProgress?(Double(uploadedBytes) / Double(byteSize))
+        if uploadedBytes > 0 {
+            onRetry?("blob_multipart_resume_\(completedParts.count)_of_\(partCount)")
+        }
+
+        let missingPartNumbers = (1...partCount).filter { completedParts[$0] == nil }
+        for batchStart in stride(
+            from: 0,
+            to: missingPartNumbers.count,
+            by: Self.blobMultipartConcurrency
+        ) {
+            try Task.checkCancellation()
+            let batch = Array(
+                missingPartNumbers[
+                    batchStart..<min(
+                        batchStart + Self.blobMultipartConcurrency,
+                        missingPartNumbers.count
+                    )
+                ]
+            )
+            let batchState = state
+            try await withThrowingTaskGroup(
+                of: BlobMultipartPart.self
+            ) { group in
+                for partNumber in batch {
+                    group.addTask { @MainActor in
+                        try await self.uploadBlobMultipartPart(
+                            fileURL: fileURL,
+                            byteSize: byteSize,
+                            source: source,
+                            state: batchState,
+                            partNumber: partNumber,
+                            onRetry: onRetry
+                        )
+                    }
+                }
+
+                for try await part in group {
+                    completedParts[part.partNumber] = part
+                    uploadedBytes += Self.blobMultipartByteCount(
+                        partNumber: part.partNumber,
+                        totalByteSize: byteSize
+                    )
+                    // Commit each acknowledged part immediately. If its sibling
+                    // fails or the app is terminated between responses, the next
+                    // attempt resumes from the most precise durable checkpoint.
+                    state.completedParts = completedParts.values.sorted {
+                        $0.partNumber < $1.partNumber
+                    }
+                    try await Self.saveBlobMultipartState(state)
+                    onProgress?(min(Double(uploadedBytes) / Double(byteSize), 0.99))
+                }
+            }
+        }
+
+        let orderedParts = completedParts.values.sorted {
+            $0.partNumber < $1.partNumber
+        }
+        guard orderedParts.count == partCount else {
+            throw APIClientError.server("The resumable video upload is incomplete.", 0)
+        }
+
+        try await completeBlobMultipartUpload(
+            source: source,
+            state: state,
+            parts: orderedParts,
+            onRetry: onRetry
+        )
+        await Self.removeBlobMultipartState(pathname: source.pathname)
+        onProgress?(1)
+    }
+
+    private func createBlobMultipartUploadState(
+        pathname: String,
+        sourceByteSize: Int64,
+        source: ImageUploadPart
+    ) async throws -> BlobMultipartUploadState {
+        var lastError: Error?
+        for attempt in 1...4 {
+            do {
+                var request = blobMultipartRequest(
+                    source: source,
+                    action: "create"
+                )
+                request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
+                let response: BlobMultipartCreateResponse = try await sendBlobMultipartRequest(
+                    request,
+                    responseType: BlobMultipartCreateResponse.self
+                )
+                return BlobMultipartUploadState(
+                    pathname: pathname,
+                    sourceByteSize: sourceByteSize,
+                    uploadId: response.uploadId,
+                    key: response.key,
+                    completedParts: []
+                )
+            } catch {
+                lastError = error
+                let statusCode = (error as? APIClientError)?.statusCode
+                if statusCode.map({ [400, 401, 403, 404, 413, 422].contains($0) }) == true {
+                    throw error
+                }
+                guard attempt < 4 else { break }
+                try await Task.sleep(for: .milliseconds(700 * attempt + Int.random(in: 0...250)))
+            }
+        }
+        throw lastError ?? APIClientError.server("Could not start the resumable video upload.", 0)
+    }
+
+    private func uploadBlobMultipartPart(
+        fileURL: URL,
+        byteSize: Int64,
+        source: ImageUploadPart,
+        state: BlobMultipartUploadState,
+        partNumber: Int,
+        onRetry: ((String) -> Void)?
+    ) async throws -> BlobMultipartPart {
+        let partOffset = Int64(partNumber - 1) * Self.blobMultipartPartBytes
+        let partByteCount = min(Self.blobMultipartPartBytes, byteSize - partOffset)
+        let partData = try await Task.detached(priority: .utility) {
+            try Self.fileChunkData(
+                fileURL: fileURL,
+                offset: partOffset,
+                length: partByteCount
+            )
+        }.value
+
+        var lastError: Error?
+        for attempt in 1...4 {
+            try Task.checkCancellation()
+            do {
+                var request = blobMultipartRequest(
+                    source: source,
+                    action: "upload"
+                )
+                request.setValue(
+                    Self.encodeURIComponent(state.key),
+                    forHTTPHeaderField: "x-mpu-key"
+                )
+                request.setValue(state.uploadId, forHTTPHeaderField: "x-mpu-upload-id")
+                request.setValue(String(partNumber), forHTTPHeaderField: "x-mpu-part-number")
+                request.setValue(String(partData.count), forHTTPHeaderField: "x-content-length")
+                request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
+
+                let partFileURL = try await Self.stageTusChunk(
+                    partData,
+                    uploadURL: source.uploadUrl,
+                    offset: partOffset
+                )
+                let (data, response) = try await tusChunkUploader(request, partFileURL)
+                guard let http = response as? HTTPURLResponse,
+                      200..<300 ~= http.statusCode else {
+                    throw uploadError(data: data, response: response)
+                }
+                let result = try decoder.decode(BlobMultipartPartResponse.self, from: data)
+                guard !result.etag.isEmpty else {
+                    throw APIClientError.invalidResponse
+                }
+                return BlobMultipartPart(partNumber: partNumber, etag: result.etag)
+            } catch {
+                lastError = error
+                let statusCode = (error as? APIClientError)?.statusCode
+                if statusCode.map({ [400, 401, 403, 404, 413, 422].contains($0) }) == true {
+                    throw error
+                }
+                guard attempt < 4 else { break }
+                onRetry?("blob_part_\(partNumber)_attempt_\(attempt)")
+                try await Task.sleep(for: .milliseconds(700 * attempt + Int.random(in: 0...250)))
+            }
+        }
+
+        throw lastError ?? APIClientError.server("Video upload failed.", 0)
+    }
+
+    private func completeBlobMultipartUpload(
+        source: ImageUploadPart,
+        state: BlobMultipartUploadState,
+        parts: [BlobMultipartPart],
+        onRetry: ((String) -> Void)?
+    ) async throws {
+        let body = try encoder.encode(parts)
+        var lastError: Error?
+
+        for attempt in 1...4 {
+            do {
+                var request = blobMultipartRequest(source: source, action: "complete")
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(
+                    Self.encodeURIComponent(state.key),
+                    forHTTPHeaderField: "x-mpu-key"
+                )
+                request.setValue(state.uploadId, forHTTPHeaderField: "x-mpu-upload-id")
+                request.httpBody = body
+                _ = try await sendBlobMultipartRequest(
+                    request,
+                    responseType: BlobMultipartCompleteResponse.self
+                )
+                return
+            } catch {
+                lastError = error
+                let statusCode = (error as? APIClientError)?.statusCode
+                if statusCode.map({ [400, 401, 403, 404, 413, 422].contains($0) }) == true {
+                    throw error
+                }
+                guard attempt < 4 else { break }
+                onRetry?("blob_complete_attempt_\(attempt)")
+                try await Task.sleep(for: .milliseconds(700 * attempt + Int.random(in: 0...250)))
+            }
+        }
+        throw lastError ?? APIClientError.server("Could not finalize the video upload.", 0)
+    }
+
+    private func blobMultipartRequest(
+        source: ImageUploadPart,
+        action: String
+    ) -> URLRequest {
+        var components = URLComponents(url: source.uploadUrl, resolvingAgainstBaseURL: false)!
+        components.path = "/mpu"
+        components.queryItems = [URLQueryItem(name: "pathname", value: source.pathname)]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.largeVideoUploadTimeout
+        request.setValue("Bearer \(source.clientToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(source.access ?? "private", forHTTPHeaderField: "x-vercel-blob-access")
+        request.setValue(source.contentType, forHTTPHeaderField: "x-content-type")
+        request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
+        request.setValue(blobRequestId(clientToken: source.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+        request.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
+        request.setValue(action, forHTTPHeaderField: "x-mpu-action")
+        return request
+    }
+
+    private func sendBlobMultipartRequest<Response: Decodable>(
+        _ request: URLRequest,
+        responseType: Response.Type
+    ) async throws -> Response {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              200..<300 ~= http.statusCode else {
+            throw uploadError(data: data, response: response)
+        }
+        return try decoder.decode(Response.self, from: data)
+    }
+
+    private static func blobMultipartByteCount(
+        partNumber: Int,
+        totalByteSize: Int64
+    ) -> Int64 {
+        let offset = Int64(partNumber - 1) * blobMultipartPartBytes
+        return max(0, min(blobMultipartPartBytes, totalByteSize - offset))
+    }
+
+    nonisolated private static func encodeURIComponent(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-_.!~*'()")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
+    nonisolated private static func blobMultipartStateURL(pathname: String) -> URL {
+        let digest = SHA256.hash(data: Data(pathname.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("UBEYE", isDirectory: true)
+            .appendingPathComponent("blob-multipart", isDirectory: true)
+            .appendingPathComponent("\(digest).json")
+    }
+
+    private static func loadBlobMultipartState(
+        pathname: String,
+        sourceByteSize: Int64
+    ) async throws -> BlobMultipartUploadState? {
+        await Task.detached(priority: .utility) {
+            let url = blobMultipartStateURL(pathname: pathname)
+            guard let data = try? Data(contentsOf: url),
+                  let state = try? JSONDecoder().decode(BlobMultipartUploadState.self, from: data),
+                  state.pathname == pathname,
+                  state.sourceByteSize == sourceByteSize else {
+                try? FileManager.default.removeItem(at: url)
+                return nil
+            }
+            return state
+        }.value
+    }
+
+    private static func saveBlobMultipartState(
+        _ state: BlobMultipartUploadState
+    ) async throws {
+        try await Task.detached(priority: .utility) {
+            let url = blobMultipartStateURL(pathname: state.pathname)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: url, options: .atomic)
+        }.value
+    }
+
+    private static func removeBlobMultipartState(pathname: String) async {
+        await Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(
+                at: blobMultipartStateURL(pathname: pathname)
+            )
+        }.value
+    }
+
+    private static func stageBlobUploadFile(_ sourceURL: URL) async throws -> URL {
+        try await Task.detached(priority: .utility) {
+            let rootURL = FileManager.default
+                .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("UBEYE", isDirectory: true)
+                .appendingPathComponent("background-tus", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: rootURL,
+                withIntermediateDirectories: true
+            )
+
+            let pathExtension = sourceURL.pathExtension
+            let suffix = pathExtension.isEmpty ? ".upload" : ".\(pathExtension)"
+            let stagedURL = rootURL.appendingPathComponent(
+                "blob-\(UUID().uuidString.lowercased())\(suffix)"
+            )
+            do {
+                // A hard link is effectively free on-device and remains valid when
+                // the background transport removes its disposable pathname.
+                try FileManager.default.linkItem(at: sourceURL, to: stagedURL)
+            } catch {
+                // Fall back to a physical copy if the source and cache directories
+                // ever reside on different volumes.
+                try FileManager.default.copyItem(at: sourceURL, to: stagedURL)
+            }
+            return stagedURL
+        }.value
     }
 
     private func uploadTusVideoFile(
@@ -1199,17 +1613,30 @@ final class APIClient: ObservableObject {
         return "\(storeId):\(milliseconds):\(suffix)"
     }
 
-    func waitForStoryLive(storyId: String) async -> Bool {
-        for attempt in 0..<72 {
+    func waitForStoryLive(storyId: String) async -> StoryReadinessResult {
+        for attempt in 0..<60 {
             let status: StoryStatusResponse? = try? await get("/api/mobile/stories/\(storyId)/status")
-            if status?.story.isLive == true {
-                return true
+            if let story = status?.story,
+               let result = StoryReadinessPolicy.terminalResult(for: story) {
+                return result
             }
 
-            let delay: Duration = attempt < 24 ? .seconds(1) : .seconds(2.5)
+            let fallbackMilliseconds: Int
+            switch attempt {
+            case 0..<4:
+                fallbackMilliseconds = 1_500
+            case 4..<12:
+                fallbackMilliseconds = 3_000
+            default:
+                fallbackMilliseconds = 5_000
+            }
+            let requestedMilliseconds = status?.story.pollAfterMs ?? fallbackMilliseconds
+            let boundedMilliseconds = min(max(requestedMilliseconds, 1_000), 10_000)
+            let jitter = Int.random(in: 0...max(1, boundedMilliseconds / 5))
+            let delay: Duration = .milliseconds(boundedMilliseconds + jitter)
             try? await Task.sleep(for: delay)
         }
-        return false
+        return .timedOut
     }
 
     private func fetchStoryStackFromNetwork(storyId: String) async throws -> StoryStackResponse {
@@ -1456,7 +1883,19 @@ final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLS
         lock.lock()
         systemCompletionHandler = completionHandler
         lock.unlock()
-        session.getAllTasks { _ in }
+        // URLSession restores transport tasks after a process relaunch, but the
+        // Swift continuations that created those tasks cannot be restored. Cancel
+        // only orphaned tasks so the durable upload manifest can safely retry the
+        // affected Blob part instead of racing an untracked completion.
+        session.getAllTasks { [weak self] tasks in
+            guard let self else { return }
+            self.lock.lock()
+            let trackedTaskIds = Set(self.pendingUploads.keys)
+            self.lock.unlock()
+            tasks
+                .filter { !trackedTaskIds.contains($0.taskIdentifier) }
+                .forEach { $0.cancel() }
+        }
     }
 
     func urlSession(

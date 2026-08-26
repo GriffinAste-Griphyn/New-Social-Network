@@ -78,6 +78,9 @@ actor HLSOfflineCache {
     private let delegate = HLSOfflineCacheDelegate()
     private var entries: [String: Entry] = [:]
     private var activeIdentities = Set<String>()
+    private var pendingEntries: [String: Entry] = [:]
+    private var successfulIdentities = Set<String>()
+    private var failedIdentities = Set<String>()
     private var backgroundCompletionHandler: (() -> Void)?
     private var didRestoreSessionTasks = false
 
@@ -108,9 +111,11 @@ actor HLSOfflineCache {
     ) -> URL? {
         prune(policy: policy)
         guard var entry = entries[source.identity],
+              Self.representsSameRemoteMedia(entry.remoteURL, source.url),
               isSafePackageURL(entry.localURL),
               fileManager.fileExists(atPath: entry.localURL.path) else {
-            if entries.removeValue(forKey: source.identity) != nil {
+            if let removed = entries.removeValue(forKey: source.identity) {
+                removePackageIfPresent(removed.localURL)
                 persistEntries()
             }
             return nil
@@ -174,6 +179,8 @@ actor HLSOfflineCache {
                 policy: policy
             )
             task.taskDescription = descriptor.taskDescription
+            successfulIdentities.remove(source.identity)
+            failedIdentities.remove(source.identity)
             activeIdentities.insert(source.identity)
             MediaPerformance.mark(
                 "hls_asset_download_start url=\(source.url.lastPathComponent)"
@@ -186,11 +193,16 @@ actor HLSOfflineCache {
         let tasks = await session.allTasks
         tasks.forEach { $0.cancel() }
         activeIdentities.removeAll()
+        successfulIdentities.removeAll()
+        failedIdentities.removeAll()
 
         let cachedEntries = Array(entries.values)
+        let pendingPackages = pendingEntries.values.map(\.localURL)
         entries.removeAll()
+        pendingEntries.removeAll()
         persistEntries()
         cachedEntries.forEach { removePackageIfPresent($0.localURL) }
+        pendingPackages.forEach(removePackageIfPresent)
     }
 
     func suspendSpeculativeDownloads() async {
@@ -207,32 +219,36 @@ actor HLSOfflineCache {
     fileprivate func didFinishDownloading(
         taskDescription: String?,
         location: URL
-    ) {
+    ) async {
         guard let descriptor = DownloadDescriptor(taskDescription: taskDescription) else {
             removePackageIfPresent(location)
             return
         }
 
+        let packageAsset = AVURLAsset(url: location)
+        let isPlayable = (try? await packageAsset.load(.isPlayable)) == true
+        guard isPlayable,
+              failedIdentities.remove(descriptor.identity) == nil else {
+            activeIdentities.remove(descriptor.identity)
+            successfulIdentities.remove(descriptor.identity)
+            removePackageIfPresent(location)
+            MediaPerformance.mark(
+                "hls_asset_download_failed reason=invalid_package url=\(descriptor.remoteURL.lastPathComponent)"
+            )
+            return
+        }
+
         let now = Date()
-        let policy = Policy(
-            maximumAssets: descriptor.maximumAssets,
-            maximumBytes: descriptor.maximumBytes,
-            expiration: descriptor.expiration
-        )
-        entries[descriptor.identity] = Entry(
+        pendingEntries[descriptor.identity] = Entry(
             identity: descriptor.identity,
             remoteURL: descriptor.remoteURL,
             localURL: location,
             completedAt: now,
             lastAccessedAt: now
         )
-        activeIdentities.remove(descriptor.identity)
-        applyStoragePolicy(to: location, expiration: policy.expiration)
-        prune(policy: policy)
-        persistEntries()
-        MediaPerformance.mark(
-            "hls_asset_download_finished url=\(descriptor.remoteURL.lastPathComponent)"
-        )
+        if successfulIdentities.remove(descriptor.identity) != nil {
+            commitSuccessfulDownload(descriptor: descriptor)
+        }
     }
 
     fileprivate func didComplete(taskDescription: String?, error: Error?) {
@@ -241,11 +257,52 @@ actor HLSOfflineCache {
         }
         activeIdentities.remove(descriptor.identity)
         let errorCode = (error as NSError?)?.code
-        if error != nil, errorCode != NSURLErrorCancelled {
+        if error == nil {
+            failedIdentities.remove(descriptor.identity)
+            if pendingEntries[descriptor.identity] != nil {
+                commitSuccessfulDownload(descriptor: descriptor)
+            } else {
+                successfulIdentities.insert(descriptor.identity)
+            }
+            return
+        }
+
+        successfulIdentities.remove(descriptor.identity)
+        failedIdentities.insert(descriptor.identity)
+        if let pending = pendingEntries.removeValue(forKey: descriptor.identity) {
+            removePackageIfPresent(pending.localURL)
+        }
+        if let invalid = entries[descriptor.identity],
+           Self.representsSameRemoteMedia(invalid.remoteURL, descriptor.remoteURL) {
+            entries.removeValue(forKey: descriptor.identity)
+            removePackageIfPresent(invalid.localURL)
+            persistEntries()
+        }
+        if errorCode != NSURLErrorCancelled {
             MediaPerformance.mark(
                 "hls_asset_download_failed url=\(descriptor.remoteURL.lastPathComponent)"
             )
         }
+    }
+
+    private func commitSuccessfulDownload(descriptor: DownloadDescriptor) {
+        guard let entry = pendingEntries.removeValue(forKey: descriptor.identity) else {
+            return
+        }
+
+        let policy = Policy(
+            maximumAssets: descriptor.maximumAssets,
+            maximumBytes: descriptor.maximumBytes,
+            expiration: descriptor.expiration
+        )
+        entries[descriptor.identity] = entry
+        activeIdentities.remove(descriptor.identity)
+        applyStoragePolicy(to: entry.localURL, expiration: policy.expiration)
+        prune(policy: policy)
+        persistEntries()
+        MediaPerformance.mark(
+            "hls_asset_download_finished url=\(descriptor.remoteURL.lastPathComponent)"
+        )
     }
 
     fileprivate func didFinishBackgroundEvents() {
@@ -276,6 +333,11 @@ actor HLSOfflineCache {
             return false
         }
         return duration.isFinite && duration > 0 && duration <= maximumDuration
+    }
+
+    nonisolated static func representsSameRemoteMedia(_ lhs: URL, _ rhs: URL) -> Bool {
+        StoryVideoPlaybackPool.canonicalURL(for: lhs) ==
+            StoryVideoPlaybackPool.canonicalURL(for: rhs)
     }
 
     private func restoreActiveSessionTasksIfNeeded() async {

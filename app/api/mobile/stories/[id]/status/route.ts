@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
+import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
 export const runtime = "nodejs"
+export const maxDuration = 300
 const noStoreHeaders = { "Cache-Control": "private, no-store" }
 
 export async function GET(
@@ -30,14 +33,41 @@ export async function GET(
     )
   }
 
+  const { mediaAssetId, storageProvider, ...publicStoryStatus } = storyStatus
+  if (
+    storageProvider === "vercel-blob" &&
+    (publicStoryStatus.processingStatus !== "ready" ||
+      !publicStoryStatus.fullQualityReady)
+  ) {
+    await enqueueMediaProcessing(mediaAssetId)
+      .then((dispatch) => {
+        if (dispatch.dispatchRecommended) {
+          scheduleMediaProcessing(dispatch.jobId, "story_status_poll")
+        }
+      })
+      .catch((error) => {
+        console.error("media_processing_status_recovery_failed", {
+          storyId: id,
+          mediaAssetId,
+          error,
+        })
+      })
+  }
+
   return NextResponse.json(
     {
       ok: true,
       story: {
-        ...storyStatus,
+        ...publicStoryStatus,
+        pollAfterMs:
+          publicStoryStatus.processingStatus === "ready"
+            ? null
+            : publicStoryStatus.providerStatus === "queued"
+              ? 1_500
+              : 3_000,
         moderationReason: userFacingModerationReason({
-          moderationStatus: storyStatus.moderationStatus,
-          moderationReason: storyStatus.moderationReason,
+          moderationStatus: publicStoryStatus.moderationStatus,
+          moderationReason: publicStoryStatus.moderationReason,
         }),
       },
     },

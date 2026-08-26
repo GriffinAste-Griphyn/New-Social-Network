@@ -13,6 +13,7 @@ import {
 } from "@/lib/media-pipeline/contracts"
 import {
   encodeMediaRendition,
+  generateMediaPoster,
   inspectMediaFile,
   inspectMediaStream,
   mediaBinaryPaths,
@@ -115,6 +116,7 @@ describe("bundled FFmpeg smoke test", () => {
     temporaryDirectories.push(directory)
     const sourcePath = path.join(directory, "source.mp4")
     const outputDirectory = path.join(directory, "hls")
+    const posterPath = path.join(directory, "poster.jpg")
     const { ffmpeg } = mediaBinaryPaths()
 
     await execFileAsync(ffmpeg, [
@@ -152,12 +154,17 @@ describe("bundled FFmpeg smoke test", () => {
       profile: mediaRenditionProfiles[0],
       outputDirectory,
     })
+    const poster = await generateMediaPoster({
+      source: new Blob([sourceBuffer]).stream() as ReadableStream<Uint8Array>,
+      outputPath: posterPath,
+    })
 
     expect(metadata).toMatchObject({ width: 360, height: 640, hasAudio: true })
     expect(metadata.durationMs).toBeGreaterThan(1_000)
     expect(encoded.files.some(({ fileName }) => fileName === "index.m3u8")).toBe(true)
     expect(encoded.files.some(({ fileName }) => fileName === "init.mp4")).toBe(true)
     expect(encoded.files.some(({ fileName }) => fileName.endsWith(".m4s"))).toBe(true)
+    expect(poster.body.byteLength).toBeGreaterThan(0)
     await expect(
       inspectMediaFile(path.join(outputDirectory, "index.m3u8")),
     ).resolves.toMatchObject({

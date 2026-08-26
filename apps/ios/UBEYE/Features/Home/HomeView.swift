@@ -1,6 +1,48 @@
 import SwiftUI
 import AVKit
 
+enum HomeFeedMediaPresentationPolicy {
+    static let visibleFollowingThumbnailCount = 2
+    static let visibleDiscoverThumbnailCount = 2
+
+    static func requiredThumbnailURLs(for feed: MobileFeedResponse) -> [URL] {
+        requiredThumbnailURLs(
+            myStoryURL: feed.myStory.latestThumbnailUrl,
+            followingURLs: feed.followingStories.map { $0.playbackThumbnailUrl ?? $0.playbackMediaUrl },
+            discoverURLs: feed.discoverTiles.map { $0.thumbnailUrl ?? $0.imageUrl }
+        )
+    }
+
+    static func requiredThumbnailURLs(
+        myStoryURL: URL?,
+        followingURLs: [URL?],
+        discoverURLs: [URL?]
+    ) -> [URL] {
+        let candidates = [myStoryURL]
+            + Array(followingURLs.prefix(visibleFollowingThumbnailCount))
+            + Array(discoverURLs.prefix(visibleDiscoverThumbnailCount))
+        var seen = Set<URL>()
+        return candidates.compactMap { $0 }.filter { seen.insert($0).inserted }
+    }
+}
+
+enum FeedMediaCommitPolicy {
+    enum Decision: Equatable {
+        case commit
+        case deferUntilReady
+    }
+
+    static func decision(
+        hasPresentedFeed: Bool,
+        preparation: MediaImagePreparationResult
+    ) -> Decision {
+        if preparation.isComplete || !hasPresentedFeed {
+            return .commit
+        }
+        return .deferUntilReady
+    }
+}
+
 @MainActor
 final class FeedStore: ObservableObject {
     @Published var feed: MobileFeedResponse?
@@ -12,6 +54,11 @@ final class FeedStore: ObservableObject {
     private var lastNetworkLoadAt: Date?
     private var uploadedStoryOverrides: [StoryUploadResponse] = []
     private let foregroundRefreshCooldown: TimeInterval = 45
+    private let diskMediaPreparationTimeout: Duration = .milliseconds(700)
+    private let networkMediaPreparationTimeout: Duration = .milliseconds(1_200)
+    private let deferredMediaPreparationTimeout: Duration = .seconds(20)
+    private var loadGeneration = 0
+    private var deferredFeedCommitTask: Task<Void, Never>?
 
     func load(
         api: APIClient,
@@ -19,31 +66,55 @@ final class FeedStore: ObservableObject {
         showsLoading: Bool = true,
         useDiskCache: Bool = true
     ) async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        deferredFeedCommitTask?.cancel()
+        deferredFeedCommitTask = nil
+
         if showsLoading, feed == nil {
             isLoading = true
         }
         error = nil
         authenticationFailed = false
+        var cachedFallback: MobileFeedResponse?
 
         let restoreInterval = useDiskCache && feed == nil
             ? MediaPerformance.beginInterval("feed_disk_restore source=disk")
             : nil
         if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
-            let cachedStoryIds = storyStackPrefetchIds(from: cached)
+            let candidate = feedApplyingUploadedStoryOverrides(to: cached)
+            cachedFallback = candidate
+            let preparation = await prepareForPresentation(
+                candidate,
+                source: "disk",
+                timeout: diskMediaPreparationTimeout
+            )
+            guard isCurrentLoad(generation) else {
+                return
+            }
+
+            let cachedStoryIds = storyStackPrefetchIds(from: candidate)
             mediaEngine.prepareInitialStoryStacks(
                 ids: cachedStoryIds,
-                embeddedStacks: cached.initialStoryStacks
+                embeddedStacks: candidate.initialStoryStacks
             )
-            feed = cached
-            applyUploadedStoryOverridesIfNeeded()
-            if let restoreInterval {
-                MediaPerformance.endInterval(restoreInterval, event: "feed_disk_restore source=disk")
+
+            if preparation.isComplete {
+                commitFeed(candidate, source: "disk", preparation: preparation)
+                if let restoreInterval {
+                    MediaPerformance.endInterval(restoreInterval, event: "feed_disk_restore source=disk")
+                }
+                mediaEngine.preheat(feed: candidate, priority: .visible)
+                let storyIds = storyStackPrefetchIds(from: candidate)
+                restoreInitialStoryStacks(ids: storyIds, api: api, mediaEngine: mediaEngine, refresh: false)
+            } else {
+                if let restoreInterval {
+                    MediaPerformance.cancelInterval(restoreInterval, reason: "media_not_ready")
+                }
+                MediaPerformance.mark(
+                    "feed_media_deferred source=disk ready=\(preparation.readyCount) requested=\(preparation.requestedCount)"
+                )
             }
-            if let feed {
-                mediaEngine.preheat(feed: feed, priority: .visible)
-            }
-            let storyIds = storyStackPrefetchIds(from: feed ?? cached)
-            restoreInitialStoryStacks(ids: storyIds, api: api, mediaEngine: mediaEngine, refresh: false)
         } else if let restoreInterval {
             MediaPerformance.cancelInterval(restoreInterval, reason: "miss")
         }
@@ -51,42 +122,81 @@ final class FeedStore: ObservableObject {
         let networkInterval = MediaPerformance.beginInterval("feed_load source=network")
         do {
             let response = try await api.mobileFeed()
+            guard isCurrentLoad(generation) else {
+                return
+            }
             lastNetworkLoadAt = Date()
-            let responseStoryIds = storyStackPrefetchIds(from: response)
+            let candidate = feedApplyingUploadedStoryOverrides(to: response)
+            let responseStoryIds = storyStackPrefetchIds(from: candidate)
             mediaEngine.prepareInitialStoryStacks(
                 ids: responseStoryIds,
-                embeddedStacks: response.initialStoryStacks
+                embeddedStacks: candidate.initialStoryStacks
             )
-            feed = response
-            applyUploadedStoryOverridesIfNeeded()
-            MediaPerformance.endInterval(networkInterval, event: "feed_load source=network")
-            if let feed {
-                mediaEngine.preheat(feed: feed, priority: .visible)
+
+            let preparation = await prepareForPresentation(
+                candidate,
+                source: "network",
+                timeout: networkMediaPreparationTimeout
+            )
+            guard isCurrentLoad(generation) else {
+                return
             }
+
+            if FeedMediaCommitPolicy.decision(
+                hasPresentedFeed: feed != nil,
+                preparation: preparation
+            ) == .commit {
+                commitFeed(candidate, source: "network", preparation: preparation)
+                mediaEngine.preheat(feed: candidate, priority: .visible)
+            } else {
+                MediaPerformance.mark(
+                    "feed_media_deferred source=network ready=\(preparation.readyCount) requested=\(preparation.requestedCount)"
+                )
+                scheduleDeferredFeedCommit(
+                    candidate,
+                    generation: generation,
+                    mediaEngine: mediaEngine
+                )
+            }
+            MediaPerformance.endInterval(networkInterval, event: "feed_load source=network")
             restoreInitialStoryStacks(
-                ids: storyStackPrefetchIds(from: feed ?? response),
+                ids: storyStackPrefetchIds(from: candidate),
                 api: api,
                 mediaEngine: mediaEngine,
                 refresh: true
             )
             scheduleStoryStackPrefetch(
-                ids: storyStackPrefetchIds(from: feed ?? response),
+                ids: storyStackPrefetchIds(from: candidate),
                 api: api,
                 mediaEngine: mediaEngine,
                 refresh: true
             )
         } catch {
+            guard isCurrentLoad(generation) else {
+                return
+            }
             MediaPerformance.cancelInterval(networkInterval, reason: "failed")
             if let statusCode = (error as? APIClientError)?.statusCode {
                 authenticationFailed = statusCode == 401 || statusCode == 403
             }
-            if feed == nil {
+            if feed == nil, let cachedFallback {
+                let preparation = await prepareForPresentation(
+                    cachedFallback,
+                    source: "disk_fallback",
+                    timeout: .milliseconds(300)
+                )
+                guard isCurrentLoad(generation) else {
+                    return
+                }
+                commitFeed(cachedFallback, source: "disk_fallback", preparation: preparation)
+                mediaEngine.preheat(feed: cachedFallback, priority: .visible)
+            } else if feed == nil {
                 self.error = error.localizedDescription
             } else {
                 MediaPerformance.mark("feed_refresh_failed")
             }
         }
-        if showsLoading {
+        if showsLoading, isCurrentLoad(generation) {
             isLoading = false
         }
     }
@@ -170,9 +280,9 @@ final class FeedStore: ObservableObject {
         uploadedStoryOverrides.append(response)
     }
 
-    private func applyUploadedStoryOverridesIfNeeded() {
-        guard let current = feed, !uploadedStoryOverrides.isEmpty else {
-            return
+    private func feedApplyingUploadedStoryOverrides(to current: MobileFeedResponse) -> MobileFeedResponse {
+        guard !uploadedStoryOverrides.isEmpty else {
+            return current
         }
 
         let resolvedStoryIds = Set(
@@ -184,9 +294,69 @@ final class FeedStore: ObservableObject {
             resolvedStoryIds.contains(response.storyId)
         }
 
-        feed = uploadedStoryOverrides.reduce(current) { partialFeed, response in
+        return uploadedStoryOverrides.reduce(current) { partialFeed, response in
             feedWithUploadedStory(response, in: partialFeed)
         }
+    }
+
+    private func prepareForPresentation(
+        _ candidate: MobileFeedResponse,
+        source: String,
+        timeout: Duration
+    ) async -> MediaImagePreparationResult {
+        let urls = HomeFeedMediaPresentationPolicy.requiredThumbnailURLs(for: candidate)
+        let interval = MediaPerformance.beginInterval("feed_media_preparation source=\(source)")
+        let result = await MediaImageCache.shared.prepareForPresentation(urls, timeout: timeout)
+        MediaPerformance.endInterval(
+            interval,
+            event: "feed_media_preparation source=\(source) ready=\(result.readyCount) requested=\(result.requestedCount) timed_out=\(result.timedOut)"
+        )
+        return result
+    }
+
+    private func commitFeed(
+        _ candidate: MobileFeedResponse,
+        source: String,
+        preparation: MediaImagePreparationResult
+    ) {
+        let isInitialCommit = feed == nil
+        withTransaction(Transaction(animation: nil)) {
+            feed = candidate
+        }
+        MediaPerformance.mark(
+            "feed_media_commit source=\(source) initial=\(isInitialCommit) ready=\(preparation.readyCount) requested=\(preparation.requestedCount)"
+        )
+    }
+
+    private func scheduleDeferredFeedCommit(
+        _ candidate: MobileFeedResponse,
+        generation: Int,
+        mediaEngine: MediaEngine
+    ) {
+        deferredFeedCommitTask?.cancel()
+        deferredFeedCommitTask = Task { @MainActor [weak self, mediaEngine] in
+            guard let self else {
+                return
+            }
+
+            let preparation = await prepareForPresentation(
+                candidate,
+                source: "network_deferred",
+                timeout: deferredMediaPreparationTimeout
+            )
+            guard !Task.isCancelled, isCurrentLoad(generation), preparation.isComplete else {
+                return
+            }
+
+            let resolvedCandidate = feedApplyingUploadedStoryOverrides(to: candidate)
+            commitFeed(resolvedCandidate, source: "network_deferred", preparation: preparation)
+            mediaEngine.preheat(feed: resolvedCandidate, priority: .visible)
+            deferredFeedCommitTask = nil
+        }
+    }
+
+    private func isCurrentLoad(_ generation: Int) -> Bool {
+        !Task.isCancelled && loadGeneration == generation
     }
 
     func markUploadedStoryLive(_ storyId: String) {
@@ -595,7 +765,7 @@ struct HomeView: View {
             pendingStoryUploads.latestVisibleUpload?.displayProgress ?? 0
         case .posted:
             1
-        case .processing, .review, .failed, nil:
+        case .processing, .delayed, .review, .failed, nil:
             nil
         }
     }
@@ -1241,8 +1411,14 @@ struct StoryMediaView: View {
                     Color.black
                 }
 
-                ProgressView()
-                    .tint(.white)
+                if story.hasVideoProcessingFailed {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(.white)
+                } else {
+                    ProgressView()
+                        .tint(.white)
+                }
             }
         } else if story.assetKind == .video {
             AutoPlayVideoPlayer(

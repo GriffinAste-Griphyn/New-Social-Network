@@ -345,6 +345,7 @@ export async function getStoryUploadStatusForOwner(
     const [story] = await db
       .select({
         id: stories.id,
+        mediaAssetId: stories.mediaAssetId,
         creatorId: stories.creatorId,
         storageProvider: stories.storageProvider,
         storageKey: stories.storageKey,
@@ -390,6 +391,8 @@ export async function getStoryUploadStatusForOwner(
 
   return {
     id: story.id,
+    mediaAssetId: story.mediaAssetId,
+    storageProvider: story.storageProvider,
     status: story.status,
     processingStatus: story.processingStatus,
     hasOriginalRendition: Boolean(story.originalStorageKey),
@@ -401,7 +404,8 @@ export async function getStoryUploadStatusForOwner(
       story.storageProvider === "cloudflare-stream"
         ? story.processingStatus === "ready" &&
           (story.providerPctComplete ?? 0) >= 100
-        : story.processingStatus === "ready",
+        : story.processingStatus === "ready" &&
+          (story.providerPctComplete ?? 0) >= 100,
     providerError: story.providerError,
     lastCheckedAt: story.lastCheckedAt?.toISOString() ?? null,
     readyAt: story.readyAt?.toISOString() ?? null,

@@ -102,7 +102,7 @@ export function getMobileMediaConfig(input: {
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-25.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-25.2",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
@@ -154,8 +154,8 @@ export function getMobileMediaConfig(input: {
         : 0,
       standard: supportsSafePlayerPreparation
         ? integerEnv(
-            "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
-            2,
+          "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
+            3,
             {
               min: 0,
               max: 4,

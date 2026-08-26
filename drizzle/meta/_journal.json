@@ -351,6 +351,20 @@
       "when": 1787682766506,
       "tag": "0049_vercel_hls_media_pipeline",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1787685600000,
+      "tag": "0050_story_transition_diagnostics",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1787706000000,
+      "tag": "0051_media_feed_diagnostics",
+      "breakpoints": true
     }
   ]
 }

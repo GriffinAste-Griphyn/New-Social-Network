@@ -1,9 +1,7 @@
-import { start } from "workflow/api"
-
-import { storyPublicationReconcilerWorkflow } from "@/workflows/story-publication/reconciler"
+import { reconcileStoryPublications } from "@/lib/story-publication"
 
 export const runtime = "nodejs"
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET
@@ -21,10 +19,10 @@ export async function GET(request: Request) {
     )
   }
 
-  const run = await start(storyPublicationReconcilerWorkflow)
+  const result = await reconcileStoryPublications({ limit: 100 })
 
   return Response.json(
-    { ok: true, runId: run.runId },
+    { ok: true, ...result },
     { headers: { "Cache-Control": "private, no-store" } },
   )
 }

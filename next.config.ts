@@ -2,7 +2,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { NextConfig } from "next";
-import { withWorkflow } from "workflow/next";
 import { assertProductionEnvironment } from "./lib/env";
 import { storyMediaContract } from "./lib/story-media-contract";
 
@@ -13,7 +12,11 @@ const configDir = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig: NextConfig = {
   serverExternalPackages: ["ffmpeg-static", "@ffprobe-installer/ffprobe"],
   outputFileTracingIncludes: {
-    "/.well-known/workflow/v1/step": [
+    // The media processor can be entered by upload/status recovery, the cron,
+    // or its authenticated continuation route. These native binaries are
+    // loaded through platform-specific packages, so every server trace that
+    // imports the scheduler must explicitly carry them.
+    "/*": [
       "./node_modules/ffmpeg-static/ffmpeg",
       "./node_modules/@ffprobe-installer/**/*",
     ],
@@ -57,4 +60,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withWorkflow(nextConfig);
+export default nextConfig;

@@ -86,5 +86,12 @@ export async function POST(request: Request) {
     })),
   })
 
+  console.info("mobile_performance_events_recorded", {
+    userId: session.id,
+    received: parsed.data.events.length,
+    accepted: result.accepted,
+    names: Array.from(new Set(parsed.data.events.map((event) => event.name))),
+  })
+
   return NextResponse.json({ ok: true, ...result })
 }

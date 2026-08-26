@@ -80,14 +80,24 @@ final class StoryUploadCoordinator: ObservableObject {
         readinessTasks[response.storyId]?.cancel()
         readinessTasks[response.storyId] = Task { @MainActor [weak self, api, notice] in
             StoryUploadDiagnostics.mark("readiness_poll_started", response: response)
-            let isLive = await api.waitForStoryLive(storyId: response.storyId)
+            let result = await api.waitForStoryLive(storyId: response.storyId)
             guard !Task.isCancelled else {
                 return
             }
 
             self?.readinessTasks[response.storyId] = nil
-            guard isLive else {
-                StoryUploadDiagnostics.mark("readiness_poll_timeout", response: response)
+            guard result == .live else {
+                api.invalidateStoryStacks(ids: ["my-story", response.storyId])
+                api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
+                if result == .failed {
+                    notice.showFailed(
+                        message: "We couldn’t finish preparing this video. Your original upload is safe; please try uploading it again."
+                    )
+                    StoryUploadDiagnostics.mark("readiness_poll_failed", response: response)
+                } else {
+                    notice.showDelayed()
+                    StoryUploadDiagnostics.mark("readiness_poll_timeout", response: response)
+                }
                 return
             }
 
@@ -696,7 +706,7 @@ final class PendingStoryUploadStore: ObservableObject {
             case .imageDirectBlob:
                 response = try await uploadDirectImage(upload, api: api)
             case .videoTus:
-                response = try await uploadTusVideo(
+                response = try await uploadVideo(
                     upload,
                     api: api,
                     onPhase: onVideoPhase
@@ -908,7 +918,7 @@ final class PendingStoryUploadStore: ObservableObject {
         return response
     }
 
-    private func uploadTusVideo(
+    private func uploadVideo(
         _ upload: PendingStoryUpload,
         api: APIClient,
         onPhase: ((StoryVideoUploadPhase) -> Void)? = nil
@@ -924,8 +934,8 @@ final class PendingStoryUploadStore: ObservableObject {
         var preparedUpload: VideoUploadResponse
 
         if let resumableUpload = upload.preparedVideoUpload,
-           resumableUpload.uploadProtocol == "tus" {
-            preparedUpload = try await prepareTusVideoUpload(
+           resumableUpload.supportsDirectVideoUpload {
+            preparedUpload = try await prepareVideoUpload(
                 upload,
                 byteSize: byteSize,
                 replacing: nil,
@@ -933,7 +943,7 @@ final class PendingStoryUploadStore: ObservableObject {
             )
             MediaPerformance.mark("pending_video_upload_resume uid=\(resumableUpload.uid)")
         } else {
-            preparedUpload = try await prepareTusVideoUpload(
+            preparedUpload = try await prepareVideoUpload(
                 upload,
                 byteSize: byteSize,
                 replacing: nil,
@@ -1022,7 +1032,7 @@ final class PendingStoryUploadStore: ObservableObject {
                 let failedSessionId = preparedUpload.uploadSessionId
                 recordRetry(id: upload.id, reason: "replace_upload_session")
                 setPreparedVideoUpload(id: upload.id, preparedUpload: nil)
-                preparedUpload = try await prepareTusVideoUpload(
+                preparedUpload = try await prepareVideoUpload(
                     upload,
                     byteSize: byteSize,
                     replacing: failedSessionId,
@@ -1038,7 +1048,7 @@ final class PendingStoryUploadStore: ObservableObject {
         Int64(MediaControlConfig.shared.uploadChunkBytes)
     }
 
-    private func prepareTusVideoUpload(
+    private func prepareVideoUpload(
         _ upload: PendingStoryUpload,
         byteSize: Int64,
         replacing uploadSessionId: String?,
@@ -1052,8 +1062,8 @@ final class PendingStoryUploadStore: ObservableObject {
             replaceUploadSessionId: uploadSessionId
         )
 
-        guard preparedUpload.uploadProtocol == "tus" else {
-            throw APIClientError.server("The media service did not provide a resumable upload.", 0)
+        guard preparedUpload.supportsDirectVideoUpload else {
+            throw APIClientError.server("The media service did not provide a supported private upload.", 0)
         }
 
         setPreparedVideoUpload(id: upload.id, preparedUpload: preparedUpload)

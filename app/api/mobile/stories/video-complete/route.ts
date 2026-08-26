@@ -17,6 +17,7 @@ import {
   releaseMediaUploadSessionCompletion,
 } from "@/lib/media-upload-sessions"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
+import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
@@ -39,6 +40,7 @@ import {
 import { isSupportedStoryVideoInputContentType } from "@/lib/story-media-contract"
 
 export const runtime = "nodejs"
+export const maxDuration = 300
 
 const minimumRequiredVideoPosterBuild = 306
 
@@ -106,6 +108,17 @@ function logVideoCompleteEvent(
       ),
     }),
   )
+}
+
+async function enqueueAndScheduleMediaProcessing(
+  mediaAssetId: string,
+  source: string,
+) {
+  const dispatch = await enqueueMediaProcessing(mediaAssetId)
+  if (dispatch.dispatchRecommended) {
+    scheduleMediaProcessing(dispatch.jobId, source)
+  }
+  return dispatch
 }
 
 export async function POST(request: Request) {
@@ -224,7 +237,10 @@ export async function POST(request: Request) {
           .where(eq(stories.id, existingCompletion.storyId))
           .limit(1)
         if (existingStory) {
-          await enqueueMediaProcessing(existingStory.mediaAssetId).catch(
+          await enqueueAndScheduleMediaProcessing(
+            existingStory.mediaAssetId,
+            "video_complete_reused",
+          ).catch(
             (error) => {
               console.error("media_processing_reenqueue_failed", {
                 storyId: existingCompletion.storyId,
@@ -308,7 +324,10 @@ export async function POST(request: Request) {
         .where(eq(stories.id, completion.storyId))
         .limit(1)
       if (createdStory) {
-        await enqueueMediaProcessing(createdStory.mediaAssetId).catch((error) => {
+        await enqueueAndScheduleMediaProcessing(
+          createdStory.mediaAssetId,
+          "video_complete_created",
+        ).catch((error) => {
           console.error("media_processing_enqueue_failed", {
             storyId: completion.storyId,
             mediaAssetId: createdStory.mediaAssetId,

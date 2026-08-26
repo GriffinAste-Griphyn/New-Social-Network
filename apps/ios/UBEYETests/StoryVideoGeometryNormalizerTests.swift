@@ -293,7 +293,11 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             replaceUploadSessionId: "expired-session"
         )
 
-        let request = try XCTUnwrap(recorder.requests.first)
+        let request = try XCTUnwrap(
+            recorder.requests.first {
+                $0.url?.path == "/api/mobile/stories/video-upload"
+            }
+        )
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
         )
@@ -419,9 +423,12 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
         let recorder = UploadRequestRecorder()
+        var stagedFileURL: URL?
         let api = APIClient(tusChunkUploader: { request, bodyFileURL in
             recorder.append(request)
-            XCTAssertEqual(bodyFileURL, sourceURL)
+            stagedFileURL = bodyFileURL
+            XCTAssertNotEqual(bodyFileURL, sourceURL)
+            XCTAssertEqual(try Data(contentsOf: bodyFileURL), Data("private-video".utf8))
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
                 statusCode: 200,
@@ -446,6 +453,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             maxSizeBytes: 1_024,
             access: "private"
         )
+        XCTAssertTrue(upload.supportsDirectVideoUpload)
 
         try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
 
@@ -458,6 +466,259 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "x-vercel-blob-access"), "private")
         XCTAssertEqual(request.value(forHTTPHeaderField: "x-content-type"), "video/mp4")
         XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-version"), "12")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: try XCTUnwrap(stagedFileURL).path
+            )
+        )
+    }
+
+    @MainActor
+    func testPrivateBlobVideoRetryPreservesOriginalAndRestagesBodyFile() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-retry-source-\(UUID().uuidString).mp4")
+        try Data("retry-private-video".utf8).write(to: sourceURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        var stagedFileURLs: [URL] = []
+        let api = APIClient(tusChunkUploader: { request, bodyFileURL in
+            stagedFileURLs.append(bodyFileURL)
+            XCTAssertNotEqual(bodyFileURL, sourceURL)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: bodyFileURL.path))
+            try FileManager.default.removeItem(at: bodyFileURL)
+
+            let statusCode = stagedFileURLs.count == 1 ? 503 : 200
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: statusCode,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (Data("{}".utf8), response)
+        })
+        var upload = VideoUploadResponse(
+            ok: true,
+            uid: "media-originals/creator/session/retry-source.mp4",
+            uploadSessionId: "session-blob-retry",
+            uploadUrl: URL(string: "https://blob.vercel-storage.com?pathname=retry-source")!,
+            uploadProtocol: "vercel-blob",
+            poster: nil
+        )
+        upload.source = ImageUploadPart(
+            pathname: upload.uid,
+            uploadUrl: upload.uploadUrl,
+            clientToken: "vercel_blob_client_retry_store_token",
+            contentType: "video/mp4",
+            maxSizeBytes: 1_024,
+            access: "private"
+        )
+
+        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+
+        XCTAssertEqual(stagedFileURLs.count, 2)
+        XCTAssertNotEqual(stagedFileURLs[0], stagedFileURLs[1])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertTrue(
+            stagedFileURLs.allSatisfy {
+                !FileManager.default.fileExists(atPath: $0.path)
+            }
+        )
+    }
+
+    @MainActor
+    func testLargePrivateBlobVideoUsesTwoPartResumableUpload() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-multipart-\(UUID().uuidString).mp4")
+        FileManager.default.createFile(atPath: sourceURL.path, contents: nil)
+        let output = try FileHandle(forWritingTo: sourceURL)
+        try output.truncate(atOffset: 16 * 1024 * 1024)
+        try output.close()
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let requestRecorder = UploadRequestRecorder()
+        let session = makeSession { request in
+            requestRecorder.append(request)
+            let action = request.value(forHTTPHeaderField: "x-mpu-action")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            switch action {
+            case "create":
+                return (response, Data("{\"uploadId\":\"upload-1\",\"key\":\"folder/source.mp4\"}".utf8))
+            case "complete":
+                return (response, Data("{}".utf8))
+            default:
+                XCTFail("Unexpected direct multipart action \(action ?? "nil")")
+                return (response, Data("{}".utf8))
+            }
+        }
+        defer { session.invalidateAndCancel() }
+
+        let partRecorder = UploadRequestRecorder()
+        let api = APIClient(
+            session: session,
+            tusChunkUploader: { request, bodyFileURL in
+                partRecorder.append(request)
+                let partSize = try XCTUnwrap(
+                    FileManager.default.attributesOfItem(atPath: bodyFileURL.path)[.size]
+                        as? NSNumber
+                )
+                XCTAssertEqual(partSize.int64Value, 8 * 1024 * 1024)
+                let partNumber = try XCTUnwrap(
+                    request.value(forHTTPHeaderField: "x-mpu-part-number")
+                )
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (Data("{\"etag\":\"etag-\(partNumber)\"}".utf8), response)
+            }
+        )
+        let pathname = "media-originals/creator/\(UUID().uuidString)/source.mp4"
+        var upload = VideoUploadResponse(
+            ok: true,
+            uid: pathname,
+            uploadSessionId: "session-blob-multipart",
+            uploadUrl: URL(string: "https://blob.vercel-storage.com?pathname=source")!,
+            uploadProtocol: "vercel-blob",
+            poster: nil
+        )
+        upload.source = ImageUploadPart(
+            pathname: pathname,
+            uploadUrl: upload.uploadUrl,
+            clientToken: "vercel_blob_client_test_store_token",
+            contentType: "video/mp4",
+            maxSizeBytes: 32 * 1024 * 1024,
+            access: "private"
+        )
+
+        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+
+        let partRequests = partRecorder.requests.sorted {
+            ($0.value(forHTTPHeaderField: "x-mpu-part-number") ?? "") <
+                ($1.value(forHTTPHeaderField: "x-mpu-part-number") ?? "")
+        }
+        XCTAssertEqual(
+            partRequests.compactMap { $0.value(forHTTPHeaderField: "x-mpu-part-number") },
+            ["1", "2"]
+        )
+        XCTAssertTrue(
+            partRequests.allSatisfy {
+                $0.value(forHTTPHeaderField: "x-mpu-key") == "folder%2Fsource.mp4"
+            }
+        )
+        XCTAssertEqual(
+            requestRecorder.requests.compactMap {
+                $0.value(forHTTPHeaderField: "x-mpu-action")
+            },
+            ["create", "complete"]
+        )
+        let completionBody = try XCTUnwrap(requestRecorder.requests.last?.httpBody)
+        let completionParts = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: completionBody) as? [[String: Any]]
+        )
+        XCTAssertEqual(completionParts.count, 2)
+        XCTAssertEqual(completionParts.compactMap { $0["partNumber"] as? Int }, [1, 2])
+    }
+
+    @MainActor
+    func testMultipartUploadResumesOnlyMissingPartsAfterFailure() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-multipart-resume-\(UUID().uuidString).mp4")
+        FileManager.default.createFile(atPath: sourceURL.path, contents: nil)
+        let output = try FileHandle(forWritingTo: sourceURL)
+        try output.truncate(atOffset: 24 * 1024 * 1024)
+        try output.close()
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let controlRecorder = UploadRequestRecorder()
+        let session = makeSession { request in
+            controlRecorder.append(request)
+            let action = request.value(forHTTPHeaderField: "x-mpu-action")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            if action == "create" {
+                return (response, Data("{\"uploadId\":\"resume-upload\",\"key\":\"folder/resume.mp4\"}".utf8))
+            }
+            return (response, Data("{}".utf8))
+        }
+        defer { session.invalidateAndCancel() }
+
+        let partRecorder = UploadRequestRecorder()
+        var partThreeAttempts = 0
+        let api = APIClient(
+            session: session,
+            tusChunkUploader: { request, _ in
+                partRecorder.append(request)
+                let partNumber = try XCTUnwrap(
+                    request.value(forHTTPHeaderField: "x-mpu-part-number")
+                )
+                if partNumber == "3" {
+                    partThreeAttempts += 1
+                }
+                let shouldFail = partNumber == "3" && partThreeAttempts == 1
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: shouldFail ? 400 : 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    shouldFail
+                        ? Data("{\"error\":{\"message\":\"part interrupted\"}}".utf8)
+                        : Data("{\"etag\":\"etag-\(partNumber)\"}".utf8),
+                    response
+                )
+            }
+        )
+        let pathname = "media-originals/creator/\(UUID().uuidString)/resume.mp4"
+        var upload = VideoUploadResponse(
+            ok: true,
+            uid: pathname,
+            uploadSessionId: "session-blob-multipart-resume",
+            uploadUrl: URL(string: "https://blob.vercel-storage.com?pathname=resume")!,
+            uploadProtocol: "vercel-blob",
+            poster: nil
+        )
+        upload.source = ImageUploadPart(
+            pathname: pathname,
+            uploadUrl: upload.uploadUrl,
+            clientToken: "vercel_blob_client_resume_store_token",
+            contentType: "video/mp4",
+            maxSizeBytes: 32 * 1024 * 1024,
+            access: "private"
+        )
+
+        do {
+            try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+            XCTFail("The interrupted part should fail the first upload attempt.")
+        } catch {
+            XCTAssertEqual((error as? APIClientError)?.statusCode, 400)
+        }
+        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+
+        XCTAssertEqual(
+            partRecorder.requests.compactMap {
+                $0.value(forHTTPHeaderField: "x-mpu-part-number")
+            }.sorted(),
+            ["1", "2", "3", "3"]
+        )
+        XCTAssertEqual(
+            controlRecorder.requests.compactMap {
+                $0.value(forHTTPHeaderField: "x-mpu-action")
+            },
+            ["create", "complete"]
+        )
     }
 
     private func makeInspection(

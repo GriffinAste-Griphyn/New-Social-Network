@@ -262,6 +262,7 @@ struct RemoteAvatar: View {
             loadedImageURL = nil
         }
     }
+
 }
 
 struct TopAvatarSpacer: View {
@@ -284,6 +285,9 @@ enum MediaPerformance {
         "feed_disk_cache_write",
         "feed_disk_restore",
         "feed_load",
+        "feed_media_commit",
+        "feed_media_deferred",
+        "feed_media_preparation",
         "feed_media_preheat",
         "feed_refresh_failed",
         "media_cache_summary",
@@ -298,6 +302,7 @@ enum MediaPerformance {
         "media_qoe_config",
         "image_derivatives_prepared",
         "image_derivative_upload_failed",
+        "thumbnail_generation_swap",
         "background_upload_resume",
         "silent_push_prewarm",
         "story_open",
@@ -314,6 +319,7 @@ enum MediaPerformance {
         "story_stack_network",
         "story_stack_prefetch_end",
         "story_stack_prefetch_start",
+        "story_transition_visible",
         "video_disk_cache_hit",
         "video_dismissed",
         "video_ended",
@@ -410,6 +416,13 @@ enum MediaPerformance {
     static func measure(_ event: String, since start: Date) {
         let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
         logMeasuredEvent(event, elapsedMs: elapsedMs, upload: true)
+    }
+
+    static func flushUploadEvents() {
+        Task { @MainActor in
+            await Task.yield()
+            await MobilePerformanceReporter.shared.flushNow()
+        }
     }
 
     private static func logMeasuredEvent(_ event: String, elapsedMs: Int, upload: Bool) {
@@ -520,19 +533,34 @@ final class MobilePerformanceReporter {
     private var send: (([MobilePerformanceEventUpload]) async throws -> Void)?
     private var buffer: [MobilePerformanceEventUpload] = []
     private var flushTask: Task<Void, Never>?
-    private var isFlushing = false
-    private let batchSize = 25
-    private let maxBufferSize = 200
-    private let flushDelay: Duration = .seconds(20)
+    private var prefersImmediateFlush = false
+    private var lastUploadStartedAt: Date?
+    private var retryNotBefore: Date?
+    private let batchSize: Int
+    private let maxBufferSize: Int
+    private let flushDelaySeconds: TimeInterval
+    private let minimumRequestSpacingSeconds: TimeInterval
+    private let retryDelaySeconds: TimeInterval
     private let dateFormatter = ISO8601DateFormatter()
 
-    private init() {
+    init(
+        batchSize: Int = 50,
+        maxBufferSize: Int = 200,
+        flushDelaySeconds: TimeInterval = 30,
+        minimumRequestSpacingSeconds: TimeInterval = 15,
+        retryDelaySeconds: TimeInterval = 60
+    ) {
+        self.batchSize = max(1, batchSize)
+        self.maxBufferSize = max(1, maxBufferSize)
+        self.flushDelaySeconds = max(0, flushDelaySeconds)
+        self.minimumRequestSpacingSeconds = max(0, minimumRequestSpacingSeconds)
+        self.retryDelaySeconds = max(0, retryDelaySeconds)
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
     func configure(send: @escaping ([MobilePerformanceEventUpload]) async throws -> Void) {
         self.send = send
-        scheduleFlush(immediate: true)
+        scheduleFlush(immediate: false)
     }
 
     func record(name: String, durationMs: Int?, metadata: [String: String]) {
@@ -546,56 +574,96 @@ final class MobilePerformanceReporter {
         )
 
         if buffer.count > maxBufferSize {
-            buffer.removeFirst(buffer.count - maxBufferSize)
+            // Preserve the prefix because it may currently be in flight.
+            buffer.removeLast(buffer.count - maxBufferSize)
         }
 
         scheduleFlush(immediate: buffer.count >= batchSize)
     }
 
+    func flushNow() async {
+        // Never cancel an upload that may already have reached the server. A
+        // cancelled URLSession task can still be committed remotely, and
+        // requeueing that batch creates a tight duplicate-upload loop.
+        scheduleFlush(immediate: true)
+    }
+
     private func scheduleFlush(immediate: Bool) {
-        guard send != nil else {
-            return
-        }
-        guard !isFlushing else {
+        guard send != nil, !buffer.isEmpty else {
             return
         }
 
-        flushTask?.cancel()
+        if immediate {
+            prefersImmediateFlush = true
+        }
+
+        // One worker owns both the delay and the network request. New events
+        // join its buffer instead of cancelling and replacing it.
+        guard flushTask == nil else {
+            return
+        }
+
         flushTask = Task { @MainActor [weak self] in
-            if !immediate {
-                try? await Task.sleep(for: self?.flushDelay ?? .seconds(20))
-            }
-            await self?.flush()
+            await self?.runScheduledFlush()
         }
     }
 
-    private func flush() async {
-        guard !isFlushing, let send, !buffer.isEmpty else {
+    private func runScheduledFlush() async {
+        guard let send, !buffer.isEmpty else {
+            flushTask = nil
             return
         }
 
-        isFlushing = true
-        defer {
-            isFlushing = false
+        let immediate = prefersImmediateFlush || buffer.count >= batchSize
+        prefersImmediateFlush = false
+
+        let now = Date()
+        let regularDelay = immediate ? 0 : flushDelaySeconds
+        let spacingDelay = lastUploadStartedAt.map {
+            max(0, minimumRequestSpacingSeconds - now.timeIntervalSince($0))
+        } ?? 0
+        let retryDelay = retryNotBefore.map {
+            max(0, $0.timeIntervalSince(now))
+        } ?? 0
+        let delaySeconds = max(regularDelay, spacingDelay, retryDelay)
+
+        if delaySeconds > 0 {
+            do {
+                try await Task.sleep(
+                    for: .milliseconds(Int((delaySeconds * 1_000).rounded(.up)))
+                )
+            } catch {
+                flushTask = nil
+                return
+            }
+        }
+
+        guard !Task.isCancelled else {
+            flushTask = nil
+            return
         }
 
         let batch = Array(buffer.prefix(batchSize))
-        buffer.removeFirst(batch.count)
+        lastUploadStartedAt = Date()
 
         do {
             try await send(batch)
-            if !buffer.isEmpty {
-                scheduleFlush(immediate: buffer.count >= batchSize)
+            // The worker is the only code that removes events, so the batch is
+            // still the buffer prefix even if more events arrived in flight.
+            buffer.removeFirst(min(batch.count, buffer.count))
+            retryNotBefore = nil
+            if buffer.isEmpty {
+                prefersImmediateFlush = false
             }
         } catch {
-            if !Task.isCancelled {
-                buffer.insert(contentsOf: batch, at: 0)
-            }
-            if buffer.count > maxBufferSize {
-                buffer.removeLast(buffer.count - maxBufferSize)
-            }
-            scheduleFlush(immediate: false)
+            // Keep the original prefix in place and retry with backoff. This
+            // bounds failures to one request per retry window instead of a
+            // request-per-event storm.
+            retryNotBefore = Date().addingTimeInterval(retryDelaySeconds)
         }
+
+        flushTask = nil
+        scheduleFlush(immediate: buffer.count >= batchSize)
     }
 }
 
@@ -721,8 +789,8 @@ final class MediaControlConfig {
 
     func preparedPlayerLimit(isLimited: Bool) -> Int {
         min(
-            readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 1 : 2),
-            isLimited ? 1 : 2
+            readLimit(\.preparedPlayerLimit, isLimited: isLimited, fallback: isLimited ? 1 : 3),
+            isLimited ? 1 : 3
         )
     }
 
@@ -771,29 +839,28 @@ final class MediaControlConfig {
 
     func preparedStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
+            let preparedCap = isLimited ? 2_000_000.0 : 4_000_000.0
             guard let pair = $0?.preparedStreamingPeakBitRate else {
-                return isLimited ? 2_000_000 : 8_256_000
+                return preparedCap
             }
 
-            return isLimited ? min(pair.constrained, 2_000_000) : pair.standard
+            return min(isLimited ? pair.constrained : pair.standard, preparedCap)
         }
     }
 
     func preparedStreamingMaximumResolution(isLimited: Bool) -> CGSize {
         read {
+            let preparedCap = isLimited
+                ? CGSize(width: 540, height: 960)
+                : CGSize(width: 720, height: 1280)
             guard let pair = $0?.preparedStreamingMaximumResolution else {
-                return isLimited
-                    ? CGSize(width: 540, height: 960)
-                    : StoryMediaContract.playbackPixelSize
+                return preparedCap
             }
 
             let resolution = isLimited ? pair.constrained : pair.standard
-            guard isLimited else {
-                return CGSize(width: resolution.width, height: resolution.height)
-            }
             return CGSize(
-                width: min(resolution.width, 540),
-                height: min(resolution.height, 960)
+                width: min(resolution.width, preparedCap.width),
+                height: min(resolution.height, preparedCap.height)
             )
         }
     }
@@ -1297,6 +1364,42 @@ final class MediaImageCache {
         return image
     }
 
+    func prepareForPresentation(
+        _ urls: [URL],
+        timeout: Duration
+    ) async -> MediaImagePreparationResult {
+        var seen = Set<URL>()
+        let uniqueURLs = urls.filter { seen.insert($0).inserted }
+        guard !uniqueURLs.isEmpty else {
+            return MediaImagePreparationResult(requestedCount: 0, readyCount: 0, timedOut: false)
+        }
+
+        prioritizePreheat(uniqueURLs)
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var readyCount = uniqueURLs.reduce(into: 0) { count, url in
+            if cachedImage(for: url) != nil {
+                count += 1
+            }
+        }
+
+        while readyCount < uniqueURLs.count, clock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(20))
+            readyCount = uniqueURLs.reduce(into: 0) { count, url in
+                if cachedImage(for: url) != nil {
+                    count += 1
+                }
+            }
+        }
+
+        return MediaImagePreparationResult(
+            requestedCount: uniqueURLs.count,
+            readyCount: readyCount,
+            timedOut: readyCount < uniqueURLs.count
+        )
+    }
+
     func preheat(_ urls: [URL], limit: Int = 16) {
         guard limit > 0 else {
             return
@@ -1317,6 +1420,36 @@ final class MediaImageCache {
                 continue
             }
             preheatQueue.append(url)
+        }
+
+        drainPreheatQueue()
+    }
+
+    private func prioritizePreheat(_ urls: [URL]) {
+        for url in urls.reversed() {
+            guard cachedImage(for: url) == nil,
+                  inFlightLoads[url] == nil,
+                  activePreheats[url] == nil else {
+                continue
+            }
+
+            if let queuedIndex = preheatQueue.firstIndex(of: url) {
+                preheatQueue.remove(at: queuedIndex)
+                preheatQueue.insert(url, at: 0)
+                continue
+            }
+
+            while activePreheats.count + preheatQueue.count >= maxPreheatWorkItems,
+                  let displacedURL = preheatQueue.popLast() {
+                queuedPreheatURLs.remove(displacedURL)
+            }
+
+            guard activePreheats.count + preheatQueue.count < maxPreheatWorkItems else {
+                continue
+            }
+
+            queuedPreheatURLs.insert(url)
+            preheatQueue.insert(url, at: 0)
         }
 
         drainPreheatQueue()
@@ -1463,6 +1596,16 @@ final class MediaImageCache {
     }
 }
 
+struct MediaImagePreparationResult: Equatable {
+    let requestedCount: Int
+    let readyCount: Int
+    let timedOut: Bool
+
+    var isComplete: Bool {
+        readyCount == requestedCount
+    }
+}
+
 private enum ImageDecodePipeline {
     static func decode(contentsOf fileURL: URL, maxPixelDimension: CGFloat) async -> UIImage? {
         await Task.detached(priority: .utility) {
@@ -1516,17 +1659,78 @@ private extension UIImage {
     }
 }
 
+@MainActor
+final class StableImageLoader: ObservableObject {
+    @Published private(set) var displayedImage: UIImage?
+    @Published private(set) var displayedURL: URL?
+    private(set) var requestedURL: URL?
+    private var requestGeneration = 0
+
+    func load(url: URL?) async {
+        await load(
+            url: url,
+            retryDelays: [.milliseconds(450), .seconds(1), .seconds(2)]
+        ) { url in
+            await MediaImageCache.shared.loadImage(for: url)
+        }
+    }
+
+    func load(
+        url: URL?,
+        retryDelays: [Duration],
+        imageLoader: @escaping @MainActor (URL) async -> UIImage?
+    ) async {
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        requestedURL = url
+
+        guard let url else {
+            displayedImage = nil
+            displayedURL = nil
+            return
+        }
+
+        if displayedURL == url, displayedImage != nil {
+            return
+        }
+
+        for attempt in 0...retryDelays.count {
+            guard !Task.isCancelled,
+                  requestGeneration == generation,
+                  requestedURL == url else {
+                return
+            }
+
+            if let image = await imageLoader(url) {
+                guard !Task.isCancelled,
+                      requestGeneration == generation,
+                      requestedURL == url else {
+                    return
+                }
+
+                let previousURL = displayedURL
+                displayedImage = image
+                displayedURL = url
+                if let previousURL, previousURL != url {
+                    MediaPerformance.mark("thumbnail_generation_swap previous=ready next=ready")
+                }
+                return
+            }
+
+            guard attempt < retryDelays.count else {
+                return
+            }
+
+            try? await Task.sleep(for: retryDelays[attempt])
+        }
+    }
+}
+
 struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     let url: URL?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
-    private let retryDelays: [Duration] = [
-        .milliseconds(450),
-        .seconds(1),
-        .seconds(2)
-    ]
-    @State private var loadedImage: UIImage?
-    @State private var loadedImageURL: URL?
+    @StateObject private var loader = StableImageLoader()
 
     init(
         url: URL?,
@@ -1542,51 +1746,14 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         Group {
             if let image = MediaImageCache.shared.cachedImage(for: url) {
                 content(Image(uiImage: image))
-            } else if loadedImageURL == url, let image = loadedImage {
+            } else if url != nil, let image = loader.displayedImage {
                 content(Image(uiImage: image))
             } else {
                 placeholder()
             }
         }
         .task(id: url) {
-            await loadImageIfNeeded()
-        }
-    }
-
-    private func loadImageIfNeeded() async {
-        guard let url else {
-            loadedImage = nil
-            loadedImageURL = nil
-            return
-        }
-
-        if loadedImageURL == url, loadedImage != nil {
-            return
-        }
-
-        loadedImage = nil
-        loadedImageURL = nil
-
-        for attempt in 0...retryDelays.count {
-            guard !Task.isCancelled else {
-                return
-            }
-
-            if let image = await MediaImageCache.shared.loadImage(for: url) {
-                guard self.url == url else {
-                    return
-                }
-
-                loadedImage = image
-                loadedImageURL = url
-                return
-            }
-
-            guard attempt < retryDelays.count else {
-                return
-            }
-
-            try? await Task.sleep(for: retryDelays[attempt])
+            await loader.load(url: url)
         }
     }
 }

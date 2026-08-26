@@ -157,7 +157,7 @@ describe("aggressive media pipeline contract", () => {
     const config = getMobileMediaConfig({ clientBuild: 320 })
 
     expect(config.persistentVideoPreheatLimit).toEqual({ constrained: 2, standard: 2 })
-    expect(config.preparedPlayerLimit).toEqual({ constrained: 1, standard: 2 })
+    expect(config.preparedPlayerLimit).toEqual({ constrained: 1, standard: 3 })
     expect(config.stackPreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.imagePreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.startupStreamingPeakBitRate).toEqual({

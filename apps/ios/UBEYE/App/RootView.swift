@@ -13,8 +13,9 @@ struct RootView: View {
                 MainTabView()
             }
         }
-        .animation(.snappy, value: auth.isRestoringSession)
-        .animation(.snappy, value: auth.account?.mobileToken)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
     }
 }
 
@@ -130,6 +131,7 @@ final class StoryUploadNoticeStore: ObservableObject {
     enum State: Equatable {
         case posting
         case processing
+        case delayed
         case posted
         case review(String?)
         case failed(String)
@@ -144,6 +146,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "Uploading story…"
         case .processing:
             "Processing video…"
+        case .delayed:
+            "Video processing delayed"
         case .posted:
             "Added to your story"
         case .review:
@@ -160,7 +164,9 @@ final class StoryUploadNoticeStore: ObservableObject {
         case .posting:
             "Your story is visible in My Story while it uploads."
         case .processing:
-            "Your video is visible in My Story and will play when processing finishes."
+            "Preparing a streamable version now. Higher quality will continue in the background."
+        case .delayed:
+            "Your upload is safe. We’ll keep trying to prepare it in the background."
         case .posted:
             "Your story is ready to play."
         case .review(let reason):
@@ -178,6 +184,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "arrow.up.circle.fill"
         case .processing:
             "video.fill"
+        case .delayed:
+            "clock.badge.exclamationmark.fill"
         case .posted:
             "checkmark.circle.fill"
         case .review:
@@ -197,6 +205,11 @@ final class StoryUploadNoticeStore: ObservableObject {
     func showProcessing() {
         dismissTask?.cancel()
         state = .processing
+    }
+
+    func showDelayed() {
+        dismissTask?.cancel()
+        state = .delayed
     }
 
     func showPosted() {

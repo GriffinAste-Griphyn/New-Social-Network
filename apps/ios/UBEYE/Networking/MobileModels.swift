@@ -37,7 +37,7 @@ struct BasicOkResponse: Codable {
     let ok: Bool
 }
 
-struct MobilePerformanceEventUpload: Codable {
+struct MobilePerformanceEventUpload: Codable, Sendable {
     let name: String
     let durationMs: Int?
     let metadata: [String: String]
@@ -231,20 +231,37 @@ struct StoryCard: Codable, Identifiable, Hashable {
 }
 
 extension StoryCard {
+    private var activeVideoRendition: StoryMediaRendition? {
+        if assetKind == .video,
+           processingStatus != nil,
+           processingStatus != "ready",
+           let original = renditions?.original {
+            return original
+        }
+        return renditions?.playback
+    }
+
     var playbackMediaUrl: URL {
-        renditions?.playback.mediaUrl ?? mediaUrl
+        activeVideoRendition?.mediaUrl ?? mediaUrl
     }
 
     var playbackThumbnailUrl: URL? {
-        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+        activeVideoRendition?.thumbnailUrl ?? renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
 
     var playbackPlaceholderUrl: URL? {
-        renditions?.playback.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
+        activeVideoRendition?.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
     }
 
     var isProcessingVideo: Bool {
-        assetKind == .video && processingStatus != nil && processingStatus != "ready"
+        assetKind == .video &&
+            processingStatus != nil &&
+            processingStatus != "ready" &&
+            renditions?.original == nil
+    }
+
+    var hasVideoProcessingFailed: Bool {
+        assetKind == .video && processingStatus == "error"
     }
 
     var isPlayableVideo: Bool {
@@ -254,7 +271,7 @@ extension StoryCard {
     var playbackIdentity: String {
         stablePlaybackIdentity(
             storyId: id,
-            rendition: renditions?.playback
+            rendition: activeVideoRendition
         )
     }
 
@@ -518,20 +535,37 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
 }
 
 extension StoryStackItem {
+    private var activeVideoRendition: StoryMediaRendition? {
+        if assetKind == .video,
+           processingStatus != nil,
+           processingStatus != "ready",
+           let original = renditions?.original {
+            return original
+        }
+        return renditions?.playback
+    }
+
     var playbackMediaUrl: URL {
-        renditions?.playback.mediaUrl ?? mediaUrl
+        activeVideoRendition?.mediaUrl ?? mediaUrl
     }
 
     var playbackThumbnailUrl: URL? {
-        renditions?.playback.thumbnailUrl ?? thumbnailUrl
+        activeVideoRendition?.thumbnailUrl ?? renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
 
     var playbackPlaceholderUrl: URL? {
-        renditions?.playback.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
+        activeVideoRendition?.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
     }
 
     var isProcessingVideo: Bool {
-        assetKind == .video && processingStatus != nil && processingStatus != "ready"
+        assetKind == .video &&
+            processingStatus != nil &&
+            processingStatus != "ready" &&
+            renditions?.original == nil
+    }
+
+    var hasVideoProcessingFailed: Bool {
+        assetKind == .video && processingStatus == "error"
     }
 
     var isPlayableVideo: Bool {
@@ -541,7 +575,7 @@ extension StoryStackItem {
     var playbackIdentity: String {
         stablePlaybackIdentity(
             storyId: id,
-            rendition: renditions?.playback
+            rendition: activeVideoRendition
         )
     }
 
@@ -808,6 +842,17 @@ struct VideoUploadResponse: Codable, Hashable {
     let uploadProtocol: String?
     let poster: ImageUploadPart?
     var source: ImageUploadPart? = nil
+
+    var supportsDirectVideoUpload: Bool {
+        switch uploadProtocol {
+        case "tus":
+            return true
+        case "vercel-blob":
+            return source != nil
+        default:
+            return false
+        }
+    }
 }
 
 struct StoryStatusResponse: Codable {
@@ -816,13 +861,34 @@ struct StoryStatusResponse: Codable {
         let status: String
         let processingStatus: String
         let hasOriginalRendition: Bool?
+        let providerStatus: String?
         let providerPctComplete: Int?
         let fullQualityReady: Bool?
+        let providerError: String?
         let isLive: Bool
+        let pollAfterMs: Int?
     }
 
     let ok: Bool
     let story: Story
+}
+
+enum StoryReadinessResult: Equatable {
+    case live
+    case failed
+    case timedOut
+}
+
+enum StoryReadinessPolicy {
+    static func terminalResult(for story: StoryStatusResponse.Story) -> StoryReadinessResult? {
+        if story.isLive {
+            return .live
+        }
+        if story.processingStatus == "error" || story.providerStatus == "error" {
+            return .failed
+        }
+        return nil
+    }
 }
 
 struct APIErrorEnvelope: Decodable {

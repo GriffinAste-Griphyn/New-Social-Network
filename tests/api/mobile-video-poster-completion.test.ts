@@ -4,6 +4,7 @@ import { head } from "@vercel/blob"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
+import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import {
   claimMediaUploadSessionForCompletion,
   markMediaUploadSessionCompleted,
@@ -27,6 +28,10 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))
 
 vi.mock("@/lib/media-pipeline/jobs", () => ({
   enqueueMediaProcessing: vi.fn(),
+}))
+
+vi.mock("@/lib/media-pipeline/schedule", () => ({
+  scheduleMediaProcessing: vi.fn(),
 }))
 
 vi.mock("@/lib/auth", () => ({
@@ -162,6 +167,7 @@ describe("mobile video poster completion", () => {
     vi.mocked(enqueueMediaProcessing).mockResolvedValue({
       jobId: "media-job-1",
       runId: "workflow-run-1",
+      dispatchRecommended: true,
     })
   })
 
@@ -256,6 +262,10 @@ describe("mobile video poster completion", () => {
       expect.objectContaining({ pathname: customUid, checksum: "source-etag" }),
     )
     expect(enqueueMediaProcessing).toHaveBeenCalledWith("media-123")
+    expect(scheduleMediaProcessing).toHaveBeenCalledWith(
+      "media-job-1",
+      "video_complete_created",
+    )
     expect(createCloudflareStreamStoredVideoAsset).not.toHaveBeenCalled()
   })
 })

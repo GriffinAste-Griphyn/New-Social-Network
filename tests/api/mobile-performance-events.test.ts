@@ -27,6 +27,9 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "feed_disk_cache_write",
     "feed_disk_restore",
     "feed_load",
+    "feed_media_commit",
+    "feed_media_deferred",
+    "feed_media_preparation",
     "feed_media_preheat",
     "feed_refresh_failed",
     "media_cache_summary",
@@ -34,6 +37,7 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "media_file_cache_hit",
     "media_file_cache_skip",
     "media_file_cache_write",
+    "thumbnail_generation_swap",
     "story_open",
     "story_open_warm",
     "story_stack_cache_clear",
@@ -48,6 +52,7 @@ vi.mock("@/lib/mobile-performance-events", () => ({
     "story_stack_network",
     "story_stack_prefetch_end",
     "story_stack_prefetch_start",
+    "story_transition_visible",
     "video_disk_cache_hit",
     "video_dismissed",
     "video_ended",
@@ -177,6 +182,30 @@ describe("mobile performance events API", () => {
             reason: "network",
           },
         }),
+      ],
+    })
+  })
+
+  it("accepts feed commit and thumbnail swap diagnostics", async () => {
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: [
+          { name: "feed_media_commit", metadata: { id: "story_123" } },
+          {
+            name: "thumbnail_generation_swap",
+            metadata: { id: "story_123" },
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: [
+        expect.objectContaining({ name: "feed_media_commit" }),
+        expect.objectContaining({ name: "thumbnail_generation_swap" }),
       ],
     })
   })

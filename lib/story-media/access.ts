@@ -58,7 +58,10 @@ export function getPrivateVercelBlobPathname(mediaUrl: string) {
       .map((segment) => decodeURIComponent(segment))
       .join("/")
 
-    return pathname.startsWith("stories/") ? pathname : null
+    return pathname.startsWith("stories/") ||
+      pathname.startsWith("media-originals/")
+      ? pathname
+      : null
   }
 
   if (!/^https?:\/\//i.test(mediaUrl)) {

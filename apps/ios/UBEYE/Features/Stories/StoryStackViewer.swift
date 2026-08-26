@@ -1,4 +1,5 @@
 import AVKit
+import CryptoKit
 import SwiftUI
 import UIKit
 
@@ -41,6 +42,31 @@ enum StoryNavigationPolicy {
         let nextIndex = min(max(currentIndex + delta, 0), itemCount - 1)
         return nextIndex == currentIndex ? .stay : .move(to: nextIndex)
     }
+}
+
+struct StoryMediaBufferPolicy {
+    static func indices(activeIndex: Int, itemCount: Int) -> [Int] {
+        guard itemCount > 0, (0..<itemCount).contains(activeIndex) else {
+            return []
+        }
+
+        return [activeIndex, activeIndex + 1].filter { $0 < itemCount }
+    }
+}
+
+private struct BufferedStoryMedia: Identifiable {
+    let item: StoryStackItem
+    let isActive: Bool
+
+    var id: String { item.id }
+}
+
+private struct StoryTransitionMeasurement {
+    let destinationItemId: String
+    let direction: String
+    let sourceKind: SocialAssetKind
+    let destinationKind: SocialAssetKind
+    let startedAt: Date
 }
 
 struct StoryViewerPageState {
@@ -454,6 +480,7 @@ struct StoryStackViewer: View {
     @State private var completionDismissTask: Task<Void, Never>?
     @State private var isClearingCompletedStory = false
     @State private var keyboardHeight: CGFloat = 0
+    @State private var pendingTransitionMeasurement: StoryTransitionMeasurement?
     @GestureState private var isPressingStoryMedia = false
     @FocusState private var isReplyFieldFocused: Bool
 
@@ -499,7 +526,7 @@ struct StoryStackViewer: View {
                         fillsAvailableHeight: true
                     )
 
-                    media(item)
+                    storyMediaBuffer(stack: stack, activeIndex: index)
                         .frame(
                             width: canvasLayout.frame.width,
                             height: canvasLayout.frame.height
@@ -519,7 +546,15 @@ struct StoryStackViewer: View {
                             startStoryTimerIfNeeded(for: item)
                         }
                         .onDisappear {
-                            Task { await store.recordImpression(item: item, completed: false, api: api) }
+                            if let activeItem = store.stack?.items[safe: index] {
+                                Task {
+                                    await store.recordImpression(
+                                        item: activeItem,
+                                        completed: false,
+                                        api: api
+                                    )
+                                }
+                            }
                         }
 
                     storyCanvasOverlay(item)
@@ -683,13 +718,70 @@ struct StoryStackViewer: View {
         }
     }
 
+    private func storyMediaBuffer(stack: StoryStack, activeIndex: Int) -> some View {
+        let bufferedMedia = StoryMediaBufferPolicy.indices(
+            activeIndex: activeIndex,
+            itemCount: stack.items.count
+        ).compactMap { itemIndex -> BufferedStoryMedia? in
+            guard let item = stack.items[safe: itemIndex] else {
+                return nil
+            }
+
+            return BufferedStoryMedia(item: item, isActive: itemIndex == activeIndex)
+        }
+
+        return ZStack {
+            ForEach(bufferedMedia) { buffered in
+                media(buffered.item, isActive: buffered.isActive)
+                    .opacity(buffered.isActive ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(!buffered.isActive)
+                    .zIndex(buffered.isActive ? 1 : 0)
+            }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+
     @ViewBuilder
-    private func media(_ item: StoryStackItem) -> some View {
+    private func media(_ item: StoryStackItem, isActive: Bool) -> some View {
         ZStack {
             Color.black
 
             if item.isProcessingVideo {
                 processingVideoPlaceholder(item)
+                    .onAppear {
+                        if isActive {
+                            completeStoryTransitionIfNeeded(for: item)
+                        }
+                    }
+                    .onChange(of: isActive) { _, nextIsActive in
+                        if nextIsActive {
+                            completeStoryTransitionIfNeeded(for: item)
+                        }
+                    }
+                    .task(id: "\(item.id):\(item.processingStatus ?? "unknown"):\(isActive)") {
+                        guard isActive,
+                              item.processingStatus == "processing",
+                              !PendingStoryUploadStore.isPendingStoryId(item.id) else {
+                            return
+                        }
+
+                        let result = await api.waitForStoryLive(storyId: item.id)
+                        guard !Task.isCancelled, result != .timedOut else {
+                            return
+                        }
+                        api.invalidateStoryStacks(ids: [route.id, item.id, "my-story"])
+                        await store.load(
+                            storyId: route.id,
+                            api: api,
+                            mediaEngine: mediaEngine,
+                            pendingUploads: pendingStoryUploads,
+                            account: auth.account
+                        )
+                    }
             } else if item.assetKind == .video {
                 AutoPlayVideoPlayer(
                     source: item.playbackSource,
@@ -713,12 +805,15 @@ struct StoryStackViewer: View {
                         return refreshedItem.playbackSource
                     },
                     showsThumbnailWhileLoading: true,
-                    isPaused: shouldPauseVideoPlayback,
+                    preparesPlayerPool: false,
+                    isPaused: !isActive || shouldPauseVideoPlayback,
                     onReadyForPlayback: {
-                        guard store.stack?.items[safe: index]?.id == item.id else {
+                        guard isActive,
+                              store.stack?.items[safe: index]?.id == item.id else {
                             return
                         }
 
+                        completeStoryTransitionIfNeeded(for: item)
                         startStoryTimerIfNeeded(for: item)
                         guard videoReadyItemId != item.id else {
                             return
@@ -738,8 +833,21 @@ struct StoryStackViewer: View {
             } else {
                 CachedAsyncImage(url: item.playbackMediaUrl) { image in
                     StoryCanvasImage(image: image)
+                        .onAppear {
+                            if isActive {
+                                completeStoryTransitionIfNeeded(for: item)
+                            }
+                        }
                 } placeholder: {
                     storyImagePlaceholder(item)
+                }
+                .onChange(of: isActive) { _, nextIsActive in
+                    guard nextIsActive,
+                          MediaImageCache.shared.cachedImage(for: item.playbackMediaUrl) != nil else {
+                        return
+                    }
+
+                    completeStoryTransitionIfNeeded(for: item)
                 }
             }
         }
@@ -752,12 +860,21 @@ struct StoryStackViewer: View {
                 .opacity(0.82)
 
             VStack(spacing: 12) {
-                ProgressView()
-                    .tint(.white)
-                    .controlSize(.large)
-                Text("Video processing")
+                if item.hasVideoProcessingFailed {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 30, weight: .bold))
+                } else {
+                    ProgressView()
+                        .tint(.white)
+                        .controlSize(.large)
+                }
+                Text(item.hasVideoProcessingFailed ? "Video couldn’t be processed" : "Preparing your video")
                     .font(.system(size: 18, weight: .bold))
-                Text("It will play here as soon as Cloudflare finishes preparing it.")
+                Text(
+                    item.hasVideoProcessingFailed
+                        ? "Your original upload is safe. Please try uploading the video again."
+                        : "We’re optimizing it for smooth, high-quality playback."
+                )
                     .font(.system(size: 13, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.76))
@@ -1451,20 +1568,46 @@ struct StoryStackViewer: View {
             return
         }
 
+        guard let stack = store.stack,
+              let next = stack.items[safe: nextIndex] else {
+            return
+        }
+
+        let targetWasBuffered = StoryMediaBufferPolicy.indices(
+            activeIndex: index,
+            itemCount: stack.items.count
+        ).contains(nextIndex)
+        pendingTransitionMeasurement = StoryTransitionMeasurement(
+            destinationItemId: next.id,
+            direction: delta > 0 ? "forward" : "backward",
+            sourceKind: item.assetKind,
+            destinationKind: next.assetKind,
+            startedAt: Date()
+        )
         Task { await store.recordImpression(item: item, completed: delta > 0, api: api) }
         ownerSheet = nil
         index = nextIndex
-        if let next = store.stack?.items[safe: index] {
-            store.markActiveItem(next)
-            resetStoryTimer(for: next)
-            if let stack = store.stack {
-                mediaEngine.prepare(
-                    stack: stack,
-                    around: index,
-                    activeIdentity: next.isPlayableVideo ? next.playbackIdentity : nil
-                )
-            }
+        store.markActiveItem(next)
+        resetStoryTimer(for: next)
+        mediaEngine.prepare(
+            stack: stack,
+            around: index,
+            activeIdentity: next.isPlayableVideo ? next.playbackIdentity : nil,
+            promoteActiveIfNeeded: !targetWasBuffered
+        )
+    }
+
+    private func completeStoryTransitionIfNeeded(for item: StoryStackItem) {
+        guard let measurement = pendingTransitionMeasurement,
+              measurement.destinationItemId == item.id else {
+            return
         }
+
+        pendingTransitionMeasurement = nil
+        MediaPerformance.measure(
+            "story_transition_visible direction=\(measurement.direction) from=\(measurement.sourceKind.rawValue) to=\(measurement.destinationKind.rawValue)",
+            since: measurement.startedAt
+        )
     }
 
     private func adjacentVideoSources(
@@ -2799,6 +2942,7 @@ struct AutoPlayVideoPlayer: View {
     let playerPool: StoryVideoPlaybackPool?
     let refreshSource: () async -> StoryVideoPlaybackSource?
     let showsThumbnailWhileLoading: Bool
+    let preparesPlayerPool: Bool
     let isPaused: Bool
     let onReadyForPlayback: () -> Void
     let onProgress: (Double) -> Void
@@ -2813,6 +2957,7 @@ struct AutoPlayVideoPlayer: View {
         playerPool: StoryVideoPlaybackPool? = nil,
         refreshSource: @escaping () async -> StoryVideoPlaybackSource? = { nil },
         showsThumbnailWhileLoading: Bool = true,
+        preparesPlayerPool: Bool = true,
         isPaused: Bool = false,
         onReadyForPlayback: @escaping () -> Void = {},
         onProgress: @escaping (Double) -> Void = { _ in },
@@ -2825,6 +2970,7 @@ struct AutoPlayVideoPlayer: View {
         self.playerPool = playerPool
         self.refreshSource = refreshSource
         self.showsThumbnailWhileLoading = showsThumbnailWhileLoading
+        self.preparesPlayerPool = preparesPlayerPool
         self.isPaused = isPaused
         self.onReadyForPlayback = onReadyForPlayback
         self.onProgress = onProgress
@@ -2876,10 +3022,12 @@ struct AutoPlayVideoPlayer: View {
         }
         .background(Color.black)
         .onAppear {
-            playerPool?.prepare(
-                sources: [source] + preloadSources,
-                activeIdentity: source.identity
-            )
+            if preparesPlayerPool {
+                playerPool?.prepare(
+                    sources: [source] + preloadSources,
+                    activeIdentity: source.identity
+                )
+            }
             playback.play(
                 source: source,
                 expectedDuration: expectedDuration,
@@ -2892,10 +3040,12 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: source) { _, nextSource in
-            playerPool?.prepare(
-                sources: [nextSource] + preloadSources,
-                activeIdentity: nextSource.identity
-            )
+            if preparesPlayerPool {
+                playerPool?.prepare(
+                    sources: [nextSource] + preloadSources,
+                    activeIdentity: nextSource.identity
+                )
+            }
             playback.play(
                 source: nextSource,
                 expectedDuration: expectedDuration,
@@ -2908,13 +3058,23 @@ struct AutoPlayVideoPlayer: View {
             )
         }
         .onChange(of: preloadSources) { _, nextSources in
-            playerPool?.prepare(
-                sources: [source] + nextSources,
-                activeIdentity: source.identity
-            )
+            if preparesPlayerPool {
+                playerPool?.prepare(
+                    sources: [source] + nextSources,
+                    activeIdentity: source.identity
+                )
+            }
         }
         .onChange(of: isPaused) { _, nextValue in
+            playback.updateCallbacks(
+                onReadyForPlayback: onReadyForPlayback,
+                onProgress: onProgress,
+                onFinished: onFinished
+            )
             playback.setPaused(nextValue)
+            if !nextValue, playback.isReadyForPlayback {
+                onReadyForPlayback()
+            }
         }
         .onDisappear {
             playback.stop(reason: "disappear")
@@ -2923,7 +3083,7 @@ struct AutoPlayVideoPlayer: View {
 }
 
 enum VideoStartupPolicy {
-    static let freshForwardBufferDuration: TimeInterval = 2
+    static let freshForwardBufferDuration: TimeInterval = 8
 
     static func firstFrameTimeout(isLimitedNetwork: Bool) -> TimeInterval {
         isLimitedNetwork ? 8 : 5
@@ -2969,14 +3129,101 @@ enum VideoPlaybackRecoveryPolicy {
     }
 }
 
+enum VideoStallRecoveryPolicy {
+    static let confirmationDelay: Duration = .milliseconds(200)
+    static let minimumRecoveryAdvanceSeconds: TimeInterval = 0.12
+
+    static func hasRecovered(
+        timeControlStatus: AVPlayer.TimeControlStatus,
+        playbackAdvanced: Bool
+    ) -> Bool {
+        // AVPlayer can transiently report `.playing` while its playhead and decoded
+        // frames remain frozen. Measurable media-time advancement is the only reliable
+        // signal that playback actually recovered.
+        _ = timeControlStatus
+        return playbackAdvanced
+    }
+}
+
+enum VideoPlaybackWatchdogPolicy {
+    static let sampleInterval: Duration = .milliseconds(250)
+    static let stallThresholdSeconds: TimeInterval = 1.25
+    static let minimumSampleAdvanceSeconds: TimeInterval = 0.04
+
+    static func madeProgress(
+        previousSeconds: TimeInterval,
+        currentSeconds: TimeInterval
+    ) -> Bool {
+        previousSeconds.isFinite &&
+            currentSeconds.isFinite &&
+            currentSeconds - previousSeconds >= minimumSampleAdvanceSeconds
+    }
+
+    static func shouldDeclareStall(
+        isVisible: Bool,
+        isPaused: Bool,
+        didFinish: Bool,
+        secondsWithoutProgress: TimeInterval
+    ) -> Bool {
+        isVisible &&
+            !isPaused &&
+            !didFinish &&
+            secondsWithoutProgress.isFinite &&
+            secondsWithoutProgress >= stallThresholdSeconds
+    }
+}
+
 enum VideoQualityRampPolicy {
     static let sampleInterval: Duration = .milliseconds(250)
     static let timeoutSeconds: TimeInterval = 8
+    static let minimumForwardBufferSeconds: TimeInterval = 6
+    static let requiredHealthySamples = 3
+
+    static func shouldRelaxStreamingHints(
+        isPlaybackLikelyToKeepUp: Bool,
+        bufferedAheadSeconds: TimeInterval,
+        remainingSeconds: TimeInterval?
+    ) -> Bool {
+        guard isPlaybackLikelyToKeepUp,
+              bufferedAheadSeconds.isFinite,
+              bufferedAheadSeconds >= 0 else {
+            return false
+        }
+
+        let requiredBuffer = remainingSeconds.flatMap { remaining -> TimeInterval? in
+            guard remaining.isFinite, remaining > 2 else {
+                return nil
+            }
+            return min(minimumForwardBufferSeconds, remaining)
+        } ?? minimumForwardBufferSeconds
+        return bufferedAheadSeconds >= requiredBuffer
+    }
 
     static func hasReached1080p(_ size: CGSize) -> Bool {
         let shortSide = min(abs(size.width), abs(size.height))
         let longSide = max(abs(size.width), abs(size.height))
         return shortSide >= 1_000 && longSide >= 1_800
+    }
+}
+
+enum VideoPlaybackCompletionPolicy {
+    static let graceDelay: Duration = .milliseconds(500)
+
+    static func isAtEnd(
+        currentSeconds: TimeInterval,
+        durationSeconds: TimeInterval
+    ) -> Bool {
+        guard currentSeconds.isFinite,
+              durationSeconds.isFinite,
+              durationSeconds > 0 else {
+            return false
+        }
+
+        // Keep the fallback close to the authoritative AVPlayerItem duration. The
+        // normal path is AVPlayerItemDidPlayToEndTime; this only covers a missed end
+        // notification without skipping a visible portion of the final segment.
+        let tolerance = min(0.12, max(0.05, durationSeconds * 0.005))
+        return currentSeconds >= durationSeconds - tolerance
     }
 }
 
@@ -3014,10 +3261,13 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var playTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
     private var seekTask: Task<Void, Never>?
+    private var stallConfirmationTask: Task<Void, Never>?
     private var stallRecoveryTask: Task<Void, Never>?
     private var sameItemRecoveryTask: Task<Void, Never>?
     private var rebuildTask: Task<Void, Never>?
     private var qualityRampTask: Task<Void, Never>?
+    private var progressWatchdogTask: Task<Void, Never>?
+    private var completionFallbackTask: Task<Void, Never>?
     private var playbackStartedAt: Date?
     private var qualityRampStartedAt: Date?
     private var qualityRampLastSize = CGSize.zero
@@ -3031,15 +3281,18 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var sameItemRecoveryCount = 0
     private var playbackAttemptId = UUID().uuidString.lowercased()
     private var wasPlayingBeforeAudioInterruption = false
+    private var isAudioInterrupted = false
     private var layerReadyForDisplay = false
     private var didUploadAccessLog = false
     private var didUploadQualityRamp = false
+    private var didRelaxStreamingHints = false
     private var shouldUploadQoE = false
     private var playbackPhase = PlaybackPhase.idle
     private var playbackGeneration = 0
     private var revealTargetSeconds: TimeInterval = 0
     private var hasCompletedPreroll = false
     private var shouldStartImmediatelyAfterPreroll = false
+    private var stallEpisodeStartedAt: Date?
 
     func play(
         source: StoryVideoPlaybackSource,
@@ -3080,6 +3333,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         didFinishPlayback = false
         didUploadAccessLog = false
         didUploadQualityRamp = false
+        didRelaxStreamingHints = false
         shouldUploadQoE = MediaControlConfig.shared.shouldUploadAccessLog()
         qualityRampStartedAt = nil
         qualityRampLastSize = .zero
@@ -3467,7 +3721,34 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             return
         }
 
+        if isPaused {
+            completionFallbackTask?.cancel()
+            completionFallbackTask = nil
+        }
         updatePlaybackState(for: player)
+        if !isPaused {
+            scheduleCompletionFallbackIfNeeded(player: player)
+            if progressWatchdogTask == nil,
+               isReadyForPlayback,
+               playbackPhase == .visible,
+               let activeURL {
+                startProgressWatchdog(
+                    player: player,
+                    url: activeURL,
+                    generation: playbackGeneration
+                )
+            }
+        }
+    }
+
+    func updateCallbacks(
+        onReadyForPlayback: @escaping () -> Void,
+        onProgress: @escaping (Double) -> Void,
+        onFinished: @escaping () -> Void
+    ) {
+        self.onReadyForPlayback = onReadyForPlayback
+        self.onProgress = onProgress
+        self.onFinished = onFinished
     }
 
     func stop(reason: String) {
@@ -3600,11 +3881,14 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         let startedAt = playbackStartedAt ?? Date()
         playbackPhase = .visible
         isReadyForPlayback = true
-        MediaPlaybackQuality.relaxStreamingHints(
-            for: player.currentItem,
-            playbackURL: activePlaybackURL
-        )
         startQualityRampMonitoring(player: player, generation: generation)
+        if let activeURL {
+            startProgressWatchdog(
+                player: player,
+                url: activeURL,
+                generation: generation
+            )
+        }
         onReadyForPlayback()
         let metadata = startupMetadata.isEmpty
             ? "url=\(activeURL?.lastPathComponent ?? "unknown")"
@@ -3681,16 +3965,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                     return
                 }
 
-                let phase = self.isReadyForPlayback ? "playing" : "startup"
-                MediaPerformance.mark(
-                    self.playbackEvent(
-                        "video_stalled phase=\(phase) url=\(url.lastPathComponent)"
-                    )
-                )
-                self.monitorStallRecovery(
+                self.confirmObservedStall(
                     player: player,
                     url: url,
-                    generation: generation
+                    generation: generation,
+                    reason: "notification",
+                    startedAt: Date()
                 )
             }
         }
@@ -3710,28 +3990,171 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 guard let self,
                       let player,
                       observedPlayer === player,
-                      self.isCurrentPlayer(player, generation: generation),
-                      self.isReadyForPlayback,
-                      self.playbackPhase == .visible,
-                      !self.isPaused,
-                      player.timeControlStatus == .waitingToPlayAtSpecifiedRate else {
+                      self.isCurrentPlayer(player, generation: generation) else {
                     return
                 }
 
-                let waitingReason = player.reasonForWaitingToPlay?.rawValue
-                    .replacingOccurrences(of: " ", with: "_") ?? "unknown"
-                MediaPerformance.mark(
-                    self.playbackEvent(
-                        "video_stalled phase=playing reason=waiting_\(waitingReason) url=\(url.lastPathComponent)"
+                switch player.timeControlStatus {
+                case .waitingToPlayAtSpecifiedRate:
+                    guard self.isReadyForPlayback,
+                          self.playbackPhase == .visible,
+                          !self.isPaused else {
+                        return
+                    }
+
+                    let waitingReason = player.reasonForWaitingToPlay?.rawValue
+                        .replacingOccurrences(of: " ", with: "_") ?? "unknown"
+                    self.scheduleStallConfirmation(
+                        player: player,
+                        url: url,
+                        generation: generation,
+                        reason: "waiting_\(waitingReason)"
                     )
-                )
-                self.monitorStallRecovery(
-                    player: player,
-                    url: url,
-                    generation: generation
-                )
+                case .playing:
+                    // `.playing` is not proof that frames are moving. Only cancel a
+                    // pending waiting-state confirmation; an established stall is
+                    // cleared by measured playhead progress in the watchdog.
+                    if self.stallEpisodeStartedAt == nil {
+                        self.stallConfirmationTask?.cancel()
+                        self.stallConfirmationTask = nil
+                    }
+                case .paused:
+                    if self.isPaused {
+                        self.stallConfirmationTask?.cancel()
+                        self.stallConfirmationTask = nil
+                    }
+                @unknown default:
+                    break
+                }
             }
         }
+    }
+
+    private func scheduleStallConfirmation(
+        player: AVPlayer,
+        url: URL,
+        generation: Int,
+        reason: String
+    ) {
+        guard stallEpisodeStartedAt == nil,
+              stallConfirmationTask == nil,
+              stallRecoveryTask == nil else {
+            return
+        }
+
+        let startedAt = Date()
+        stallConfirmationTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(for: VideoStallRecoveryPolicy.confirmationDelay)
+            guard let self,
+                  let player,
+                  !Task.isCancelled,
+                  self.isCurrentPlayer(player, generation: generation),
+                  self.isReadyForPlayback,
+                  self.playbackPhase == .visible,
+                  !self.isPaused,
+                  player.timeControlStatus == .waitingToPlayAtSpecifiedRate else {
+                self?.stallConfirmationTask = nil
+                return
+            }
+
+            self.stallConfirmationTask = nil
+            self.confirmObservedStall(
+                player: player,
+                url: url,
+                generation: generation,
+                reason: reason,
+                startedAt: startedAt
+            )
+        }
+    }
+
+    private func confirmObservedStall(
+        player: AVPlayer,
+        url: URL,
+        generation: Int,
+        reason: String,
+        startedAt: Date
+    ) {
+        guard isCurrentPlayer(player, generation: generation),
+              !isPaused,
+              stallEpisodeStartedAt == nil,
+              stallRecoveryTask == nil else {
+            return
+        }
+
+        stallConfirmationTask?.cancel()
+        stallConfirmationTask = nil
+        stallEpisodeStartedAt = startedAt
+        qualityRampTask?.cancel()
+        qualityRampTask = nil
+        didRelaxStreamingHints = false
+        MediaPlaybackQuality.applyStreamingHints(
+            for: player.currentItem,
+            playbackURL: activePlaybackURL,
+            profile: .cold
+        )
+        let phase = isReadyForPlayback ? "playing" : "startup"
+        let currentSeconds = player.currentTime().seconds
+        let durationSeconds = finiteSeconds(player.currentItem?.duration)
+        let bufferedSeconds = bufferedAheadSeconds(
+            item: player.currentItem,
+            currentSeconds: currentSeconds
+        )
+        let currentMilliseconds = currentSeconds.isFinite
+            ? Int(max(0, currentSeconds) * 1_000)
+            : -1
+        let durationMilliseconds = durationSeconds.map { Int($0 * 1_000) } ?? -1
+        let bufferedMilliseconds = Int(max(0, bufferedSeconds) * 1_000)
+        MediaPerformance.mark(
+            playbackEvent(
+                "video_stalled phase=\(phase) reason=\(reason) control=\(timeControlStatusToken(player.timeControlStatus)) current_ms=\(currentMilliseconds) duration_ms=\(durationMilliseconds) buffer_ms=\(bufferedMilliseconds) url=\(url.lastPathComponent)"
+            )
+        )
+
+        if reason == "progress_watchdog" {
+            // The watchdog has already observed a full no-progress window. Waiting
+            // for AVPlayer's state machine to agree only extends a visible freeze.
+            stallEpisodeStartedAt = nil
+            recoverOrFail(
+                player: player,
+                url: url,
+                reason: reason
+            )
+            return
+        }
+
+        monitorStallRecovery(
+            player: player,
+            url: url,
+            generation: generation
+        )
+    }
+
+    private func finishObservedStall(
+        player: AVPlayer,
+        url: URL,
+        generation: Int
+    ) {
+        guard isCurrentPlayer(player, generation: generation) else {
+            return
+        }
+
+        stallConfirmationTask?.cancel()
+        stallConfirmationTask = nil
+        guard let startedAt = stallEpisodeStartedAt else {
+            return
+        }
+
+        stallEpisodeStartedAt = nil
+        stallRecoveryTask?.cancel()
+        stallRecoveryTask = nil
+        MediaPerformance.measure(
+            playbackEvent(
+                "video_recovered reason=stall strategy=automatic url=\(url.lastPathComponent)"
+            ),
+            since: startedAt
+        )
+        startQualityRampMonitoring(player: player, generation: generation)
     }
 
     private func observeAudioInterruptions(
@@ -3761,6 +4184,14 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 case .began:
                     self.wasPlayingBeforeAudioInterruption =
                         !self.isPaused && self.playbackPhase == .visible
+                    self.isAudioInterrupted = true
+                    self.stallConfirmationTask?.cancel()
+                    self.stallConfirmationTask = nil
+                    self.stallRecoveryTask?.cancel()
+                    self.stallRecoveryTask = nil
+                    self.stallEpisodeStartedAt = nil
+                    self.sameItemRecoveryTask?.cancel()
+                    self.sameItemRecoveryTask = nil
                     player.pause()
                     MediaPerformance.mark(
                         self.playbackEvent(
@@ -3773,15 +4204,25 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                     let shouldResume = options.contains(.shouldResume) &&
                         self.wasPlayingBeforeAudioInterruption &&
                         !self.isPaused
-                    self.wasPlayingBeforeAudioInterruption = false
                     if shouldResume {
+                        self.isAudioInterrupted = false
+                        self.wasPlayingBeforeAudioInterruption = false
                         _ = AppAudioSession.configureForVideoPlayback()
                         self.updatePlaybackState(for: player)
+                        if self.progressWatchdogTask == nil {
+                            self.startProgressWatchdog(
+                                player: player,
+                                url: url,
+                                generation: generation
+                            )
+                        }
                         MediaPerformance.mark(
                             self.playbackEvent(
                                 "video_recovered reason=audio_interruption url=\(url.lastPathComponent)"
                             )
                         )
+                    } else {
+                        self.wasPlayingBeforeAudioInterruption = false
                     }
                 @unknown default:
                     break
@@ -3793,17 +4234,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func monitorStallRecovery(player: AVPlayer, url: URL, generation: Int) {
         stallRecoveryTask?.cancel()
         stallRecoveryTask = Task { @MainActor in
-            let stalledAt = Date()
             let stalledTime = player.currentTime().seconds
             var recoveryChecks = 0
 
-            while recoveryChecks < 70 {
+            while recoveryChecks < 20 {
                 guard self.isCurrentPlayer(player, generation: generation),
                       !Task.isCancelled else {
                     return
                 }
 
-                if self.isPaused {
+                if self.isPaused || self.isAudioInterrupted {
                     try? await Task.sleep(for: .milliseconds(50))
                     continue
                 }
@@ -3812,20 +4252,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 let currentTime = player.currentTime().seconds
                 let playbackAdvanced = stalledTime.isFinite &&
                     currentTime.isFinite &&
-                    currentTime - stalledTime >= 0.05
-                if player.currentItem?.isPlaybackLikelyToKeepUp == true || playbackAdvanced {
-                    MediaPerformance.measure(
-                        self.playbackEvent(
-                            "video_recovered reason=stall strategy=automatic url=\(url.lastPathComponent)"
-                        ),
-                        since: stalledAt
+                    currentTime - stalledTime >= VideoStallRecoveryPolicy.minimumRecoveryAdvanceSeconds
+                if VideoStallRecoveryPolicy.hasRecovered(
+                    timeControlStatus: player.timeControlStatus,
+                    playbackAdvanced: playbackAdvanced
+                ) {
+                    self.finishObservedStall(
+                        player: player,
+                        url: url,
+                        generation: generation
                     )
-                    if self.isReadyForPlayback {
-                        self.updatePlaybackState(for: player)
-                    } else {
-                        self.attemptRevealVideo(reason: "stall_recovered")
-                        self.updatePlaybackState(for: player)
-                    }
                     return
                 }
 
@@ -3837,6 +4273,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 return
             }
 
+            self.stallEpisodeStartedAt = nil
+            self.stallRecoveryTask = nil
             logPlaybackFailure(player: player, url: url, reason: "stall_recovery_timeout")
             recoverOrFail(player: player, url: url, reason: "stall_recovery_timeout")
         }
@@ -3890,7 +4328,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func observeProgress(player: AVPlayer, generation: Int) {
         removeTimeObserver()
 
-        let interval = CMTime(value: 1, timescale: 60)
+        // Thirty progress updates per second keeps the indicator visually smooth
+        // without driving a full SwiftUI state-update chain at display refresh rate.
+        let interval = CMTime(value: 1, timescale: 30)
         timeObserverPlayer = player
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
             Task { @MainActor in
@@ -3901,6 +4341,101 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 }
 
                 self.publishProgress(currentTime: time, player: player)
+            }
+        }
+    }
+
+    private func startProgressWatchdog(
+        player: AVPlayer,
+        url: URL,
+        generation: Int
+    ) {
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = Task { @MainActor [weak self, weak player] in
+            guard let self, let player else {
+                return
+            }
+
+            var lastObservedSeconds = player.currentTime().seconds
+            var lastProgressAt = Date()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: VideoPlaybackWatchdogPolicy.sampleInterval)
+                guard !Task.isCancelled,
+                      self.isCurrentPlayer(player, generation: generation) else {
+                    return
+                }
+
+                let isVisible = self.isReadyForPlayback && self.playbackPhase == .visible
+                let currentSeconds = player.currentTime().seconds
+                if !isVisible || self.isPaused || self.isAudioInterrupted || self.didFinishPlayback {
+                    lastObservedSeconds = currentSeconds
+                    lastProgressAt = Date()
+                    continue
+                }
+
+                if currentSeconds.isFinite,
+                   lastObservedSeconds.isFinite,
+                   currentSeconds < lastObservedSeconds - 0.1 {
+                    // An intentional seek or source replacement starts a fresh sample
+                    // window and must never be interpreted as a stall.
+                    lastObservedSeconds = currentSeconds
+                    lastProgressAt = Date()
+                    continue
+                }
+
+                if VideoPlaybackWatchdogPolicy.madeProgress(
+                    previousSeconds: lastObservedSeconds,
+                    currentSeconds: currentSeconds
+                ) {
+                    lastObservedSeconds = currentSeconds
+                    lastProgressAt = Date()
+                    if self.stallEpisodeStartedAt != nil {
+                        self.finishObservedStall(
+                            player: player,
+                            url: url,
+                            generation: generation
+                        )
+                    }
+                    continue
+                }
+
+                let actualDuration = self.finiteSeconds(player.currentItem?.duration)
+                if let actualDuration,
+                   VideoPlaybackCompletionPolicy.isAtEnd(
+                       currentSeconds: currentSeconds,
+                       durationSeconds: actualDuration
+                   ) {
+                    self.scheduleCompletionFallbackIfNeeded(
+                        player: player,
+                        currentSeconds: currentSeconds,
+                        durationSeconds: actualDuration
+                    )
+                    lastProgressAt = Date()
+                    continue
+                }
+
+                let secondsWithoutProgress = Date().timeIntervalSince(lastProgressAt)
+                guard self.sameItemRecoveryTask == nil,
+                      self.rebuildTask == nil,
+                      self.stallRecoveryTask == nil,
+                      self.stallEpisodeStartedAt == nil,
+                      VideoPlaybackWatchdogPolicy.shouldDeclareStall(
+                          isVisible: isVisible,
+                          isPaused: self.isPaused,
+                          didFinish: self.didFinishPlayback,
+                          secondsWithoutProgress: secondsWithoutProgress
+                      ) else {
+                    continue
+                }
+
+                self.confirmObservedStall(
+                    player: player,
+                    url: url,
+                    generation: generation,
+                    reason: "progress_watchdog",
+                    startedAt: lastProgressAt
+                )
             }
         }
     }
@@ -3916,6 +4451,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         let currentSeconds = currentTime.seconds.isFinite ? max(0, currentTime.seconds) : 0
         let progress = min(max(currentSeconds / durationSeconds, 0), 1)
+        scheduleCompletionFallbackIfNeeded(
+            player: player,
+            currentSeconds: currentSeconds,
+            durationSeconds: finiteSeconds(player.currentItem?.duration)
+        )
         guard progress >= 0.995 || abs(progress - lastPublishedProgress) >= 0.001 else {
             return
         }
@@ -3945,13 +4485,76 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         }
 
         didFinishPlayback = true
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = nil
+        completionFallbackTask?.cancel()
+        completionFallbackTask = nil
         playbackPhase = .finished
         lastPublishedProgress = 1
         onProgress(1)
         MediaPerformance.mark(
             playbackEvent("video_ended url=\(url.lastPathComponent)")
         )
+        MediaPerformance.flushUploadEvents()
         onFinished()
+    }
+
+    private func scheduleCompletionFallbackIfNeeded(
+        player: AVPlayer,
+        currentSeconds: TimeInterval? = nil,
+        durationSeconds: TimeInterval? = nil
+    ) {
+        guard completionFallbackTask == nil,
+              !didFinishPlayback,
+              !isPaused,
+              isReadyForPlayback,
+              playbackPhase == .visible else {
+            return
+        }
+
+        let resolvedCurrent = currentSeconds ?? player.currentTime().seconds
+        let resolvedDuration = durationSeconds ??
+            finiteSeconds(player.currentItem?.duration)
+        guard let resolvedDuration,
+              VideoPlaybackCompletionPolicy.isAtEnd(
+                  currentSeconds: resolvedCurrent,
+                  durationSeconds: resolvedDuration
+              ) else {
+            return
+        }
+
+        let generation = playbackGeneration
+        completionFallbackTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(for: VideoPlaybackCompletionPolicy.graceDelay)
+            guard let self,
+                  let player,
+                  !Task.isCancelled,
+                  self.isCurrentPlayer(player, generation: generation),
+                  !self.isPaused,
+                  !self.didFinishPlayback else {
+                self?.completionFallbackTask = nil
+                return
+            }
+
+            self.completionFallbackTask = nil
+            let current = player.currentTime().seconds
+            let duration = self.finiteSeconds(player.currentItem?.duration)
+            guard let duration,
+                  VideoPlaybackCompletionPolicy.isAtEnd(
+                      currentSeconds: current,
+                      durationSeconds: duration
+                  ),
+                  let url = self.activeURL else {
+                return
+            }
+
+            MediaPerformance.mark(
+                self.playbackEvent(
+                    "video_completion_fallback current_ms=\(Int(max(0, current) * 1_000)) duration_ms=\(Int(duration * 1_000)) url=\(url.lastPathComponent)"
+                )
+            )
+            self.finishPlayback(player: player, url: url)
+        }
     }
 
     private func handlePlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
@@ -3960,10 +4563,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             player: player,
             url: url,
             reason: reason,
-            refreshSourceBeforeRebuild: isAuthorizationFailure(
-                player: player,
-                error: error
-            )
+            refreshSourceBeforeRebuild: true
         )
     }
 
@@ -3971,13 +4571,26 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         player: AVPlayer,
         url: URL,
         reason: String,
-        refreshSourceBeforeRebuild: Bool = false
+        refreshSourceBeforeRebuild: Bool = true
     ) {
         guard self.player === player,
               sameItemRecoveryTask == nil,
               rebuildTask == nil else {
             return
         }
+
+        completionFallbackTask?.cancel()
+        completionFallbackTask = nil
+        qualityRampTask?.cancel()
+        qualityRampTask = nil
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = nil
+        didRelaxStreamingHints = false
+        MediaPlaybackQuality.applyStreamingHints(
+            for: player.currentItem,
+            playbackURL: activePlaybackURL,
+            profile: .cold
+        )
 
         let recoveryAction = VideoPlaybackRecoveryPolicy.action(
             itemIsReady: isReadyForPlayback && player.currentItem?.status == .readyToPlay,
@@ -4029,9 +4642,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             guard didSeek,
                   !Task.isCancelled,
                   self.isCurrentPlayer(player, generation: generation),
-                  !self.isPaused else {
+                  !self.isPaused,
+                  !self.isAudioInterrupted else {
                 self.sameItemRecoveryTask = nil
-                if self.isCurrentPlayer(player, generation: generation), !self.isPaused {
+                if self.isCurrentPlayer(player, generation: generation),
+                   !self.isPaused,
+                   !self.isAudioInterrupted {
                     self.rebuildOrFailAfterSameItemRecovery(
                         player: player,
                         url: url,
@@ -4049,7 +4665,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                     return
                 }
 
-                if self.isPaused {
+                if self.isPaused || self.isAudioInterrupted {
                     player.pause()
                     self.sameItemRecoveryTask = nil
                     return
@@ -4057,8 +4673,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
                 let currentSeconds = player.currentTime().seconds
                 let advanced = currentSeconds.isFinite &&
-                    currentSeconds >= targetSeconds + 0.05
-                if advanced || player.timeControlStatus == .playing {
+                    currentSeconds >= targetSeconds + VideoStallRecoveryPolicy.minimumRecoveryAdvanceSeconds
+                if advanced {
                     self.sameItemRecoveryTask = nil
                     MediaPerformance.measure(
                         self.playbackEvent(
@@ -4067,6 +4683,15 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                         since: recoveryStartedAt
                     )
                     self.updatePlaybackState(for: player)
+                    self.startQualityRampMonitoring(
+                        player: player,
+                        generation: generation
+                    )
+                    self.startProgressWatchdog(
+                        player: player,
+                        url: url,
+                        generation: generation
+                    )
                     return
                 }
 
@@ -4116,12 +4741,19 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTask = nil
         seekTask?.cancel()
         seekTask = nil
+        stallConfirmationTask?.cancel()
+        stallConfirmationTask = nil
         stallRecoveryTask?.cancel()
         stallRecoveryTask = nil
+        stallEpisodeStartedAt = nil
         sameItemRecoveryTask?.cancel()
         sameItemRecoveryTask = nil
         rebuildTask?.cancel()
         rebuildTask = nil
+        completionFallbackTask?.cancel()
+        completionFallbackTask = nil
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = nil
         didFinishPlayback = true
         playbackPhase = .idle
         isReadyForPlayback = false
@@ -4135,6 +4767,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 "video_terminal_failure reason=\(reason) rebuilds=\(playbackRetryCount) same_item_recoveries=\(sameItemRecoveryCount) url=\(url.lastPathComponent)"
             )
         )
+        MediaPerformance.flushUploadEvents()
     }
 
     @discardableResult
@@ -4209,16 +4842,6 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         return true
     }
 
-    private func isAuthorizationFailure(player: AVPlayer, error: Error?) -> Bool {
-        let statusCode = player.currentItem?.errorLog()?.events.last?.errorStatusCode ?? 0
-        if statusCode == 401 || statusCode == 403 {
-            return true
-        }
-
-        let nsError = (error ?? player.currentItem?.error) as NSError?
-        return nsError?.code == 401 || nsError?.code == 403
-    }
-
     private func logPlaybackFailure(player: AVPlayer, url: URL, reason: String, error: Error? = nil) {
         let nsError = (error ?? player.currentItem?.error) as NSError?
         var event = "video_stalled reason=\(reason) url=\(url.lastPathComponent)"
@@ -4265,23 +4888,59 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         qualityRampTask?.cancel()
         qualityRampTask = nil
 
-        guard shouldUploadQoE,
-              activePlaybackURL?.pathExtension.lowercased() == "m3u8" else {
+        guard activePlaybackURL?.pathExtension.lowercased() == "m3u8" else {
             return
         }
 
         let startedAt = Date()
         qualityRampStartedAt = startedAt
         qualityRampTask = Task { @MainActor in
+            var healthyBufferSamples = 0
             while Date().timeIntervalSince(startedAt) < VideoQualityRampPolicy.timeoutSeconds {
                 guard self.isCurrentPlayer(player, generation: generation),
                       !Task.isCancelled else {
                     return
                 }
 
-                let size = player.currentItem?.presentationSize ?? .zero
+                let item = player.currentItem
+                let currentSeconds = player.currentTime().seconds
+                let durationSeconds = self.finiteSeconds(item?.duration) ??
+                    self.expectedDurationSeconds
+                let remainingSeconds: TimeInterval? = durationSeconds.flatMap { duration -> TimeInterval? in
+                    guard duration.isFinite, currentSeconds.isFinite else {
+                        return nil
+                    }
+                    return max(0, duration - currentSeconds)
+                }
+                let bufferedAheadSeconds = self.bufferedAheadSeconds(
+                    item: item,
+                    currentSeconds: currentSeconds
+                )
+
+                let hasHealthyBuffer = VideoQualityRampPolicy.shouldRelaxStreamingHints(
+                    isPlaybackLikelyToKeepUp: item?.isPlaybackLikelyToKeepUp == true,
+                    bufferedAheadSeconds: bufferedAheadSeconds,
+                    remainingSeconds: remainingSeconds
+                )
+                healthyBufferSamples = hasHealthyBuffer ? healthyBufferSamples + 1 : 0
+
+                if !self.didRelaxStreamingHints,
+                   healthyBufferSamples >= VideoQualityRampPolicy.requiredHealthySamples {
+                    MediaPlaybackQuality.relaxStreamingHints(
+                        for: item,
+                        playbackURL: self.activePlaybackURL
+                    )
+                    self.didRelaxStreamingHints = true
+                    if !self.shouldUploadQoE {
+                        self.qualityRampTask = nil
+                        return
+                    }
+                }
+
+                let size = item?.presentationSize ?? .zero
                 self.qualityRampLastSize = size
-                if VideoQualityRampPolicy.hasReached1080p(size) {
+                if self.shouldUploadQoE,
+                   VideoQualityRampPolicy.hasReached1080p(size) {
                     self.logQualityRampIfNeeded(result: "reached")
                     return
                 }
@@ -4293,12 +4952,43 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                   !Task.isCancelled else {
                 return
             }
-            self.logQualityRampIfNeeded(result: "timeout")
+            if self.shouldUploadQoE {
+                self.logQualityRampIfNeeded(
+                    result: self.didRelaxStreamingHints
+                        ? "timeout"
+                        : "buffer_guarded"
+                )
+            }
         }
     }
 
+    private func bufferedAheadSeconds(
+        item: AVPlayerItem?,
+        currentSeconds: TimeInterval
+    ) -> TimeInterval {
+        guard currentSeconds.isFinite else {
+            return 0
+        }
+
+        return item?.loadedTimeRanges
+            .map(\.timeRangeValue)
+            .compactMap { range -> TimeInterval? in
+                let start = range.start.seconds
+                let end = start + range.duration.seconds
+                guard start.isFinite,
+                      end.isFinite,
+                      currentSeconds + 0.05 >= start,
+                      currentSeconds <= end else {
+                    return nil
+                }
+                return max(0, end - currentSeconds)
+            }
+            .max() ?? 0
+    }
+
     private func logQualityRampIfNeeded(result: String) {
-        guard !didUploadQualityRamp,
+        guard shouldUploadQoE,
+              !didUploadQualityRamp,
               let startedAt = qualityRampStartedAt else {
             return
         }
@@ -4336,7 +5026,30 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 
     private func playbackEvent(_ event: String) -> String {
-        "\(event) playback=\(playbackAttemptId)"
+        let mediaIdentifier = activeIdentity.map(telemetryMediaIdentifier) ?? "unknown"
+        return "\(event) playback=\(playbackAttemptId) generation=\(playbackGeneration) media=\(mediaIdentifier)"
+    }
+
+    private func telemetryMediaIdentifier(_ value: String) -> String {
+        // Playback identities can contain signed paths. A short stable digest keeps
+        // events correlatable without uploading credentials or storage details.
+        SHA256.hash(data: Data(value.utf8))
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private func timeControlStatusToken(_ status: AVPlayer.TimeControlStatus) -> String {
+        switch status {
+        case .paused:
+            return "paused"
+        case .waitingToPlayAtSpecifiedRate:
+            return "waiting"
+        case .playing:
+            return "playing"
+        @unknown default:
+            return "unknown"
+        }
     }
 
     private func cleanupCurrentPlayer(reason: String?) {
@@ -4347,12 +5060,19 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTask = nil
         seekTask?.cancel()
         seekTask = nil
+        stallConfirmationTask?.cancel()
+        stallConfirmationTask = nil
         stallRecoveryTask?.cancel()
         stallRecoveryTask = nil
+        stallEpisodeStartedAt = nil
         sameItemRecoveryTask?.cancel()
         sameItemRecoveryTask = nil
         rebuildTask?.cancel()
         rebuildTask = nil
+        completionFallbackTask?.cancel()
+        completionFallbackTask = nil
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = nil
         let qualityRampResult = reason.map { "interrupted_\($0)" } ?? "interrupted"
         logQualityRampIfNeeded(result: qualityRampResult)
         qualityRampTask?.cancel()
@@ -4377,6 +5097,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         timeControlStatusObservation?.invalidate()
         timeControlStatusObservation = nil
         wasPlayingBeforeAudioInterruption = false
+        isAudioInterrupted = false
 
         removeTimeObserver()
 
@@ -4402,6 +5123,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         hasTerminalPlaybackFailure = false
         layerReadyForDisplay = false
         didFinishPlayback = false
+        didRelaxStreamingHints = false
         lastPublishedProgress = 0
         playbackStartedAt = nil
         qualityRampStartedAt = nil
