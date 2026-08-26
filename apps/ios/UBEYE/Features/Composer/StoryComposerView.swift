@@ -1006,8 +1006,11 @@ final class StoryComposerStore: ObservableObject {
             )
         }
 
-        for pendingUpload in stagedUploads {
-            Task { @MainActor in
+        // Keep each story independent while bounding peak memory and network work.
+        // Starting several video normalizers and TUS chunks together can exceed
+        // the memory budget on physical devices even though each upload is valid.
+        Task { @MainActor in
+            for pendingUpload in stagedUploads {
                 do {
                     let response = try await pendingUploads.performUpload(
                         id: pendingUpload.id,

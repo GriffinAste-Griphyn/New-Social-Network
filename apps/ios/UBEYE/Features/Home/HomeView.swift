@@ -1202,18 +1202,27 @@ private struct StoryBatchUploadProgressCard: View {
                 .progressViewStyle(.linear)
                 .tint(Color.ubeyeRed)
 
-            VStack(spacing: 7) {
-                ForEach(summary.uploads) { upload in
-                    Button {
-                        if upload.isFailed {
-                            onFailedUploadTapped(upload)
-                        }
-                    } label: {
-                        StoryBatchUploadProgressRow(upload: upload)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint(upload.isFailed ? "Opens retry options" : "")
+            HStack(spacing: 5) {
+                ForEach(0..<max(summary.totalCount, 0), id: \.self) { offset in
+                    let upload = upload(at: offset + 1)
+                    ProgressView(value: upload?.displayProgress ?? 1, total: 1)
+                        .progressViewStyle(.linear)
+                        .tint(upload?.isFailed == true ? Color.ubeyeRed.opacity(0.45) : Color.ubeyeRed)
+                        .accessibilityLabel("Story \(offset + 1)")
+                        .accessibilityValue(upload?.statusLabel ?? "Posted")
                 }
+            }
+
+            if let failedUpload = summary.uploads.first(where: \.isFailed) {
+                Button {
+                    onFailedUploadTapped(failedUpload)
+                } label: {
+                    Label("Retry failed story", systemImage: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.ubeyeRed)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens retry options")
             }
         }
         .padding(12)
@@ -1225,63 +1234,9 @@ private struct StoryBatchUploadProgressCard: View {
         .animation(.easeInOut(duration: 0.25), value: summary.progress)
         .accessibilityElement(children: .contain)
     }
-}
 
-private struct StoryBatchUploadProgressRow: View {
-    let upload: PendingStoryUpload
-
-    private var storyLabel: String {
-        if let position = upload.batchPosition {
-            return "Story \(position)"
-        }
-        return "Story"
-    }
-
-    var body: some View {
-        HStack(spacing: 9) {
-            CachedAsyncImage(url: upload.thumbnailFileURL ?? upload.mediaFileURL) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                Color.ubeyeBorder
-                    .overlay {
-                        Image(systemName: upload.assetKind == .video ? "video.fill" : "photo.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.ubeyeMuted)
-                    }
-            }
-            .frame(width: 34, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(storyLabel)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.ubeyeInk)
-
-                    Spacer(minLength: 6)
-
-                    Text(upload.statusLabel)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(upload.isFailed ? Color.ubeyeRed : Color.ubeyeMuted)
-                        .contentTransition(.numericText())
-                }
-
-                ProgressView(value: upload.displayProgress, total: 1)
-                    .progressViewStyle(.linear)
-                    .tint(upload.isFailed ? Color.ubeyeRed.opacity(0.45) : Color.ubeyeRed)
-            }
-
-            if upload.isFailed {
-                Image(systemName: "arrow.clockwise.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.ubeyeRed)
-            }
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(storyLabel), \(upload.statusLabel)")
+    private func upload(at position: Int) -> PendingStoryUpload? {
+        summary.uploads.first { $0.batchPosition == position }
     }
 }
 
