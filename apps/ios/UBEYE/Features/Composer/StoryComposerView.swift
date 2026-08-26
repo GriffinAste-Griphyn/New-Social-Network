@@ -936,6 +936,143 @@ final class StoryComposerStore: ObservableObject {
         return uploadResponse
     }
 
+    func uploadBatch(
+        media: [PickedStoryMedia],
+        api: APIClient,
+        pendingUploads: PendingStoryUploadStore,
+        onPendingBatchStarted: () -> Void,
+        onUploadRegistered: @escaping (StoryUploadResponse) -> Void
+    ) async -> Bool {
+        guard media.count > 1 else {
+            error = "Choose at least two items for a batch."
+            return false
+        }
+
+        error = nil
+        lastUploadReport = nil
+        normalizeLinkDraft()
+        if let validationMessage = draftValidationMessage {
+            error = validationMessage
+            return false
+        }
+
+        isUploading = true
+        let batchId = UUID().uuidString.lowercased()
+        var stagedUploads: [PendingStoryUpload] = []
+        var failedPreparationCount = 0
+
+        for (offset, item) in media.enumerated() {
+            uploadStatus = "Preparing story \(offset + 1) of \(media.count)"
+            do {
+                let pendingUpload = try await createPendingBatchUpload(
+                    item,
+                    batchId: batchId,
+                    batchPosition: offset + 1,
+                    batchCount: media.count,
+                    pendingUploads: pendingUploads
+                )
+                stagedUploads.append(pendingUpload)
+            } catch {
+                failedPreparationCount += 1
+                if case .video(let video) = item {
+                    await StoryUploadFileIO.remove([video.url])
+                }
+                MediaPerformance.mark(
+                    "story_batch_prepare_failed position=\(offset + 1) error=\(error.localizedDescription)"
+                )
+            }
+        }
+
+        guard !stagedUploads.isEmpty else {
+            isUploading = false
+            uploadStatus = nil
+            error = "Could not prepare those stories. Try different photos or videos."
+            return false
+        }
+
+        pendingUploads.normalizeBatch(
+            batchId,
+            orderedUploadIds: stagedUploads.map(\.id)
+        )
+
+        clearUploadedDraft()
+        isUploading = false
+        uploadStatus = nil
+        onPendingBatchStarted()
+
+        if failedPreparationCount > 0 {
+            MediaPerformance.mark(
+                "story_batch_prepare_partial prepared=\(stagedUploads.count) failed=\(failedPreparationCount)"
+            )
+        }
+
+        for pendingUpload in stagedUploads {
+            Task { @MainActor in
+                do {
+                    let response = try await pendingUploads.performUpload(
+                        id: pendingUpload.id,
+                        api: api
+                    )
+                    onUploadRegistered(response)
+                } catch {
+                    MediaPerformance.mark(
+                        "story_batch_upload_failed id=\(pendingUpload.id) error=\(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        return true
+    }
+
+    private func createPendingBatchUpload(
+        _ media: PickedStoryMedia,
+        batchId: String,
+        batchPosition: Int,
+        batchCount: Int,
+        pendingUploads: PendingStoryUploadStore
+    ) async throws -> PendingStoryUpload {
+        switch media {
+        case .image(let upload):
+            return try pendingUploads.createImageUpload(
+                upload: upload,
+                contentMode: imageContentMode,
+                draft: pendingUploadDraft,
+                textOverlays: pendingTextOverlays,
+                batchId: batchId,
+                batchPosition: batchPosition,
+                batchCount: batchCount
+            )
+        case .video(let video):
+            let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
+                url: video.url,
+                source: video.source,
+                maxDurationSeconds: maxVideoDurationSeconds
+            )
+            do {
+                let thumbnailData = try await videoThumbnailData(
+                    for: preparedVideo.url,
+                    overlays: thumbnailOverlaySpecs
+                )
+                let pendingUpload = try await pendingUploads.createVideoUpload(
+                    sourceURL: preparedVideo.url,
+                    thumbnailData: thumbnailData,
+                    durationMs: preparedVideo.durationMs,
+                    draft: pendingUploadDraft,
+                    textOverlays: pendingTextOverlays,
+                    batchId: batchId,
+                    batchPosition: batchPosition,
+                    batchCount: batchCount
+                )
+                await StoryUploadFileIO.remove([preparedVideo.url, video.url])
+                return pendingUpload
+            } catch {
+                await StoryUploadFileIO.remove([preparedVideo.url])
+                throw error
+            }
+        }
+    }
+
     private func uploadVideoStory(
         video: StoryVideoUpload,
         api: APIClient,
@@ -1382,7 +1519,8 @@ struct StoryComposerView: View {
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @StateObject private var camera = CameraController()
     @StateObject private var store = StoryComposerStore()
-    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var photoPickerItems: [PhotosPickerItem] = []
+    @State private var selectedBatchMedia: [PickedStoryMedia] = []
     @State private var overlayInputMode: ComposerOverlayInputMode?
     @State private var recordingStartedAt = Date()
     @State private var recordingElapsed: TimeInterval = 0
@@ -1417,7 +1555,12 @@ struct StoryComposerView: View {
 
                 VStack(spacing: 0) {
                     ZStack(alignment: .top) {
-                        Label("Story", systemImage: "camera.fill")
+                        Label(
+                            selectedBatchMedia.count > 1
+                                ? "\(selectedBatchMedia.count) stories"
+                                : "Story",
+                            systemImage: "camera.fill"
+                        )
                             .font(.system(size: 15, weight: .bold))
                             .padding(.horizontal, 14)
                             .frame(height: 38)
@@ -1454,7 +1597,7 @@ struct StoryComposerView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(camera.isRecording || camera.isCapturingPhoto)
-                                } else {
+                                } else if selectedBatchMedia.count <= 1 {
                                     composerToolRail
                                 }
                             }
@@ -1515,9 +1658,9 @@ struct StoryComposerView: View {
         .onDisappear {
             camera.stop()
         }
-        .onChange(of: photoPickerItem) { _, item in
+        .onChange(of: photoPickerItems) { _, items in
             Task {
-                await loadPickedItem(item)
+                await loadPickedItems(items)
             }
         }
         .onChange(of: camera.capturedPhoto) { _, photo in
@@ -1557,7 +1700,9 @@ struct StoryComposerView: View {
     private var captureFooter: some View {
         HStack {
             PhotosPicker(
-                selection: $photoPickerItem,
+                selection: $photoPickerItems,
+                maxSelectionCount: quotedReply == nil ? 10 : 1,
+                selectionBehavior: .ordered,
                 matching: .any(of: [.images, .videos]),
                 preferredItemEncoding: .current
             ) {
@@ -1602,7 +1747,15 @@ struct StoryComposerView: View {
 
     private var selectedMediaFooter: some View {
         HStack(spacing: 0) {
-            if isImageMediaSelected {
+            if selectedBatchMedia.count > 1 {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(selectedBatchMedia.count) separate stories")
+                        .font(.system(size: 14, weight: .bold))
+                    Text("They’ll upload in the background")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+            } else if isImageMediaSelected {
                 Picker("Photo framing", selection: $store.imageContentMode) {
                     ForEach(StoryImageContentMode.allCases, id: \.self) { mode in
                         Text(mode.title).tag(mode)
@@ -1644,14 +1797,27 @@ struct StoryComposerView: View {
                 await uploadSelectedMedia()
             }
         } label: {
-            uploadButtonIcon
+            HStack(spacing: 7) {
+                uploadButtonIcon
+                if selectedBatchMedia.count > 1 {
+                    Text("Post \(selectedBatchMedia.count)")
+                        .font(.system(size: 14, weight: .bold))
+                }
+            }
             .foregroundStyle(.white)
-            .frame(width: footerSideControlSize, height: footerSideControlSize)
-            .background(.black.opacity(0.52), in: Circle())
+            .frame(
+                width: selectedBatchMedia.count > 1 ? 104 : footerSideControlSize,
+                height: footerSideControlSize
+            )
+            .background(.black.opacity(0.52), in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(store.isUploading)
-        .accessibilityLabel("Upload story")
+        .accessibilityLabel(
+            selectedBatchMedia.count > 1
+                ? "Upload \(selectedBatchMedia.count) separate stories"
+                : "Upload story"
+        )
         .accessibilityIdentifier("story-composer-upload-button")
     }
 
@@ -1815,7 +1981,9 @@ struct StoryComposerView: View {
 
             HStack(spacing: 18) {
                 PhotosPicker(
-                    selection: $photoPickerItem,
+                    selection: $photoPickerItems,
+                    maxSelectionCount: quotedReply == nil ? 10 : 1,
+                    selectionBehavior: .ordered,
                     matching: .any(of: [.images, .videos]),
                     preferredItemEncoding: .current
                 ) {
@@ -2003,8 +2171,8 @@ struct StoryComposerView: View {
             .foregroundStyle(Color.ubeyeInk)
     }
 
-    private func loadPickedItem(_ item: PhotosPickerItem?) async {
-        guard let item else {
+    private func loadPickedItems(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else {
             return
         }
 
@@ -2015,24 +2183,49 @@ struct StoryComposerView: View {
         camera.capturedPhoto = nil
         camera.capturedVideoURL = nil
         defer {
-            photoPickerItem = nil
+            photoPickerItems = []
         }
 
-        do {
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
-               let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
-                enterComposer(with: .video(StoryVideoUpload(url: pickedVideo.url, source: .library)))
-                return
+        var loadedMedia: [PickedStoryMedia] = []
+        var failedItemCount = 0
+
+        for (offset, item) in items.enumerated() {
+            if items.count > 1 {
+                store.uploadStatus = "Loading story \(offset + 1) of \(items.count)"
             }
 
-            if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
-                enterComposer(with: .image(pickedImage.upload))
-                return
-            }
+            do {
+                if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
+                   let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
+                    loadedMedia.append(
+                        .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
+                    )
+                    continue
+                }
 
+                if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
+                    loadedMedia.append(.image(pickedImage.upload))
+                    continue
+                }
+
+                failedItemCount += 1
+            } catch {
+                failedItemCount += 1
+            }
+        }
+
+        guard let firstMedia = loadedMedia.first else {
+            store.uploadStatus = nil
             store.error = "Could not load that media. Try another photo or video."
-        } catch {
-            store.error = "Could not load that media. Try another photo or video."
+            return
+        }
+
+        enterComposer(with: firstMedia)
+        selectedBatchMedia = loadedMedia.count > 1 ? loadedMedia : []
+        if failedItemCount > 0 {
+            store.error = failedItemCount == 1
+                ? "One item couldn’t be loaded. The others are ready."
+                : "\(failedItemCount) items couldn’t be loaded. The others are ready."
         }
     }
 
@@ -2129,6 +2322,25 @@ struct StoryComposerView: View {
             return
         }
 
+        if selectedBatchMedia.count > 1 {
+            let didStart = await store.uploadBatch(
+                media: selectedBatchMedia,
+                api: api,
+                pendingUploads: pendingStoryUploads,
+                onPendingBatchStarted: {
+                    selectedBatchMedia = []
+                    stagedMedia = nil
+                    onPendingUploadStarted()
+                },
+                onUploadRegistered: onUploadRegistered
+            )
+            if didStart {
+                selectedBatchMedia = []
+                stagedMedia = nil
+            }
+            return
+        }
+
         if let response = await store.upload(
             api: api,
             pendingUploads: pendingStoryUploads,
@@ -2143,6 +2355,13 @@ struct StoryComposerView: View {
     }
 
     private func resetCapture(clearQuote: Bool = false) {
+        for media in selectedBatchMedia {
+            if case .video(let video) = media {
+                try? FileManager.default.removeItem(at: video.url)
+            }
+        }
+        selectedBatchMedia = []
+        photoPickerItems = []
         stagedMedia = nil
         store.selectedMedia = nil
         store.error = nil
@@ -2165,6 +2384,7 @@ struct StoryComposerView: View {
     }
 
     private func enterComposer(with media: PickedStoryMedia) {
+        selectedBatchMedia = []
         store.error = nil
         store.uploadStatus = nil
         overlayInputMode = nil

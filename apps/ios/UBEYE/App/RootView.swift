@@ -59,7 +59,8 @@ struct MainTabView: View {
                         storyUploadCoordinator.register(
                             response,
                             api: api,
-                            notice: storyUploadNotice
+                            notice: storyUploadNotice,
+                            pendingUploads: pendingStoryUploads
                         )
                     }
                 )
@@ -82,7 +83,8 @@ struct MainTabView: View {
                         storyUploadCoordinator.register(
                             response,
                             api: api,
-                            notice: storyUploadNotice
+                            notice: storyUploadNotice,
+                            pendingUploads: pendingStoryUploads
                         )
                     }
                 )
@@ -119,7 +121,8 @@ struct MainTabView: View {
                 storyUploadCoordinator.register(
                     response,
                     api: api,
-                    notice: storyUploadNotice
+                    notice: storyUploadNotice,
+                    pendingUploads: pendingStoryUploads
                 )
             }
         }

@@ -730,7 +730,15 @@ struct HomeView: View {
 
     @ViewBuilder
     private var uploadNoticeBanner: some View {
-        if storyUploadNotice.state != nil {
+        if let batchSummary = pendingStoryUploads.latestBatchSummary {
+            StoryBatchUploadProgressCard(
+                summary: batchSummary,
+                onFailedUploadTapped: { upload in
+                    selectedFailedUpload = upload
+                }
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
+        } else if storyUploadNotice.state != nil {
             StoryUploadNoticeBanner(
                 title: uploadNoticeTitle,
                 message: storyUploadNotice.message,
@@ -1142,6 +1150,139 @@ struct MyStoryHomeCard: View {
         )
     }
 
+}
+
+private struct StoryBatchUploadProgressCard: View {
+    let summary: PendingStoryUploadBatchSummary
+    let onFailedUploadTapped: (PendingStoryUpload) -> Void
+
+    private var headerTitle: String {
+        if summary.failedCount > 0 {
+            return "\(summary.failedCount) of \(summary.totalCount) need attention"
+        }
+        return "Posting \(summary.totalCount) stories"
+    }
+
+    private var headerMessage: String {
+        if summary.completedCount > 0 {
+            return "\(summary.completedCount) posted · Uploads continue in background"
+        }
+        return "Uploads continue in background"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.ubeyeRed, in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(headerTitle)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.ubeyeInk)
+                        .contentTransition(.numericText())
+                    Text(headerMessage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text("\(Int((summary.progress * 100).rounded()))%")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.ubeyeInk)
+                    .contentTransition(.numericText())
+            }
+
+            ProgressView(value: summary.progress, total: 1)
+                .progressViewStyle(.linear)
+                .tint(Color.ubeyeRed)
+
+            VStack(spacing: 7) {
+                ForEach(summary.uploads) { upload in
+                    Button {
+                        if upload.isFailed {
+                            onFailedUploadTapped(upload)
+                        }
+                    } label: {
+                        StoryBatchUploadProgressRow(upload: upload)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(upload.isFailed ? "Opens retry options" : "")
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.ubeyeBorder, lineWidth: 1)
+        )
+        .animation(.easeInOut(duration: 0.25), value: summary.progress)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct StoryBatchUploadProgressRow: View {
+    let upload: PendingStoryUpload
+
+    private var storyLabel: String {
+        if let position = upload.batchPosition {
+            return "Story \(position)"
+        }
+        return "Story"
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            CachedAsyncImage(url: upload.thumbnailFileURL ?? upload.mediaFileURL) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                Color.ubeyeBorder
+                    .overlay {
+                        Image(systemName: upload.assetKind == .video ? "video.fill" : "photo.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.ubeyeMuted)
+                    }
+            }
+            .frame(width: 34, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(storyLabel)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.ubeyeInk)
+
+                    Spacer(minLength: 6)
+
+                    Text(upload.statusLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(upload.isFailed ? Color.ubeyeRed : Color.ubeyeMuted)
+                        .contentTransition(.numericText())
+                }
+
+                ProgressView(value: upload.displayProgress, total: 1)
+                    .progressViewStyle(.linear)
+                    .tint(upload.isFailed ? Color.ubeyeRed.opacity(0.45) : Color.ubeyeRed)
+            }
+
+            if upload.isFailed {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.ubeyeRed)
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(storyLabel), \(upload.statusLabel)")
+    }
 }
 
 private struct StoryUploadNoticeBanner: View {

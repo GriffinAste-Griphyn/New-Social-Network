@@ -15,7 +15,8 @@ final class StoryUploadCoordinator: ObservableObject {
     func register(
         _ response: StoryUploadResponse,
         api: APIClient,
-        notice: StoryUploadNoticeStore
+        notice: StoryUploadNoticeStore,
+        pendingUploads: PendingStoryUploadStore? = nil
     ) {
         StoryUploadDiagnostics.mark("registered", response: response)
         upsertRegistration(response)
@@ -24,7 +25,11 @@ final class StoryUploadCoordinator: ObservableObject {
 
         guard response.moderationStatus == nil || response.moderationStatus == "approved" else {
             StoryUploadDiagnostics.mark("under_review", response: response)
-            notice.showReview(reason: response.moderationReason)
+            if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                notice.showPosting()
+            } else {
+                notice.showReview(reason: response.moderationReason)
+            }
             return
         }
 
@@ -32,8 +37,19 @@ final class StoryUploadCoordinator: ObservableObject {
         refreshVisibleStoryState(response, api: api)
 
         if response.asset.assetKind == .video && response.processingStatus != "ready" {
-            notice.showProcessing()
-            startReadinessPolling(response, api: api, notice: notice)
+            startReadinessPolling(
+                response,
+                api: api,
+                notice: notice,
+                pendingUploads: pendingUploads
+            )
+            if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                notice.showPosting()
+            } else {
+                notice.showProcessing()
+            }
+        } else if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+            notice.showPosting()
         } else {
             notice.showPosted()
         }
@@ -75,7 +91,8 @@ final class StoryUploadCoordinator: ObservableObject {
     private func startReadinessPolling(
         _ response: StoryUploadResponse,
         api: APIClient,
-        notice: StoryUploadNoticeStore
+        notice: StoryUploadNoticeStore,
+        pendingUploads: PendingStoryUploadStore?
     ) {
         readinessTasks[response.storyId]?.cancel()
         readinessTasks[response.storyId] = Task { @MainActor [weak self, api, notice] in
@@ -90,12 +107,20 @@ final class StoryUploadCoordinator: ObservableObject {
                 api.invalidateStoryStacks(ids: ["my-story", response.storyId])
                 api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
                 if result == .failed {
-                    notice.showFailed(
-                        message: "We couldn’t finish preparing this video. Your original upload is safe; please try uploading it again."
-                    )
+                    if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                        notice.showPosting()
+                    } else {
+                        notice.showFailed(
+                            message: "We couldn’t finish preparing this video. Your original upload is safe; please try uploading it again."
+                        )
+                    }
                     StoryUploadDiagnostics.mark("readiness_poll_failed", response: response)
                 } else {
-                    notice.showDelayed()
+                    if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                        notice.showPosting()
+                    } else {
+                        notice.showDelayed()
+                    }
                     StoryUploadDiagnostics.mark("readiness_poll_timeout", response: response)
                 }
                 return
@@ -104,7 +129,11 @@ final class StoryUploadCoordinator: ObservableObject {
             self?.registrations.removeAll { $0.storyId == response.storyId }
             api.invalidateStoryStacks(ids: ["my-story", response.storyId])
             api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
-            notice.showPosted()
+            if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                notice.showPosting()
+            } else {
+                notice.showPosted()
+            }
             NotificationCenter.default.post(
                 name: .storyUploadDidComplete,
                 object: response.storyId
@@ -144,6 +173,9 @@ struct PendingStoryUploadDraft: Codable, Hashable {
 
 struct PendingStoryUpload: Codable, Hashable, Identifiable {
     let id: String
+    let batchId: String?
+    var batchPosition: Int?
+    var batchCount: Int?
     let assetKind: SocialAssetKind
     let pipeline: PendingStoryUploadPipeline
     let mediaFileURL: URL
@@ -187,6 +219,15 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
         let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return message.isEmpty ? "The video could not be uploaded. Check your connection and try again." : message
     }
+}
+
+struct PendingStoryUploadBatchSummary: Equatable {
+    let id: String
+    let totalCount: Int
+    let completedCount: Int
+    let failedCount: Int
+    let progress: Double
+    let uploads: [PendingStoryUpload]
 }
 
 struct LocalImageDerivative {
@@ -602,11 +643,43 @@ final class PendingStoryUploadStore: ObservableObject {
         visibleUploads.last
     }
 
+    var latestBatchSummary: PendingStoryUploadBatchSummary? {
+        guard let latestBatchUpload = visibleUploads.last(where: { $0.batchId != nil }),
+              let batchId = latestBatchUpload.batchId else {
+            return nil
+        }
+
+        let batchUploads = visibleUploads
+            .filter { $0.batchId == batchId }
+            .sorted {
+                ($0.batchPosition ?? Int.max) < ($1.batchPosition ?? Int.max)
+            }
+        let totalCount = max(latestBatchUpload.batchCount ?? batchUploads.count, batchUploads.count)
+        let completedCount = max(totalCount - batchUploads.count, 0)
+        let failedCount = batchUploads.filter(\.isFailed).count
+        let remainingProgress = batchUploads.reduce(0) { $0 + $1.displayProgress }
+        let progress = totalCount > 0
+            ? min(max((Double(completedCount) + remainingProgress) / Double(totalCount), 0), 1)
+            : 0
+
+        return PendingStoryUploadBatchSummary(
+            id: batchId,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            failedCount: failedCount,
+            progress: progress,
+            uploads: batchUploads
+        )
+    }
+
     func createImageUpload(
         upload: StoryImageUpload,
         contentMode: StoryImageContentMode,
         draft: PendingStoryUploadDraft,
-        textOverlays: [StoryTextOverlay]
+        textOverlays: [StoryTextOverlay],
+        batchId: String? = nil,
+        batchPosition: Int? = nil,
+        batchCount: Int? = nil
     ) throws -> PendingStoryUpload {
         try ensureDirectories()
         let id = Self.makePendingId()
@@ -618,6 +691,9 @@ final class PendingStoryUploadStore: ObservableObject {
 
         let pending = PendingStoryUpload(
             id: id,
+            batchId: batchId,
+            batchPosition: batchPosition,
+            batchCount: batchCount,
             assetKind: .image,
             pipeline: .imageDirectBlob,
             mediaFileURL: mediaURL,
@@ -646,7 +722,10 @@ final class PendingStoryUploadStore: ObservableObject {
         thumbnailData: Data,
         durationMs: Int?,
         draft: PendingStoryUploadDraft,
-        textOverlays: [StoryTextOverlay]
+        textOverlays: [StoryTextOverlay],
+        batchId: String? = nil,
+        batchPosition: Int? = nil,
+        batchCount: Int? = nil
     ) async throws -> PendingStoryUpload {
         let id = Self.makePendingId()
         let fileExtension = sourceURL.pathExtension.isEmpty ? "mp4" : sourceURL.pathExtension
@@ -661,6 +740,9 @@ final class PendingStoryUploadStore: ObservableObject {
 
         let pending = PendingStoryUpload(
             id: id,
+            batchId: batchId,
+            batchPosition: batchPosition,
+            batchCount: batchCount,
             assetKind: .video,
             pipeline: .videoTus,
             mediaFileURL: mediaURL,
@@ -759,6 +841,24 @@ final class PendingStoryUploadStore: ObservableObject {
 
     func upload(id: String) -> PendingStoryUpload? {
         uploads.first { $0.id == id }
+    }
+
+    func normalizeBatch(_ batchId: String, orderedUploadIds: [String]) {
+        guard !orderedUploadIds.isEmpty else {
+            return
+        }
+
+        for (offset, uploadId) in orderedUploadIds.enumerated() {
+            guard let index = uploads.firstIndex(where: {
+                $0.id == uploadId && $0.batchId == batchId
+            }) else {
+                continue
+            }
+            uploads[index].batchPosition = offset + 1
+            uploads[index].batchCount = orderedUploadIds.count
+            uploads[index].updatedAt = Date()
+        }
+        persist()
     }
 
     func feedByMergingPendingUploads(into feed: MobileFeedResponse) -> MobileFeedResponse {
