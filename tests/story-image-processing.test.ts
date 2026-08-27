@@ -3,11 +3,31 @@ import sharp from "sharp"
 
 import {
   createStoryCanvasImage,
+  storyImageDisplayDimensions,
   storyImageResizeOptions,
   storyImageThumbnailResizeOptions,
 } from "@/lib/story-image-processing"
 
 describe("story image processing", () => {
+  it("reports display-oriented dimensions for camera JPEG metadata", async () => {
+    const source = await sharp({
+      create: {
+        width: 1200,
+        height: 800,
+        channels: 3,
+        background: { r: 220, g: 30, b: 30 },
+      },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer()
+
+    await expect(storyImageDisplayDimensions(source)).resolves.toEqual({
+      width: 800,
+      height: 1200,
+    })
+  })
+
   it("uses transparent letterboxing for fit images", async () => {
     expect(storyImageResizeOptions("fit")).toMatchObject({
       fit: "contain",

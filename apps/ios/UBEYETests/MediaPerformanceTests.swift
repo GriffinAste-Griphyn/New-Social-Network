@@ -286,6 +286,22 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(size.height, 1_920)
     }
 
+    func testCameraPhotoMetadataUsesDisplayOrientedPixelDimensions() async throws {
+        let data = try makeOrientedJPEGData(width: 1_200, height: 800)
+        let detectedSize = await StoryUploadFileIO.imagePixelSize(of: data)
+        let size = try XCTUnwrap(detectedSize)
+
+        XCTAssertEqual(size.width, 800)
+        XCTAssertEqual(size.height, 1_200)
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: size.width,
+                height: size.height
+            ),
+            .top
+        )
+    }
+
     func testParsesEventNameAndMetadata() {
         let parsed = MediaPerformance.parsedEventForTesting(
             "video_first_frame reason=layer_ready delivery=hls cache=hit source=pooled url=clip.m3u8"
@@ -566,11 +582,18 @@ final class MediaPerformanceTests: XCTestCase {
                 width: 1_080,
                 height: 1_350
             ),
-            .center
+            .top
         )
         XCTAssertEqual(
             StoryCanvasVerticalPlacement.forMediaDimensions(
                 width: 1_920,
+                height: 1_080
+            ),
+            .center
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: 1_080,
                 height: 1_080
             ),
             .center

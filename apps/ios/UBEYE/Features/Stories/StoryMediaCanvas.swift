@@ -79,8 +79,6 @@ enum StoryCanvasVerticalPlacement: Equatable {
     case top
     case center
 
-    private static let fullHeightAspectTolerance: CGFloat = 0.015
-
     static func forMediaDimensions(width: Int?, height: Int?) -> Self {
         guard let width,
               let height,
@@ -89,10 +87,7 @@ enum StoryCanvasVerticalPlacement: Equatable {
             return .center
         }
 
-        let aspectRatio = CGFloat(width) / CGFloat(height)
-        return aspectRatio <= StoryMediaContract.aspectRatio + fullHeightAspectTolerance
-            ? .top
-            : .center
+        return width < height ? .top : .center
     }
 }
 

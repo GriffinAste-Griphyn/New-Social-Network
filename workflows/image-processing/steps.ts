@@ -142,6 +142,8 @@ export async function completeImageProcessingStep(
       checksum: output.checksum,
       width: output.width,
       height: output.height,
+      originalWidth: output.originalWidth ?? null,
+      originalHeight: output.originalHeight ?? null,
       processingStatus: "ready",
       providerStatus: "ready",
       providerPctComplete: 100,
@@ -186,6 +188,8 @@ export async function completeImageProcessingStep(
         checksum: output.checksum,
         width: output.width,
         height: output.height,
+        originalWidth: output.originalWidth ?? null,
+        originalHeight: output.originalHeight ?? null,
         processingStatus: "ready",
         status,
       })

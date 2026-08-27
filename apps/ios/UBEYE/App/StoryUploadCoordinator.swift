@@ -363,7 +363,21 @@ enum StoryUploadFileIO {
                 return nil
             }
 
-            return StoryImagePixelSize(width: width.intValue, height: height.intValue)
+            let rawOrientation = properties[kCGImagePropertyOrientation] as? NSNumber
+            let orientation = rawOrientation
+                .flatMap { CGImagePropertyOrientation(rawValue: $0.uint32Value) }
+                ?? .up
+            let swapsPixelAxes = switch orientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                true
+            default:
+                false
+            }
+
+            return StoryImagePixelSize(
+                width: swapsPixelAxes ? height.intValue : width.intValue,
+                height: swapsPixelAxes ? width.intValue : height.intValue
+            )
         }.value
     }
 

@@ -53,6 +53,27 @@ export function storyImageThumbnailResizeOptions() {
   return storyImageResizeOptions("fill")
 }
 
+export async function storyImageDisplayDimensions(sourceBody: Buffer) {
+  const metadata = await sharp(sourceBody, {
+    autoOrient: false,
+    failOn: "warning",
+    limitInputPixels: 80_000_000,
+  }).metadata()
+  if (!metadata.width || !metadata.height) {
+    return null
+  }
+
+  const swapsPixelAxes =
+    metadata.orientation != null &&
+    metadata.orientation >= 5 &&
+    metadata.orientation <= 8
+
+  return {
+    width: swapsPixelAxes ? metadata.height : metadata.width,
+    height: swapsPixelAxes ? metadata.width : metadata.height,
+  }
+}
+
 export function createVercelImageProcessingStoredAsset(input: {
   source: DirectStoryImageSourceInput
   width?: number | null
@@ -147,6 +168,7 @@ export async function createServerEncodedStoryImageAsset(input: {
     throw new StoryUploadError("The uploaded image failed its integrity check.")
   }
 
+  const originalDimensions = await storyImageDisplayDimensions(sourceBody)
   const image = await createStoryCanvasImage(sourceBody)
   const displayAvif = await encodeWithinBudget({
     qualities: [85, 80, 75, 70, 65],
@@ -246,6 +268,8 @@ export async function createServerEncodedStoryImageAsset(input: {
       checksum: createHash("sha256").update(display.body).digest("hex"),
       width: storyMediaContract.canvas.width,
       height: storyMediaContract.canvas.height,
+      originalWidth: originalDimensions?.width ?? null,
+      originalHeight: originalDimensions?.height ?? null,
       durationMs: null,
       processingStatus: "ready",
     }
