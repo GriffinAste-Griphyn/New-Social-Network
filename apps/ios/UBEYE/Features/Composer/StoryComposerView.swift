@@ -1598,6 +1598,8 @@ struct StoryComposerView: View {
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
     @State private var stagedMedia: PickedStoryMedia?
+    @State private var composerKeyboardHeight: CGFloat = 0
+    @State private var overlayFocusRequestAt: Date?
     @FocusState private var isOverlayInputFocused: Bool
     let isActive: Bool
     let quotedReply: QuotedStoryReply?
@@ -1774,6 +1776,12 @@ struct StoryComposerView: View {
                 finishOverlayInput()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateComposerKeyboard(from: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            updateComposerKeyboard(from: notification, forcedHeight: 0)
+        }
     }
 
     @ViewBuilder
@@ -1946,6 +1954,7 @@ struct StoryComposerView: View {
                         keyboardType: .default,
                         autocapitalization: .sentences,
                         autocorrectionDisabled: false,
+                        keyboardHeight: composerKeyboardHeight,
                         onSubmit: finishOverlayInput,
                         onTapToEdit: {
                             openOverlayInput(.text)
@@ -1971,6 +1980,7 @@ struct StoryComposerView: View {
                         keyboardType: .URL,
                         autocapitalization: .never,
                         autocorrectionDisabled: true,
+                        keyboardHeight: composerKeyboardHeight,
                         onSubmit: finishOverlayInput,
                         onTapToEdit: {
                             openOverlayInput(.link)
@@ -2014,6 +2024,8 @@ struct StoryComposerView: View {
         }
 
         overlayInputMode = mode
+        overlayFocusRequestAt = Date()
+        UBEYEFeedback.prepare(.selection)
         Task {
             try? await Task.sleep(for: .milliseconds(120))
             await MainActor.run {
@@ -2029,6 +2041,33 @@ struct StoryComposerView: View {
 
         isOverlayInputFocused = false
         overlayInputMode = nil
+    }
+
+    private func updateComposerKeyboard(
+        from notification: Notification,
+        forcedHeight: CGFloat? = nil
+    ) {
+        let measuredHeight: CGFloat
+        if let forcedHeight {
+            measuredHeight = forcedHeight
+        } else if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+            measuredHeight = max(0, UIScreen.main.bounds.maxY - frame.minY)
+        } else {
+            return
+        }
+
+        let height = measuredHeight > 1 ? measuredHeight : 0
+        if height > 0, let overlayFocusRequestAt {
+            MediaPerformance.measure(
+                "keyboard_latency surface=story_composer phase=will_change_frame",
+                since: overlayFocusRequestAt
+            )
+            self.overlayFocusRequestAt = nil
+        }
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        withAnimation(.easeOut(duration: duration)) {
+            composerKeyboardHeight = height
+        }
     }
 
     private func clearCurrentQuotedReply() {
@@ -2492,6 +2531,7 @@ private struct EditableStoryOverlayChip: View {
     let keyboardType: UIKeyboardType
     let autocapitalization: TextInputAutocapitalization
     let autocorrectionDisabled: Bool
+    let keyboardHeight: CGFloat
     let onSubmit: () -> Void
     let onTapToEdit: () -> Void
     let onPositionChanged: (Double, Double) -> Void
@@ -2511,7 +2551,7 @@ private struct EditableStoryOverlayChip: View {
             }
             .position(
                 x: size.width * CGFloat(positionX / 100),
-                y: size.height * CGFloat(positionY / 100)
+                y: resolvedCenterY
             )
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -2560,6 +2600,20 @@ private struct EditableStoryOverlayChip: View {
                         }
                     }
             )
+    }
+
+    private var resolvedCenterY: CGFloat {
+        let naturalCenterY = size.height * CGFloat(positionY / 100)
+        guard isEditing, keyboardHeight > 0 else {
+            return naturalCenterY
+        }
+        let halfHeight = max(measuredChipSize.height / 2, 24)
+        let minimumCenterY = halfHeight + 20
+        let maximumCenterY = max(
+            minimumCenterY,
+            size.height - keyboardHeight - halfHeight - 18
+        )
+        return min(max(naturalCenterY, minimumCenterY), maximumCenterY)
     }
 
     private var chip: some View {

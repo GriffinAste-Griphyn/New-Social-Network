@@ -845,46 +845,55 @@ final class MediaPerformanceTests: XCTestCase {
         )
     }
 
-    func testStoryDeletionPolicyReturnsOnlyTheSubsequentItem() {
+    func testStoryDeletionPolicyPrefersNextThenPreviousItem() {
         let itemIDs = ["first", "current", "next"]
 
         XCTAssertEqual(
-            StoryDeletionPolicy.subsequentItemID(
+            StoryDeletionPolicy.replacementItemID(
                 deleting: "current",
                 from: itemIDs
             ),
             "next"
         )
-        XCTAssertNil(
-            StoryDeletionPolicy.subsequentItemID(
+        XCTAssertEqual(
+            StoryDeletionPolicy.replacementItemID(
                 deleting: "next",
                 from: itemIDs
-            )
+            ),
+            "current"
         )
         XCTAssertNil(
-            StoryDeletionPolicy.subsequentItemID(
+            StoryDeletionPolicy.replacementItemID(
                 deleting: "missing",
                 from: itemIDs
             )
         )
     }
 
-    func testStoryMediaBufferKeepsCurrentAndNextItemsMounted() {
+    func testStoryMediaBufferAdaptsToResourceMode() {
         XCTAssertEqual(
             StoryMediaBufferPolicy.indices(activeIndex: 0, itemCount: 4),
             [0, 1]
         )
         XCTAssertEqual(
             StoryMediaBufferPolicy.indices(activeIndex: 2, itemCount: 4),
-            [2, 3]
+            [2, 3, 1]
         )
         XCTAssertEqual(
             StoryMediaBufferPolicy.indices(activeIndex: 3, itemCount: 4),
-            [3]
+            [3, 2]
         )
         XCTAssertEqual(
             StoryMediaBufferPolicy.indices(activeIndex: 4, itemCount: 4),
             []
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 2, itemCount: 4, mode: .constrained),
+            [2, 3]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.indices(activeIndex: 2, itemCount: 4, mode: .critical),
+            [2]
         )
     }
 

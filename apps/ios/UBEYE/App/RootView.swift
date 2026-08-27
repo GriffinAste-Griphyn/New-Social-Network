@@ -35,7 +35,9 @@ private struct SessionRestoreView: View {
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var network = NetworkQualityMonitor.shared
+    @ObservedObject private var resourceMonitor = UBEYEResourceMonitor.shared
     @StateObject private var storyUploadNotice = StoryUploadNoticeStore()
     @StateObject private var storyUploadCoordinator = StoryUploadCoordinator()
     @State private var selectedTab: AppTab = .home
@@ -185,7 +187,12 @@ struct MainTabView: View {
         }
 
         UBEYEFeedback.selection()
-        withAnimation(.snappy(duration: 0.2)) {
+        withAnimation(
+            UBEYEMotion.reveal(
+                reduceMotion: reduceMotion,
+                mode: resourceMonitor.mode
+            )
+        ) {
             selectedTab = tab
         }
     }

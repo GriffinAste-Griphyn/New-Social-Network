@@ -27,25 +27,91 @@ enum UBEYEMetrics {
     static let compactTopAvatar: CGFloat = 38
 }
 
+@MainActor
 enum UBEYEFeedback {
+    enum Vocabulary {
+        case selection
+        case snap
+        case boundary
+        case success
+        case warning
+        case failure
+    }
+
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+    private static let lightImpactGenerator = UIImpactFeedbackGenerator(style: .light)
+    private static let mediumImpactGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private static let heavyImpactGenerator = UIImpactFeedbackGenerator(style: .heavy)
+    private static let rigidImpactGenerator = UIImpactFeedbackGenerator(style: .rigid)
+    private static let softImpactGenerator = UIImpactFeedbackGenerator(style: .soft)
+    private static let notificationGenerator = UINotificationFeedbackGenerator()
+
+    static func prepare(_ vocabulary: Vocabulary = .selection) {
+        switch vocabulary {
+        case .selection:
+            selectionGenerator.prepare()
+        case .snap:
+            lightImpactGenerator.prepare()
+        case .boundary:
+            rigidImpactGenerator.prepare()
+        case .success, .warning, .failure:
+            notificationGenerator.prepare()
+        }
+    }
+
     static func selection() {
-        UISelectionFeedbackGenerator().selectionChanged()
+        selectionGenerator.selectionChanged()
+        selectionGenerator.prepare()
     }
 
     static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light, intensity: CGFloat = 0.85) {
-        UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: intensity)
+        let generator = impactGenerator(for: style)
+        generator.impactOccurred(intensity: intensity)
+        generator.prepare()
+    }
+
+    static func snap() {
+        lightImpactGenerator.impactOccurred(intensity: 0.72)
+        lightImpactGenerator.prepare()
+    }
+
+    static func boundary() {
+        rigidImpactGenerator.impactOccurred(intensity: 0.88)
+        rigidImpactGenerator.prepare()
     }
 
     static func success() {
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        notificationGenerator.notificationOccurred(.success)
+        notificationGenerator.prepare()
     }
 
     static func warning() {
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        notificationGenerator.notificationOccurred(.warning)
+        notificationGenerator.prepare()
     }
 
     static func error() {
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        notificationGenerator.notificationOccurred(.error)
+        notificationGenerator.prepare()
+    }
+
+    private static func impactGenerator(
+        for style: UIImpactFeedbackGenerator.FeedbackStyle
+    ) -> UIImpactFeedbackGenerator {
+        switch style {
+        case .light:
+            lightImpactGenerator
+        case .medium:
+            mediumImpactGenerator
+        case .heavy:
+            heavyImpactGenerator
+        case .rigid:
+            rigidImpactGenerator
+        case .soft:
+            softImpactGenerator
+        @unknown default:
+            lightImpactGenerator
+        }
     }
 }
 
@@ -351,6 +417,14 @@ enum MediaPerformance {
         "media_qoe_config",
         "image_derivatives_prepared",
         "image_derivative_upload_failed",
+        "image_ready",
+        "interaction_latency",
+        "keyboard_latency",
+        "gesture_outcome",
+        "frame_hitch",
+        "prefetch_intent",
+        "resource_mode",
+        "undo_action",
         "thumbnail_generation_swap",
         "background_upload_resume",
         "silent_push_prewarm",
@@ -511,10 +585,6 @@ enum MediaPerformance {
         for name: String,
         eventMetadata: [String: String]
     ) -> [String: String] {
-        guard name.hasPrefix("video_") else {
-            return eventMetadata
-        }
-
         let build = Bundle.main.object(
             forInfoDictionaryKey: kCFBundleVersionKey as String
         ) as? String ?? "unknown"
@@ -535,6 +605,7 @@ enum MediaPerformance {
             "device_class": deviceClass,
             "network_class": NetworkQualityMonitor.shared.telemetryNetworkClass,
             "os": UIDevice.current.systemVersion,
+            "resource_mode": UBEYEResourceMonitor.shared.mode.rawValue,
         ]
         for (key, value) in eventMetadata where metadata.count < 20 {
             metadata[key] = value
@@ -974,11 +1045,13 @@ final class NetworkQualityMonitor: ObservableObject {
     }
 
     private var shouldLimitPreheating: Bool {
-        isLimitedPath || measuredThroughputBitsPerSecond.map { $0 < 2_500_000 } == true
+        isLimitedPath ||
+            measuredThroughputBitsPerSecond.map { $0 < 2_500_000 } == true ||
+            UBEYEResourceMonitor.shared.mode != .standard
     }
 
     private var shouldLimitStreamingQuality: Bool {
-        isConstrained
+        isConstrained || UBEYEResourceMonitor.shared.mode != .standard
     }
 
     var imagePreheatLimit: Int {
@@ -1507,6 +1580,25 @@ final class MediaImageCache {
         drainPreheatQueue()
     }
 
+    func updatePredictivePreheat(_ urls: [URL], limit: Int = 12) {
+        var seen = Set<URL>()
+        let orderedURLs = urls
+            .prefix(max(limit, 0))
+            .filter { seen.insert($0).inserted }
+        let desiredURLs = Set(orderedURLs)
+        guard !desiredURLs.isEmpty else { return }
+
+        preheatQueue.removeAll { url in
+            guard !desiredURLs.contains(url) else { return false }
+            queuedPreheatURLs.remove(url)
+            return true
+        }
+        prioritizePreheat(Array(orderedURLs))
+        MediaPerformance.mark(
+            "prefetch_intent kind=image desired=\(desiredURLs.count) queued=\(preheatQueue.count)"
+        )
+    }
+
     private func prioritizePreheat(_ urls: [URL]) {
         for url in urls.reversed() {
             guard cachedImage(for: url) == nil,
@@ -1879,7 +1971,7 @@ enum MediaPreheater {
     ) {
         let nearbyItems = orderedNearbyStoryItems(in: stack, around: index)
         let imageUrls = nearbyItems.flatMap { item -> [URL] in
-            var urls: [URL] = []
+            var urls: [URL] = [item.playbackPlaceholderUrl].compactMap { $0 }
             if let thumbnailUrl = item.playbackThumbnailUrl {
                 urls.append(thumbnailUrl)
             }
@@ -1888,12 +1980,13 @@ enum MediaPreheater {
             }
             return urls
         }
-        MediaImageCache.shared.preheat(
+        MediaImageCache.shared.updatePredictivePreheat(
             imageUrls,
             limit: min(12, NetworkQualityMonitor.shared.imagePreheatLimit)
         )
 
-        guard preheatVideoAssets else {
+        guard preheatVideoAssets,
+              UBEYEResourceMonitor.shared.allowsSpeculativeMedia else {
             return
         }
 
@@ -1910,13 +2003,22 @@ enum MediaPreheater {
         }
     }
 
+    @MainActor
     private static func orderedNearbyStoryItems(in stack: StoryStack, around index: Int) -> [StoryStackItem] {
         guard stack.items.indices.contains(index) else {
             return []
         }
 
+        let candidates: [Int] = switch UBEYEResourceMonitor.shared.mode {
+        case .standard:
+            [index, index + 1, index - 1, index + 2]
+        case .constrained:
+            [index, index + 1]
+        case .critical:
+            [index]
+        }
         var seen = Set<Int>()
-        return [index, index + 1, index - 1, index + 2]
+        return candidates
             .filter { candidate in
                 stack.items.indices.contains(candidate) && seen.insert(candidate).inserted
             }
@@ -2101,6 +2203,7 @@ struct StoryPressPrewarmModifier: ViewModifier {
                         return
                     }
                     didPrewarmCurrentPress = true
+                    UBEYEFeedback.prepare(.selection)
                     action()
                 }
                 .onEnded { _ in

@@ -45,19 +45,36 @@ enum StoryNavigationPolicy {
 }
 
 enum StoryDismissGesturePolicy {
+    static func distanceThreshold(viewportHeight: CGFloat) -> CGFloat {
+        min(max(viewportHeight * 0.14, 72), 132)
+    }
+
     static func shouldDismiss(
         translation: CGFloat,
         predictedTranslation: CGFloat,
         viewportHeight: CGFloat
     ) -> Bool {
-        let distanceThreshold = min(max(viewportHeight * 0.14, 72), 132)
+        let distanceThreshold = distanceThreshold(viewportHeight: viewportHeight)
         let velocityThreshold = min(max(viewportHeight * 0.28, 180), 320)
         return translation >= distanceThreshold || predictedTranslation >= velocityThreshold
+    }
+
+    static func progress(translation: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        min(max(translation / max(viewportHeight * 0.55, 1), 0), 1)
+    }
+
+    static func displayedOffset(translation: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        let positiveTranslation = max(translation, 0)
+        let resistanceStart = max(viewportHeight * 0.62, 1)
+        guard positiveTranslation > resistanceStart else {
+            return positiveTranslation
+        }
+        return resistanceStart + (positiveTranslation - resistanceStart) * 0.2
     }
 }
 
 enum StoryDeletionPolicy {
-    static func subsequentItemID(
+    static func replacementItemID(
         deleting itemID: String,
         from orderedItemIDs: [String]
     ) -> String? {
@@ -66,16 +83,21 @@ enum StoryDeletionPolicy {
         }
 
         return orderedItemIDs[safe: deletedIndex + 1]
+            ?? orderedItemIDs[safe: deletedIndex - 1]
     }
 }
 
 struct StoryMediaBufferPolicy {
-    static func indices(activeIndex: Int, itemCount: Int) -> [Int] {
-        guard itemCount > 0, (0..<itemCount).contains(activeIndex) else {
-            return []
-        }
-
-        return [activeIndex, activeIndex + 1].filter { $0 < itemCount }
+    static func indices(
+        activeIndex: Int,
+        itemCount: Int,
+        mode: UBEYEAdaptiveMode = .standard
+    ) -> [Int] {
+        UBEYEAdaptivePolicy.storyBufferIndices(
+            activeIndex: activeIndex,
+            itemCount: itemCount,
+            mode: mode
+        )
     }
 }
 
@@ -92,6 +114,13 @@ private struct StoryTransitionMeasurement {
     let sourceKind: SocialAssetKind
     let destinationKind: SocialAssetKind
     let startedAt: Date
+}
+
+private struct PendingStoryDeletion {
+    let id = UUID()
+    let item: StoryStackItem
+    let originalStack: StoryStack
+    let originalIndex: Int
 }
 
 struct StoryViewerPageState {
@@ -471,7 +500,7 @@ final class StoryStackStore: ObservableObject {
         }
     }
 
-    func delete(item: StoryStackItem, api: APIClient) async -> Bool {
+    func commitDelete(item: StoryStackItem, api: APIClient) async -> Bool {
         guard !PendingStoryUploadStore.isPendingStoryId(item.id) else {
             return false
         }
@@ -482,7 +511,6 @@ final class StoryStackStore: ObservableObject {
             let _: BasicOkResponse = try await api.delete("/api/mobile/stories/\(item.id)", body: EmptyPayload())
             api.invalidateStoryStacks(ids: [item.id, "my-story", stack?.id].compactMap { $0 })
             api.invalidateMobileFeedCache()
-            removeDeletedItem(item.id)
             NotificationCenter.default.post(name: .storyDidDelete, object: item.id)
             return true
         } catch {
@@ -491,7 +519,7 @@ final class StoryStackStore: ObservableObject {
         }
     }
 
-    private func removeDeletedItem(_ itemID: String) {
+    func removeItemForUndo(_ itemID: String) {
         guard let stack else {
             return
         }
@@ -507,6 +535,10 @@ final class StoryStackStore: ObservableObject {
         storyReplies.removeValue(forKey: itemID)
         storyViewerPages.removeValue(forKey: itemID)
         viewerErrors.removeValue(forKey: itemID)
+    }
+
+    func restoreStackForUndo(_ restoredStack: StoryStack) {
+        stack = restoredStack
     }
 
     func report(item: StoryStackItem, reason: StoryReportReason, details: String?, api: APIClient) async -> Bool {
@@ -587,6 +619,9 @@ struct StoryStackViewer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @ObservedObject private var resourceMonitor = UBEYEResourceMonitor.shared
     @StateObject private var store = StoryStackStore()
     @State private var storyTimerState = StoryTimerState()
     @State private var index = 0
@@ -609,6 +644,13 @@ struct StoryStackViewer: View {
     @State private var isChromeVisible = true
     @State private var showsReactionBurst = false
     @State private var reactionBurstTask: Task<Void, Never>?
+    @State private var pendingDeletion: PendingStoryDeletion?
+    @State private var deletionCommitTask: Task<Void, Never>?
+    @State private var gestureAxis: GestureAxisIntent = .undecided
+    @State private var crossedDismissThreshold = false
+    @State private var showsGestureHint = false
+    @State private var gestureHintDismissTask: Task<Void, Never>?
+    @State private var keyboardRequestStartedAt: Date?
     @AppStorage("ubeye.story-playback-muted") private var isStoryPlaybackMuted = false
     @GestureState private var isPressingStoryMedia = false
     @FocusState private var isReplyFieldFocused: Bool
@@ -619,8 +661,8 @@ struct StoryStackViewer: View {
     )
     private let storyAvatarSize: CGFloat = 42
     private let storyActionSize: CGFloat = 42
-    private let ownerStatsHeight: CGFloat = 64
-    private let replyComposerHeight: CGFloat = 46
+    @ScaledMetric(relativeTo: .body) private var scaledOwnerStatsHeight: CGFloat = 64
+    @ScaledMetric(relativeTo: .body) private var scaledReplyComposerHeight: CGFloat = 46
     private let bottomChromeInset: CGFloat = 16
     private let bottomChromeScreenGap: CGFloat = 20
     private let keyboardComposerGap: CGFloat = 8
@@ -630,18 +672,20 @@ struct StoryStackViewer: View {
     private let verticalSwipeMinimumDistance: CGFloat = 58
     private let verticalSwipeDominanceRatio: CGFloat = 1.15
 
+    private var ownerStatsHeight: CGFloat { min(scaledOwnerStatsHeight, 84) }
+    private var replyComposerHeight: CGFloat { min(scaledReplyComposerHeight, 62) }
+
     var body: some View {
         GeometryReader { proxy in
             let safeAreaInsets = resolvedSafeAreaInsets(proxy.safeAreaInsets)
 
             ZStack {
-                Color.black
+                Color.black.opacity(1 - Double(storyDismissProgress) * 0.34)
 
                 if isClearingCompletedStory {
                     Color.black
                 } else if store.isLoading && store.stack == nil {
-                    ProgressView()
-                        .tint(.white)
+                    StoryViewerLoadingPlaceholder()
                 } else if let error = store.error, store.stack == nil {
                     EmptyStateView(title: "Story unavailable", message: error, systemImage: "exclamationmark.triangle")
                         .padding()
@@ -742,6 +786,38 @@ struct StoryStackViewer: View {
                     .offset(y: max(verticalDragOffset, 0))
                     .scaleEffect(storyDismissScale)
                     .opacity(storyDismissOpacity)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: reduceMotion ? 0 : storyDismissProgress * 24,
+                            style: .continuous
+                        )
+                    )
+                }
+
+                if showsGestureHint {
+                    Button {
+                        dismissGestureHint()
+                    } label: {
+                        UBEYEContextualHint(
+                            systemImage: "hand.tap",
+                            message: "Tap sides to move · Double-tap to react · Swipe down to close"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, max(safeAreaInsets.bottom + 84, 104))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(20)
+                }
+
+                if pendingDeletion != nil {
+                    storyDeletionUndoToast
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, max(safeAreaInsets.bottom + 22, 34))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(30)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -757,6 +833,8 @@ struct StoryStackViewer: View {
         .onAppear {
             mediaEngine.storyViewerDidAppear()
             AppAudioSession.configureForVideoPlayback()
+            InteractionFrameMonitor.shared.start(surface: "story_viewer")
+            UBEYEFeedback.prepare(.selection)
         }
         .task {
             let storyOpenMetadata = "id=\(route.id) source=\(String(describing: route.source))"
@@ -774,6 +852,10 @@ struct StoryStackViewer: View {
                 upload: false
             )
             MediaPerformance.measure("story_open \(storyOpenMetadata)", since: route.openedAt)
+            MediaPerformance.measure(
+                "interaction_latency surface=story_viewer action=open source=\(String(describing: route.source))",
+                since: route.openedAt
+            )
             if route.source != .ownStory {
                 await store.loadFollows(api: api)
             }
@@ -783,6 +865,7 @@ struct StoryStackViewer: View {
             if let stack = store.stack {
                 mediaEngine.prepare(stack: stack, around: index, activeIdentity: nil)
             }
+            presentGestureHintIfNeeded()
         }
         .onReceive(pendingStoryUploads.$uploads) { _ in
             guard route.id == "my-story" else {
@@ -817,6 +900,14 @@ struct StoryStackViewer: View {
         .onChange(of: shouldPauseStoryProgress) { _, isPaused in
             storyTimerState.setPaused(isPaused)
         }
+        .onChange(of: isReplyFieldFocused) { _, isFocused in
+            if isFocused {
+                keyboardRequestStartedAt = Date()
+                UBEYEFeedback.prepare(.selection)
+            } else if keyboardHeight == 0 {
+                keyboardRequestStartedAt = nil
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             updateKeyboardHeight(from: notification)
         }
@@ -828,8 +919,10 @@ struct StoryStackViewer: View {
             reportConfirmationDismissTask?.cancel()
             completionDismissTask?.cancel()
             reactionBurstTask?.cancel()
+            gestureHintDismissTask?.cancel()
             storyTimerState.stop()
             mediaEngine.storyViewerDidDisappear()
+            InteractionFrameMonitor.shared.stop(surface: "story_viewer")
         }
         .fullScreenCover(item: $reportingItem) { item in
             ReportStoryReasonView(
@@ -847,7 +940,7 @@ struct StoryStackViewer: View {
         ) {
             Button("Delete story", role: .destructive) {
                 if let item = deleteConfirmationItem {
-                    Task { await deleteStory(item) }
+                    beginDeleteStory(item)
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -861,7 +954,8 @@ struct StoryStackViewer: View {
     private func storyMediaBuffer(stack: StoryStack, activeIndex: Int) -> some View {
         let bufferedMedia = StoryMediaBufferPolicy.indices(
             activeIndex: activeIndex,
-            itemCount: stack.items.count
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
         ).compactMap { itemIndex -> BufferedStoryMedia? in
             guard let item = stack.items[safe: itemIndex] else {
                 return nil
@@ -973,15 +1067,18 @@ struct StoryStackViewer: View {
                 )
                 .id(item.id)
             } else {
-                CachedAsyncImage(url: item.playbackMediaUrl) { image in
+                ProgressiveCachedImage(
+                    placeholderURL: item.playbackPlaceholderUrl,
+                    thumbnailURL: item.playbackThumbnailUrl,
+                    fullURL: item.playbackMediaUrl
+                ) { image, _ in
                     StoryCanvasImage(image: image)
-                        .onAppear {
-                            if isActive {
-                                completeStoryTransitionIfNeeded(for: item)
-                            }
-                        }
                 } placeholder: {
-                    storyImagePlaceholder(item)
+                    StoryCanvasBackground()
+                } onReady: { _ in
+                    if isActive {
+                        completeStoryTransitionIfNeeded(for: item)
+                    }
                 }
                 .onChange(of: isActive) { _, nextIsActive in
                     guard nextIsActive,
@@ -1355,7 +1452,7 @@ struct StoryStackViewer: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(stack.creator)
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.headline.weight(.medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
 
@@ -1365,7 +1462,7 @@ struct StoryStackViewer: View {
                 }
 
                 Text(item.postedAt)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -1378,7 +1475,7 @@ struct StoryStackViewer: View {
                 isMuted: isStoryPlaybackMuted,
                 canDeleteStory: !PendingStoryUploadStore.isPendingStoryId(item.id),
                 actionSize: storyActionSize,
-                isPerformingAction: store.isPerformingAction,
+                isPerformingAction: store.isPerformingAction || pendingDeletion != nil,
                 deleteStory: {
                     deleteConfirmationItem = item
                     isDeleteConfirmationPresented = true
@@ -1411,35 +1508,137 @@ struct StoryStackViewer: View {
         .frame(maxWidth: .infinity, minHeight: storyAvatarSize, alignment: .leading)
     }
 
-    private func deleteStory(_ item: StoryStackItem) async {
-        let subsequentItemID = StoryDeletionPolicy.subsequentItemID(
-            deleting: item.id,
-            from: store.stack?.items.map(\.id) ?? []
-        )
-
-        guard await store.delete(item: item, api: api) else {
+    private func beginDeleteStory(_ item: StoryStackItem) {
+        guard pendingDeletion == nil,
+              let originalStack = store.stack,
+              let originalIndex = originalStack.items.firstIndex(where: { $0.id == item.id }) else {
             return
         }
 
+        let replacementItemID = StoryDeletionPolicy.replacementItemID(
+            deleting: item.id,
+            from: originalStack.items.map(\.id)
+        )
+        let pending = PendingStoryDeletion(
+            item: item,
+            originalStack: originalStack,
+            originalIndex: originalIndex
+        )
+        pendingDeletion = pending
         deleteConfirmationItem = nil
         ownerSheet = nil
+        store.removeItemForUndo(item.id)
+        UBEYEFeedback.warning()
+        MediaPerformance.mark("undo_action kind=story_delete phase=offered")
 
-        guard let subsequentItemID,
-              let stack = store.stack,
-              let nextIndex = stack.items.firstIndex(where: { $0.id == subsequentItemID }),
-              let nextItem = stack.items[safe: nextIndex] else {
-            dismiss()
-            return
+        if let replacementItemID,
+           let stack = store.stack,
+           let nextIndex = stack.items.firstIndex(where: { $0.id == replacementItemID }),
+           let nextItem = stack.items[safe: nextIndex] {
+            index = nextIndex
+            store.markActiveItem(nextItem)
+            resetStoryTimer(for: nextItem)
+            mediaEngine.prepare(
+                stack: stack,
+                around: nextIndex,
+                activeIdentity: nextItem.isPlayableVideo ? nextItem.playbackIdentity : nil
+            )
+        } else {
+            isClearingCompletedStory = true
+            storyTimerState.stop()
         }
 
-        index = nextIndex
-        store.markActiveItem(nextItem)
-        resetStoryTimer(for: nextItem)
-        mediaEngine.prepare(
-            stack: stack,
-            around: nextIndex,
-            activeIdentity: nextItem.isPlayableVideo ? nextItem.playbackIdentity : nil
+        deletionCommitTask?.cancel()
+        deletionCommitTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4.5))
+            guard !Task.isCancelled else { return }
+            await commitPendingDeletion(id: pending.id)
+        }
+    }
+
+    private func undoStoryDeletion() {
+        guard let pendingDeletion else { return }
+        deletionCommitTask?.cancel()
+        deletionCommitTask = nil
+        store.restoreStackForUndo(pendingDeletion.originalStack)
+        index = min(
+            pendingDeletion.originalIndex,
+            max(pendingDeletion.originalStack.items.count - 1, 0)
         )
+        isClearingCompletedStory = false
+        if let restoredItem = pendingDeletion.originalStack.items[safe: index] {
+            store.markActiveItem(restoredItem)
+            resetStoryTimer(for: restoredItem)
+            mediaEngine.prepare(
+                stack: pendingDeletion.originalStack,
+                around: index,
+                activeIdentity: restoredItem.isPlayableVideo ? restoredItem.playbackIdentity : nil
+            )
+        }
+        withAnimation(UBEYEMotion.reveal(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
+            self.pendingDeletion = nil
+        }
+        UBEYEFeedback.success()
+        MediaPerformance.mark("undo_action kind=story_delete phase=undone")
+    }
+
+    private func commitPendingDeletion(id: UUID) async {
+        guard let pendingDeletion, pendingDeletion.id == id else { return }
+        let didDelete = await store.commitDelete(item: pendingDeletion.item, api: api)
+        guard self.pendingDeletion?.id == id else { return }
+
+        if didDelete {
+            MediaPerformance.mark("undo_action kind=story_delete phase=committed")
+            withAnimation(.easeOut(duration: 0.14)) {
+                self.pendingDeletion = nil
+            }
+            if store.stack?.items.isEmpty != false {
+                dismiss()
+            }
+        } else {
+            store.restoreStackForUndo(pendingDeletion.originalStack)
+            index = min(
+                pendingDeletion.originalIndex,
+                max(pendingDeletion.originalStack.items.count - 1, 0)
+            )
+            isClearingCompletedStory = false
+            self.pendingDeletion = nil
+            if let restoredItem = pendingDeletion.originalStack.items[safe: index] {
+                store.markActiveItem(restoredItem)
+                resetStoryTimer(for: restoredItem)
+                mediaEngine.prepare(
+                    stack: pendingDeletion.originalStack,
+                    around: index,
+                    activeIdentity: restoredItem.isPlayableVideo ? restoredItem.playbackIdentity : nil
+                )
+            }
+            UBEYEFeedback.error()
+        }
+    }
+
+    private var storyDeletionUndoToast: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "trash")
+                .font(.body.weight(.bold))
+            Text("Story removed")
+                .font(.body.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button("Undo") {
+                undoStoryDeletion()
+            }
+            .font(.body.weight(.bold))
+            .foregroundStyle(Color.ubeyeYellow)
+            .frame(minWidth: 44, minHeight: 44)
+        }
+        .foregroundStyle(.white)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .frame(minHeight: 52)
+        .background(.black.opacity(reduceTransparency ? 0.96 : 0.82), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
+        .accessibilityElement(children: .contain)
     }
 
     private func discoverFollowButton() -> some View {
@@ -1483,6 +1682,33 @@ struct StoryStackViewer: View {
             .gesture(storyNavigationGesture(item: item, viewportWidth: viewportWidth))
             .simultaneousGesture(pressToPauseGesture)
             .ignoresSafeArea()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Story viewer")
+            .accessibilityValue(storyAccessibilityValue)
+            .accessibilityHint("Use actions to move, react, show controls, or close")
+            .accessibilityAction(named: Text("Previous story")) {
+                move(-1, item: item)
+            }
+            .accessibilityAction(named: Text("Next story")) {
+                move(1, item: item)
+            }
+            .accessibilityAction(named: Text("React with heart")) {
+                reactToStory(item)
+            }
+            .accessibilityAction(named: Text(isChromeVisible ? "Hide controls" : "Show controls")) {
+                isChromeVisible.toggle()
+            }
+            .accessibilityAction(named: Text("Close stories")) {
+                dismissStoryFromSwipe(item: item)
+            }
+    }
+
+    private var storyAccessibilityValue: String {
+        guard let stack = store.stack,
+              let item = stack.items[safe: index] else {
+            return "Loading"
+        }
+        return "\(stack.creator), story \(index + 1) of \(stack.items.count), \(item.assetKind.rawValue)"
     }
 
     private var pressToPauseGesture: some Gesture {
@@ -1555,7 +1781,7 @@ struct StoryStackViewer: View {
     }
 
     private func replyComposer(_ item: StoryStackItem) -> some View {
-        let fieldBackgroundOpacity = isReplyFieldFocused ? 0.62 : 0.48
+        let fieldBackgroundOpacity = reduceTransparency ? 0.92 : (isReplyFieldFocused ? 0.62 : 0.48)
         let fieldBorderOpacity = isReplyFieldFocused ? 0.24 : 0.16
 
         return HStack(spacing: 10) {
@@ -1565,7 +1791,7 @@ struct StoryStackViewer: View {
                 prompt: Text("Reply").foregroundStyle(.white.opacity(0.86))
             )
                 .textFieldStyle(.plain)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 46)
                 .background(.black.opacity(fieldBackgroundOpacity), in: Capsule())
@@ -1752,14 +1978,42 @@ struct StoryStackViewer: View {
     }
 
     private var verticalStorySwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 28, coordinateSpace: .local)
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
-                guard ownerSheet == nil,
-                      value.translation.height > 0,
-                      abs(value.translation.height) > abs(value.translation.width) * verticalSwipeDominanceRatio else {
+                guard ownerSheet == nil else {
                     return
                 }
-                verticalDragOffset = value.translation.height
+                let axis = GestureIntentPolicy.axis(
+                    translation: value.translation,
+                    minimumDistance: 8,
+                    dominanceRatio: verticalSwipeDominanceRatio
+                )
+                if gestureAxis == .undecided, axis != .undecided {
+                    gestureAxis = axis
+                }
+                guard gestureAxis == .vertical,
+                      value.translation.height > 0 else {
+                    return
+                }
+
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    verticalDragOffset = StoryDismissGesturePolicy.displayedOffset(
+                        translation: value.translation.height,
+                        viewportHeight: viewportHeight
+                    )
+                }
+
+                let crossedThreshold = value.translation.height >= StoryDismissGesturePolicy.distanceThreshold(
+                    viewportHeight: viewportHeight
+                )
+                if crossedThreshold, !crossedDismissThreshold {
+                    crossedDismissThreshold = true
+                    UBEYEFeedback.snap()
+                } else if !crossedThreshold, crossedDismissThreshold {
+                    crossedDismissThreshold = false
+                }
             }
             .onEnded { value in
                 handleVerticalStorySwipe(value)
@@ -1767,6 +2021,10 @@ struct StoryStackViewer: View {
     }
 
     private func handleVerticalStorySwipe(_ value: DragGesture.Value) {
+        defer {
+            gestureAxis = .undecided
+            crossedDismissThreshold = false
+        }
         guard ownerSheet == nil,
               let stack = store.stack,
               let item = stack.items[safe: index] else {
@@ -1775,21 +2033,28 @@ struct StoryStackViewer: View {
 
         let verticalDistance = value.translation.height
         let horizontalDistance = value.translation.width
-        guard abs(verticalDistance) >= verticalSwipeMinimumDistance,
+        guard gestureAxis == .vertical,
+              abs(verticalDistance) >= verticalSwipeMinimumDistance,
               abs(verticalDistance) > abs(horizontalDistance) * verticalSwipeDominanceRatio else {
+            MediaPerformance.mark("gesture_outcome surface=story axis=unclaimed outcome=ignored")
+            withAnimation(UBEYEMotion.interactive(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
+                verticalDragOffset = 0
+            }
             return
         }
 
         if verticalDistance < 0 {
             verticalDragOffset = 0
+            MediaPerformance.mark("gesture_outcome surface=story axis=vertical direction=up outcome=reply_or_dismiss")
             handleStorySwipeUp(stack: stack, item: item)
         } else if StoryDismissGesturePolicy.shouldDismiss(
             translation: verticalDistance,
             predictedTranslation: value.predictedEndTranslation.height,
             viewportHeight: viewportHeight
         ) {
-            UBEYEFeedback.impact(.light)
-            withAnimation(reduceMotion ? .easeOut(duration: 0.08) : .easeOut(duration: 0.14)) {
+            UBEYEFeedback.boundary()
+            MediaPerformance.mark("gesture_outcome surface=story axis=vertical direction=down outcome=dismissed")
+            withAnimation(UBEYEMotion.interactive(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
                 verticalDragOffset = viewportHeight
             }
             Task { @MainActor in
@@ -1797,7 +2062,8 @@ struct StoryStackViewer: View {
                 dismissStoryFromSwipe(item: item)
             }
         } else {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.1) : .spring(response: 0.28, dampingFraction: 0.82)) {
+            MediaPerformance.mark("gesture_outcome surface=story axis=vertical direction=down outcome=cancelled")
+            withAnimation(UBEYEMotion.interactive(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
                 verticalDragOffset = 0
             }
         }
@@ -1832,7 +2098,10 @@ struct StoryStackViewer: View {
 
         guard case let .move(to: nextIndex) = action else {
             if action == .finish {
+                UBEYEFeedback.boundary()
                 finishCurrentItem(item)
+            } else if action == .stay {
+                UBEYEFeedback.boundary()
             }
             return
         }
@@ -1846,7 +2115,8 @@ struct StoryStackViewer: View {
 
         let targetWasBuffered = StoryMediaBufferPolicy.indices(
             activeIndex: index,
-            itemCount: stack.items.count
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
         ).contains(nextIndex)
         pendingTransitionMeasurement = StoryTransitionMeasurement(
             destinationItemId: next.id,
@@ -2055,6 +2325,13 @@ struct StoryStackViewer: View {
         let height = measuredHeight > 1 ? measuredHeight : 0
         let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
         let curve = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.intValue ?? 0
+        if height > 0, let keyboardRequestStartedAt {
+            MediaPerformance.measure(
+                "keyboard_latency surface=story_reply phase=will_change_frame",
+                since: keyboardRequestStartedAt
+            )
+            self.keyboardRequestStartedAt = nil
+        }
         setKeyboardHeight(height, duration: duration, curve: curve)
     }
 
@@ -2102,7 +2379,10 @@ struct StoryStackViewer: View {
     }
 
     private var storyDismissProgress: CGFloat {
-        min(max(verticalDragOffset / max(viewportHeight * 0.55, 1), 0), 1)
+        StoryDismissGesturePolicy.progress(
+            translation: verticalDragOffset,
+            viewportHeight: viewportHeight
+        )
     }
 
     private var storyDismissScale: CGFloat {
@@ -2177,6 +2457,80 @@ struct StoryStackViewer: View {
                 }
             }
         }
+    }
+
+    private func presentGestureHintIfNeeded() {
+        let hintKey = "story-navigation-v2"
+        guard route.source != .ownStory,
+              !voiceOverEnabled,
+              UBEYEContextualHintStore.shared.shouldShow(hintKey) else {
+            return
+        }
+
+        withAnimation(UBEYEMotion.reveal(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
+            showsGestureHint = true
+        }
+        gestureHintDismissTask?.cancel()
+        gestureHintDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4.5))
+            guard !Task.isCancelled else { return }
+            dismissGestureHint()
+        }
+    }
+
+    private func dismissGestureHint() {
+        gestureHintDismissTask?.cancel()
+        gestureHintDismissTask = nil
+        UBEYEContextualHintStore.shared.markSeen("story-navigation-v2")
+        withAnimation(UBEYEMotion.reveal(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
+            showsGestureHint = false
+        }
+    }
+}
+
+private struct StoryViewerLoadingPlaceholder: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [.black, Color.ubeyeNavy.opacity(0.9), .black],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    UBEYESkeletonCircle(size: 42)
+                    VStack(alignment: .leading, spacing: 7) {
+                        UBEYESkeletonLine(width: 116, height: 12)
+                        UBEYESkeletonLine(width: 72, height: 9)
+                    }
+                    Spacer()
+                    UBEYESkeletonCircle(size: 42)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 64)
+
+                Spacer()
+
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+                    .opacity(reduceMotion ? 0.75 : 1)
+
+                Spacer()
+
+                Capsule()
+                    .fill(.white.opacity(0.14))
+                    .frame(height: 46)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 34)
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading story")
     }
 }
 

@@ -40,6 +40,110 @@ final class UXPolishTests: XCTestCase {
         )
     }
 
+    func testGestureIntentWaitsForDominanceBeforeClaimingAxis() {
+        XCTAssertEqual(
+            GestureIntentPolicy.axis(translation: CGSize(width: 4, height: 5)),
+            .undecided
+        )
+        XCTAssertEqual(
+            GestureIntentPolicy.axis(translation: CGSize(width: 30, height: 8)),
+            .horizontal
+        )
+        XCTAssertEqual(
+            GestureIntentPolicy.axis(translation: CGSize(width: 8, height: 30)),
+            .vertical
+        )
+        XCTAssertEqual(
+            GestureIntentPolicy.axis(translation: CGSize(width: 20, height: 20)),
+            .undecided
+        )
+    }
+
+    func testStoryDismissProgressIsClampedAndRubberBandsPastViewport() {
+        XCTAssertEqual(
+            StoryDismissGesturePolicy.progress(translation: -30, viewportHeight: 800),
+            0
+        )
+        XCTAssertEqual(
+            StoryDismissGesturePolicy.progress(translation: 800, viewportHeight: 800),
+            1
+        )
+        XCTAssertLessThan(
+            StoryDismissGesturePolicy.displayedOffset(translation: 900, viewportHeight: 800),
+            900
+        )
+    }
+
+    func testAdaptivePolicyEscalatesForPowerThermalAndMemoryPressure() {
+        XCTAssertEqual(
+            UBEYEAdaptivePolicy.mode(
+                lowPowerMode: false,
+                thermalState: .nominal,
+                recentMemoryPressure: false,
+                limitedNetwork: false
+            ),
+            .standard
+        )
+        XCTAssertEqual(
+            UBEYEAdaptivePolicy.mode(
+                lowPowerMode: true,
+                thermalState: .nominal,
+                recentMemoryPressure: false,
+                limitedNetwork: false
+            ),
+            .constrained
+        )
+        XCTAssertEqual(
+            UBEYEAdaptivePolicy.mode(
+                lowPowerMode: false,
+                thermalState: .serious,
+                recentMemoryPressure: false,
+                limitedNetwork: false
+            ),
+            .critical
+        )
+        XCTAssertEqual(
+            UBEYEAdaptivePolicy.mode(
+                lowPowerMode: false,
+                thermalState: .nominal,
+                recentMemoryPressure: true,
+                limitedNetwork: false
+            ),
+            .critical
+        )
+    }
+
+    func testDirectionalPrefetchExpandsAheadAndReversesImmediately() {
+        var tracker = DirectionalPrefetchTracker()
+        let start = Date(timeIntervalSince1970: 100)
+        let first = tracker.record(
+            visibleIndex: 2,
+            itemCount: 10,
+            mode: .standard,
+            now: start
+        )
+        XCTAssertEqual(first.direction, .forward)
+        XCTAssertEqual(first.indices, [2, 3, 4, 5])
+
+        let fastForward = tracker.record(
+            visibleIndex: 4,
+            itemCount: 10,
+            mode: .standard,
+            now: start.addingTimeInterval(0.2)
+        )
+        XCTAssertEqual(fastForward.indices, [4, 5, 6, 7, 8])
+        XCTAssertGreaterThan(fastForward.velocityItemsPerSecond, 4)
+
+        let reverse = tracker.record(
+            visibleIndex: 3,
+            itemCount: 10,
+            mode: .constrained,
+            now: start.addingTimeInterval(0.4)
+        )
+        XCTAssertEqual(reverse.direction, .backward)
+        XCTAssertEqual(reverse.indices, [3, 2, 1])
+    }
+
     @MainActor
     func testQueuedFollowAndUnfollowCoalesceToLatestIntent() {
         let now = Date()

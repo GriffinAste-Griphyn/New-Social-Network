@@ -91,6 +91,37 @@ final class MediaEngine: ObservableObject {
         api.prefetchStoryStacks(ids: uniqueIds, refresh: refresh, limit: resolvedLimit)
     }
 
+    func updatePredictiveStoryIntent(
+        ids: [String],
+        api: APIClient,
+        direction: DirectionalPrefetchIntent.Direction,
+        velocityItemsPerSecond: Double
+    ) {
+        let uniqueIds = uniqueNonEmptyIds(ids)
+        guard !uniqueIds.isEmpty else { return }
+
+        visibleStackWarmTask?.cancel()
+        backgroundPrefetchTask?.cancel()
+        let mode = UBEYEResourceMonitor.shared.mode
+        let limit = min(uniqueIds.count, NetworkQualityMonitor.shared.stackPreheatLimit)
+        MediaPerformance.mark(
+            "prefetch_intent kind=story direction=\(direction.rawValue) velocity=\(String(format: "%.2f", velocityItemsPerSecond)) count=\(limit) mode=\(mode.rawValue)"
+        )
+
+        visibleStackWarmTask = Task { @MainActor [weak self, api] in
+            guard let self else { return }
+            let candidates = Array(uniqueIds.prefix(limit))
+            _ = await api.restoreCachedStoryStacks(ids: candidates, limit: limit)
+            guard !Task.isCancelled else { return }
+            if mode != .critical {
+                await prepareVisibleStoryStacks(ids: candidates, api: api)
+            }
+            guard !Task.isCancelled else { return }
+            api.prefetchStoryStacks(ids: candidates, refresh: false, limit: limit)
+            visibleStackWarmTask = nil
+        }
+    }
+
     func restoreAndPrefetchStoryStacks(
         ids: [String],
         api: APIClient,
@@ -311,7 +342,8 @@ final class MediaEngine: ObservableObject {
     private func scheduleOfflineHLSPreheat(
         sources: [StoryVideoPlaybackSource]
     ) {
-        guard !sources.isEmpty else {
+        guard !sources.isEmpty,
+              UBEYEResourceMonitor.shared.mode == .standard else {
             return
         }
 
@@ -370,8 +402,16 @@ final class MediaEngine: ObservableObject {
             return []
         }
 
+        let candidates: [Int] = switch UBEYEResourceMonitor.shared.mode {
+        case .standard:
+            [itemIndex, itemIndex + 1, itemIndex - 1, itemIndex + 2]
+        case .constrained:
+            [itemIndex, itemIndex + 1]
+        case .critical:
+            [itemIndex]
+        }
         var seen = Set<Int>()
-        return [itemIndex, itemIndex + 1, itemIndex - 1, itemIndex + 2]
+        return candidates
             .filter { index in
                 stack.items.indices.contains(index) && seen.insert(index).inserted
             }

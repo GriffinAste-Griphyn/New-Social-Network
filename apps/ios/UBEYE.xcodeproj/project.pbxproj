@@ -37,6 +37,7 @@
 		AD89FAD5C6EC764CC90397BC /* ThumbHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A17262BABB67CA0E2EA127 /* ThumbHash.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
 		B0CC9D5D484CEF3197B58B98 /* LegalDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05CEACE382715A96E0901076 /* LegalDocuments.swift */; };
+		BA00C19C362F7B055BDB7B43 /* InteractionPolish.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6903BE5F5D3EECA910C5BB /* InteractionPolish.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
 		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
@@ -66,6 +67,7 @@
 		12112239A2105E9146475DBB /* FollowingManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingManagementView.swift; sourceTree = "<group>"; };
 		1427E7CB5130FC83F36A8F19 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UBEYEApp.swift; sourceTree = "<group>"; };
+		1F6903BE5F5D3EECA910C5BB /* InteractionPolish.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPolish.swift; sourceTree = "<group>"; };
 		21255BE86F573D35C67EFC00 /* CreatorScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorScreens.swift; sourceTree = "<group>"; };
 		28486780B71D96C7D6EE5C30 /* MobileModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModels.swift; sourceTree = "<group>"; };
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 				062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */,
 				024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */,
 				78085C32E4F7CCB340157B82 /* HLSOfflineCache.swift */,
+				1F6903BE5F5D3EECA910C5BB /* InteractionPolish.swift */,
 				A6FC832199482683DD788D9D /* MediaEngine.swift */,
 				69B57991CDEC6ED6639A348C /* MediaPlaybackQuality.swift */,
 				075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */,
@@ -371,6 +374,7 @@
 				0D1863BA957CAA57945368E4 /* FollowingView.swift in Sources */,
 				255C8ACC23818516BB2441B2 /* HLSOfflineCache.swift in Sources */,
 				2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */,
+				BA00C19C362F7B055BDB7B43 /* InteractionPolish.swift in Sources */,
 				03E12EC442CBCF298798C41C /* KeychainStore.swift in Sources */,
 				B0CC9D5D484CEF3197B58B98 /* LegalDocuments.swift in Sources */,
 				591D2D226C03B3857EEE6C75 /* MediaEngine.swift in Sources */,
@@ -421,7 +425,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 376;
+				CURRENT_PROJECT_VERSION = 377;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -522,7 +526,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 376;
+				CURRENT_PROJECT_VERSION = 377;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

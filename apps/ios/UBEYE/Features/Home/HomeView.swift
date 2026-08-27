@@ -544,6 +544,7 @@ struct HomeView: View {
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var resourceMonitor = UBEYEResourceMonitor.shared
     var uploadedStoryRegistrations: [StoryUploadResponse] = []
     var onSearchTap: () -> Void = {}
     var onDiscoverTap: () -> Void = {}
@@ -553,6 +554,9 @@ struct HomeView: View {
     @State private var selectedDiscoverCreator: DiscoverCreator?
     @State private var selectedFailedUpload: PendingStoryUpload?
     @State private var navigationPath = NavigationPath()
+    @State private var followingPrefetchTracker = DirectionalPrefetchTracker()
+    @State private var discoverPrefetchTracker = DirectionalPrefetchTracker()
+    @SceneStorage("ubeye.home-scroll-anchor") private var homeScrollAnchor: String?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -578,14 +582,18 @@ struct HomeView: View {
                         let displayFeed = pendingStoryUploads.feedByMergingPendingUploads(into: feed)
 
                         followingStoriesSection(displayFeed)
+                            .id("home-following")
 
                         discoverSection(displayFeed)
+                            .id("home-discover")
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 104)
+                .scrollTargetLayout()
             }
+            .scrollPosition(id: $homeScrollAnchor, anchor: .top)
             .refreshable {
                 await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
             }
@@ -660,6 +668,7 @@ struct HomeView: View {
                 }
 
                 navigationPath = NavigationPath()
+                homeScrollAnchor = "home-feed-top"
                 withAnimation(.snappy(duration: 0.28)) {
                     scrollProxy.scrollTo("home-feed-top", anchor: .top)
                 }
@@ -869,12 +878,7 @@ struct HomeView: View {
                             selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                         }
                         .onAppear {
-                            mediaEngine.prefetchStoryStacks(
-                                ids: [story.id],
-                                api: api,
-                                priority: .visible,
-                                limit: 1
-                            )
+                            prefetchFollowingStory(story, in: feed)
                         }
                     }
                 }
@@ -933,11 +937,49 @@ struct HomeView: View {
     }
 
     private func prefetchDiscoverTile(_ tile: DiscoverTile) {
-        mediaEngine.prefetchStoryStacks(
-            ids: [tile.activeStoryId ?? tile.id],
+        guard let feed = store.feed,
+              let visibleIndex = feed.discoverTiles.firstIndex(where: { $0.id == tile.id }) else {
+            return
+        }
+        let intent = discoverPrefetchTracker.record(
+            visibleIndex: visibleIndex,
+            itemCount: feed.discoverTiles.count,
+            mode: resourceMonitor.mode
+        )
+        let ids = intent.indices.map { index in
+            let candidate = feed.discoverTiles[index]
+            return candidate.activeStoryId ?? candidate.id
+        }
+        mediaEngine.updatePredictiveStoryIntent(
+            ids: ids,
             api: api,
-            priority: .visible,
-            limit: 1
+            direction: intent.direction,
+            velocityItemsPerSecond: intent.velocityItemsPerSecond
+        )
+        let imageURLs = intent.indices.compactMap { index in
+            feed.discoverTiles[index].thumbnailUrl ?? feed.discoverTiles[index].imageUrl
+        }
+        MediaImageCache.shared.updatePredictivePreheat(imageURLs)
+    }
+
+    private func prefetchFollowingStory(_ story: StoryCard, in feed: MobileFeedResponse) {
+        guard let visibleIndex = feed.followingStories.firstIndex(where: { $0.id == story.id }) else {
+            return
+        }
+        let intent = followingPrefetchTracker.record(
+            visibleIndex: visibleIndex,
+            itemCount: feed.followingStories.count,
+            mode: resourceMonitor.mode
+        )
+        let stories = intent.indices.map { feed.followingStories[$0] }
+        mediaEngine.updatePredictiveStoryIntent(
+            ids: stories.map(\.id),
+            api: api,
+            direction: intent.direction,
+            velocityItemsPerSecond: intent.velocityItemsPerSecond
+        )
+        MediaImageCache.shared.updatePredictivePreheat(
+            stories.compactMap { $0.playbackPlaceholderUrl ?? $0.playbackThumbnailUrl }
         )
     }
 
