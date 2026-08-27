@@ -81,14 +81,21 @@ enum StoryCanvasVerticalPlacement: Equatable {
 
     static func forRenditions(
         _ renditions: StoryMediaRenditions?,
-        prefersPlaybackDimensions: Bool = false
+        prefersPlaybackDimensions: Bool = false,
+        missingDimensionsFallback: Self = .center
     ) -> Self {
         let sourceRendition = prefersPlaybackDimensions
             ? renditions?.playback
             : renditions?.original ?? renditions?.playback
+        guard let width = sourceRendition?.width,
+              let height = sourceRendition?.height,
+              width > 0,
+              height > 0 else {
+            return missingDimensionsFallback
+        }
         return forMediaDimensions(
-            width: sourceRendition?.width,
-            height: sourceRendition?.height
+            width: width,
+            height: height
         )
     }
 

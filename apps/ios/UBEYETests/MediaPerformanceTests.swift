@@ -653,6 +653,17 @@ final class MediaPerformanceTests: XCTestCase {
         )
     }
 
+    func testStoryCanvasPlacementKeepsCanonicalImageFrameWhileRenditionMetadataLoads() {
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forRenditions(
+                nil,
+                prefersPlaybackDimensions: true,
+                missingDimensionsFallback: .top
+            ),
+            .top
+        )
+    }
+
     func testStoryCanvasLayoutScalesDownOnCompactScreensWithoutChangingAspect() {
         let layout = StoryCanvasLayout(
             containerSize: CGSize(width: 320, height: 568),

@@ -333,7 +333,6 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
     private let content: (Image, ProgressiveImageStage) -> Content
     private let placeholder: () -> Placeholder
     private let onReady: (ProgressiveImageStage) -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var loader = ProgressiveImageLoader()
 
     init(
@@ -363,11 +362,16 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
             placeholder()
             if let image = loader.image {
                 content(Image(uiImage: image), loader.stage)
-                    .id(loader.stage)
-                    .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: loader.stage)
+        .transaction { transaction in
+            // Thumbnail and full-size derivatives share identical geometry.
+            // Replacing the view identity and cross-fading the stages exposed
+            // both decoded frames during first load and made overlays appear to
+            // jump. Keep one stable render node and promote pixels atomically.
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         .task(id: loadKey) {
             await loader.load(
                 placeholderURL: placeholderURL,

@@ -671,6 +671,8 @@ struct StoryStackViewer: View {
     @State private var showsGestureHint = false
     @State private var gestureHintDismissTask: Task<Void, Never>?
     @State private var keyboardRequestStartedAt: Date?
+    @State private var bufferedStoryItemIDs = Set<String>()
+    @State private var mediaBufferRefreshTask: Task<Void, Never>?
     @AppStorage("ubeye.story-playback-muted") private var isStoryPlaybackMuted = false
     @GestureState private var isPressingStoryMedia = false
     @FocusState private var isReplyFieldFocused: Bool
@@ -728,9 +730,6 @@ struct StoryStackViewer: View {
                         StoryCanvasBackground()
 
                         storyMediaBuffer(stack: stack, activeIndex: index)
-
-                        storyCanvasOverlay(item)
-                            .zIndex(1)
                     }
                         .storyCanvasFrame(
                             canvasLayout,
@@ -883,7 +882,7 @@ struct StoryStackViewer: View {
                 startStoryTimerIfNeeded(for: item)
             }
             if let stack = store.stack {
-                mediaEngine.prepare(stack: stack, around: index, activeIdentity: nil)
+                commitStoryMediaBuffer(stack: stack, around: index)
             }
             presentGestureHintIfNeeded()
         }
@@ -899,6 +898,9 @@ struct StoryStackViewer: View {
                 around: index
             )
             index = min(index, max((store.stack?.items.count ?? 1) - 1, 0))
+            if let stack = store.stack {
+                commitStoryMediaBuffer(stack: stack, around: index)
+            }
         }
         .onChange(of: shouldPauseVideoPlayback) { _, isPaused in
             guard !isPaused,
@@ -940,6 +942,7 @@ struct StoryStackViewer: View {
             completionDismissTask?.cancel()
             reactionBurstTask?.cancel()
             gestureHintDismissTask?.cancel()
+            mediaBufferRefreshTask?.cancel()
             storyTimerState.stop()
             mediaEngine.storyViewerDidDisappear()
             InteractionFrameMonitor.shared.stop(surface: "story_viewer")
@@ -972,10 +975,10 @@ struct StoryStackViewer: View {
     }
 
     private func storyMediaBuffer(stack: StoryStack, activeIndex: Int) -> some View {
-        let bufferedMedia = StoryMediaBufferPolicy.indices(
+        let bufferedMedia = storyMediaBufferIndices(
+            stack: stack,
             activeIndex: activeIndex,
-            itemCount: stack.items.count,
-            mode: resourceMonitor.mode
+            retainedItemIDs: bufferedStoryItemIDs
         ).compactMap { itemIndex -> BufferedStoryMedia? in
             guard let item = stack.items[safe: itemIndex] else {
                 return nil
@@ -986,9 +989,15 @@ struct StoryStackViewer: View {
 
         return ZStack {
             ForEach(bufferedMedia) { buffered in
-                media(buffered.item, isActive: buffered.isActive)
+                ZStack {
+                    media(buffered.item, isActive: buffered.isActive)
+                        .allowsHitTesting(false)
+
+                    storyCanvasOverlay(buffered.item)
+                        .zIndex(1)
+                }
                     .opacity(buffered.isActive ? 1 : 0)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(buffered.isActive)
                     .accessibilityHidden(!buffered.isActive)
                     .zIndex(buffered.isActive ? 1 : 0)
             }
@@ -996,6 +1005,58 @@ struct StoryStackViewer: View {
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
+        }
+    }
+
+    private func storyMediaBufferIndices(
+        stack: StoryStack,
+        activeIndex: Int,
+        retainedItemIDs: Set<String>
+    ) -> [Int] {
+        let policyIndices = StoryMediaBufferPolicy.indices(
+            activeIndex: activeIndex,
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
+        )
+        guard !retainedItemIDs.isEmpty else {
+            return policyIndices
+        }
+
+        // Preserve source order while the active flag moves. Reordering the
+        // ForEach collection around the active item makes SwiftUI perform move
+        // bookkeeping during the exact frame whose opacity is changing.
+        return stack.items.indices.filter {
+            $0 == activeIndex || retainedItemIDs.contains(stack.items[$0].id)
+        }
+    }
+
+    private func commitStoryMediaBuffer(stack: StoryStack, around activeIndex: Int) {
+        let indices = StoryMediaBufferPolicy.indices(
+            activeIndex: activeIndex,
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
+        )
+        bufferedStoryItemIDs = Set(indices.compactMap { stack.items[safe: $0]?.id })
+    }
+
+    private func scheduleStoryMediaBufferRefresh(
+        stack: StoryStack,
+        around activeIndex: Int,
+        activeItemID: String
+    ) {
+        mediaBufferRefreshTask?.cancel()
+        mediaBufferRefreshTask = Task { @MainActor in
+            // The next story's pixels are already warmed. Rotate the retained
+            // SwiftUI/AVPlayer window after the visible commit so mounting the
+            // following story cannot steal that transition frame.
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled,
+                  index == activeIndex,
+                  store.stack?.items[safe: activeIndex]?.id == activeItemID else {
+                return
+            }
+            commitStoryMediaBuffer(stack: stack, around: activeIndex)
+            mediaBufferRefreshTask = nil
         }
     }
 
@@ -1439,7 +1500,8 @@ struct StoryStackViewer: View {
         // a vertically centered screen frame.
         StoryCanvasVerticalPlacement.forRenditions(
             item.renditions,
-            prefersPlaybackDimensions: item.assetKind == .image
+            prefersPlaybackDimensions: item.assetKind == .image,
+            missingDimensionsFallback: item.assetKind == .image ? .top : .center
         )
     }
 
@@ -2157,10 +2219,10 @@ struct StoryStackViewer: View {
 
         UBEYEFeedback.selection()
 
-        let targetWasBuffered = StoryMediaBufferPolicy.indices(
+        let targetWasBuffered = storyMediaBufferIndices(
+            stack: stack,
             activeIndex: index,
-            itemCount: stack.items.count,
-            mode: resourceMonitor.mode
+            retainedItemIDs: bufferedStoryItemIDs
         ).contains(nextIndex)
         pendingTransitionMeasurement = StoryTransitionMeasurement(
             destinationItemId: next.id,
@@ -2171,6 +2233,9 @@ struct StoryStackViewer: View {
         )
         Task { await store.recordImpression(item: item, completed: delta > 0, api: api) }
         ownerSheet = nil
+        if !targetWasBuffered {
+            bufferedStoryItemIDs.insert(next.id)
+        }
         index = nextIndex
         store.markActiveItem(next)
         resetStoryTimer(for: next)
@@ -2178,7 +2243,12 @@ struct StoryStackViewer: View {
             stack: stack,
             targetIndex: nextIndex,
             targetItem: next,
-            promoteActiveIfNeeded: !targetWasBuffered
+            targetWasBuffered: targetWasBuffered
+        )
+        scheduleStoryMediaBufferRefresh(
+            stack: stack,
+            around: nextIndex,
+            activeItemID: next.id
         )
     }
 
@@ -2186,21 +2256,37 @@ struct StoryStackViewer: View {
         stack: StoryStack,
         targetIndex: Int,
         targetItem: StoryStackItem,
-        promoteActiveIfNeeded: Bool
+        targetWasBuffered: Bool
     ) {
         Task { @MainActor in
-            await Task.yield()
+            // Keep speculative decode/preroll work out of the frame that commits
+            // the new media and its overlay. The destination is already in the
+            // view buffer; this only advances the look-ahead window.
+            try? await Task.sleep(for: .milliseconds(180))
             guard index == targetIndex,
+                  !Task.isCancelled,
                   store.stack?.items[safe: targetIndex]?.id == targetItem.id else {
                 return
             }
 
-            mediaEngine.prepare(
-                stack: stack,
-                around: targetIndex,
-                activeIdentity: targetItem.isPlayableVideo ? targetItem.playbackIdentity : nil,
-                promoteActiveIfNeeded: promoteActiveIfNeeded
-            )
+            if targetWasBuffered {
+                // The buffered destination already owns a decoded image or an
+                // attached player. Only advance image warming here; asking the
+                // player pool to prepare the same window again can construct an
+                // AVPlayer while the destination is visible.
+                MediaPreheater.preheat(
+                    stack: stack,
+                    around: targetIndex,
+                    preheatVideoAssets: false
+                )
+            } else {
+                mediaEngine.prepare(
+                    stack: stack,
+                    around: targetIndex,
+                    activeIdentity: targetItem.isPlayableVideo ? targetItem.playbackIdentity : nil,
+                    promoteActiveIfNeeded: true
+                )
+            }
         }
     }
 
@@ -3670,6 +3756,7 @@ struct AutoPlayVideoPlayer: View {
     let onProgress: (Double) -> Void
     let onFinished: () -> Void
     @StateObject private var playback = AutoPlayVideoPlaybackController()
+    @State private var deferredRewindTask: Task<Void, Never>?
 
     init(
         source: StoryVideoPlaybackSource,
@@ -3793,6 +3880,8 @@ struct AutoPlayVideoPlayer: View {
             }
         }
         .onChange(of: isActive) { previousValue, nextValue in
+            deferredRewindTask?.cancel()
+            deferredRewindTask = nil
             guard StoryVideoVisitPolicy.shouldRewindForNextVisit(
                 previousIsActive: previousValue,
                 nextIsActive: nextValue
@@ -3800,7 +3889,17 @@ struct AutoPlayVideoPlayer: View {
                 return
             }
 
-            playback.rewindForNextVisit()
+            deferredRewindTask = Task { @MainActor in
+                // Rewinding performs AVPlayer seek/preroll bookkeeping. Running
+                // it during the same frame as the destination swap caused a
+                // visible hitch in the media and independently laid-out text.
+                try? await Task.sleep(for: .milliseconds(180))
+                guard !Task.isCancelled else {
+                    return
+                }
+                playback.rewindForNextVisit()
+                deferredRewindTask = nil
+            }
         }
         .onChange(of: isPaused) { _, nextValue in
             playback.updateCallbacks(
@@ -3817,6 +3916,8 @@ struct AutoPlayVideoPlayer: View {
             playback.setMuted(nextValue)
         }
         .onDisappear {
+            deferredRewindTask?.cancel()
+            deferredRewindTask = nil
             playback.stop(reason: "disappear")
         }
     }
