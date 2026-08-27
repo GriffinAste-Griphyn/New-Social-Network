@@ -1592,6 +1592,65 @@ final class StoryComposerStore: ObservableObject {
     }
 }
 
+private enum StoryComposerChromeAppearance {
+    static let controlSize: CGFloat = 42
+    static let controlBackgroundOpacity = 0.30
+    static let pillBackgroundOpacity = 0.36
+    static let borderOpacity = 0.16
+    static let borderWidth: CGFloat = 0.75
+}
+
+private struct StoryComposerCircularChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(.white.opacity(0.94))
+            .frame(
+                width: StoryComposerChromeAppearance.controlSize,
+                height: StoryComposerChromeAppearance.controlSize
+            )
+            .background(
+                .black.opacity(StoryComposerChromeAppearance.controlBackgroundOpacity),
+                in: Circle()
+            )
+            .overlay(
+                Circle()
+                    .stroke(
+                        .white.opacity(StoryComposerChromeAppearance.borderOpacity),
+                        lineWidth: StoryComposerChromeAppearance.borderWidth
+                    )
+            )
+            .contentShape(Circle())
+    }
+}
+
+private struct StoryComposerPillChrome: ViewModifier {
+    let backgroundOpacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .background(.black.opacity(backgroundOpacity), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        .white.opacity(StoryComposerChromeAppearance.borderOpacity),
+                        lineWidth: StoryComposerChromeAppearance.borderWidth
+                    )
+            )
+    }
+}
+
+private extension View {
+    func storyComposerCircularChrome() -> some View {
+        modifier(StoryComposerCircularChrome())
+    }
+
+    func storyComposerPillChrome(
+        backgroundOpacity: Double = StoryComposerChromeAppearance.pillBackgroundOpacity
+    ) -> some View {
+        modifier(StoryComposerPillChrome(backgroundOpacity: backgroundOpacity))
+    }
+}
+
 struct StoryComposerView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
@@ -1640,12 +1699,12 @@ struct StoryComposerView: View {
                             selectedBatchMedia.count > 1
                                 ? "\(selectedBatchMedia.count) stories"
                                 : "Story",
-                            systemImage: "camera.fill"
+                            systemImage: "camera"
                         )
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 15, weight: .regular))
                             .padding(.horizontal, 14)
                             .frame(height: 38)
-                            .background(.black.opacity(0.34), in: Capsule())
+                            .storyComposerPillChrome(backgroundOpacity: 0.30)
 
                         HStack(alignment: .top) {
                             if hasSelectedMedia {
@@ -1654,9 +1713,8 @@ struct StoryComposerView: View {
                                     resetCapture(clearQuote: true)
                                 } label: {
                                     Image(systemName: "xmark")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .frame(width: 42, height: 42)
-                                        .background(.black.opacity(0.34), in: Circle())
+                                        .font(.system(size: 18, weight: .medium))
+                                        .storyComposerCircularChrome()
                                 }
                                 .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                                 .accessibilityLabel("Discard captured story")
@@ -1674,9 +1732,8 @@ struct StoryComposerView: View {
                                         camera.switchCamera()
                                     } label: {
                                         Image(systemName: "camera.rotate")
-                                            .font(.system(size: 18, weight: .bold))
-                                            .frame(width: 42, height: 42)
-                                            .background(.black.opacity(0.34), in: Circle())
+                                            .font(.system(size: 17, weight: .medium))
+                                            .storyComposerCircularChrome()
                                     }
                                     .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                                     .disabled(camera.isRecording || camera.isCapturingPhoto)
@@ -1693,14 +1750,15 @@ struct StoryComposerView: View {
 
                     if let uploadStatus = store.uploadStatus {
                         Text(uploadStatus)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .regular))
+                            .tracking(0.1)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(.black.opacity(0.45), in: Capsule())
+                            .storyComposerPillChrome()
                             .padding(.bottom, 16)
-                    } else if let error = store.error ?? camera.error {
+                    } else if let error = store.error ?? (stagedMedia == nil ? camera.error : nil) {
                         Text(error)
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 14, weight: .medium))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
@@ -1709,13 +1767,13 @@ struct StoryComposerView: View {
                             .padding(.bottom, 16)
                     } else if camera.isCapturingPhoto {
                         Text("Preparing photo")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.72))
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.76))
                             .padding(.bottom, 24)
                     } else if stagedMedia == nil {
                         Text("Tap for photo, hold for video")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.65))
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.72))
                             .padding(.bottom, 24)
                     }
 
@@ -1855,9 +1913,9 @@ struct StoryComposerView: View {
             if selectedBatchMedia.count > 1 {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(selectedBatchMedia.count) separate stories")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .medium))
                     Text("They’ll upload in the background")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(.white.opacity(0.68))
                 }
             }
@@ -1888,7 +1946,7 @@ struct StoryComposerView: View {
                 uploadButtonIcon
                 if selectedBatchMedia.count > 1 {
                     Text("Post \(selectedBatchMedia.count)")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .medium))
                 }
             }
             .foregroundStyle(.white)
@@ -1896,7 +1954,7 @@ struct StoryComposerView: View {
                 width: selectedBatchMedia.count > 1 ? 104 : footerSideControlSize,
                 height: footerSideControlSize
             )
-            .background(.black.opacity(0.52), in: Capsule())
+            .storyComposerPillChrome(backgroundOpacity: 0.42)
         }
         .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
         .disabled(store.isUploading)
@@ -1909,8 +1967,8 @@ struct StoryComposerView: View {
     }
 
     private var uploadButtonIcon: some View {
-        Image(systemName: store.isUploading ? "hourglass" : "paperplane.fill")
-            .font(.system(size: 21, weight: .bold))
+        Image(systemName: store.isUploading ? "hourglass" : "paperplane")
+            .font(.system(size: 20, weight: .medium))
     }
 
     private var composerToolRail: some View {
@@ -1920,9 +1978,9 @@ struct StoryComposerView: View {
                 openOverlayInput(.text)
             } label: {
                 Text("Aa")
-                    .font(.system(size: 18, weight: .bold))
-                    .frame(width: 42, height: 42)
-                    .background(.black.opacity(0.34), in: Circle())
+                    .font(.system(size: 18, weight: .regular))
+                    .tracking(-0.25)
+                    .storyComposerCircularChrome()
             }
             .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
             .accessibilityLabel("Add text overlay")
@@ -1932,9 +1990,8 @@ struct StoryComposerView: View {
                 openOverlayInput(.link)
             } label: {
                 Image(systemName: "link")
-                    .font(.system(size: 18, weight: .bold))
-                    .frame(width: 42, height: 42)
-                    .background(.black.opacity(0.34), in: Circle())
+                    .font(.system(size: 18, weight: .regular))
+                    .storyComposerCircularChrome()
             }
             .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
             .accessibilityLabel("Add link overlay")
@@ -2889,14 +2946,14 @@ private struct StoryShutterButton: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(.white.opacity(0.42), lineWidth: 5)
+                .stroke(.white.opacity(0.52), lineWidth: 3)
                 .frame(width: 88, height: 88)
 
             Circle()
                 .trim(from: 0, to: isRecording ? progress : 0)
                 .stroke(
                     Color.ubeyeRed,
-                    style: StrokeStyle(lineWidth: 5, lineCap: .round)
+                    style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
                 )
                 .frame(width: 88, height: 88)
                 .rotationEffect(.degrees(-90))
@@ -2907,7 +2964,7 @@ private struct StoryShutterButton: View {
 
             if isRecording {
                 Text("\(segmentCount)/\(maxSegments)")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.ubeyeInk)
             }
         }
@@ -2981,15 +3038,15 @@ private struct LibraryPickerThumbnail: View {
             thumbnailContent
 
             Image(systemName: "photo.on.rectangle")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.white)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white.opacity(0.94))
                 .shadow(color: .black.opacity(0.45), radius: 4, x: 0, y: 1)
         }
         .frame(width: 58, height: 58)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(.white.opacity(0.85), lineWidth: 2)
+                .stroke(.white.opacity(0.72), lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }

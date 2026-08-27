@@ -93,6 +93,14 @@ struct MainTabView: View {
             ProfileView()
         }
         .onAppear {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-story-composer-selected-photo-fixture") {
+                visitedTabs.insert(.post)
+                selectedTab = .post
+                return
+            }
+            #endif
+
             if let restoredTab = AppTab(rawValue: restoredTabRawValue) {
                 visitedTabs.insert(restoredTab)
                 selectedTab = restoredTab
