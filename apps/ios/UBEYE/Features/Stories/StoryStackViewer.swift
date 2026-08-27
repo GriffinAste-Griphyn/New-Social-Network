@@ -116,6 +116,25 @@ private struct StoryTransitionMeasurement {
     let startedAt: Date
 }
 
+private final class StoryInteractionLatencyTracker {
+    private var touchBeganAt: Date?
+
+    func beginTouchIfNeeded(at date: Date = Date()) {
+        if touchBeganAt == nil {
+            touchBeganAt = date
+        }
+    }
+
+    func consumeTouchStart(fallback: Date = Date()) -> Date {
+        defer { touchBeganAt = nil }
+        return touchBeganAt ?? fallback
+    }
+
+    func cancelTouch() {
+        touchBeganAt = nil
+    }
+}
+
 private struct PendingStoryDeletion {
     let id = UUID()
     let item: StoryStackItem
@@ -639,6 +658,7 @@ struct StoryStackViewer: View {
     @State private var isClearingCompletedStory = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var pendingTransitionMeasurement: StoryTransitionMeasurement?
+    @State private var interactionLatencyTracker = StoryInteractionLatencyTracker()
     @State private var verticalDragOffset: CGFloat = 0
     @State private var viewportHeight: CGFloat = 844
     @State private var isChromeVisible = true
@@ -800,7 +820,7 @@ struct StoryStackViewer: View {
                     } label: {
                         UBEYEContextualHint(
                             systemImage: "hand.tap",
-                            message: "Tap sides to move · Double-tap to react · Swipe down to close"
+                            message: "Tap sides to move · Double-tap center to react · Swipe down to close"
                         )
                     }
                     .buttonStyle(.plain)
@@ -1677,9 +1697,20 @@ struct StoryStackViewer: View {
     }
 
     private func tapNavigationOverlay(item: StoryStackItem, viewportWidth: CGFloat) -> some View {
-        Color.clear
+        let navigationZoneWidth = max(viewportWidth, 1) * 0.32
+
+        return HStack(spacing: 0) {
+            storyNavigationTapZone(direction: -1, item: item)
+                .frame(width: navigationZoneWidth)
+
+            storyCenterTapZone(item: item)
+                .frame(maxWidth: .infinity)
+
+            storyNavigationTapZone(direction: 1, item: item)
+                .frame(width: navigationZoneWidth)
+        }
             .contentShape(Rectangle())
-            .gesture(storyNavigationGesture(item: item, viewportWidth: viewportWidth))
+            .simultaneousGesture(verticalStorySwipeGesture)
             .simultaneousGesture(pressToPauseGesture)
             .ignoresSafeArea()
             .accessibilityElement(children: .ignore)
@@ -1716,38 +1747,54 @@ struct StoryStackViewer: View {
             .updating($isPressingStoryMedia) { _, isPressing, transaction in
                 transaction.disablesAnimations = true
                 isPressing = true
+                interactionLatencyTracker.beginTouchIfNeeded()
             }
     }
 
-    private func storyNavigationGesture(item: StoryStackItem, viewportWidth: CGFloat) -> some Gesture {
-        verticalStorySwipeGesture.exclusively(
-            before: TapGesture(count: 2)
-                .onEnded {
-                    reactToStory(item)
-                }
-                .exclusively(
-                    before: SpatialTapGesture().onEnded { value in
-                        handleStoryTap(value.location.x, viewportWidth: viewportWidth, item: item)
-                    }
-                )
-        )
+    private func storyNavigationTapZone(direction: Int, item: StoryStackItem) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {
+                handleStoryNavigationTap(direction: direction, item: item)
+            }
     }
 
-    private func handleStoryTap(_ x: CGFloat, viewportWidth: CGFloat, item: StoryStackItem) {
+    private func storyCenterTapZone(item: StoryStackItem) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        interactionLatencyTracker.cancelTouch()
+                        reactToStory(item)
+                    }
+                    .exclusively(
+                        before: TapGesture().onEnded {
+                            interactionLatencyTracker.cancelTouch()
+                            toggleStoryChrome()
+                        }
+                    )
+            )
+    }
+
+    private func handleStoryNavigationTap(direction: Int, item: StoryStackItem) {
         guard ownerSheet == nil else {
+            interactionLatencyTracker.cancelTouch()
             return
         }
 
-        let width = max(viewportWidth, 1)
-        if x < width * 0.32 {
-            move(-1, item: item)
-        } else if x > width * 0.68 {
-            move(1, item: item)
-        } else {
-            UBEYEFeedback.selection()
-            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .snappy(duration: 0.2)) {
-                isChromeVisible.toggle()
-            }
+        let interactionStartedAt = interactionLatencyTracker.consumeTouchStart()
+        MediaPerformance.measure(
+            "story_tap_recognized direction=\(direction > 0 ? "forward" : "backward")",
+            since: interactionStartedAt
+        )
+        move(direction, item: item, interactionStartedAt: interactionStartedAt)
+    }
+
+    private func toggleStoryChrome() {
+        UBEYEFeedback.selection()
+        withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .snappy(duration: 0.2)) {
+            isChromeVisible.toggle()
         }
     }
 
@@ -2024,6 +2071,7 @@ struct StoryStackViewer: View {
         defer {
             gestureAxis = .undecided
             crossedDismissThreshold = false
+            interactionLatencyTracker.cancelTouch()
         }
         guard ownerSheet == nil,
               let stack = store.stack,
@@ -2089,7 +2137,11 @@ struct StoryStackViewer: View {
         !isOwnStack(stack) && route.source != .discover && isFollowingCreator(stack)
     }
 
-    private func move(_ delta: Int, item: StoryStackItem) {
+    private func move(
+        _ delta: Int,
+        item: StoryStackItem,
+        interactionStartedAt: Date? = nil
+    ) {
         let action = StoryNavigationPolicy.action(
             currentIndex: index,
             itemCount: store.stack?.items.count ?? 0,
@@ -2123,19 +2175,41 @@ struct StoryStackViewer: View {
             direction: delta > 0 ? "forward" : "backward",
             sourceKind: item.assetKind,
             destinationKind: next.assetKind,
-            startedAt: Date()
+            startedAt: interactionStartedAt ?? Date()
         )
         Task { await store.recordImpression(item: item, completed: delta > 0, api: api) }
         ownerSheet = nil
         index = nextIndex
         store.markActiveItem(next)
         resetStoryTimer(for: next)
-        mediaEngine.prepare(
+        prepareStoryMediaAfterVisibleCommit(
             stack: stack,
-            around: index,
-            activeIdentity: next.isPlayableVideo ? next.playbackIdentity : nil,
+            targetIndex: nextIndex,
+            targetItem: next,
             promoteActiveIfNeeded: !targetWasBuffered
         )
+    }
+
+    private func prepareStoryMediaAfterVisibleCommit(
+        stack: StoryStack,
+        targetIndex: Int,
+        targetItem: StoryStackItem,
+        promoteActiveIfNeeded: Bool
+    ) {
+        Task { @MainActor in
+            await Task.yield()
+            guard index == targetIndex,
+                  store.stack?.items[safe: targetIndex]?.id == targetItem.id else {
+                return
+            }
+
+            mediaEngine.prepare(
+                stack: stack,
+                around: targetIndex,
+                activeIdentity: targetItem.isPlayableVideo ? targetItem.playbackIdentity : nil,
+                promoteActiveIfNeeded: promoteActiveIfNeeded
+            )
+        }
     }
 
     private func completeStoryTransitionIfNeeded(for item: StoryStackItem) {
