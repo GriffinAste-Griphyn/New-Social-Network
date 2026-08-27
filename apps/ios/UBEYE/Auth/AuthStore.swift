@@ -102,9 +102,23 @@ final class AuthStore: ObservableObject {
             struct Body: Encodable {
                 let email: String
                 let password: String
+                let acceptedTerms: Bool
+                let termsVersion: String
+                let communityGuidelinesVersion: String
+                let privacyPolicyVersion: String
             }
 
-            let response: SignupResponse = try await api.post("/api/mobile/auth/signup", body: Body(email: normalizedEmail, password: password))
+            let response: SignupResponse = try await api.post(
+                "/api/mobile/auth/signup",
+                body: Body(
+                    email: normalizedEmail,
+                    password: password,
+                    acceptedTerms: true,
+                    termsVersion: LegalDocuments.termsVersion,
+                    communityGuidelinesVersion: LegalDocuments.communityGuidelinesVersion,
+                    privacyPolicyVersion: LegalDocuments.privacyPolicyVersion
+                )
+            )
             pendingEmail = response.pendingEmail
             pendingPassword = password
             message = response.message ?? "Enter the verification code we sent to your email."

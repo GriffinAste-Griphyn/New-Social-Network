@@ -347,6 +347,7 @@ export async function getStoryUploadStatusForOwner(
         id: stories.id,
         mediaAssetId: stories.mediaAssetId,
         creatorId: stories.creatorId,
+        assetKind: stories.assetKind,
         storageProvider: stories.storageProvider,
         storageKey: stories.storageKey,
         status: stories.status,
@@ -392,6 +393,7 @@ export async function getStoryUploadStatusForOwner(
   return {
     id: story.id,
     mediaAssetId: story.mediaAssetId,
+    assetKind: story.assetKind,
     storageProvider: story.storageProvider,
     status: story.status,
     processingStatus: story.processingStatus,

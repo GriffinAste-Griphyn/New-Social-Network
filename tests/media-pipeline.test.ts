@@ -53,6 +53,17 @@ describe("custom media pipeline contracts", () => {
       .toEqual(["360p", "540p", "720p", "1080p"])
   })
 
+  it("preserves a high-fidelity 1080p top rendition", () => {
+    expect(mediaRenditionProfiles.at(-1)).toMatchObject({
+      label: "1080p",
+      width: 1080,
+      height: 1920,
+      videoBitrate: 6_000_000,
+      maxRate: 8_000_000,
+      bufferSize: 16_000_000,
+    })
+  })
+
   it("accounts for rotation when planning renditions", () => {
     expect(
       selectRenditionProfiles({ width: 1920, height: 1080, rotation: 90 }).at(-1)
@@ -74,13 +85,18 @@ describe("custom media pipeline contracts", () => {
         profile,
         playlistUrl: "360p/index.m3u8",
         codec: "avc1.640029,mp4a.40.2",
+        byteSize: 1_000_000,
+        durationMs: 10_000,
+        frameRate: 29.97,
       },
     ])
 
     expect(master).toContain("#EXT-X-INDEPENDENT-SEGMENTS")
     expect(master).toContain("RESOLUTION=360x640")
     expect(master).toContain("360p/index.m3u8")
-    expect(master).toContain("BANDWIDTH=1128000")
+    expect(master).toContain("AVERAGE-BANDWIDTH=800000")
+    expect(master).toContain("BANDWIDTH=920000")
+    expect(master).toContain("FRAME-RATE=29.970")
   })
 
   it("does not advertise an audio bitrate for silent sources", () => {
@@ -90,11 +106,14 @@ describe("custom media pipeline contracts", () => {
         profile,
         playlistUrl: "360p/index.m3u8",
         codec: "avc1.640029",
+        byteSize: 750_000,
+        durationMs: 10_000,
+        frameRate: 30,
       },
     ])
 
-    expect(master).toContain("BANDWIDTH=1000000")
-    expect(master).toContain("AVERAGE-BANDWIDTH=850000")
+    expect(master).toContain("BANDWIDTH=690000")
+    expect(master).toContain("AVERAGE-BANDWIDTH=600000")
     expect(master).not.toContain("mp4a")
   })
 
@@ -107,6 +126,11 @@ describe("custom media pipeline contracts", () => {
     expect(args).toContain("independent_segments+temp_file")
     expect(args).toContain("expr:gte(t,n_forced*2)")
     expect(args).toContain("yuv420p")
+    const filter = args[args.indexOf("-filter_complex") + 1]
+    expect(filter).toContain("force_original_aspect_ratio=decrease")
+    expect(filter).toContain("pad=360:640:(ow-iw)/2:(oh-ih)/2:color=black")
+    expect(filter).not.toContain("force_original_aspect_ratio=increase")
+    expect(filter).not.toContain("boxblur")
   })
 })
 

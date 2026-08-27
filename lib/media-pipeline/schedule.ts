@@ -1,5 +1,8 @@
 import { after } from "next/server"
+import { start } from "workflow/api"
 
+import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import { processMediaWorkflow } from "@/workflows/media-processing"
 import { processMediaJobRun } from "./direct-processing"
 
 type MediaProcessingDispatch = {
@@ -11,41 +14,46 @@ type MediaProcessingDispatch = {
 export async function dispatchMediaProcessing(
   payload: MediaProcessingDispatch,
 ) {
-  return processMediaJobRun(payload.jobId)
+  if (!areDurableMediaWorkersEnabled()) {
+    return processMediaJobRun(payload.jobId)
+  }
+
+  const run = await start(processMediaWorkflow, [payload.jobId])
+  return { runId: run.runId, jobId: payload.jobId }
 }
 
-export function scheduleMediaProcessing(jobId: string, source: string) {
-  after(async () => {
-    try {
-      const result = await dispatchMediaProcessing({ jobId, source })
-      console.info("media_processing_run_finished", { jobId, source, result })
-    } catch (error) {
-      console.error("media_processing_dispatch_failed", {
-        jobId,
-        source,
-        error,
-      })
-    }
+export async function scheduleMediaProcessing(jobId: string, source: string) {
+  if (!areDurableMediaWorkersEnabled()) {
+    after(async () => {
+      try {
+        const result = await dispatchMediaProcessing({ jobId, source })
+        console.info("media_processing_direct_finished", {
+          jobId,
+          source,
+          result,
+        })
+      } catch (error) {
+        console.error("media_processing_direct_failed", {
+          jobId,
+          source,
+          error,
+        })
+      }
+    })
+    return { jobId, runId: null }
+  }
+
+  const result = await dispatchMediaProcessing({ jobId, source })
+  console.info("media_processing_workflow_started", {
+    jobId,
+    source,
+    runId: "runId" in result ? result.runId : null,
   })
+  return result
 }
 
-export function scheduleMediaProcessingSlice(
+export async function scheduleMediaProcessingSlice(
   payload: MediaProcessingDispatch,
 ) {
-  after(async () => {
-    try {
-      const result = await processMediaJobRun(payload.jobId)
-      console.info("media_processing_run_finished", {
-        jobId: payload.jobId,
-        source: payload.source,
-        result,
-      })
-    } catch (error) {
-      console.error("media_processing_run_failed", {
-        jobId: payload.jobId,
-        source: payload.source,
-        error,
-      })
-    }
-  })
+  return scheduleMediaProcessing(payload.jobId, payload.source)
 }

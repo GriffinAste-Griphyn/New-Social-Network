@@ -6,6 +6,8 @@ node_modules
 apps/mobile/node_modules
 .git
 .next
+/build
+/generated
 .expo
 apps/mobile/.expo
 apps/mobile/dist

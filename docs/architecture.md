@@ -84,18 +84,18 @@ For auth, the repo currently uses a credentials-based cookie session flow backed
 
 ### Video
 
-Use Cloudflare Stream for story videos.
+Use the versioned Vercel Workflow + Blob HLS pipeline for new story videos.
 
 Reason:
 
-- direct user uploads
-- encoding and playback handled for you
-- fewer surprises than storing raw video files and building your own playback pipeline
+- direct owner-bound uploads to a private original store
+- durable FFmpeg processing with progressive 540p-first publication
+- opaque, immutable delivery objects with a private-route rollback mode
 
 Every direct upload is represented by an expiring, owner-bound upload session before the
-client receives a provider URL. Completion is idempotent and reconciles provider progress
-with moderation as independent states. Public stories use signed adaptive HLS only; source
-files are not progressive playback fallbacks.
+client receives a provider URL. Completion is idempotent and reconciles processing progress
+with moderation as independent states. Public stories use adaptive HLS only; source files
+are not progressive playback fallbacks. Cloudflare remains a legacy rollback/drain path.
 
 ### Images
 

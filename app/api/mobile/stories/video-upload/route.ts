@@ -114,7 +114,7 @@ async function createVideoPosterUploadPart(uid: string) {
       pathname,
       allowedContentTypes: ["image/jpeg"],
       maximumSizeInBytes: maxStoryVideoPosterUploadBytes,
-      validUntil: Date.now() + 60 * 60 * 1000,
+      validUntil: Date.now() + 15 * 60 * 1000,
       addRandomSuffix: false,
       allowOverwrite: true,
     })
@@ -148,7 +148,7 @@ async function createVideoOriginalUploadPart(input: {
       pathname: input.pathname,
       allowedContentTypes: [input.contentType],
       maximumSizeInBytes: input.byteSize,
-      validUntil: Date.now() + 60 * 60 * 1000,
+      validUntil: Date.now() + 15 * 60 * 1000,
       addRandomSuffix: false,
       allowOverwrite: true,
     })

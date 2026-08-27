@@ -35,71 +35,46 @@ private struct SessionRestoreView: View {
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
+    @ObservedObject private var network = NetworkQualityMonitor.shared
     @StateObject private var storyUploadNotice = StoryUploadNoticeStore()
     @StateObject private var storyUploadCoordinator = StoryUploadCoordinator()
     @State private var selectedTab: AppTab = .home
+    @State private var visitedTabs: Set<AppTab> = [.home]
+    @SceneStorage("ubeye.selected-tab") private var restoredTabRawValue = AppTab.home.rawValue
     @State private var discoverSearchFocusRequest = 0
     @State private var isShowingProfile = false
     @State private var pendingQuotedReply: QuotedStoryReply?
+    @State private var hasObservedOfflineState = false
+    @State private var showsReconnectedBanner = false
+    @State private var reconnectBannerTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
-            switch selectedTab {
-            case .home:
-                HomeView(
-                    uploadedStoryRegistrations: storyUploadCoordinator.registrations,
-                    onSearchTap: {
-                        discoverSearchFocusRequest += 1
-                        selectedTab = .discover
-                    },
-                    onDiscoverTap: {
-                        selectedTab = .discover
-                    },
-                    onPendingUploadRetried: { response in
-                        storyUploadCoordinator.register(
-                            response,
-                            api: api,
-                            notice: storyUploadNotice,
-                            pendingUploads: pendingStoryUploads
-                        )
+            ForEach(AppTab.allCases) { tab in
+                if visitedTabs.contains(tab) {
+                    ZStack {
+                        tabContent(tab)
                     }
-                )
-            case .following:
-                FollowingView()
-            case .post:
-                StoryComposerView(
-                    quotedReply: pendingQuotedReply,
-                    clearQuotedReply: {
-                        pendingQuotedReply = nil
-                    },
-                    onPendingUploadStarted: {
-                        pendingQuotedReply = nil
-                        selectedTab = .home
-                        storyUploadNotice.showPosting()
-                    },
-                    onUploadRegistered: { response in
-                        pendingQuotedReply = nil
-                        selectedTab = .home
-                        storyUploadCoordinator.register(
-                            response,
-                            api: api,
-                            notice: storyUploadNotice,
-                            pendingUploads: pendingStoryUploads
-                        )
-                    }
-                )
-            case .discover:
-                DiscoverView(searchFocusRequest: discoverSearchFocusRequest)
-            case .replies:
-                RepliesView { quote in
-                    pendingQuotedReply = quote
-                    selectedTab = .post
+                        .opacity(selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(selectedTab == tab)
+                        .accessibilityHidden(selectedTab != tab)
+                        .accessibilityRespondsToUserInteraction(selectedTab == tab)
+                        .zIndex(selectedTab == tab ? 1 : 0)
                 }
+            }
+
+            if !network.isConnected || showsReconnectedBanner {
+                ConnectivityBanner(isOffline: !network.isConnected)
+                    .padding(.top, 62)
+                    .padding(.horizontal, 62)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(200)
             }
         }
         .environmentObject(storyUploadNotice)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            AppBottomBar(selectedTab: $selectedTab)
+            AppBottomBar(selectedTab: selectedTab, select: selectTab)
         }
         .ignoresSafeArea(
             selectedTab == .post ? .keyboard : [],
@@ -115,7 +90,21 @@ struct MainTabView: View {
         .sheet(isPresented: $isShowingProfile) {
             ProfileView()
         }
+        .onAppear {
+            if let restoredTab = AppTab(rawValue: restoredTabRawValue) {
+                visitedTabs.insert(restoredTab)
+                selectedTab = restoredTab
+            }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            visitedTabs.insert(tab)
+            restoredTabRawValue = tab.rawValue
+        }
+        .onChange(of: network.isConnected) { wasConnected, isConnected in
+            handleConnectivityChange(wasConnected: wasConnected, isConnected: isConnected)
+        }
         .task {
+            await PendingSocialActionQueue.shared.flush(api: api)
             let resumed = await pendingStoryUploads.resumeInterruptedUploads(api: api)
             for response in resumed {
                 storyUploadCoordinator.register(
@@ -126,6 +115,131 @@ struct MainTabView: View {
                 )
             }
         }
+    }
+
+    @ViewBuilder
+    private func tabContent(_ tab: AppTab) -> some View {
+        switch tab {
+        case .home:
+            HomeView(
+                uploadedStoryRegistrations: storyUploadCoordinator.registrations,
+                onSearchTap: {
+                    discoverSearchFocusRequest += 1
+                    selectTab(.discover)
+                },
+                onDiscoverTap: {
+                    selectTab(.discover)
+                },
+                onPendingUploadRetried: { response in
+                    storyUploadCoordinator.register(
+                        response,
+                        api: api,
+                        notice: storyUploadNotice,
+                        pendingUploads: pendingStoryUploads
+                    )
+                }
+            )
+        case .following:
+            FollowingView()
+        case .post:
+            StoryComposerView(
+                isActive: selectedTab == .post,
+                quotedReply: pendingQuotedReply,
+                clearQuotedReply: {
+                    pendingQuotedReply = nil
+                },
+                onPendingUploadStarted: {
+                    pendingQuotedReply = nil
+                    selectTab(.home)
+                    storyUploadNotice.showPosting()
+                },
+                onUploadRegistered: { response in
+                    pendingQuotedReply = nil
+                    selectTab(.home)
+                    storyUploadCoordinator.register(
+                        response,
+                        api: api,
+                        notice: storyUploadNotice,
+                        pendingUploads: pendingStoryUploads
+                    )
+                }
+            )
+        case .discover:
+            DiscoverView(searchFocusRequest: discoverSearchFocusRequest)
+        case .replies:
+            RepliesView { quote in
+                pendingQuotedReply = quote
+                selectTab(.post)
+            }
+        }
+    }
+
+    private func selectTab(_ tab: AppTab) {
+        switch AppTabSelectionPolicy.decision(current: selectedTab, requested: tab) {
+        case .reselect:
+            UBEYEFeedback.selection()
+            NotificationCenter.default.post(name: .appTabReselected, object: tab.rawValue)
+            return
+        case .switchTo:
+            break
+        }
+
+        UBEYEFeedback.selection()
+        withAnimation(.snappy(duration: 0.2)) {
+            selectedTab = tab
+        }
+    }
+
+    private func handleConnectivityChange(wasConnected: Bool, isConnected: Bool) {
+        reconnectBannerTask?.cancel()
+
+        if !isConnected {
+            hasObservedOfflineState = true
+            showsReconnectedBanner = false
+            return
+        }
+
+        guard hasObservedOfflineState, !wasConnected else {
+            return
+        }
+
+        UBEYEFeedback.success()
+        showsReconnectedBanner = true
+        Task {
+            await PendingSocialActionQueue.shared.flush(api: api)
+        }
+        reconnectBannerTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else {
+                return
+            }
+            withAnimation(.easeOut(duration: 0.18)) {
+                showsReconnectedBanner = false
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let appTabReselected = Notification.Name("ubeye.appTabReselected")
+}
+
+private struct ConnectivityBanner: View {
+    let isOffline: Bool
+
+    var body: some View {
+        Label(
+            isOffline ? "Offline · showing saved content" : "Back online",
+            systemImage: isOffline ? "wifi.slash" : "wifi"
+        )
+        .font(.system(size: 13, weight: .bold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
+        .background(isOffline ? Color.ubeyeNavy.opacity(0.92) : Color.green.opacity(0.92), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 5)
+        .accessibilityLabel(isOffline ? "Offline. Showing saved content." : "Back online")
     }
 }
 
@@ -249,14 +363,15 @@ private struct FixedAccountAvatarOverlay: View {
                 name: auth.account?.displayName ?? auth.account?.handle ?? ""
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(UBEYEPressButtonStyle())
         .accessibilityLabel("Profile")
-        .frame(width: UBEYEMetrics.topAvatar, height: UBEYEMetrics.topAvatar)
+        .frame(width: 48, height: 48)
+        .contentShape(Circle())
         .zIndex(100)
     }
 }
 
-enum AppTab: String, CaseIterable, Identifiable {
+enum AppTab: String, CaseIterable, Identifiable, Hashable {
     case home
     case following
     case post
@@ -286,16 +401,28 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum AppTabSelectionDecision: Equatable {
+    case switchTo(AppTab)
+    case reselect(AppTab)
+}
+
+enum AppTabSelectionPolicy {
+    static func decision(current: AppTab, requested: AppTab) -> AppTabSelectionDecision {
+        current == requested ? .reselect(requested) : .switchTo(requested)
+    }
+}
+
 struct AppBottomBar: View {
-    @Binding var selectedTab: AppTab
+    let selectedTab: AppTab
+    let select: (AppTab) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AppTab.allCases) { tab in
                 Button {
-                    selectedTab = tab
+                    select(tab)
                 } label: {
-                    ZStack {
+                    ZStack(alignment: .bottom) {
                         if tab == .post {
                             Circle()
                                 .fill(Color.ubeyeInk)
@@ -308,13 +435,23 @@ struct AppBottomBar: View {
                             .foregroundStyle(tab == .post ? .white : tabColor(for: tab))
                             .frame(width: iconFrameSize(for: tab), height: iconFrameSize(for: tab))
                             .offset(x: iconOpticalOffset(for: tab))
+
+                        if selectedTab == tab, tab != .post {
+                            Capsule()
+                                .fill(Color.ubeyeRed)
+                                .frame(width: 18, height: 2.5)
+                                .offset(y: 4)
+                                .transition(.scale.combined(with: .opacity))
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.92, pressedOpacity: 0.74))
                 .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                .accessibilityHint(selectedTab == tab ? "Double tap to return to the top and refresh" : "Double tap to open")
             }
         }
         .padding(.horizontal, 12)

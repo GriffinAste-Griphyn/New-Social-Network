@@ -35,16 +35,27 @@ final class FollowingManagementStore: ObservableObject {
 
         removingIds.insert(profile.id)
         error = nil
+        let previousIndex = following.firstIndex(where: { $0.id == profile.id })
+        following.removeAll { $0.id == profile.id }
+        UBEYEFeedback.impact(.light)
         defer {
             removingIds.remove(profile.id)
         }
 
         do {
             let _: BasicOkResponse = try await api.delete("/api/mobile/follows", body: Body(creatorId: profile.id))
-            following.removeAll { $0.id == profile.id }
             NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
+            UBEYEFeedback.success()
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: profile.id)
+                return
+            }
+            if let previousIndex, !following.contains(where: { $0.id == profile.id }) {
+                following.insert(profile, at: min(previousIndex, following.endIndex))
+            }
             self.error = error.localizedDescription
+            UBEYEFeedback.error()
         }
     }
 }

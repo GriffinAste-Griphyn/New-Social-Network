@@ -135,6 +135,7 @@ describe("story upload and mobile feed API", () => {
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
       id: createdStoryId,
       mediaAssetId: "media-123",
+      assetKind: "image",
       storageProvider: "vercel-blob",
       status: "live",
       processingStatus: "ready",

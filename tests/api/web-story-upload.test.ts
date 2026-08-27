@@ -243,6 +243,7 @@ describe("web direct story upload API", () => {
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
       id: "33333333-3333-4333-8333-333333333333",
       mediaAssetId: "media-123",
+      assetKind: "video",
       storageProvider: "vercel-blob",
       status: "live",
       processingStatus: "ready",

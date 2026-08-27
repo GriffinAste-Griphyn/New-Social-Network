@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto"
+import { createWriteStream } from "node:fs"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 
 import { get, head, put } from "@vercel/blob"
 import { and, eq } from "drizzle-orm"
@@ -15,17 +18,21 @@ import {
 } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import {
+  maximumMediaProcessingAttempts,
   mediaPipelineLimits,
   selectRenditionProfiles,
   type MediaRenditionProfile,
   type MediaSourceMetadata,
   validateSourceMetadata,
 } from "@/lib/media-pipeline/contracts"
+import { mediaDeliveryAccess } from "@/lib/media-pipeline/features"
 import {
   encodeMediaRendition,
+  encodeMediaRenditionFile,
   generateMediaPoster,
+  generateMediaPosterFile,
   inspectMediaFile,
-  inspectMediaStream,
+  inspectAndHashMediaStream,
   mediaContentType,
 } from "@/lib/media-pipeline/ffmpeg"
 import {
@@ -33,10 +40,13 @@ import {
   type PublishedRendition,
 } from "@/lib/media-pipeline/manifest"
 import { renditionPrefix } from "@/lib/media-pipeline/paths"
+import { buildStoryMediaRoute } from "@/lib/story-media/access"
 import { enqueueStoryPublication } from "@/lib/story-publication"
 import { deriveStoryPublicationStatus } from "@/lib/stories/cloudflare-status"
 
-class MediaProcessingFatalError extends Error {}
+import { FatalError } from "workflow"
+
+class MediaProcessingFatalError extends FatalError {}
 
 type EncodedRendition = {
   profile: MediaRenditionProfile
@@ -47,6 +57,8 @@ type EncodedRendition = {
   segmentCount: number
   encodingMs: number
   codec: string
+  durationMs: number
+  frameRate: number | null
 }
 
 type PublishedMaster = {
@@ -64,6 +76,8 @@ type PublishedPoster = {
 }
 
 const renditionUploadConcurrency = 8
+const workflowLeaseRecoveryMs = 15 * 60 * 1_000
+const activeJobStatuses = ["inspecting", "encoding", "publishing"] as const
 
 function logMediaPipeline(
   level: "info" | "error",
@@ -106,6 +120,7 @@ async function publishRenditionFiles(input: {
   files: Array<{ fileName: string; body: Buffer }>
   token: string
 }) {
+  const access = mediaDeliveryAccess()
   const uploaded: Awaited<ReturnType<typeof put>>[] = []
   for (
     let index = 0;
@@ -117,7 +132,7 @@ async function publishRenditionFiles(input: {
       ...(await Promise.all(
         batch.map((file) =>
           put(`${input.prefix}/${file.fileName}`, file.body, {
-            access: "public",
+            access,
             token: input.token,
             addRandomSuffix: false,
             allowOverwrite: true,
@@ -129,6 +144,12 @@ async function publishRenditionFiles(input: {
     )
   }
   return uploaded
+}
+
+function deliveryMediaUrl(blob: { pathname: string; url: string }) {
+  return mediaDeliveryAccess() === "public"
+    ? blob.url
+    : buildStoryMediaRoute(blob.pathname)
 }
 
 async function readJob(jobId: string) {
@@ -148,27 +169,54 @@ async function readJob(jobId: string) {
 
 export async function claimMediaProcessingWorkflowStep(
   jobId: string,
-  attempt: number,
+  workflowRunId: string,
 ) {
   "use step"
 
+  const job = await readJob(jobId)
+  const isStaleActiveJob =
+    activeJobStatuses.some((status) => status === job.status) &&
+    job.updatedAt.getTime() <= Date.now() - workflowLeaseRecoveryMs
+  if (
+    job.status === "ready" ||
+    job.attempts >= maximumMediaProcessingAttempts ||
+    (!["pending", "error"].includes(job.status) && !isStaleActiveJob)
+  ) {
+    return null
+  }
+  const attempt = job.attempts + 1
+  const now = new Date()
   const [claimed] = await getDb()
     .update(mediaProcessingJobs)
     .set({
+      workflowRunId,
       status: "inspecting",
-      progressPct: 1,
-      updatedAt: new Date(),
+      attempts: attempt,
+      progressPct: Math.max(job.progressPct, 1),
+      failureCode: null,
+      lastError: null,
+      startedAt: job.startedAt ?? now,
+      finishedAt: null,
+      updatedAt: now,
     })
     .where(
       and(
         eq(mediaProcessingJobs.id, jobId),
-        eq(mediaProcessingJobs.status, "pending"),
-        eq(mediaProcessingJobs.attempts, attempt),
+        eq(mediaProcessingJobs.status, job.status),
+        eq(mediaProcessingJobs.attempts, job.attempts),
+        eq(mediaProcessingJobs.updatedAt, job.updatedAt),
       ),
     )
     .returning({ id: mediaProcessingJobs.id })
 
-  return Boolean(claimed)
+  if (!claimed) return null
+
+  await getDb()
+    .update(mediaAssets)
+    .set({ workflowRunId, updatedAt: now })
+    .where(eq(mediaAssets.id, job.mediaAssetId))
+
+  return { attempt }
 }
 
 async function readPrivateSource(pathname: string) {
@@ -183,6 +231,15 @@ async function readPrivateSource(pathname: string) {
     )
   }
   return source
+}
+
+async function stagePrivateSource(pathname: string, outputPath: string) {
+  const source = await readPrivateSource(pathname)
+  await pipeline(
+    Readable.fromWeb(source.stream as import("node:stream/web").ReadableStream),
+    createWriteStream(outputPath, { flags: "wx" }),
+  )
+  return outputPath
 }
 
 export async function inspectMediaSourceStep(jobId: string) {
@@ -209,11 +266,33 @@ export async function inspectMediaSourceStep(jobId: string) {
   }
 
   const sourceBlob = await readPrivateSource(job.sourcePathname)
-  const source = await inspectMediaStream(sourceBlob.stream)
+  const inspected = await inspectAndHashMediaStream(sourceBlob.stream)
+  const source = inspected.metadata
   const sourceFailure = validateSourceMetadata(source)
   if (sourceFailure) {
     throw new MediaProcessingFatalError(
       `Media quality control failed: ${sourceFailure}.`,
+    )
+  }
+  const [asset] = await getDb()
+    .select({
+      checksum: mediaAssets.originalChecksum,
+      byteSize: mediaAssets.originalByteSize,
+    })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.id, job.mediaAssetId))
+    .limit(1)
+  if (
+    asset?.checksum &&
+    inspected.checksum.toLowerCase() !== asset.checksum.toLowerCase()
+  ) {
+    throw new MediaProcessingFatalError(
+      "The source video failed its integrity check.",
+    )
+  }
+  if (asset?.byteSize && sourceHead.size !== asset.byteSize) {
+    throw new MediaProcessingFatalError(
+      "The source video size does not match the completed upload.",
     )
   }
 
@@ -237,18 +316,18 @@ export async function inspectMediaSourceStep(jobId: string) {
     frameRate: source.frameRate,
     videoCodec: source.videoCodec,
     hasAudio: source.hasAudio,
+    checksum: inspected.checksum,
   })
 
   return { source, profiles: selectRenditionProfiles(source) }
 }
 
-export async function encodeMediaRenditionStep(
+async function encodeMediaRenditionCore(
   jobId: string,
   profile: MediaRenditionProfile,
   sourceMetadata: MediaSourceMetadata,
+  stagedSourcePath?: string,
 ): Promise<EncodedRendition> {
-  "use step"
-
   const job = await readJob(jobId)
   const [existing] = await getDb()
     .select()
@@ -279,6 +358,10 @@ export async function encodeMediaRenditionStep(
       segmentCount: details.segmentCount ?? 0,
       encodingMs: details.encodingMs ?? 0,
       codec: existing.codec ?? "avc1.640029",
+      durationMs: existing.durationMs ?? sourceMetadata.durationMs,
+      frameRate:
+        ((existing.qualityDetails ?? {}) as { frameRate?: number | null })
+          .frameRate ?? sourceMetadata.frameRate,
     }
   }
 
@@ -293,12 +376,21 @@ export async function encodeMediaRenditionStep(
   try {
     const outputDirectory = path.join(tempDirectory, profile.label)
     await mkdir(outputDirectory, { recursive: true })
-    const source = await readPrivateSource(job.sourcePathname)
-    const encoded = await encodeMediaRendition({
-      source: source.stream,
-      profile,
-      outputDirectory,
-    })
+    const encoded = stagedSourcePath
+      ? await encodeMediaRenditionFile({
+          inputPath: stagedSourcePath,
+          profile,
+          outputDirectory,
+          sourceMetadata,
+        })
+      : await readPrivateSource(job.sourcePathname).then((source) =>
+          encodeMediaRendition({
+            source: source.stream,
+            profile,
+            outputDirectory,
+            sourceMetadata,
+          }),
+        )
     const playlistFile = encoded.files.find(
       (file) => file.fileName === "index.m3u8",
     )
@@ -349,6 +441,10 @@ export async function encodeMediaRenditionStep(
       (total, file) => total + file.body.byteLength,
       0,
     )
+    const measuredBitrate = Math.max(
+      1,
+      Math.ceil((byteSize * 8) / Math.max(encodedMetadata.durationMs / 1_000, 0.001)),
+    )
     const now = new Date()
     const values = {
       id: `media-rendition-${randomUUID()}`,
@@ -358,7 +454,7 @@ export async function encodeMediaRenditionStep(
       label: profile.label,
       storageProvider: "vercel-blob" as const,
       storageKey: uploadedPlaylist.pathname,
-      mediaUrl: uploadedPlaylist.url,
+      mediaUrl: deliveryMediaUrl(uploadedPlaylist),
       contentType: "application/vnd.apple.mpegurl",
       codec: sourceMetadata.hasAudio
         ? "avc1.640029,mp4a.40.2"
@@ -366,9 +462,7 @@ export async function encodeMediaRenditionStep(
       width: profile.width,
       height: profile.height,
       durationMs: encodedMetadata.durationMs,
-      bitrate:
-        profile.videoBitrate +
-        (sourceMetadata.hasAudio ? profile.audioBitrate : 0),
+      bitrate: measuredBitrate,
       byteSize,
       checksum: playlistFile.checksum,
       status: "ready" as const,
@@ -382,6 +476,8 @@ export async function encodeMediaRenditionStep(
         verifiedDurationMs: encodedMetadata.durationMs,
         verifiedVideoCodec: encodedMetadata.videoCodec,
         verifiedAudioCodec: encodedMetadata.audioCodec,
+        frameRate: encodedMetadata.frameRate,
+        measuredBitrate,
       },
       encoderVersion: job.encoderVersion,
       createdAt: now,
@@ -402,6 +498,9 @@ export async function encodeMediaRenditionStep(
           processingJobId: values.processingJobId,
           storageKey: values.storageKey,
           mediaUrl: values.mediaUrl,
+          codec: values.codec,
+          durationMs: values.durationMs,
+          bitrate: values.bitrate,
           byteSize: values.byteSize,
           checksum: values.checksum,
           status: values.status,
@@ -430,7 +529,47 @@ export async function encodeMediaRenditionStep(
       segmentCount,
       encodingMs: encoded.encodingMs,
       codec: values.codec,
+      durationMs: encodedMetadata.durationMs,
+      frameRate: encodedMetadata.frameRate,
     }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true })
+  }
+}
+
+export async function encodeMediaRenditionStep(
+  jobId: string,
+  profile: MediaRenditionProfile,
+  sourceMetadata: MediaSourceMetadata,
+) {
+  "use step"
+  return encodeMediaRenditionCore(jobId, profile, sourceMetadata)
+}
+
+export async function encodeMediaRenditionBatchStep(
+  jobId: string,
+  profiles: MediaRenditionProfile[],
+  sourceMetadata: MediaSourceMetadata,
+) {
+  "use step"
+
+  const job = await readJob(jobId)
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-source-batch-"))
+  try {
+    const sourcePath = path.join(tempDirectory, "source")
+    await stagePrivateSource(job.sourcePathname, sourcePath)
+    const renditions: EncodedRendition[] = []
+    for (const profile of profiles) {
+      renditions.push(
+        await encodeMediaRenditionCore(
+          jobId,
+          profile,
+          sourceMetadata,
+          sourcePath,
+        ),
+      )
+    }
+    return renditions
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
   }
@@ -458,6 +597,9 @@ export async function publishMasterPlaylistStep(
         profile: item.profile,
         playlistUrl: `${item.profile.label}/index.m3u8`,
         codec: item.codec,
+        byteSize: item.byteSize,
+        durationMs: item.durationMs,
+        frameRate: item.frameRate,
       }),
     ),
   )
@@ -466,7 +608,7 @@ export async function publishMasterPlaylistStep(
   const renditionLabels = ordered.map((item) => item.profile.label)
   const masterFileName = `master-${renditionLabels.join("-")}.m3u8`
   const blob = await put(`${job.outputPrefix}/${masterFileName}`, body, {
-    access: "public",
+    access: mediaDeliveryAccess(),
     token: deliveryBlobToken(),
     addRandomSuffix: false,
     allowOverwrite: true,
@@ -485,7 +627,7 @@ export async function publishMasterPlaylistStep(
       label: "adaptive",
       storageProvider: "vercel-blob",
       storageKey: blob.pathname,
-      mediaUrl: blob.url,
+      mediaUrl: deliveryMediaUrl(blob),
       contentType: "application/vnd.apple.mpegurl",
       byteSize: body.byteLength,
       checksum,
@@ -506,7 +648,7 @@ export async function publishMasterPlaylistStep(
       set: {
         processingJobId: job.id,
         storageKey: blob.pathname,
-        mediaUrl: blob.url,
+        mediaUrl: deliveryMediaUrl(blob),
         byteSize: body.byteLength,
         checksum,
         status: "ready",
@@ -529,14 +671,18 @@ export async function publishMasterPlaylistStep(
     byteSize: body.byteLength,
   })
 
-  return { pathname: blob.pathname, url: blob.url, byteSize: body.byteLength, checksum }
+  return {
+    pathname: blob.pathname,
+    url: deliveryMediaUrl(blob),
+    byteSize: body.byteLength,
+    checksum,
+  }
 }
 
-export async function generateMediaPosterStep(
+async function generateMediaPosterCore(
   jobId: string,
+  stagedSourcePath?: string,
 ): Promise<PublishedPoster> {
-  "use step"
-
   const job = await readJob(jobId)
   const [existing] = await getDb()
     .select()
@@ -563,13 +709,16 @@ export async function generateMediaPosterStep(
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-poster-"))
   try {
     const outputPath = path.join(tempDirectory, "poster.jpg")
-    const source = await readPrivateSource(job.sourcePathname)
-    const poster = await generateMediaPoster({
-      source: source.stream,
-      outputPath,
-    })
+    const poster = stagedSourcePath
+      ? await generateMediaPosterFile({
+          inputPath: stagedSourcePath,
+          outputPath,
+        })
+      : await readPrivateSource(job.sourcePathname).then((source) =>
+          generateMediaPoster({ source: source.stream, outputPath }),
+        )
     const blob = await put(`${job.outputPrefix}/poster.jpg`, poster.body, {
-      access: "public",
+      access: mediaDeliveryAccess(),
       token: deliveryBlobToken(),
       addRandomSuffix: false,
       allowOverwrite: true,
@@ -587,7 +736,7 @@ export async function generateMediaPosterStep(
         label: "540x960",
         storageProvider: "vercel-blob",
         storageKey: blob.pathname,
-        mediaUrl: blob.url,
+        mediaUrl: deliveryMediaUrl(blob),
         contentType: "image/jpeg",
         width: 540,
         height: 960,
@@ -610,7 +759,7 @@ export async function generateMediaPosterStep(
         set: {
           processingJobId: job.id,
           storageKey: blob.pathname,
-          mediaUrl: blob.url,
+          mediaUrl: deliveryMediaUrl(blob),
           byteSize: poster.body.byteLength,
           checksum: poster.checksum,
           status: "ready",
@@ -625,10 +774,37 @@ export async function generateMediaPosterStep(
     })
     return {
       pathname: blob.pathname,
-      url: blob.url,
+      url: deliveryMediaUrl(blob),
       byteSize: poster.body.byteLength,
       checksum: poster.checksum,
     }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true })
+  }
+}
+
+export async function generateMediaPosterStep(jobId: string) {
+  "use step"
+  return generateMediaPosterCore(jobId)
+}
+
+export async function encodeInitialMediaStep(
+  jobId: string,
+  profile: MediaRenditionProfile,
+  sourceMetadata: MediaSourceMetadata,
+) {
+  "use step"
+
+  const job = await readJob(jobId)
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-source-initial-"))
+  try {
+    const sourcePath = path.join(tempDirectory, "source")
+    await stagePrivateSource(job.sourcePathname, sourcePath)
+    const [rendition, poster] = await Promise.all([
+      encodeMediaRenditionCore(jobId, profile, sourceMetadata, sourcePath),
+      generateMediaPosterCore(jobId, sourcePath),
+    ])
+    return { rendition, poster }
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
   }

@@ -5,6 +5,7 @@ import { env } from "@/lib/env"
 export const storyMediaRoutePrefix = "/api/story-media"
 export const cloudflareStreamMediaPrefix = "cloudflare-stream"
 export const storyMediaAccessTokenTtlMs = 2 * 60 * 60 * 1000
+export const cloudflareClientBandwidthHintQueryName = "clientBandwidthHint"
 
 const storyMediaAccessTokenBucketMs = 30 * 60 * 1000
 
@@ -59,7 +60,8 @@ export function getPrivateVercelBlobPathname(mediaUrl: string) {
       .join("/")
 
     return pathname.startsWith("stories/") ||
-      pathname.startsWith("media-originals/")
+      pathname.startsWith("media-originals/") ||
+      pathname.startsWith("media/")
       ? pathname
       : null
   }
@@ -103,6 +105,32 @@ export function buildCloudflareStreamPathname(uid: string) {
 
 export function buildCloudflareStreamThumbnailPathname(uid: string) {
   return `${cloudflareStreamMediaPrefix}/${uid}/thumbnails/thumbnail.jpg`
+}
+
+export function forwardCloudflarePlaybackOptions(
+  playbackUrl: string,
+  requestUrl: string,
+) {
+  const requestedHint = new URL(requestUrl).searchParams.get(
+    cloudflareClientBandwidthHintQueryName,
+  )
+  if (!requestedHint) return playbackUrl
+
+  const megabitsPerSecond = Number(requestedHint)
+  if (
+    !Number.isFinite(megabitsPerSecond) ||
+    megabitsPerSecond < 0.25 ||
+    megabitsPerSecond > 20
+  ) {
+    return playbackUrl
+  }
+
+  const url = new URL(playbackUrl)
+  url.searchParams.set(
+    cloudflareClientBandwidthHintQueryName,
+    String(megabitsPerSecond),
+  )
+  return url.toString()
 }
 
 function parseCloudflareStreamUid(mediaUrl: string) {
@@ -219,5 +247,23 @@ export function publicStoryMediaUrl(
     url.searchParams.set("token", createStoryMediaAccessToken(mediaPathname))
   }
 
+  return url.toString()
+}
+
+export function reviewableStoryMediaUrl(value: string | null) {
+  if (!value) return null
+  if (/^https?:\/\//i.test(value) && !getPrivateVercelBlobPathname(value)) {
+    return value
+  }
+
+  const pathname =
+    getPrivateVercelBlobPathname(value) ?? getCloudflareStreamPathname(value)
+  if (!pathname) return null
+
+  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
+  if (!baseUrl) return null
+
+  const url = new URL(buildStoryMediaRoute(pathname), baseUrl)
+  url.searchParams.set("token", createStoryMediaAccessToken(pathname))
   return url.toString()
 }

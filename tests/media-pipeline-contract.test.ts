@@ -161,19 +161,19 @@ describe("aggressive media pipeline contract", () => {
     expect(config.stackPreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.imagePreheatLimit).toEqual({ constrained: 2, standard: 4 })
     expect(config.startupStreamingPeakBitRate).toEqual({
-      constrained: 2_000_000,
-      standard: 3_000_000,
+      constrained: 3_000_000,
+      standard: 8_000_000,
     })
     expect(config.startupStreamingMaximumResolution).toEqual({
-      constrained: { width: 540, height: 960 },
-      standard: { width: 720, height: 1280 },
+      constrained: { width: 720, height: 1280 },
+      standard: { width: 1080, height: 1920 },
     })
     expect(config.preparedStreamingPeakBitRate).toEqual({
-      constrained: 2_000_000,
-      standard: 8_256_000,
+      constrained: 3_000_000,
+      standard: 8_000_000,
     })
     expect(config.preparedStreamingMaximumResolution).toEqual({
-      constrained: { width: 540, height: 960 },
+      constrained: { width: 720, height: 1280 },
       standard: { width: 1080, height: 1920 },
     })
     expect(config.offlineHLSPreheatLimit).toEqual({ constrained: 0, standard: 1 })

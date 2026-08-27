@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enforceRequestRateLimits } from "@/lib/request-security"
+import { createServerEncodedStoryImageAsset } from "@/lib/story-image-processing"
 import {
   createStory,
   getStoryTextOverlaysForOwner,
@@ -24,6 +25,9 @@ vi.mock("@/lib/story-store", () => ({
   createStory: vi.fn(),
   getStoryTextOverlaysForOwner: vi.fn(),
   getStoryUploadStatusForOwner: vi.fn(),
+}))
+vi.mock("@/lib/story-image-processing", () => ({
+  createServerEncodedStoryImageAsset: vi.fn(),
 }))
 vi.mock("@/lib/story-storage", async () => {
   const actual = await vi.importActual<typeof import("@/lib/story-storage")>(
@@ -108,6 +112,7 @@ describe("mobile image completion", () => {
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(createDirectBlobStoryImageAsset).mockResolvedValue(imageAsset)
+    vi.mocked(createServerEncodedStoryImageAsset).mockResolvedValue(imageAsset)
     vi.mocked(publicStoryMediaUrl).mockImplementation((value) => value)
     vi.mocked(removeStoredStoryAsset).mockResolvedValue(undefined)
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue(null)
@@ -157,6 +162,60 @@ describe("mobile image completion", () => {
     expect(response.status).toBe(200)
     expect(createStory).toHaveBeenCalledWith(
       expect.objectContaining({ createdAt: uploadStartedAt }),
+    )
+  })
+
+  it("uses the server encoder when the client uploads one raw source", async () => {
+    vi.mocked(createStory).mockResolvedValue(
+      "22222222-2222-4222-8222-222222222222",
+    )
+    const sourceUpload = {
+      pathname: `${reservedBasePathname}-source.jpg`,
+      contentType: "image/jpeg",
+      byteSize: 2_048,
+      checksum: "c".repeat(64),
+      width: 1200,
+      height: 2000,
+    }
+    const { POST } = await import(
+      "@/app/api/mobile/stories/image-complete/route"
+    )
+
+    const response = await POST(completionRequest({ sourceUpload }))
+
+    expect(response.status).toBe(200)
+    expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith({
+      basePathname: reservedBasePathname,
+      ownerUserId: session.id,
+      contentMode: "fit",
+      source: sourceUpload,
+    })
+    expect(createDirectBlobStoryImageAsset).not.toHaveBeenCalled()
+  })
+
+  it("forces fit-only server encoding when an older client requests fill", async () => {
+    vi.mocked(createStory).mockResolvedValue(
+      "22222222-2222-4222-8222-222222222222",
+    )
+    const sourceUpload = {
+      pathname: `${reservedBasePathname}-source.jpg`,
+      contentType: "image/jpeg",
+      byteSize: 2_048,
+      checksum: "c".repeat(64),
+      width: 1200,
+      height: 2000,
+    }
+    const { POST } = await import(
+      "@/app/api/mobile/stories/image-complete/route"
+    )
+
+    const response = await POST(
+      completionRequest({ sourceUpload, contentMode: "fill" }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ contentMode: "fit" }),
     )
   })
 })

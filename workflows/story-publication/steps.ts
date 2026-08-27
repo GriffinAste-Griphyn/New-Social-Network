@@ -41,7 +41,9 @@ async function readDispatch(storyId: string) {
   return dispatch ?? null
 }
 
-export async function validateStoryPublicationCore(storyId: string) {
+export async function validateStoryPublicationStep(storyId: string) {
+  "use step"
+
   const publication = await readPublication(storyId)
 
   if (!publication) {
@@ -58,7 +60,9 @@ export async function validateStoryPublicationCore(storyId: string) {
   return publication
 }
 
-export async function processStoryPublicationEarningsCore(storyId: string) {
+export async function processStoryPublicationEarningsStep(storyId: string) {
+  "use step"
+
   const dispatch = await readDispatch(storyId)
   if (dispatch?.earningsCompletedAt || !(await readPublication(storyId))) return
 
@@ -69,7 +73,9 @@ export async function processStoryPublicationEarningsCore(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function fanoutStoryPublicationCore(storyId: string) {
+export async function fanoutStoryPublicationStep(storyId: string) {
+  "use step"
+
   const [dispatch, publication] = await Promise.all([
     readDispatch(storyId),
     readPublication(storyId),
@@ -87,7 +93,9 @@ export async function fanoutStoryPublicationCore(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function notifyStoryPublicationCore(storyId: string) {
+export async function notifyStoryPublicationStep(storyId: string) {
+  "use step"
+
   const publication = await readPublication(storyId)
   if (!publication) return
 
@@ -136,7 +144,9 @@ export async function notifyStoryPublicationCore(storyId: string) {
   }
 }
 
-export async function invalidateStoryPublicationSnapshotsCore(storyId: string) {
+export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
+  "use step"
+
   const [dispatch, publication] = await Promise.all([
     readDispatch(storyId),
     readPublication(storyId),
@@ -150,7 +160,9 @@ export async function invalidateStoryPublicationSnapshotsCore(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function completeStoryPublicationCore(storyId: string) {
+export async function completeStoryPublicationStep(storyId: string) {
+  "use step"
+
   const now = new Date()
   await getDb()
     .update(storyPublishJobs)
@@ -163,7 +175,9 @@ export async function completeStoryPublicationCore(storyId: string) {
     .where(eq(storyPublishJobs.storyId, storyId))
 }
 
-export async function failStoryPublicationCore(storyId: string, message: string) {
+export async function failStoryPublicationStep(storyId: string, message: string) {
+  "use step"
+
   await getDb()
     .update(storyPublishJobs)
     .set({
@@ -172,39 +186,4 @@ export async function failStoryPublicationCore(storyId: string, message: string)
       updatedAt: new Date(),
     })
     .where(eq(storyPublishJobs.storyId, storyId))
-}
-
-export async function validateStoryPublicationStep(storyId: string) {
-  "use step"
-  return validateStoryPublicationCore(storyId)
-}
-
-export async function processStoryPublicationEarningsStep(storyId: string) {
-  "use step"
-  return processStoryPublicationEarningsCore(storyId)
-}
-
-export async function fanoutStoryPublicationStep(storyId: string) {
-  "use step"
-  return fanoutStoryPublicationCore(storyId)
-}
-
-export async function notifyStoryPublicationStep(storyId: string) {
-  "use step"
-  return notifyStoryPublicationCore(storyId)
-}
-
-export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
-  "use step"
-  return invalidateStoryPublicationSnapshotsCore(storyId)
-}
-
-export async function completeStoryPublicationStep(storyId: string) {
-  "use step"
-  return completeStoryPublicationCore(storyId)
-}
-
-export async function failStoryPublicationStep(storyId: string, message: string) {
-  "use step"
-  return failStoryPublicationCore(storyId, message)
 }

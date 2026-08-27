@@ -7,9 +7,9 @@ Date: August 25, 2026
 The provider-neutral custom pipeline is implemented behind the paired
 `STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` flags.
 Private originals upload directly to Vercel Blob. Versioned Vercel Workflow
-steps inspect them with FFprobe, create a source-appropriate 360p–1080p H.264
-ladder, package two-second CMAF HLS, generate a poster, publish to a distinct
-public Blob store, run structural quality checks, and atomically promote the
+steps inspect and hash them, create a source-appropriate 360p–1080p H.264
+ladder, package two-second CMAF HLS, generate a poster, publish immutable
+versioned manifests to a distinct delivery Blob store, run structural quality checks, and atomically promote the
 story. Cloudflare is retained only as the migration rollback/drain path.
 
 ## Outcome
@@ -44,8 +44,9 @@ with real QoE data.
    receive resources; speculative full HLS package downloads are not part of launch.
 10. Playback progress follows `AVPlayer` media time. Buffering pauses progress, end of
     media advances exactly once, and a prolonged stall performs a bounded recovery.
-11. Publication side effects run in a durable Workflow after the story transaction;
-    a one-minute reconciliation scan repairs any missed dispatch.
+11. Moderation, image processing, video processing, and publication side effects run in
+    durable Workflows after the story transaction; five-minute reconciliation scans repair
+    any missed dispatch.
 
 ## State model
 
@@ -100,8 +101,8 @@ the other effects can be retried safely. The publishing request does not wait fo
 
 ## iOS ingest
 
-1. Capture portrait video at 1080p/30 fps with a network-appropriate source bitrate.
-   Avoid generating an 18 Mbps source when the delivery ladder cannot benefit from it.
+1. Capture portrait video at 1080p/30 fps with a delivery-aware 5 Mbps HEVC or
+   7 Mbps H.264 source bitrate. Routine story capture does not use 4K.
 2. Normalize only when container/codec/geometry requires it; keep passthrough exports
    when AVFoundation can produce a provider-compatible result without re-encoding.
    Compatible slow-start files first receive a fast-start passthrough remux; only files
@@ -133,16 +134,16 @@ the other effects can be retried safely. The publishing request does not wait fo
 
 ## Images and thumbnails
 
-- Upload a 1080 x 1920-bounded display image and a 360 x 640-bounded thumbnail from
-  the client. Carry the tiny JPEG placeholder inline in the completion payload.
-- Fill letterboxed canvas space with a darkened blurred version of the source image.
+- Build 363+ uploads one private source image and returns from completion after creating
+  a processing story. A durable worker verifies it and publishes the 1080 x 1920 AVIF/WebP
+  display derivative, 360 x 640 WebP thumbnail, and ThumbHash placeholder.
+- Keep photo letterboxing transparent in derivatives and render uncovered canvas space as flat black in every client theme.
 - Use decoded-memory and byte-bounded disk caches with request coalescing.
 - Prefetch visible/adjacent thumbnails, not an unbounded feed window.
 - Extract the first decodable video frame at time zero for the client poster; use the
   Stream `time=0s` thumbnail as the server fallback so the transition to HLS remains
   pixel-aligned with playback.
-- Keep server-side JPEG generation only as a compatibility fallback for clients that do
-  not submit verified derivatives; do not synchronously generate AVIF/WebP sidecars.
+- Older clients retain the verified client-derivative path during the migration window.
 
 ## QoE service levels
 
@@ -191,7 +192,8 @@ media duration, warm/cold state, and provider delivery type.
 
 1. Run all local quality gates.
 2. Create a release snapshot containing only the reviewed implementation.
-3. Apply the additive `0049_vercel_hls_media_pipeline.sql` migration while the
+3. Apply the additive `0049_vercel_hls_media_pipeline.sql` and
+   `0052_async_media_workers.sql` migrations while the
    custom pipeline flag remains disabled.
 4. Verify schema state and existing media rows.
 5. Deploy a Vercel preview from the release snapshot and run health/API smoke checks.
@@ -218,7 +220,7 @@ This release fixes correctness and the largest playback/upload latency traps. Re
 TikTok/Instagram scale remains an iterative program:
 
 1. Build QoE dashboards and automatic regression alerts from production events.
-2. Add multi-frame moderation and perceptual VMAF/SSIM gates to the existing
+2. Add sampled multi-frame moderation and perceptual VMAF/SSIM gates to the existing
    durable media-job workflow.
 3. Add byte-budgeted cache eviction informed by device storage pressure and actual reuse.
 4. Tune the custom H.264 ladder from VMAF/SSIM and startup measurements.

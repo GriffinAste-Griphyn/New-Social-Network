@@ -26,12 +26,14 @@ struct StoryCanvasLayout: Equatable {
     static let thumbnailPixelSize = StoryMediaContract.thumbnailPixelSize
 
     let frame: CGRect
+    let verticalPlacement: StoryCanvasVerticalPlacement
 
     init(
         containerSize: CGSize,
         reservedTopHeight: CGFloat = 0,
         reservedBottomHeight: CGFloat = 0,
-        fillsAvailableHeight: Bool = false
+        fillsAvailableHeight: Bool = false,
+        verticalPlacement: StoryCanvasVerticalPlacement = .center
     ) {
         let containerWidth = max(containerSize.width, 0)
         let containerHeight = max(containerSize.height, 0)
@@ -56,11 +58,77 @@ struct StoryCanvasLayout: Equatable {
                 : 0
         }
 
+        let canvasOriginY = switch verticalPlacement {
+        case .top:
+            topHeight
+        case .center:
+            (containerHeight - canvasHeight) / 2
+        }
+
+        self.verticalPlacement = verticalPlacement
         frame = CGRect(
             x: (containerWidth - canvasWidth) / 2,
-            y: topHeight,
+            y: canvasOriginY,
             width: canvasWidth,
             height: canvasHeight
+        )
+    }
+}
+
+enum StoryCanvasVerticalPlacement: Equatable {
+    case top
+    case center
+
+    private static let fullHeightAspectTolerance: CGFloat = 0.015
+
+    static func forMediaDimensions(width: Int?, height: Int?) -> Self {
+        guard let width,
+              let height,
+              width > 0,
+              height > 0 else {
+            return .center
+        }
+
+        let aspectRatio = CGFloat(width) / CGFloat(height)
+        return aspectRatio <= StoryMediaContract.aspectRatio + fullHeightAspectTolerance
+            ? .top
+            : .center
+    }
+}
+
+private struct StoryCanvasFrameModifier: ViewModifier {
+    let layout: StoryCanvasLayout
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .frame(
+                width: layout.frame.width,
+                height: layout.frame.height
+            )
+            .position(
+                x: layout.frame.midX,
+                y: layout.frame.midY
+            )
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: max(cornerRadius, 0),
+                    style: .continuous
+                )
+            )
+    }
+}
+
+extension View {
+    func storyCanvasFrame(
+        _ layout: StoryCanvasLayout,
+        cornerRadius: CGFloat = 0
+    ) -> some View {
+        modifier(
+            StoryCanvasFrameModifier(
+                layout: layout,
+                cornerRadius: cornerRadius
+            )
         )
     }
 }
@@ -75,11 +143,17 @@ struct StoryCanvasForegroundImage: View {
     }
 }
 
+struct StoryCanvasBackground: View {
+    var body: some View {
+        Color.black
+    }
+}
+
 struct StoryCanvasImage: View {
     let image: Image
 
     var body: some View {
-        Color.black
+        StoryCanvasBackground()
             .overlay {
                 StoryCanvasForegroundImage(image: image)
             }

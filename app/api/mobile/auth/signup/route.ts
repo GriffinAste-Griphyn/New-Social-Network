@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { signupSchema } from "@/lib/auth-validators"
+import { mobileSignupSchema, signupSchema } from "@/lib/auth-validators"
 import { sendUserVerificationEmail } from "@/lib/email-verification"
 import {
   enforceRequestRateLimits,
@@ -8,6 +8,10 @@ import {
   requestIpSubject,
 } from "@/lib/request-security"
 import { registerUser } from "@/lib/user-store"
+import {
+  currentLegalVersions,
+  versionedLegalAcceptanceIosBuild,
+} from "@/lib/legal"
 
 export const runtime = "nodejs"
 
@@ -23,7 +27,15 @@ export async function POST(request: Request) {
     return rateLimitResponse
   }
 
-  const parsed = signupSchema.safeParse(await request.json().catch(() => null))
+  const requestBody = await request.json().catch(() => null)
+  const appBuild = Number(request.headers.get("x-ubeye-app-build"))
+  const isLegacyIosBuild =
+    Number.isInteger(appBuild) &&
+    appBuild > 0 &&
+    appBuild < versionedLegalAcceptanceIosBuild
+  const parsed = isLegacyIosBuild
+    ? signupSchema.safeParse(requestBody)
+    : mobileSignupSchema.safeParse(requestBody)
 
   if (!parsed.success) {
     return NextResponse.json(
@@ -35,7 +47,17 @@ export async function POST(request: Request) {
     )
   }
 
-  const result = await registerUser(parsed.data)
+  const signupInput = isLegacyIosBuild
+    ? {
+        ...parsed.data,
+        acceptedTerms: true as const,
+        termsVersion: currentLegalVersions.terms,
+        communityGuidelinesVersion:
+          currentLegalVersions.communityGuidelines,
+        privacyPolicyVersion: currentLegalVersions.privacyPolicy,
+      }
+    : parsed.data
+  const result = await registerUser(signupInput)
 
   if (!result.ok) {
     return NextResponse.json({ error: result.message }, { status: 400 })

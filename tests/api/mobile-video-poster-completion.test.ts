@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { head } from "@vercel/blob"
+import { get, head } from "@vercel/blob"
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
+import { inspectAndHashMediaStream } from "@/lib/media-pipeline/ffmpeg"
 import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import {
   claimMediaUploadSessionForCompletion,
@@ -22,7 +23,11 @@ import {
   setCloudflareStreamThumbnailAtDefaultTime,
 } from "@/lib/story-storage"
 
-vi.mock("@vercel/blob", () => ({ head: vi.fn() }))
+vi.mock("@vercel/blob", () => ({ get: vi.fn(), head: vi.fn() }))
+
+vi.mock("@/lib/media-pipeline/ffmpeg", () => ({
+  inspectAndHashMediaStream: vi.fn(),
+}))
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))
 
@@ -103,6 +108,7 @@ function completionRequest(input: {
       uploadSessionId: "upload-123",
       contentType: "video/mp4",
       byteSize: 4_096,
+      checksum: "c".repeat(64),
       durationMs: 5_000,
       ...(input.includePoster
         ? {
@@ -169,6 +175,10 @@ describe("mobile video poster completion", () => {
       runId: "workflow-run-1",
       dispatchRecommended: true,
     })
+    vi.mocked(scheduleMediaProcessing).mockResolvedValue({
+      jobId: "media-job-1",
+      runId: "workflow-run-1",
+    })
   })
 
   it("requires a poster from builds that implement the poster contract", async () => {
@@ -225,6 +235,25 @@ describe("mobile video poster completion", () => {
       contentType: "video/mp4",
       etag: "source-etag",
     } as never)
+    vi.mocked(get).mockResolvedValue({
+      statusCode: 200,
+      stream: new Blob(["video"]).stream(),
+    } as never)
+    vi.mocked(inspectAndHashMediaStream).mockResolvedValue({
+      checksum: "c".repeat(64),
+      metadata: {
+        width: 1080,
+        height: 1920,
+        durationMs: 5_000,
+        frameRate: 30,
+        videoCodec: "h264",
+        audioCodec: "aac",
+        hasAudio: true,
+        rotation: 0,
+        colorTransfer: null,
+        colorPrimaries: null,
+      },
+    })
     vi.mocked(createVercelHlsProcessingStoredVideoAsset).mockReturnValue({
       assetKind: "video",
       mediaUrl: `/api/story-media/${customUid}`,
@@ -233,9 +262,9 @@ describe("mobile video poster completion", () => {
       storageKey: customUid,
       contentType: "video/mp4",
       byteSize: 4_096,
-      checksum: "source-etag",
-      width: null,
-      height: null,
+      checksum: "c".repeat(64),
+      width: 1080,
+      height: 1920,
       durationMs: 5_000,
       processingStatus: "processing",
     } as never)
@@ -259,7 +288,7 @@ describe("mobile video poster completion", () => {
       expect.objectContaining({ storageProvider: "vercel-blob", storageKey: customUid }),
     )
     expect(createVercelHlsProcessingStoredVideoAsset).toHaveBeenCalledWith(
-      expect.objectContaining({ pathname: customUid, checksum: "source-etag" }),
+      expect.objectContaining({ pathname: customUid, checksum: "c".repeat(64) }),
     )
     expect(enqueueMediaProcessing).toHaveBeenCalledWith("media-123")
     expect(scheduleMediaProcessing).toHaveBeenCalledWith(

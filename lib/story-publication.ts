@@ -1,16 +1,19 @@
 import { and, desc, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories, storyPublishJobs } from "@/lib/db/schema"
+import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
 import {
-  completeStoryPublicationCore,
-  failStoryPublicationCore,
-  fanoutStoryPublicationCore,
-  invalidateStoryPublicationSnapshotsCore,
-  notifyStoryPublicationCore,
-  processStoryPublicationEarningsCore,
-  validateStoryPublicationCore,
+  completeStoryPublicationStep,
+  failStoryPublicationStep,
+  fanoutStoryPublicationStep,
+  invalidateStoryPublicationSnapshotsStep,
+  notifyStoryPublicationStep,
+  processStoryPublicationEarningsStep,
+  validateStoryPublicationStep,
 } from "@/workflows/story-publication/steps"
+import { publishStoryWorkflow } from "@/workflows/story-publication"
 
 const activeDispatchWindowMs = 10 * 60 * 1_000
 export const maxStoryPublicationAttempts = 4
@@ -45,21 +48,21 @@ export function isStoryPublicationDispatchDue(input: {
 }
 
 async function processStoryPublicationDirect(storyId: string) {
-  const publication = await validateStoryPublicationCore(storyId)
+  const publication = await validateStoryPublicationStep(storyId)
   if (!publication) return false
 
   try {
     await Promise.all([
-      processStoryPublicationEarningsCore(storyId),
-      fanoutStoryPublicationCore(storyId),
-      notifyStoryPublicationCore(storyId),
-      invalidateStoryPublicationSnapshotsCore(storyId),
+      processStoryPublicationEarningsStep(storyId),
+      fanoutStoryPublicationStep(storyId),
+      notifyStoryPublicationStep(storyId),
+      invalidateStoryPublicationSnapshotsStep(storyId),
     ])
-    await completeStoryPublicationCore(storyId)
+    await completeStoryPublicationStep(storyId)
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await failStoryPublicationCore(storyId, message)
+    await failStoryPublicationStep(storyId, message)
     throw error
   }
 }
@@ -140,9 +143,32 @@ export async function enqueueStoryPublication(
     if (!claim) return null
     claimedAttempt = claim.attempts
 
-    const completed = await processStoryPublicationDirect(storyId)
-    return completed ? storyId : null
+    if (!areDurableMediaWorkersEnabled()) {
+      const completed = await processStoryPublicationDirect(storyId)
+      return completed ? storyId : null
+    }
+
+    const run = await start(publishStoryWorkflow, [storyId])
+    await db
+      .update(storyPublishJobs)
+      .set({ workflowRunId: run.runId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(storyPublishJobs.storyId, storyId),
+          eq(storyPublishJobs.status, "running"),
+          eq(storyPublishJobs.attempts, claimedAttempt),
+        ),
+      )
+    return run.runId
   } catch (error) {
+    await db
+      .update(storyPublishJobs)
+      .set({
+        status: "pending",
+        lastError: error instanceof Error ? error.message.slice(0, 2_000) : String(error),
+        updatedAt: new Date(),
+      })
+      .where(eq(storyPublishJobs.storyId, storyId))
     if (
       claimedAttempt !== null &&
       claimedAttempt >= maxStoryPublicationAttempts

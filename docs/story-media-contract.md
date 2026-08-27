@@ -14,18 +14,18 @@ This contract defines how story media is accepted, normalized, positioned, and d
 
 ## Framing
 
-- `Fit` is the default. It preserves the entire source asset.
-- Space not occupied by fitted media is filled by a cover-scaled, blurred copy of the same asset with a dark overlay.
-- The blurred extension is clipped to the `9:16` canvas. Space outside the canvas is black.
-- `Fill` is an explicit photo option. It center-crops the source to the canvas.
-- Video playback always preserves the full source. A blurred thumbnail or generated poster fills the canvas behind it.
+- Photo playback is always aspect-fit and preserves the entire source asset.
+- Space not occupied by fitted media is transparent in photo derivatives and always rendered black by iOS.
+- Photo playback never uses a cover-scaled, blurred, or center-cropped background layer.
+- Feed, discovery, and profile thumbnails may still use a separate cover crop; that crop is never used as story playback media.
+- Video normalization and playback are always aspect-fit with centered black padding, preserving the full source. Its generated poster is used only while the first video frame is loading.
 
 ## Inputs and delivery
 
 | Asset | Accepted input | Source limit | Duration | Delivery |
 | --- | --- | ---: | ---: | --- |
 | Image | JPG, PNG, WebP | 25 MB | — | AVIF or WebP display derivative; WebP thumbnail |
-| Video | MP4, MOV, WebM | 512 MB | 120 seconds | Cloudflare Stream adaptive playback and thumbnail |
+| Video | MP4, MOV, WebM | 512 MB | 120 seconds | Versioned Vercel Blob CMAF HLS with generated poster |
 
 iOS may accept camera-roll formats such as HEIC because it normalizes unsupported source images to JPEG before upload. The server only accepts the normalized input types listed above.
 

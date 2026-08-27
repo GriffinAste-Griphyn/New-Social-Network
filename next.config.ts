@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { NextConfig } from "next";
+import { withWorkflow } from "workflow/next";
 import { assertProductionEnvironment } from "./lib/env";
 import { storyMediaContract } from "./lib/story-media-contract";
 
@@ -60,4 +61,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withWorkflow(nextConfig);

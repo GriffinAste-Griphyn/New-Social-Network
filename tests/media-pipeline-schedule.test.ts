@@ -1,57 +1,45 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { processMediaJobRun } from "@/lib/media-pipeline/direct-processing"
+import { start } from "workflow/api"
+import { processMediaWorkflow } from "@/workflows/media-processing"
 
-const state = vi.hoisted(() => ({ callbacks: [] as Array<() => Promise<void>> }))
-
-vi.mock("next/server", () => ({
-  after: vi.fn((callback: () => Promise<void>) => {
-    state.callbacks.push(callback)
-  }),
+vi.mock("workflow/api", () => ({
+  start: vi.fn(),
 }))
-vi.mock("@/lib/media-pipeline/direct-processing", () => ({
-  processMediaJobRun: vi.fn(),
+vi.mock("@/workflows/media-processing", () => ({
+  processMediaWorkflow: vi.fn(),
 }))
 
-describe("direct media processing scheduling", () => {
+describe("durable media processing scheduling", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    state.callbacks = []
-    vi.mocked(processMediaJobRun).mockResolvedValue({
-      status: "completed",
-      jobId: "media-job-123",
-      attempt: 1,
-    })
+    vi.mocked(start).mockResolvedValue({ runId: "workflow-run-123" } as never)
   })
 
-  it("runs the leased processor directly without a recursive HTTP dispatch", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch")
+  it("enqueues a durable Workflow run", async () => {
     const { scheduleMediaProcessing } = await import(
       "@/lib/media-pipeline/schedule"
     )
 
-    scheduleMediaProcessing("media-job-123", "video_complete")
-    expect(state.callbacks).toHaveLength(1)
-    await state.callbacks[0]()
-
-    expect(processMediaJobRun).toHaveBeenCalledOnce()
-    expect(processMediaJobRun).toHaveBeenCalledWith("media-job-123")
-    expect(fetchSpy).not.toHaveBeenCalled()
-    fetchSpy.mockRestore()
+    await expect(
+      scheduleMediaProcessing("media-job-123", "video_complete"),
+    ).resolves.toEqual({
+      jobId: "media-job-123",
+      runId: "workflow-run-123",
+    })
+    expect(start).toHaveBeenCalledWith(processMediaWorkflow, ["media-job-123"])
   })
 
-  it("does not trust an external attempt number as lease ownership", async () => {
+  it("does not pass an external attempt number as lease ownership", async () => {
     const { scheduleMediaProcessingSlice } = await import(
       "@/lib/media-pipeline/schedule"
     )
 
-    scheduleMediaProcessingSlice({
+    await scheduleMediaProcessingSlice({
       jobId: "media-job-123",
       source: "manual_recovery",
       attempt: 7,
     })
-    await state.callbacks[0]()
-
-    expect(processMediaJobRun).toHaveBeenCalledWith("media-job-123")
+    expect(start).toHaveBeenCalledWith(processMediaWorkflow, ["media-job-123"])
   })
 })

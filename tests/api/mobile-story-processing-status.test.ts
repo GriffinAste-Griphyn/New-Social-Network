@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { recoverImageProcessingForAsset } from "@/lib/image-processing-jobs"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
 vi.mock("@/lib/auth", () => ({ getCompleteMobileSession: vi.fn() }))
+vi.mock("@/lib/image-processing-jobs", () => ({
+  recoverImageProcessingForAsset: vi.fn(),
+}))
 vi.mock("@/lib/media-pipeline/jobs", () => ({
   enqueueMediaProcessing: vi.fn(),
 }))
@@ -22,6 +26,7 @@ vi.mock("@/lib/safety/user-facing", () => ({
 const processingStatus = {
   id: "story-1",
   mediaAssetId: "media-1",
+  assetKind: "video" as const,
   storageProvider: "vercel-blob",
   status: "processing" as const,
   processingStatus: "processing",
@@ -42,6 +47,7 @@ describe("mobile story processing status", () => {
     vi.clearAllMocks()
     vi.mocked(getCompleteMobileSession).mockResolvedValue({ id: "creator-1" } as never)
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue(processingStatus)
+    vi.mocked(recoverImageProcessingForAsset).mockResolvedValue(null)
     vi.mocked(enqueueMediaProcessing).mockResolvedValue({
       jobId: "media-job-1",
       runId: null,
@@ -81,6 +87,24 @@ describe("mobile story processing status", () => {
     )
 
     expect(enqueueMediaProcessing).toHaveBeenCalledWith("media-1")
+    expect(scheduleMediaProcessing).not.toHaveBeenCalled()
+  })
+
+  it("recovers queued images without dispatching the video encoder", async () => {
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
+      ...processingStatus,
+      assetKind: "image",
+      providerStatus: "queued:fit",
+    })
+    const { GET } = await import("@/app/api/mobile/stories/[id]/status/route")
+    const response = await GET(
+      new Request("https://app.example/api/mobile/stories/story-1/status"),
+      { params: Promise.resolve({ id: "story-1" }) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(recoverImageProcessingForAsset).toHaveBeenCalledWith("media-1")
+    expect(enqueueMediaProcessing).not.toHaveBeenCalled()
     expect(scheduleMediaProcessing).not.toHaveBeenCalled()
   })
 

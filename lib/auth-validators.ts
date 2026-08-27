@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { currentLegalVersions } from "@/lib/legal"
+
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
 }
@@ -21,6 +23,17 @@ export const signupAccountTypeSchema = z.enum(["user", "advertiser"])
 export const signupSchema = z.object({
   email: z.email().transform(normalizeEmail),
   password: z.string().min(8).max(72),
+})
+
+export const mobileSignupSchema = signupSchema.extend({
+  acceptedTerms: z.literal(true, {
+    error: "Accept the Terms and Community Guidelines to create an account.",
+  }),
+  termsVersion: z.literal(currentLegalVersions.terms),
+  communityGuidelinesVersion: z.literal(
+    currentLegalVersions.communityGuidelines,
+  ),
+  privacyPolicyVersion: z.literal(currentLegalVersions.privacyPolicy),
 })
 
 export const signupFlowSchema = signupSchema.extend({
@@ -50,6 +63,7 @@ export const profileSetupSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>
 export type SignupInput = z.infer<typeof signupSchema>
+export type MobileSignupInput = z.infer<typeof mobileSignupSchema>
 export type SignupFlowInput = z.infer<typeof signupFlowSchema>
 export type PasswordResetRequestInput = z.infer<typeof passwordResetRequestSchema>
 export type PasswordResetInput = z.infer<typeof passwordResetSchema>

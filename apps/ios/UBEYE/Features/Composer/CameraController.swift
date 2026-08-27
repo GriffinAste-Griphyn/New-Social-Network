@@ -18,10 +18,8 @@ private func applyVideoRotationAngle(_ angle: CGFloat, to connection: AVCaptureC
 }
 
 enum StoryCaptureQuality {
-    static let hevcVideoBitrate = 15_000_000
-    static let h264VideoBitrate = 20_000_000
-    static let hevc4KVideoBitrate = 28_000_000
-    static let h2644KVideoBitrate = 32_000_000
+    static let hevcVideoBitrate = 8_000_000
+    static let h264VideoBitrate = 10_000_000
     static let videoFrameRate = 30
     static let videoKeyFrameInterval = 30
 
@@ -31,10 +29,6 @@ enum StoryCaptureQuality {
     }
 
     static func videoBitrate(for codec: AVVideoCodecType, is4K: Bool) -> Int {
-        if is4K {
-            return codec == .hevc ? hevc4KVideoBitrate : h2644KVideoBitrate
-        }
-
         return codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
     }
 }
@@ -187,7 +181,7 @@ final class CameraController: NSObject, ObservableObject {
                 self?.isRecording = false
                 switch result {
                 case .success(let url):
-                    if MediaDiagnostics.capturedVideoHasAudio(url: url) {
+                    if await MediaDiagnostics.capturedVideoHasAudio(url: url) {
                         self?.capturedVideoCameraPosition = self?.recordingCameraPosition ?? .back
                         self?.capturedVideoURL = url
                     } else {
@@ -372,16 +366,8 @@ final class CameraController: NSObject, ObservableObject {
         )
     }
 
-    private func configureSessionPreset(for device: AVCaptureDevice) {
-        let hasProClassMemory = ProcessInfo.processInfo.physicalMemory >= 6 * 1_024 * 1_024 * 1_024
-        let supports4K =
-            hasProClassMemory &&
-            device.position == .back &&
-            device.supportsSessionPreset(.hd4K3840x2160) &&
-            session.canSetSessionPreset(.hd4K3840x2160)
-        let preferredPreset: AVCaptureSession.Preset = supports4K
-            ? .hd4K3840x2160
-            : .hd1920x1080
+    private func configureSessionPreset(for _: AVCaptureDevice) {
+        let preferredPreset: AVCaptureSession.Preset = .hd1920x1080
 
         if session.canSetSessionPreset(preferredPreset) {
             session.sessionPreset = preferredPreset
@@ -390,7 +376,7 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         MediaPerformance.mark(
-            "capture_session_preset value=\(session.sessionPreset.rawValue) pro_class=\(supports4K)"
+            "capture_session_preset value=\(session.sessionPreset.rawValue) delivery_aware=true"
         )
     }
 

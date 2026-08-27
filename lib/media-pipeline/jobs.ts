@@ -165,7 +165,7 @@ export async function enqueueMediaProcessing(mediaAssetId: string) {
     }
   }
 
-  // Encoding is now scheduled by the owning route with Next.js `after()` and
+  // Encoding is started by the owning route as a durable Workflow run and
   // guarded by a database lease. Keeping this function side-effect-light makes
   // repeated upload completions and status polling safely idempotent.
   return { jobId: job.id, runId: null, dispatchRecommended }

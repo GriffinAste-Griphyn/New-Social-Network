@@ -1,5 +1,5 @@
-export const mediaPipelineVersion = "hls-v1"
-export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-v1"
+export const mediaPipelineVersion = "hls-v4"
+export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-v4"
 export const maximumMediaProcessingAttempts = 8
 
 export type MediaSourceMetadata = {
@@ -9,8 +9,11 @@ export type MediaSourceMetadata = {
   frameRate: number | null
   videoCodec: string
   audioCodec: string | null
+  audioChannels?: number | null
   hasAudio: boolean
   rotation: number
+  colorTransfer?: string | null
+  colorPrimaries?: string | null
 }
 
 export type MediaRenditionProfile = {
@@ -21,6 +24,8 @@ export type MediaRenditionProfile = {
   maxRate: number
   bufferSize: number
   audioBitrate: number
+  crf: number
+  preset: "fast" | "medium"
 }
 
 export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
@@ -28,37 +33,45 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
     label: "360p",
     width: 360,
     height: 640,
-    videoBitrate: 850_000,
-    maxRate: 1_000_000,
-    bufferSize: 2_000_000,
-    audioBitrate: 128_000,
+    videoBitrate: 700_000,
+    maxRate: 900_000,
+    bufferSize: 1_800_000,
+    audioBitrate: 64_000,
+    crf: 26,
+    preset: "fast",
   },
   {
     label: "540p",
     width: 540,
     height: 960,
-    videoBitrate: 1_700_000,
-    maxRate: 2_000_000,
-    bufferSize: 4_000_000,
-    audioBitrate: 128_000,
+    videoBitrate: 1_600_000,
+    maxRate: 2_200_000,
+    bufferSize: 4_400_000,
+    audioBitrate: 96_000,
+    crf: 24,
+    preset: "medium",
   },
   {
     label: "720p",
     width: 720,
     height: 1280,
-    videoBitrate: 3_500_000,
-    maxRate: 4_000_000,
-    bufferSize: 8_000_000,
+    videoBitrate: 2_800_000,
+    maxRate: 3_800_000,
+    bufferSize: 7_600_000,
     audioBitrate: 128_000,
+    crf: 23,
+    preset: "medium",
   },
   {
     label: "1080p",
     width: 1080,
     height: 1920,
-    videoBitrate: 7_500_000,
-    maxRate: 8_250_000,
-    bufferSize: 16_500_000,
+    videoBitrate: 6_000_000,
+    maxRate: 8_000_000,
+    bufferSize: 16_000_000,
     audioBitrate: 128_000,
+    crf: 22,
+    preset: "medium",
   },
 ] as const
 

@@ -11,18 +11,9 @@ enum PickedStoryMedia {
     case video(StoryVideoUpload)
 }
 
-enum StoryImageContentMode: String, Codable, CaseIterable, Hashable {
+enum StoryImageContentMode: String, Codable, Hashable {
     case fit
     case fill
-
-    var title: String {
-        switch self {
-        case .fit:
-            "Fit"
-        case .fill:
-            "Fill"
-        }
-    }
 }
 
 struct StoryVideoUpload {
@@ -548,14 +539,18 @@ enum StoryImageTranscoder {
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
               ) else {
             return nil
         }
 
         context.interpolationQuality = .high
-        context.setFillColor(CGColor(gray: 0, alpha: 1))
-        context.fill(CGRect(origin: .zero, size: targetSize))
+        if contentMode == .fit {
+            context.clear(CGRect(origin: .zero, size: targetSize))
+        } else {
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(CGRect(origin: .zero, size: targetSize))
+        }
         context.draw(sourceImage, in: fittedRect)
         return context.makeImage()
     }
@@ -706,6 +701,30 @@ private enum StoryComposerLimits {
     static let brandTagsInput = 320
 }
 
+private struct StoryComposerTextDraft: Codable {
+    let caption: String
+    let brandTags: String
+    let textOverlay: String
+    let textOverlayPositionX: Double
+    let textOverlayPositionY: Double
+    let linkUrl: String
+    let linkLabel: String
+    let linkOverlayPositionX: Double
+    let linkOverlayPositionY: Double
+    let quotedReply: QuotedStoryReply?
+    let quoteReplyPositionX: Double
+    let quoteReplyPositionY: Double
+
+    var isEmpty: Bool {
+        caption.isEmpty &&
+            brandTags.isEmpty &&
+            textOverlay.isEmpty &&
+            linkUrl.isEmpty &&
+            linkLabel.isEmpty &&
+            quotedReply == nil
+    }
+}
+
 private func storyTextPrefix(_ value: String, maximumUTF16Length: Int) -> String {
     guard value.utf16.count > maximumUTF16Length else {
         return value
@@ -727,6 +746,7 @@ private func storyTextPrefix(_ value: String, maximumUTF16Length: Int) -> String
 @MainActor
 final class StoryComposerStore: ObservableObject {
     private let maxVideoDurationSeconds = StoryMediaContract.maximumVideoDurationSeconds
+    private static let textDraftKey = "ubeye.story-composer-text-draft.v1"
 
     @Published var caption = ""
     @Published var brandTags = ""
@@ -741,11 +761,61 @@ final class StoryComposerStore: ObservableObject {
     @Published var quoteReplyPositionX: Double = 50
     @Published var quoteReplyPositionY: Double = 58
     @Published var selectedMedia: PickedStoryMedia?
-    @Published var imageContentMode: StoryImageContentMode = .fit
     @Published var uploadStatus: String?
     @Published var error: String?
     @Published var lastUploadReport: String?
     @Published var isUploading = false
+
+    init() {
+        guard let data = UserDefaults.standard.data(forKey: Self.textDraftKey),
+              let draft = try? JSONDecoder().decode(StoryComposerTextDraft.self, from: data) else {
+            return
+        }
+
+        caption = draft.caption
+        brandTags = draft.brandTags
+        textOverlay = draft.textOverlay
+        textOverlayPositionX = draft.textOverlayPositionX
+        textOverlayPositionY = draft.textOverlayPositionY
+        linkUrl = draft.linkUrl
+        linkLabel = draft.linkLabel
+        linkOverlayPositionX = draft.linkOverlayPositionX
+        linkOverlayPositionY = draft.linkOverlayPositionY
+        quotedReply = draft.quotedReply
+        quoteReplyPositionX = draft.quoteReplyPositionX
+        quoteReplyPositionY = draft.quoteReplyPositionY
+    }
+
+    func persistTextDraft() {
+        let draft = StoryComposerTextDraft(
+            caption: caption,
+            brandTags: brandTags,
+            textOverlay: textOverlay,
+            textOverlayPositionX: textOverlayPositionX,
+            textOverlayPositionY: textOverlayPositionY,
+            linkUrl: linkUrl,
+            linkLabel: linkLabel,
+            linkOverlayPositionX: linkOverlayPositionX,
+            linkOverlayPositionY: linkOverlayPositionY,
+            quotedReply: quotedReply,
+            quoteReplyPositionX: quoteReplyPositionX,
+            quoteReplyPositionY: quoteReplyPositionY
+        )
+
+        if draft.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.textDraftKey)
+        } else if let data = try? JSONEncoder().encode(draft) {
+            UserDefaults.standard.set(data, forKey: Self.textDraftKey)
+        }
+    }
+
+    private func preparedVideo(for video: StoryVideoUpload) async throws -> PreparedStoryVideo {
+        try await StoryVideoUploadNormalizer.prepare(
+            url: video.url,
+            source: video.source,
+            maxDurationSeconds: maxVideoDurationSeconds
+        )
+    }
 
     private var thumbnailOverlaySpecs: [StoryThumbnailOverlaySpec] {
         var overlays: [StoryThumbnailOverlaySpec] = []
@@ -896,7 +966,7 @@ final class StoryComposerStore: ObservableObject {
                 uploadStatus = "Posting"
                 let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
-                    contentMode: imageContentMode,
+                    contentMode: .fit,
                     draft: pendingUploadDraft,
                     textOverlays: pendingTextOverlays
                 )
@@ -921,9 +991,9 @@ final class StoryComposerStore: ObservableObject {
             api.invalidateStoryStacks(ids: ["my-story"])
             clearUploadedDraft()
         } catch {
+            uploadStatus = nil
             if didCreatePendingUpload {
                 self.error = nil
-                uploadStatus = nil
             } else {
                 self.error = error.localizedDescription
             }
@@ -1039,7 +1109,7 @@ final class StoryComposerStore: ObservableObject {
         case .image(let upload):
             return try pendingUploads.createImageUpload(
                 upload: upload,
-                contentMode: imageContentMode,
+                contentMode: .fit,
                 draft: pendingUploadDraft,
                 textOverlays: pendingTextOverlays,
                 batchId: batchId,
@@ -1047,11 +1117,7 @@ final class StoryComposerStore: ObservableObject {
                 batchCount: batchCount
             )
         case .video(let video):
-            let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
-                url: video.url,
-                source: video.source,
-                maxDurationSeconds: maxVideoDurationSeconds
-            )
+            let preparedVideo = try await preparedVideo(for: video)
             do {
                 let thumbnailData = try await videoThumbnailData(
                     for: preparedVideo.url,
@@ -1089,11 +1155,7 @@ final class StoryComposerStore: ObservableObject {
             uploadStatus = attempt.phase.statusLabel
             attempt.begin(.prepare)
             uploadStatus = attempt.phase.statusLabel
-            let preparedVideo = try await StoryVideoUploadNormalizer.prepare(
-                url: video.url,
-                source: video.source,
-                maxDurationSeconds: maxVideoDurationSeconds
-            )
+            let preparedVideo = try await preparedVideo(for: video)
             attempt.attach(video: preparedVideo)
             lastUploadReport = attempt.report
 
@@ -1132,6 +1194,12 @@ final class StoryComposerStore: ObservableObject {
         } catch {
             attempt.recordFailure(error)
             lastUploadReport = attempt.report
+            if attempt.phase == .prepare {
+                throw APIClientError.server(
+                    "Could not prepare this video. Try a different video or record it again.",
+                    0
+                )
+            }
             throw error
         }
     }
@@ -1491,6 +1559,7 @@ final class StoryComposerStore: ObservableObject {
         linkOverlayPositionY = 78
         clearQuotedReply()
         selectedMedia = nil
+        UserDefaults.standard.removeObject(forKey: Self.textDraftKey)
     }
 
     private func normalizedUrlString(_ value: String) -> String {
@@ -1530,6 +1599,7 @@ struct StoryComposerView: View {
     @State private var latestLibraryThumbnail: UIImage?
     @State private var stagedMedia: PickedStoryMedia?
     @FocusState private var isOverlayInputFocused: Bool
+    let isActive: Bool
     let quotedReply: QuotedStoryReply?
     var clearQuotedReply: () -> Void = {}
     var onPendingUploadStarted: () -> Void = {}
@@ -1572,6 +1642,7 @@ struct StoryComposerView: View {
                         HStack(alignment: .top) {
                             if hasSelectedMedia {
                                 Button {
+                                    UBEYEFeedback.selection()
                                     resetCapture(clearQuote: true)
                                 } label: {
                                     Image(systemName: "xmark")
@@ -1579,7 +1650,7 @@ struct StoryComposerView: View {
                                         .frame(width: 42, height: 42)
                                         .background(.black.opacity(0.34), in: Circle())
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                                 .accessibilityLabel("Discard captured story")
                                 .transition(.scale.combined(with: .opacity))
                             }
@@ -1591,6 +1662,7 @@ struct StoryComposerView: View {
 
                                 if stagedMedia == nil {
                                     Button {
+                                        UBEYEFeedback.impact(.light)
                                         camera.switchCamera()
                                     } label: {
                                         Image(systemName: "camera.rotate")
@@ -1598,7 +1670,7 @@ struct StoryComposerView: View {
                                             .frame(width: 42, height: 42)
                                             .background(.black.opacity(0.34), in: Circle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                                     .disabled(camera.isRecording || camera.isCapturingPhoto)
                                 } else if selectedBatchMedia.count <= 1 {
                                     composerToolRail
@@ -1651,15 +1723,31 @@ struct StoryComposerView: View {
         }
         .task {
             store.applyQuotedReply(quotedReply)
-            await camera.requestAccessAndConfigure()
+            if isActive {
+                await camera.requestAccessAndConfigure()
+            }
             await refreshLatestLibraryThumbnail()
             applyLayoutFixtureIfRequested()
+        }
+        .onChange(of: isActive) { _, nextIsActive in
+            if nextIsActive {
+                camera.start()
+            } else {
+                camera.stop()
+            }
         }
         .onChange(of: quotedReply) { _, quote in
             store.applyQuotedReply(quote)
         }
         .onDisappear {
+            store.persistTextDraft()
             camera.stop()
+        }
+        .onReceive(store.objectWillChange) { _ in
+            Task { @MainActor in
+                await Task.yield()
+                store.persistTextDraft()
+            }
         }
         .onChange(of: photoPickerItems) { _, items in
             Task {
@@ -1758,30 +1846,11 @@ struct StoryComposerView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.68))
                 }
-            } else if isImageMediaSelected {
-                Picker("Photo framing", selection: $store.imageContentMode) {
-                    ForEach(StoryImageContentMode.allCases, id: \.self) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 150)
-                .accessibilityHint("Fit shows the whole photo. Fill crops it to the story frame.")
             }
 
             Spacer(minLength: 0)
             uploadStoryButton
         }
-    }
-
-    private var isImageMediaSelected: Bool {
-        guard let media = stagedMedia ?? store.selectedMedia else {
-            return false
-        }
-        if case .image = media {
-            return true
-        }
-        return false
     }
 
     private var hasSelectedMedia: Bool {
@@ -1796,6 +1865,7 @@ struct StoryComposerView: View {
 
     private var uploadStoryButton: some View {
         Button {
+            UBEYEFeedback.impact(.medium)
             Task {
                 await uploadSelectedMedia()
             }
@@ -1814,7 +1884,7 @@ struct StoryComposerView: View {
             )
             .background(.black.opacity(0.52), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
         .disabled(store.isUploading)
         .accessibilityLabel(
             selectedBatchMedia.count > 1
@@ -1832,6 +1902,7 @@ struct StoryComposerView: View {
     private var composerToolRail: some View {
         VStack(spacing: 8) {
             Button {
+                UBEYEFeedback.selection()
                 openOverlayInput(.text)
             } label: {
                 Text("Aa")
@@ -1839,10 +1910,11 @@ struct StoryComposerView: View {
                     .frame(width: 42, height: 42)
                     .background(.black.opacity(0.34), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
             .accessibilityLabel("Add text overlay")
 
             Button {
+                UBEYEFeedback.selection()
                 openOverlayInput(.link)
             } label: {
                 Image(systemName: "link")
@@ -1850,7 +1922,7 @@ struct StoryComposerView: View {
                     .frame(width: 42, height: 42)
                     .background(.black.opacity(0.34), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
             .accessibilityLabel("Add link overlay")
         }
     }
@@ -1930,14 +2002,7 @@ struct StoryComposerView: View {
         if hasSelectedMedia {
             let canvasLayout = StoryCanvasLayout(containerSize: containerSize)
             composerOverlayLayer
-                .frame(
-                    width: canvasLayout.frame.width,
-                    height: canvasLayout.frame.height
-                )
-                .position(
-                    x: canvasLayout.frame.midX,
-                    y: canvasLayout.frame.midY
-                )
+                .storyCanvasFrame(canvasLayout)
         } else {
             composerOverlayLayer
         }
@@ -2081,24 +2146,8 @@ struct StoryComposerView: View {
         GeometryReader { proxy in
             let canvasLayout = StoryCanvasLayout(containerSize: proxy.size)
 
-            Group {
-                if store.imageContentMode == .fit {
-                    StoryCanvasImage(image: Image(uiImage: image))
-                } else {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .clipped()
-                }
-            }
-            .frame(
-                width: canvasLayout.frame.width,
-                height: canvasLayout.frame.height
-            )
-            .position(
-                x: canvasLayout.frame.midX,
-                y: canvasLayout.frame.midY
-            )
+            StoryCanvasImage(image: Image(uiImage: image))
+                .storyCanvasFrame(canvasLayout)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -2112,14 +2161,7 @@ struct StoryComposerView: View {
                 url: url,
                 mirrorsHorizontally: mirrorsHorizontally
             )
-            .frame(
-                width: canvasLayout.frame.width,
-                height: canvasLayout.frame.height
-            )
-            .position(
-                x: canvasLayout.frame.midX,
-                y: canvasLayout.frame.midY
-            )
+            .storyCanvasFrame(canvasLayout)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -2223,6 +2265,7 @@ struct StoryComposerView: View {
             return
         }
 
+        UBEYEFeedback.success()
         enterComposer(with: firstMedia)
         selectedBatchMedia = loadedMedia.count > 1 ? loadedMedia : []
         if failedItemCount > 0 {
@@ -2298,6 +2341,7 @@ struct StoryComposerView: View {
         }
 
         resetCapture()
+        UBEYEFeedback.impact(.rigid, intensity: 1)
         camera.capturePhoto()
     }
 
@@ -2309,6 +2353,7 @@ struct StoryComposerView: View {
         resetCapture()
         recordingElapsed = 0
         recordingStartedAt = Date()
+        UBEYEFeedback.impact(.heavy, intensity: 0.95)
         camera.startRecording()
     }
 
@@ -2317,6 +2362,7 @@ struct StoryComposerView: View {
             return
         }
 
+        UBEYEFeedback.impact(.medium)
         camera.stopRecording()
     }
 
@@ -2338,6 +2384,7 @@ struct StoryComposerView: View {
                 onUploadRegistered: onUploadRegistered
             )
             if didStart {
+                UBEYEFeedback.success()
                 selectedBatchMedia = []
                 stagedMedia = nil
             }
@@ -2352,8 +2399,11 @@ struct StoryComposerView: View {
                 onPendingUploadStarted()
             }
         ) {
+            UBEYEFeedback.success()
             stagedMedia = nil
             onUploadRegistered(response)
+        } else if store.error != nil {
+            UBEYEFeedback.error()
         }
     }
 
@@ -2392,9 +2442,6 @@ struct StoryComposerView: View {
         store.uploadStatus = nil
         overlayInputMode = nil
         isOverlayInputFocused = false
-        if case .image = media {
-            store.imageContentMode = .fit
-        }
         stagedMedia = media
         store.selectedMedia = media
     }

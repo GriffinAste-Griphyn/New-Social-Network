@@ -1,5 +1,4 @@
 import SwiftUI
-import AVKit
 
 enum HomeFeedMediaPresentationPolicy {
     static let visibleFollowingThumbnailCount = 2
@@ -49,6 +48,8 @@ final class FeedStore: ObservableObject {
     @Published var isLoading = false
     @Published private(set) var isLoadingNextPage = false
     @Published var error: String?
+    @Published private(set) var refreshError: String?
+    @Published private(set) var nextPageError: String?
     @Published private(set) var authenticationFailed = false
     private var storyStackPrefetchTask: Task<Void, Never>?
     private var lastNetworkLoadAt: Date?
@@ -75,6 +76,7 @@ final class FeedStore: ObservableObject {
             isLoading = true
         }
         error = nil
+        refreshError = nil
         authenticationFailed = false
         var cachedFallback: MobileFeedResponse?
 
@@ -194,6 +196,7 @@ final class FeedStore: ObservableObject {
                 self.error = error.localizedDescription
             } else {
                 MediaPerformance.mark("feed_refresh_failed")
+                refreshError = error.localizedDescription
             }
         }
         if showsLoading, isCurrentLoad(generation) {
@@ -226,6 +229,7 @@ final class FeedStore: ObservableObject {
         }
 
         isLoadingNextPage = true
+        nextPageError = nil
         defer { isLoadingNextPage = false }
 
         do {
@@ -257,6 +261,7 @@ final class FeedStore: ObservableObject {
             }
         } catch {
             MediaPerformance.mark("feed_refresh_failed source=next_page")
+            nextPageError = error.localizedDescription
         }
     }
 
@@ -547,14 +552,21 @@ struct HomeView: View {
     @State private var selectedStory: StoryRoute?
     @State private var selectedDiscoverCreator: DiscoverCreator?
     @State private var selectedFailedUpload: PendingStoryUpload?
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        NavigationStack(path: $navigationPath) {
+            ScrollViewReader { scrollProxy in
+                ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
+                        .id("home-feed-top")
 
                     uploadNoticeBanner
+
+                    if let refreshError = store.refreshError, store.feed != nil {
+                        InlineNotice(message: "Couldn’t refresh. \(refreshError)", isError: true)
+                    }
 
                     if store.isLoading && store.feed == nil {
                         HomeFeedLoadingSkeleton()
@@ -642,6 +654,24 @@ struct HomeView: View {
                     await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
+                guard notification.object as? String == AppTab.home.rawValue else {
+                    return
+                }
+
+                navigationPath = NavigationPath()
+                withAnimation(.snappy(duration: 0.28)) {
+                    scrollProxy.scrollTo("home-feed-top", anchor: .top)
+                }
+                Task {
+                    await store.load(
+                        api: api,
+                        mediaEngine: mediaEngine,
+                        showsLoading: false,
+                        useDiskCache: false
+                    )
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, store.feed != nil else {
                     return
@@ -677,6 +707,7 @@ struct HomeView: View {
                         }
                     }
                 )
+            }
             }
         }
     }
@@ -859,12 +890,15 @@ struct HomeView: View {
     }
 
     private func retryPendingUpload(_ upload: PendingStoryUpload) {
+        UBEYEFeedback.impact(.medium)
         storyUploadNotice.showPosting()
         Task {
             do {
                 let response = try await pendingStoryUploads.retry(id: upload.id, api: api)
+                UBEYEFeedback.success()
                 onPendingUploadRetried(response)
             } catch {
+                UBEYEFeedback.error()
                 MediaPerformance.mark("pending_story_upload_retry_failed id=\(upload.id)")
                 storyUploadNotice.showFailed(
                     message: pendingStoryUploads.upload(id: upload.id)?.displayErrorMessage
@@ -1060,7 +1094,7 @@ struct MyStoryHomeCard: View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: myStory.latestThumbnailUrl) { image in
-                    image.resizable().scaledToFill()
+                    StoryCardThumbnailImage(image: image)
                 } placeholder: {
                     MyStoryCardSkeleton()
                 }
@@ -1313,7 +1347,7 @@ struct StoryThumb: View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
-                    image.resizable().scaledToFill()
+                    StoryCardThumbnailImage(image: image)
                 } placeholder: {
                     Color.ubeyeSubtle
                 }
@@ -1346,6 +1380,16 @@ struct StoryThumb: View {
         .buttonStyle(.plain)
         .storyPressPrewarm(onPress)
         .accessibilityLabel("\(story.creator)'s story")
+    }
+}
+
+struct StoryCardThumbnailImage: View {
+    let image: Image
+
+    var body: some View {
+        image
+            .resizable()
+            .scaledToFill()
     }
 }
 
@@ -1450,85 +1494,6 @@ struct SuggestedAccountCard: View {
         }
         .padding(12)
         .ubeyeCard()
-    }
-}
-
-struct StoryViewer: View {
-    let stories: [StoryCard]
-    @Environment(\.dismiss) private var dismiss
-    @State private var index = 0
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-
-            if let story = stories[safe: index] {
-                StoryMediaView(story: story)
-                    .ignoresSafeArea()
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(story.creator)
-                        .font(.headline)
-                    Text(story.title)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.72))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .padding(22)
-            }
-
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.headline)
-                    .padding(12)
-                    .background(.black.opacity(0.45), in: Circle())
-            }
-            .foregroundStyle(.white)
-            .padding()
-        }
-    }
-}
-
-struct StoryMediaView: View {
-    let story: StoryCard
-
-    var body: some View {
-        if story.isProcessingVideo {
-            ZStack {
-                if let thumbnailUrl = story.playbackThumbnailUrl {
-                    CachedAsyncImage(url: thumbnailUrl) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Color.black
-                    }
-                } else {
-                    Color.black
-                }
-
-                if story.hasVideoProcessingFailed {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.white)
-                } else {
-                    ProgressView()
-                        .tint(.white)
-                }
-            }
-        } else if story.assetKind == .video {
-            AutoPlayVideoPlayer(
-                source: story.playbackSource,
-                thumbnailUrl: story.playbackThumbnailUrl,
-                preloadSources: MediaPlaybackQuality.preloadSources(for: story)
-            )
-        } else {
-            CachedAsyncImage(url: story.playbackMediaUrl) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                ProgressView().tint(.white)
-            }
-        }
     }
 }
 

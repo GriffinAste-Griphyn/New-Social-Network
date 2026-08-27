@@ -1,4 +1,4 @@
-import { head } from "@vercel/blob"
+import { get, head } from "@vercel/blob"
 import { eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
 import { z } from "zod"
@@ -18,6 +18,12 @@ import {
 } from "@/lib/media-upload-sessions"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
+import {
+  mediaPipelineLimits,
+  validateSourceMetadata,
+} from "@/lib/media-pipeline/contracts"
+import { inspectAndHashMediaStream } from "@/lib/media-pipeline/ffmpeg"
+import { isAsyncMediaCompletionEnabled } from "@/lib/media-pipeline/features"
 import {
   completeMobileVideoStory,
   getExistingMobileVideoStoryCompletion,
@@ -73,6 +79,8 @@ const completeVideoSchema = z.object({
     .refine(isSupportedStoryVideoInputContentType)
     .default("video/mp4"),
   byteSize: z.number().int().nonnegative().default(0),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  uploadId: z.string().trim().min(1).max(500).optional(),
   durationMs: z.number().int().positive().nullable().optional(),
   width: z.number().int().positive().nullable().optional(),
   height: z.number().int().positive().nullable().optional(),
@@ -116,9 +124,22 @@ async function enqueueAndScheduleMediaProcessing(
 ) {
   const dispatch = await enqueueMediaProcessing(mediaAssetId)
   if (dispatch.dispatchRecommended) {
-    scheduleMediaProcessing(dispatch.jobId, source)
+    await scheduleMediaProcessing(dispatch.jobId, source)
   }
   return dispatch
+}
+
+async function waitForSourceHead(pathname: string) {
+  for (const delayMs of [0, 200, 600, 1_200]) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+    const metadata = await head(pathname, {
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    }).catch(() => null)
+    if (metadata) return metadata
+  }
+  return null
 }
 
 export async function POST(request: Request) {
@@ -174,6 +195,7 @@ export async function POST(request: Request) {
       request.headers.get("x-ubeye-app-build") ?? "",
       10,
     )
+    const useAsyncCompletion = isAsyncMediaCompletionEnabled(clientBuild)
     if (
       Number.isFinite(clientBuild) &&
       clientBuild >= minimumRequiredVideoPosterBuild &&
@@ -196,6 +218,7 @@ export async function POST(request: Request) {
       byteSize: parsed.data.byteSize,
       durationMs: parsed.data.durationMs ?? null,
       hasClientPoster: Boolean(parsed.data.poster),
+      uploadId: parsed.data.uploadId ?? null,
     })
 
     // In-flight custom uploads must remain completable after a feature-flag
@@ -278,9 +301,13 @@ export async function POST(request: Request) {
       : null
 
     if (useVercelHls) {
-      const sourceMetadata = await head(parsed.data.uid, {
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      }).catch(() => null)
+      if (!parsed.data.checksum) {
+        throw new MediaUploadSessionError(
+          "The completed video is missing its integrity checksum.",
+          400,
+        )
+      }
+      const sourceMetadata = await waitForSourceHead(parsed.data.uid)
       if (
         !sourceMetadata ||
         sourceMetadata.size !== parsed.data.byteSize ||
@@ -293,15 +320,93 @@ export async function POST(request: Request) {
         )
       }
 
+      if (sourceMetadata.size > mediaPipelineLimits.maximumSourceBytes) {
+        throw new MediaUploadSessionError(
+          "The uploaded video exceeds the processing size limit.",
+          400,
+        )
+      }
+      let verifiedChecksum = parsed.data.checksum.toLowerCase()
+      let verifiedDurationMs = parsed.data.durationMs ?? null
+      let verifiedWidth = parsed.data.width ?? null
+      let verifiedHeight = parsed.data.height ?? null
+
+      if (useAsyncCompletion) {
+        if (!verifiedDurationMs || !verifiedWidth || !verifiedHeight) {
+          throw new MediaUploadSessionError(
+            "The completed video is missing required media details.",
+            400,
+          )
+        }
+        const sourceFailure = validateSourceMetadata({
+          durationMs: verifiedDurationMs,
+          width: verifiedWidth,
+          height: verifiedHeight,
+          frameRate: null,
+          videoCodec: "pending-verification",
+          audioCodec: null,
+          hasAudio: false,
+          rotation: 0,
+        })
+        if (sourceFailure) {
+          throw new MediaUploadSessionError(
+            `Video quality validation failed: ${sourceFailure}.`,
+            400,
+          )
+        }
+      } else {
+        const sourceBlob = await get(parsed.data.uid, {
+          access: "private",
+          token: process.env.BLOB_READ_WRITE_TOKEN,
+          useCache: false,
+        })
+        if (!sourceBlob || sourceBlob.statusCode !== 200 || !sourceBlob.stream) {
+          throw new MediaUploadSessionError(
+            "The private source video could not be inspected.",
+            409,
+          )
+        }
+        const inspected = await inspectAndHashMediaStream(sourceBlob.stream)
+        const sourceFailure = validateSourceMetadata(inspected.metadata)
+        if (sourceFailure) {
+          throw new MediaUploadSessionError(
+            `Video quality validation failed: ${sourceFailure}.`,
+            400,
+          )
+        }
+        if (
+          inspected.checksum.toLowerCase() !== parsed.data.checksum.toLowerCase()
+        ) {
+          throw new MediaUploadSessionError(
+            "The uploaded video failed its integrity check.",
+            400,
+          )
+        }
+        verifiedChecksum = inspected.checksum
+        verifiedDurationMs = inspected.metadata.durationMs
+        verifiedWidth = inspected.metadata.width
+        verifiedHeight = inspected.metadata.height
+      }
+      if (
+        uploadClaim.session.maxDurationSeconds &&
+        verifiedDurationMs &&
+        verifiedDurationMs >
+          uploadClaim.session.maxDurationSeconds * 1_000
+      ) {
+        throw new MediaUploadSessionError(
+          "The uploaded video is longer than the reserved upload allows.",
+          400,
+        )
+      }
       storedAsset = createVercelHlsProcessingStoredVideoAsset({
         pathname: sourceMetadata.pathname,
         contentType: parsed.data.contentType,
         byteSize: parsed.data.byteSize,
-        checksum: sourceMetadata.etag,
+        checksum: verifiedChecksum,
         thumbnailUrl: posterUrl,
-        durationMs: parsed.data.durationMs ?? null,
-        width: parsed.data.width ?? null,
-        height: parsed.data.height ?? null,
+        durationMs: verifiedDurationMs,
+        width: verifiedWidth,
+        height: verifiedHeight,
       })
       const completion = await completeMobileVideoStory({
         request,
@@ -310,6 +415,7 @@ export async function POST(request: Request) {
         storedAsset,
         createdAt: uploadClaim.session.createdAt,
         providerStatusFallback: "queued",
+        deferModeration: useAsyncCompletion,
       })
       await markMediaUploadSessionCompleted({
         uploadSessionId: uploadClaim.session.id,
@@ -342,6 +448,7 @@ export async function POST(request: Request) {
         storyId: completion.storyId,
         processingStatus: completion.processingStatus,
         moderationStatus: completion.moderationStatus ?? null,
+        asyncCompletion: useAsyncCompletion,
       })
       return NextResponse.json(completion)
     }

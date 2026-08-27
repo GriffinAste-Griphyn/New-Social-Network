@@ -7,6 +7,7 @@ final class DiscoverStore: ObservableObject {
     @Published var followedIds = Set<String>()
     @Published var isLoading = false
     @Published var error: String?
+    private var searchGeneration = 0
 
     func load(api: APIClient) async {
         async let search: Void = search(api: api)
@@ -15,6 +16,8 @@ final class DiscoverStore: ObservableObject {
     }
 
     func search(api: APIClient) async {
+        searchGeneration += 1
+        let generation = searchGeneration
         isLoading = true
         error = nil
         do {
@@ -22,11 +25,21 @@ final class DiscoverStore: ObservableObject {
                 "/api/mobile/discover/search",
                 queryItems: [URLQueryItem(name: "q", value: query)]
             )
+            guard generation == searchGeneration, !Task.isCancelled else {
+                return
+            }
             profiles = response.profiles
+        } catch is CancellationError {
+            return
         } catch {
+            guard generation == searchGeneration else {
+                return
+            }
             self.error = error.localizedDescription
         }
-        isLoading = false
+        if generation == searchGeneration {
+            isLoading = false
+        }
     }
 
     func loadFollows(api: APIClient) async {
@@ -47,13 +60,23 @@ final class DiscoverStore: ObservableObject {
             return true
         }
 
+        followedIds.insert(creatorId)
+        error = nil
+        UBEYEFeedback.selection()
+
         do {
             let _: BasicOkResponse = try await api.post("/api/mobile/follows", body: Body(creatorId: creatorId))
-            followedIds.insert(creatorId)
             NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
+            UBEYEFeedback.success()
             return true
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId)
+                return true
+            }
+            followedIds.remove(creatorId)
             self.error = error.localizedDescription
+            UBEYEFeedback.error()
             return false
         }
     }
@@ -94,11 +117,12 @@ struct DiscoverView: View {
     @State private var destination: DiscoverDestination?
     @State private var selectedStory: StoryRoute?
     @State private var handledSearchFocusRequest = 0
+    @State private var navigationPath = NavigationPath()
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         if embedsInNavigationStack {
-            NavigationStack {
+            NavigationStack(path: $navigationPath) {
                 content
             }
         } else {
@@ -107,9 +131,11 @@ struct DiscoverView: View {
     }
 
     private var content: some View {
-        ScrollView {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                    .id("discover-top")
 
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
@@ -157,7 +183,9 @@ struct DiscoverView: View {
                 } else if displayedCreators.isEmpty {
                     EmptyStateView(
                         title: store.query.isEmpty ? "No accounts yet" : "No accounts found",
-                        message: store.query.isEmpty ? "" : "Try another name or handle.",
+                        message: store.query.isEmpty
+                            ? "Creators with active profiles will appear here as the community grows."
+                            : "Try another name or handle.",
                         systemImage: "person.crop.circle.badge.questionmark"
                     )
                 } else {
@@ -176,12 +204,30 @@ struct DiscoverView: View {
             await store.load(api: api)
             focusSearchIfNeeded()
         }
+        .task(id: store.query) {
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled else {
+                return
+            }
+            await store.search(api: api)
+        }
         .onChange(of: searchFocusRequest) { _, _ in
             focusSearchIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
             Task {
                 await store.loadFollows(api: api)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
+            guard notification.object as? String == AppTab.discover.rawValue else {
+                return
+            }
+
+            navigationPath = NavigationPath()
+            isSearchFocused = false
+            withAnimation(.snappy(duration: 0.28)) {
+                scrollProxy.scrollTo("discover-top", anchor: .top)
             }
         }
         .fullScreenCover(item: $selectedStory) { route in
@@ -198,6 +244,7 @@ struct DiscoverView: View {
                     }
                 )
             }
+        }
         }
     }
 

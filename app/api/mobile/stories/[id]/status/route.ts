@@ -2,8 +2,10 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
+import { recoverImageProcessingForAsset } from "@/lib/image-processing-jobs"
 import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
+import { enqueueStoryModeration } from "@/lib/story-moderation"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
 export const runtime = "nodejs"
@@ -33,16 +35,18 @@ export async function GET(
     )
   }
 
-  const { mediaAssetId, storageProvider, ...publicStoryStatus } = storyStatus
+  const { mediaAssetId, storageProvider, assetKind, ...publicStoryStatus } =
+    storyStatus
   if (
+    assetKind === "video" &&
     storageProvider === "vercel-blob" &&
     (publicStoryStatus.processingStatus !== "ready" ||
       !publicStoryStatus.fullQualityReady)
   ) {
     await enqueueMediaProcessing(mediaAssetId)
-      .then((dispatch) => {
+      .then(async (dispatch) => {
         if (dispatch.dispatchRecommended) {
-          scheduleMediaProcessing(dispatch.jobId, "story_status_poll")
+          await scheduleMediaProcessing(dispatch.jobId, "story_status_poll")
         }
       })
       .catch((error) => {
@@ -52,6 +56,27 @@ export async function GET(
           error,
         })
       })
+  }
+  if (
+    assetKind === "image" &&
+    publicStoryStatus.providerStatus?.startsWith("queued:") &&
+    publicStoryStatus.processingStatus !== "ready"
+  ) {
+    await recoverImageProcessingForAsset(mediaAssetId).catch((error) => {
+      console.error("image_processing_status_recovery_failed", {
+        storyId: id,
+        mediaAssetId,
+        error,
+      })
+    })
+  }
+  if (publicStoryStatus.moderationStatus === "pending") {
+    await enqueueStoryModeration(id).catch((error) => {
+      console.error("story_moderation_status_recovery_failed", {
+        storyId: id,
+        error,
+      })
+    })
   }
 
   return NextResponse.json(

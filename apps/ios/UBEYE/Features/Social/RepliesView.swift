@@ -43,13 +43,20 @@ final class RepliesStore: ObservableObject {
         deletingReplyIds.insert(id)
         error = nil
         removeReply(id: id)
+        UBEYEFeedback.impact(.light)
 
         do {
             try await api.deleteStoryInteraction(id: id)
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(.deleteReply, targetId: id)
+                deletingReplyIds.remove(id)
+                return
+            }
             inbox = previousInbox
             if !error.isCancellation {
                 self.error = error.localizedDescription
+                UBEYEFeedback.error()
             }
         }
 
@@ -82,15 +89,15 @@ private extension Error {
 
 struct RepliesView: View {
     @EnvironmentObject private var api: APIClient
-    @EnvironmentObject private var mediaEngine: MediaEngine
     @StateObject private var store = RepliesStore()
-    @State private var selectedStory: StoryRoute?
     @State private var selectedSegment = "Received"
+    @State private var navigationPath = NavigationPath()
     var onQuoteReply: (QuotedStoryReply) -> Void = { _ in }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        NavigationStack(path: $navigationPath) {
+            ScrollViewReader { scrollProxy in
+                ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(alignment: .center) {
                         Text("Replies")
@@ -98,6 +105,7 @@ struct RepliesView: View {
                         Spacer()
                         TopAvatarSpacer()
                     }
+                    .id("replies-top")
 
                     ExpoSegmentedControl(items: ["Received", "Sent"], selected: $selectedSegment)
 
@@ -108,7 +116,14 @@ struct RepliesView: View {
                     if store.isLoading && store.inbox == nil {
                         RepliesLoadingSkeleton()
                     } else if displayedReplyThreads.isEmpty {
-                        EmptyView()
+                        EmptyStateView(
+                            title: selectedSegment == "Sent" ? "No sent replies" : "No replies yet",
+                            message: selectedSegment == "Sent"
+                                ? "Replies you send to stories will stay organized here."
+                                : "When someone replies to your story, the conversation will appear here.",
+                            systemImage: selectedSegment == "Sent" ? "paperplane" : "bubble.left.and.bubble.right"
+                        )
+                        .padding(.top, 18)
                     } else {
                         VStack(spacing: 10) {
                             ForEach(displayedReplyThreads) { thread in
@@ -116,7 +131,6 @@ struct RepliesView: View {
                                     destination: ReplyThreadView(
                                         thread: thread,
                                         onQuote: onQuoteReply,
-                                        onOpenStory: openStory,
                                         onDelete: { interactionId in
                                             await store.deleteReply(id: interactionId, api: api)
                                         }
@@ -154,8 +168,22 @@ struct RepliesView: View {
             .refreshable {
                 await store.load(api: api)
             }
-            .fullScreenCover(item: $selectedStory) { route in
-                StoryStackViewer(route: route)
+            .onChange(of: selectedSegment) { _, _ in
+                UBEYEFeedback.selection()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
+                guard notification.object as? String == AppTab.replies.rawValue else {
+                    return
+                }
+
+                navigationPath = NavigationPath()
+                withAnimation(.snappy(duration: 0.28)) {
+                    scrollProxy.scrollTo("replies-top", anchor: .top)
+                }
+                Task {
+                    await store.load(api: api)
+                }
+            }
             }
         }
     }
@@ -258,14 +286,6 @@ struct RepliesView: View {
         return []
     }
 
-    private func openStory(_ item: ReplyThreadItem) {
-        warmStory(item.storyId)
-        selectedStory = StoryRoute(id: item.storyId, source: .replies)
-    }
-
-    private func warmStory(_ storyId: String) {
-        mediaEngine.warmStoryOpen(storyId: storyId, adjacentIds: [], api: api)
-    }
 }
 
 private struct RepliesLoadingSkeleton: View {
@@ -439,7 +459,6 @@ struct ReplyThreadView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: ReplyThreadData
     let onQuote: (QuotedStoryReply) -> Void
-    let onOpenStory: (ReplyThreadItem) -> Void
     let onDelete: (String) async -> Void
     @State private var message = ""
     @State private var visibleItems: [ReplyThreadItem]
@@ -447,12 +466,10 @@ struct ReplyThreadView: View {
     init(
         thread: ReplyThreadData,
         onQuote: @escaping (QuotedStoryReply) -> Void,
-        onOpenStory: @escaping (ReplyThreadItem) -> Void,
         onDelete: @escaping (String) async -> Void
     ) {
         self.thread = thread
         self.onQuote = onQuote
-        self.onOpenStory = onOpenStory
         self.onDelete = onDelete
         _visibleItems = State(initialValue: thread.items)
     }
@@ -484,7 +501,6 @@ struct ReplyThreadView: View {
             ]
         )
         self.onQuote = { _ in }
-        self.onOpenStory = { _ in }
         self.onDelete = { _ in }
         _visibleItems = State(initialValue: self.thread.items)
     }
@@ -522,9 +538,6 @@ struct ReplyThreadView: View {
                         ForEach(visibleItems) { item in
                             ReplyThreadStoryCard(
                                 item: item,
-                                onOpenStory: {
-                                    onOpenStory(item)
-                                },
                                 onQuote: {
                                     quote(item)
                                 },
@@ -620,7 +633,6 @@ struct ReplyThreadView: View {
 
 private struct ReplyThreadStoryCard: View {
     let item: ReplyThreadItem
-    let onOpenStory: () -> Void
     let onQuote: () -> Void
     let onDelete: () -> Void
 
@@ -665,27 +677,24 @@ private struct ReplyThreadStoryCard: View {
             .padding(.top, 10)
 
             ZStack(alignment: .bottomLeading) {
-                Button(action: onOpenStory) {
-                    ZStack(alignment: .bottom) {
-                        ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl, assetKind: item.assetKind)
-                            .frame(width: 218, height: 318)
+                ZStack(alignment: .bottom) {
+                    ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl)
+                        .frame(width: 218, height: 318)
 
-                        LinearGradient(
-                            colors: [
-                                .black.opacity(0),
-                                .black.opacity(0.48),
-                                .black.opacity(0.70)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 145)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                    }
-                    .frame(width: 218, height: 318)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0),
+                            .black.opacity(0.48),
+                            .black.opacity(0.70)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 145)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                .buttonStyle(.plain)
+                .frame(width: 218, height: 318)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 ReplyMessageOverlay(message: item.message)
                     .frame(width: 214, alignment: .leading)
@@ -729,7 +738,6 @@ private struct ReplyMessageOverlay: View {
 
 private struct ReplyStoryMedia: View {
     let url: URL?
-    let assetKind: SocialAssetKind
 
     var body: some View {
         ZStack {
@@ -741,14 +749,6 @@ private struct ReplyStoryMedia: View {
                     .scaledToFill()
             } placeholder: {
                 UBEYESkeletonBlock()
-            }
-
-            if assetKind == .video {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .frame(width: 42, height: 42)
-                    .foregroundStyle(.white)
-                    .background(.black.opacity(0.42), in: Circle())
             }
         }
     }

@@ -10,14 +10,14 @@ The refactor must move media work off the tap path. Opening a story should bind 
 
 - Replace AVFoundation.
 - Rewrite the whole feed or story viewer UI.
-- Remove Cloudflare Stream. Cloudflare remains the high-quality adaptive playback path.
+- Keep Cloudflare only as the legacy rollback/drain path. New media uses the Vercel HLS workflow.
 
 ## Performance Targets
 
 - Feed restore from disk: immediate shell from cached JSON when available.
 - Story open p50: under 150 ms from tap to viewer shell.
 - Video first frame p50: under 350 ms when player or asset is warm.
-- Video first frame p95: under 900 ms on good Wi-Fi/LTE with Cloudflare-ready assets.
+- Video first frame p95: under 900 ms on good Wi-Fi/LTE with HLS-ready assets.
 - Startup stalls: below 1% of video opens on non-constrained networks.
 
 These should be measured with existing `MediaPerformance` events:
@@ -114,11 +114,10 @@ appears. Active playback never waits for a package download.
 
 ### Startup quality
 
-Cold and staged startup defaults are capped at 3 Mbps / 720 x 1280 on standard paths and
-2 Mbps / 540 x 960 on constrained paths. A ready/prerolled player starts at
-8.256 Mbps / 1080 x 1920 only on strong, non-cellular, non-expensive paths; limited paths
-retain the 2 Mbps / 540 x 960 ceiling. The limits are removed immediately after the first
-decoded frame, restoring the full Cloudflare adaptive ladder for ongoing playback.
+Cold, staged, and ready/prerolled players allow 8 Mbps / 1080 x 1920 from the first
+frame on standard paths. Low Data Mode retains a 3 Mbps / 720 x 1280 ceiling. AVPlayer
+still performs adaptive bitrate selection below these ceilings, and standard paths remove
+the hints after two consecutive healthy-buffer samples at the two-second threshold.
 
 The runtime config controls cold and prepared profiles separately so either can be
 rolled back without an app release. `video_quality_ramp` samples the time from first-frame
@@ -132,11 +131,11 @@ The mobile feed includes a bounded `initialStoryStacks` manifest keyed by reques
 
 Stories and media assets carry explicit playback and optional original rendition metadata:
 
-1. Playback rendition: the Cloudflare Stream signed HLS URL used by feed/viewer playback.
+1. Playback rendition: the opaque, versioned HLS URL used by feed/viewer playback.
 2. Original rendition: optional archive metadata; it is never selected by the viewer or
    inserted into the player/preheat pools.
 
-Every newly composed video goes through the owner-bound Cloudflare TUS pipeline, including
+Every newly composed video goes through the owner-bound Vercel Blob pipeline, including
 small H.264 MP4/M4V files. Compatible files can skip a local re-encode, but never skip
 adaptive server transcoding. The creator sees a local optimistic preview while processing;
 other users see the story only after full provider readiness and moderation approval.

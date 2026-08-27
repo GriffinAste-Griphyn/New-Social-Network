@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     )
   }
 
-  scheduleMediaProcessingSlice(payload.data)
+  await scheduleMediaProcessingSlice(payload.data)
   return Response.json(
     { ok: true, accepted: true },
     { status: 202, headers: noStoreHeaders },

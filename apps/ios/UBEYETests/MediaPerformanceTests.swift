@@ -199,7 +199,9 @@ final class MediaPerformanceTests: XCTestCase {
             fullQualityReady: false,
             providerError: nil,
             isLive: false,
-            pollAfterMs: 3_000
+            pollAfterMs: 3_000,
+            moderationStatus: "pending",
+            moderationReason: nil
         )
         let failed = StoryStatusResponse.Story(
             id: "story-1",
@@ -211,7 +213,9 @@ final class MediaPerformanceTests: XCTestCase {
             fullQualityReady: false,
             providerError: "encoder failed",
             isLive: false,
-            pollAfterMs: nil
+            pollAfterMs: nil,
+            moderationStatus: "approved",
+            moderationReason: nil
         )
         let live = StoryStatusResponse.Story(
             id: "story-1",
@@ -223,12 +227,29 @@ final class MediaPerformanceTests: XCTestCase {
             fullQualityReady: false,
             providerError: nil,
             isLive: true,
-            pollAfterMs: nil
+            pollAfterMs: nil,
+            moderationStatus: "approved",
+            moderationReason: nil
+        )
+        let rejected = StoryStatusResponse.Story(
+            id: "story-1",
+            status: "removed",
+            processingStatus: "ready",
+            hasOriginalRendition: true,
+            providerStatus: "ready",
+            providerPctComplete: 100,
+            fullQualityReady: true,
+            providerError: nil,
+            isLive: false,
+            pollAfterMs: nil,
+            moderationStatus: "rejected",
+            moderationReason: "Content did not pass review."
         )
 
         XCTAssertNil(StoryReadinessPolicy.terminalResult(for: pending))
         XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: failed), .failed)
         XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: live), .live)
+        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: rejected), .failed)
     }
 
     func testVideoUploadResponseDecodesPrivatePosterTarget() throws {
@@ -413,7 +434,7 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryImageTranscoderFitPreservesTheWholePhotoWithBlackLetterboxing() throws {
+    func testStoryImageTranscoderFitPreservesTheWholePhotoWithoutCropping() throws {
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let encoded = try XCTUnwrap(
             StoryImageTranscoder.storyCanvasJPEG(
@@ -438,16 +459,43 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertLessThan(topCenterPixel[0], 16)
-        XCTAssertLessThan(topCenterPixel[1], 16)
-        XCTAssertLessThan(topCenterPixel[2], 16)
-        XCTAssertLessThan(bottomCenterPixel[0], 16)
-        XCTAssertLessThan(bottomCenterPixel[1], 16)
-        XCTAssertLessThan(bottomCenterPixel[2], 16)
+        XCTAssertGreaterThan(topCenterPixel[0], 240)
+        XCTAssertGreaterThan(topCenterPixel[1], 240)
+        XCTAssertGreaterThan(topCenterPixel[2], 240)
+        XCTAssertGreaterThan(bottomCenterPixel[0], 240)
+        XCTAssertGreaterThan(bottomCenterPixel[1], 240)
+        XCTAssertGreaterThan(bottomCenterPixel[2], 240)
         XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
-    func testStoryCanvasLayoutTopAlignsAcrossViewerChromeVariants() {
+    func testStoryImageTranscoderFitCanvasLeavesLetterboxTransparent() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transparent-fit-\(UUID().uuidString).png")
+        try makeCropTestImageData(width: 1_600, height: 1_200)
+            .write(to: fileURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let image = try XCTUnwrap(
+            StoryImageTranscoder.storyCanvasImage(
+                fileURL: fileURL,
+                width: StoryImageUpload.playbackCanvasWidth,
+                height: StoryImageUpload.playbackCanvasHeight,
+                contentMode: .fit
+            )
+        )
+        let topPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: 4)
+        )
+        let centerPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
+        )
+
+        XCTAssertLessThan(topPixel[3], 10)
+        XCTAssertGreaterThan(centerPixel[3], 245)
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+    }
+
+    func testStoryCanvasLayoutCentersAcrossViewerChromeVariants() {
         let screenSize = CGSize(width: 393, height: 852)
 
         for reservedBottomHeight in [CGFloat(0), 90, 108] {
@@ -461,14 +509,79 @@ final class MediaPerformanceTests: XCTestCase {
                 StoryCanvasLayout.aspectRatio,
                 accuracy: 0.000_1
             )
-            XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
+            XCTAssertEqual(layout.frame.midY, screenSize.height / 2, accuracy: 0.000_1)
             XCTAssertGreaterThanOrEqual(layout.frame.minX, 0)
             XCTAssertLessThanOrEqual(layout.frame.maxX, screenSize.width + 0.000_1)
-            XCTAssertLessThanOrEqual(
-                layout.frame.maxY,
-                screenSize.height - reservedBottomHeight + 0.000_1
-            )
+            XCTAssertGreaterThanOrEqual(layout.frame.minY, 0)
+            XCTAssertLessThanOrEqual(layout.frame.maxY, screenSize.height + 0.000_1)
         }
+    }
+
+    func testStoryCanvasLayoutFillsFromAbsoluteTopToBottomChrome() {
+        let screenSize = CGSize(width: 393, height: 852)
+        let reservedBottomHeight = CGFloat(90)
+        let layout = StoryCanvasLayout(
+            containerSize: screenSize,
+            reservedBottomHeight: reservedBottomHeight,
+            fillsAvailableHeight: true,
+            verticalPlacement: .top
+        )
+
+        XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
+        XCTAssertEqual(
+            layout.frame.maxY,
+            screenSize.height - reservedBottomHeight,
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            layout.frame.height,
+            screenSize.height - reservedBottomHeight,
+            accuracy: 0.000_1
+        )
+        XCTAssertGreaterThan(layout.frame.width, screenSize.width)
+        XCTAssertEqual(
+            layout.frame.width / layout.frame.height,
+            StoryCanvasLayout.aspectRatio,
+            accuracy: 0.000_1
+        )
+    }
+
+    func testStoryCanvasPlacementUsesSourceOrientation() {
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: 1_080,
+                height: 1_920
+            ),
+            .top
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: 1_080,
+                height: 2_340
+            ),
+            .top
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: 1_080,
+                height: 1_350
+            ),
+            .center
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: 1_920,
+                height: 1_080
+            ),
+            .center
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forMediaDimensions(
+                width: nil,
+                height: nil
+            ),
+            .center
+        )
     }
 
     func testStoryCanvasLayoutScalesDownOnCompactScreensWithoutChangingAspect() {
@@ -484,32 +597,27 @@ final class MediaPerformanceTests: XCTestCase {
             accuracy: 0.000_1
         )
         XCTAssertEqual(layout.frame.midX, 160, accuracy: 0.000_1)
-        XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
+        XCTAssertEqual(layout.frame.midY, 284, accuracy: 0.000_1)
     }
 
-    func testStoryCanvasLayoutCanFillFromScreenTopWhileKeepingReservedBottom() {
+    func testStoryCanvasLayoutNeverOverflowsTheViewport() {
         let screenSize = CGSize(width: 393, height: 852)
         let reservedBottomHeight = CGFloat(90)
         let layout = StoryCanvasLayout(
             containerSize: screenSize,
-            reservedBottomHeight: reservedBottomHeight,
-            fillsAvailableHeight: true
+            reservedBottomHeight: reservedBottomHeight
         )
 
-        XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
-        XCTAssertEqual(
-            layout.frame.maxY,
-            screenSize.height - reservedBottomHeight,
-            accuracy: 0.000_1
-        )
+        XCTAssertEqual(layout.frame.midY, screenSize.height / 2, accuracy: 0.000_1)
         XCTAssertEqual(
             layout.frame.width / layout.frame.height,
             StoryCanvasLayout.aspectRatio,
             accuracy: 0.000_1
         )
         XCTAssertEqual(layout.frame.midX, screenSize.width / 2, accuracy: 0.000_1)
-        XCTAssertLessThan(layout.frame.minX, 0)
-        XCTAssertGreaterThan(layout.frame.maxX, screenSize.width)
+        XCTAssertGreaterThanOrEqual(layout.frame.minX, 0)
+        XCTAssertLessThanOrEqual(layout.frame.maxX, screenSize.width)
+        XCTAssertLessThanOrEqual(layout.frame.maxY, screenSize.height)
     }
 
     func testStoryCanvasContractUsesCanonicalDerivativeSizes() {
@@ -549,16 +657,15 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testStoryImageDerivativeBuilderProducesCanonicalBoundedVariants() async throws {
+        XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fill)
+
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("story-derivative-\(UUID().uuidString).png")
         try sourceData.write(to: fileURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: fileURL) }
 
-        let derivatives = try await StoryImageDerivativeBuilder.build(
-            fileURL: fileURL,
-            contentMode: .fit
-        )
+        let derivatives = try await StoryImageDerivativeBuilder.build(fileURL: fileURL)
 
         XCTAssertEqual(derivatives.display.width, 1_080)
         XCTAssertEqual(derivatives.display.height, 1_920)
@@ -605,7 +712,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoryCanvasImageUsesBlackLetterboxInEveryColorScheme() throws {
+    func testStoryCanvasImageUsesBlackLetterboxingInEveryColorScheme() throws {
         let sourceImage = makeHorizontalEdgeMarkerImage(width: 400, height: 400)
         let lightRenderer = ImageRenderer(
             content: StoryCanvasImage(image: Image(uiImage: sourceImage))
@@ -636,6 +743,26 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
+    func testStoryCardThumbnailImageFillsCardWithoutLetterboxing() throws {
+        let sourceImage = UIImage(data: makeTestImageData(width: 400, height: 400))!
+        let renderer = ImageRenderer(
+            content: StoryCardThumbnailImage(image: Image(uiImage: sourceImage))
+                .frame(width: 132, height: 192)
+                .clipped()
+        )
+        renderer.scale = 1
+
+        let renderedImage = try XCTUnwrap(renderer.uiImage?.cgImage)
+        let topPixel = try XCTUnwrap(rgbaPixel(in: renderedImage, x: 66, y: 2))
+        let bottomPixel = try XCTUnwrap(rgbaPixel(in: renderedImage, x: 66, y: 189))
+
+        XCTAssertGreaterThan(topPixel[2], topPixel[0])
+        XCTAssertGreaterThan(topPixel[2], topPixel[1])
+        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[0])
+        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[1])
+    }
+
+    @MainActor
     func testPreferredPlaybackAlwaysUsesCanonicalAdaptiveStream() {
         let defaultURL = URL(string: "https://example.com/playback/video.m3u8")!
         let selected = MediaPlaybackQuality.preferredPlaybackURL(defaultURL: defaultURL)
@@ -658,6 +785,43 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(selected.quality, "adaptive_hls")
     }
 
+    @MainActor
+    func testCloudflareStartupPlaybackLocksThePrerolledRendition() throws {
+        let adaptiveURL = try XCTUnwrap(
+            URL(
+                string: "https://www.ubeye.ai/api/story-media/cloudflare-stream/abc/manifest/video.m3u8?token=signed"
+            )
+        )
+        let startupURL = MediaPlaybackQuality.startupPlaybackURL(for: adaptiveURL)
+        let components = try XCTUnwrap(
+            URLComponents(url: startupURL, resolvingAgainstBaseURL: false)
+        )
+
+        XCTAssertEqual(
+            components.queryItems?.first(where: { $0.name == "token" })?.value,
+            "signed"
+        )
+        XCTAssertEqual(
+            components.queryItems?.first(where: {
+                $0.name == MediaPlaybackQuality.clientBandwidthHintQueryName
+            })?.value,
+            "8.000"
+        )
+        XCTAssertTrue(MediaPlaybackQuality.isStartupQualityLocked(startupURL))
+        XCTAssertEqual(
+            MediaPlaybackQuality.adaptivePlaybackURL(for: startupURL),
+            adaptiveURL
+        )
+    }
+
+    @MainActor
+    func testNonCloudflareStartupPlaybackRemainsAdaptive() {
+        let url = URL(string: "https://cdn.example.com/media/master.m3u8?token=signed")!
+
+        XCTAssertEqual(MediaPlaybackQuality.startupPlaybackURL(for: url), url)
+        XCTAssertFalse(MediaPlaybackQuality.isStartupQualityLocked(url))
+    }
+
     func testStoryNavigationPolicyMovesWithinStackAndFinishesAtEnd() {
         XCTAssertEqual(
             StoryNavigationPolicy.action(currentIndex: 0, itemCount: 3, delta: 1),
@@ -678,6 +842,30 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(
             StoryNavigationPolicy.action(currentIndex: 0, itemCount: 0, delta: 1),
             .stay
+        )
+    }
+
+    func testStoryDeletionPolicyReturnsOnlyTheSubsequentItem() {
+        let itemIDs = ["first", "current", "next"]
+
+        XCTAssertEqual(
+            StoryDeletionPolicy.subsequentItemID(
+                deleting: "current",
+                from: itemIDs
+            ),
+            "next"
+        )
+        XCTAssertNil(
+            StoryDeletionPolicy.subsequentItemID(
+                deleting: "next",
+                from: itemIDs
+            )
+        )
+        XCTAssertNil(
+            StoryDeletionPolicy.subsequentItemID(
+                deleting: "missing",
+                from: itemIDs
+            )
         )
     }
 
@@ -720,7 +908,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testVideoQualityRampWaitsForAHealthyForwardBuffer() {
-        XCTAssertEqual(VideoQualityRampPolicy.requiredHealthySamples, 3)
+        XCTAssertEqual(VideoQualityRampPolicy.requiredHealthySamples, 2)
         XCTAssertFalse(
             VideoQualityRampPolicy.shouldRelaxStreamingHints(
                 isPlaybackLikelyToKeepUp: false,
@@ -731,14 +919,14 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertFalse(
             VideoQualityRampPolicy.shouldRelaxStreamingHints(
                 isPlaybackLikelyToKeepUp: true,
-                bufferedAheadSeconds: 5.9,
+                bufferedAheadSeconds: 1.9,
                 remainingSeconds: 20
             )
         )
         XCTAssertTrue(
             VideoQualityRampPolicy.shouldRelaxStreamingHints(
                 isPlaybackLikelyToKeepUp: true,
-                bufferedAheadSeconds: 6,
+                bufferedAheadSeconds: 2,
                 remainingSeconds: 20
             )
         )
@@ -781,11 +969,11 @@ final class MediaPerformanceTests: XCTestCase {
     func testNormalizedVideoEnvelopeDoesNotDependOnNetworkConditions() {
         XCTAssertEqual(
             StoryVideoUploadNormalizer.normalizedTargetBitsPerSecond,
-            8_256_000
+            8_000_000
         )
         XCTAssertEqual(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 10),
-            10_320_000
+            10_000_000
         )
         XCTAssertNil(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 0)
@@ -898,10 +1086,15 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testFullBleedPlayerViewReplacesAndDetachesPlayers() {
-        let view = FullBleedPlayerView(frame: CGRect(x: 0, y: 0, width: 360, height: 640))
+    func testAspectFitPlayerViewPreservesMediaAndUsesBlackLetterboxing() {
+        let view = AspectFitPlayerView(frame: CGRect(x: 0, y: 0, width: 360, height: 640))
         let firstPlayer = AVPlayer()
         let secondPlayer = AVPlayer()
+
+        XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspect)
+        XCTAssertEqual(view.backgroundColor, .black)
+        XCTAssertEqual(view.playerLayer.backgroundColor, UIColor.black.cgColor)
+        XCTAssertTrue(view.isOpaque)
 
         view.attach(firstPlayer)
         XCTAssertTrue(view.player === firstPlayer)
@@ -1327,6 +1520,27 @@ final class MediaPerformanceTests: XCTestCase {
                 wasPrerolled: true,
                 targetSeconds: 0,
                 currentSeconds: 0.2
+            )
+        )
+    }
+
+    func testStoryVideoVisitPolicyRewindsOnlyWhenLeavingActiveStory() {
+        XCTAssertTrue(
+            StoryVideoVisitPolicy.shouldRewindForNextVisit(
+                previousIsActive: true,
+                nextIsActive: false
+            )
+        )
+        XCTAssertFalse(
+            StoryVideoVisitPolicy.shouldRewindForNextVisit(
+                previousIsActive: false,
+                nextIsActive: true
+            )
+        )
+        XCTAssertFalse(
+            StoryVideoVisitPolicy.shouldRewindForNextVisit(
+                previousIsActive: true,
+                nextIsActive: true
             )
         )
     }

@@ -36,7 +36,7 @@ describe("private story media cache policy", () => {
     const cdnPolicy = getStoryMediaCdnCacheControl(request, pathname)
     const sharedMaxAge = Number(cdnPolicy.match(/s-maxage=(\d+)/)?.[1])
     expect(cdnPolicy).toMatch(
-      /^public, max-age=0, s-maxage=\d+, must-revalidate$/,
+      /^public, max-age=0, s-maxage=\d+, stale-while-revalidate=60, must-revalidate$/,
     )
     expect(sharedMaxAge).toBeGreaterThan(0)
     expect(sharedMaxAge).toBeLessThan(maxAge)

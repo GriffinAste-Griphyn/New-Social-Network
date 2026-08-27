@@ -210,6 +210,15 @@ struct ProfileView: View {
             NavigationLink(destination: NotificationSettingsView()) {
                 accountRow(icon: "bell.badge", title: notificationTitle, subtitle: notificationSubtitle)
             }
+            Link(destination: LegalDocuments.termsURL) {
+                accountRow(icon: "doc.text", title: "Terms", subtitle: "UBEYE Terms of Service")
+            }
+            Link(destination: LegalDocuments.privacyPolicyURL) {
+                accountRow(icon: "hand.raised", title: "Privacy Policy", subtitle: "How UBEYE handles your information")
+            }
+            Link(destination: LegalDocuments.communityGuidelinesURL) {
+                accountRow(icon: "person.2.badge.gearshape", title: "Community Guidelines", subtitle: "Safety and participation rules")
+            }
             Button {
                 auth.signOut(api: api)
             } label: {

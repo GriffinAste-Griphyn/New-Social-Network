@@ -32,6 +32,8 @@ struct StoryVideoPlaybackSource: Hashable {
 }
 
 enum MediaPlaybackQuality {
+    static let clientBandwidthHintQueryName = "clientBandwidthHint"
+
     enum StartupProfile {
         case cold
         case prepared
@@ -39,7 +41,7 @@ enum MediaPlaybackQuality {
 
     @MainActor
     static var offlineStreamingPeakBitRate: Double {
-        min(NetworkQualityMonitor.shared.startupStreamingPeakBitRate, 2_000_000)
+        NetworkQualityMonitor.shared.preparedStreamingPeakBitRate
     }
 
     @MainActor
@@ -61,6 +63,52 @@ enum MediaPlaybackQuality {
             item.preferredPeakBitRate = NetworkQualityMonitor.shared.preparedStreamingPeakBitRate
             item.preferredMaximumResolution = NetworkQualityMonitor.shared.preparedStreamingMaximumResolution
         }
+    }
+
+    /// Cloudflare Stream can return the single rendition nearest this bandwidth.
+    /// Using that focused manifest for the player that is actively being prerolled
+    /// prevents AVPlayer from exposing a low-resolution ABR bootstrap frame before
+    /// it has enough throughput history to select the intended rendition.
+    @MainActor
+    static func startupPlaybackURL(for url: URL) -> URL {
+        let adaptiveURL = adaptivePlaybackURL(for: url)
+        guard isCloudflareStreamPlaylist(adaptiveURL),
+              var components = URLComponents(
+                url: adaptiveURL,
+                resolvingAgainstBaseURL: false
+              ) else {
+            return adaptiveURL
+        }
+
+        let bitsPerSecond = NetworkQualityMonitor.shared.preparedStreamingPeakBitRate
+        let megabitsPerSecond = min(max(bitsPerSecond / 1_000_000, 1.5), 20)
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll {
+            $0.name.caseInsensitiveCompare(clientBandwidthHintQueryName) == .orderedSame
+        }
+        queryItems.append(
+            URLQueryItem(
+                name: clientBandwidthHintQueryName,
+                value: String(format: "%.3f", megabitsPerSecond)
+            )
+        )
+        components.queryItems = queryItems
+        return components.url ?? adaptiveURL
+    }
+
+    nonisolated static func isStartupQualityLocked(_ url: URL?) -> Bool {
+        guard let url,
+              isCloudflareStreamPlaylist(url),
+              let components = URLComponents(
+                url: url,
+                resolvingAgainstBaseURL: false
+              ) else {
+            return false
+        }
+
+        return components.queryItems?.contains {
+            $0.name.caseInsensitiveCompare(clientBandwidthHintQueryName) == .orderedSame
+        } == true
     }
 
     @MainActor
@@ -99,9 +147,22 @@ enum MediaPlaybackQuality {
         }
 
         let filteredQueryItems = components.queryItems?.filter {
-            $0.name.caseInsensitiveCompare("clientBandwidthHint") != .orderedSame
+            $0.name.caseInsensitiveCompare(clientBandwidthHintQueryName) != .orderedSame
         }
         components.queryItems = filteredQueryItems?.isEmpty == true ? nil : filteredQueryItems
         return components.url ?? url
+    }
+
+    private nonisolated static func isCloudflareStreamPlaylist(_ url: URL) -> Bool {
+        guard isHTTPStreamingPlaylist(url) else {
+            return false
+        }
+
+        let hostname = url.host?.lowercased() ?? ""
+        let path = url.path.lowercased()
+        return path.contains("/cloudflare-stream/") ||
+            hostname.hasSuffix(".cloudflarestream.com") ||
+            hostname == "videodelivery.net" ||
+            hostname.hasSuffix(".videodelivery.net")
     }
 }

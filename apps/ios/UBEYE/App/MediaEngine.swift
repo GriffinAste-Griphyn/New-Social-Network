@@ -750,11 +750,14 @@ final class StoryVideoPlaybackPool: ObservableObject {
         onStaged: @escaping @MainActor (PreparedPlayer) -> Void
     ) async -> PreparedPlayer? {
         let resolved = await resolvePlaybackURL(for: source)
-        let asset = AVURLAsset(url: resolved.playbackURL)
+        let playbackURL = MediaPlaybackQuality.startupPlaybackURL(
+            for: resolved.playbackURL
+        )
+        let asset = AVURLAsset(url: playbackURL)
 
         let item = AVPlayerItem(asset: asset)
-        configureStreamingHints(for: item, playbackURL: resolved.playbackURL)
-        item.preferredForwardBufferDuration = 8
+        configureStreamingHints(for: item, playbackURL: playbackURL)
+        item.preferredForwardBufferDuration = NetworkQualityMonitor.shared.preparedForwardBufferDuration
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
 
         let player = AVPlayer(playerItem: item)
@@ -763,7 +766,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         player.pause()
         let staged = PreparedPlayer(
             player: player,
-            playbackURL: resolved.playbackURL,
+            playbackURL: playbackURL,
             cacheState: resolved.cacheState,
             handoffStage: .staged
         )
@@ -784,7 +787,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         return PreparedPlayer(
             player: player,
-            playbackURL: resolved.playbackURL,
+            playbackURL: playbackURL,
             cacheState: resolved.cacheState,
             wasPrerolled: wasPrerolled,
             handoffStage: wasPrerolled ? .prerolled : .ready

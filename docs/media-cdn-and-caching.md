@@ -21,15 +21,14 @@ it never stores a standalone manifest.
 
 ## Images
 
-`MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED` defaults to enabled. A post produces a display
-and thumbnail derivative before completion and sends a tiny JPEG data URL as inline
-placeholder metadata. The playback manifest uses the derivatives and retains the
-original only as archive metadata.
+Build 363+ uploads one source image and returns a processing story immediately. A durable
+server worker verifies the checksum, produces the display/thumbnail/ThumbHash derivatives,
+and atomically promotes them. Older builds keep the client-derivative compatibility path.
 
 Image delivery uses a stable authorized JPEG route as the canonical URL. Private-media
 responses use private cache directives bounded by the access-token lifetime; they are
-never marked public or immutable. Generated canvases use a darkened blurred fill instead
-of baked black bars.
+never marked public or immutable. Generated photo canvases keep letterboxing transparent;
+clients render that space as flat black rather than baking color into the image derivative.
 
 Current image delivery uses:
 
@@ -51,15 +50,13 @@ The repository does not yet run a separate imgproxy service. Add it only as a Ve
 The versioned FFmpeg workflow owns the 360p, 540p, 720p, and 1080p bitrate
 ladder, omitting levels that would upscale the source. iOS applies a startup
 peak bitrate and maximum resolution while the first frame is hidden, then
-`MediaPlaybackQuality.relaxStreamingHints` removes both limits immediately
-after `video_first_frame`.
+`MediaPlaybackQuality.relaxStreamingHints` removes both limits after two consecutive
+healthy-buffer samples at the two-second threshold.
 
-Cold and merely staged players use the latency-safe profile: 3 Mbps / 720 x 1280 on
-standard paths and 2 Mbps / 540 x 960 on constrained paths. Ready or successfully
-prerolled players use 8.256 Mbps / 1080 x 1920 on strong, non-cellular,
-non-expensive paths. Prepared playback falls back to 2 Mbps / 540 x 960 when the path
-is constrained, cellular, or expensive. These are startup ceilings only; full adaptive
-quality resumes after the first frame.
+Cold, staged, and ready/prerolled players allow 8 Mbps / 1080 x 1920 from the first
+frame on standard paths. Low Data Mode retains a 3 Mbps / 720 x 1280 ceiling and does
+not remove its streaming hints. These values are upper bounds: AVPlayer still performs
+adaptive bitrate selection within the available HLS ladder based on live conditions.
 
 After the cached feed restores, iOS selectively prepares one early playable video from
 each initially visible story stack, bounded by the runtime player limit. A successful
@@ -95,9 +92,9 @@ interruption), including presentation dimensions and AVFoundation indicated/obse
 bitrate. The same per-playback QoE sampling decision governs both quality-ramp and final
 access-log upload.
 
-Normalized upload exports always retain the 8.256 Mbps quality envelope. Network state
-changes upload scheduling and preheating behavior, but never permanently lowers the
-private original received by the processing workflow.
+Camera uploads use a delivery-aware 5 Mbps HEVC or 7 Mbps H.264 1080p envelope so normal
+captures can bypass a redundant client transcode. Gallery imports above the 8 Mbps or
+1080p envelope are normalized to 3.5 Mbps before upload.
 
 ## Disk eviction
 
@@ -125,7 +122,7 @@ Production has no process-local snapshot fallback: missing Redis credentials fai
 - `MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0` initially, then a measured gradual rollout
 - `MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD=1` for build 320+, or `0` as the kill switch
 - `MOBILE_OFFLINE_HLS_CACHE_MAX_ASSETS=2` (hard-clamped to 3)
-- `MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD=8256000`
+- `MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD=6500000`
 - `MOBILE_PREPARED_MAX_WIDTH_STANDARD=1080`
 - `MOBILE_PREPARED_MAX_HEIGHT_STANDARD=1920`
 - `CRON_SECRET` for authenticated Vercel media-session cleanup
@@ -137,7 +134,10 @@ poster atomically after `AVPlayerLayer` reports a displayable frame; it does not
 crossfade between the poster and live video.
 
 - private Vercel Blob token for originals
-- separate public Vercel Blob token for HLS delivery
+- separate Vercel Blob token for HLS delivery
+- `MEDIA_DELIVERY_ACCESS=public` only after that delivery store is configured public;
+  omission retains the private proxy rollback path
+- `MEDIA_ASYNC_COMPLETION_ENABLED=false` as the emergency build-363 async kill switch
 - `STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` only
   after migration and preview verification
 - Cloudflare credentials only during the rollback/drain window
@@ -148,10 +148,9 @@ Vercel calls `/api/cron/media-upload-cleanup` daily. It removes expired incomple
 private-Blob or Cloudflare uploads before deleting their session rows, and prunes
 completed session rows after seven days without deleting published media.
 
-Vercel calls `/api/cron/media-processing-reconcile` daily. It retries pending
-or failed custom jobs up to the bounded attempt limit; each workflow step and
-rendition path is idempotent.
+Vercel calls video, image, moderation, and publication reconciliation every five minutes.
+Workers retry pending or failed jobs up to bounded attempt limits; each workflow step and
+rendition path is idempotent. Media upload cleanup remains daily.
 
-Vercel also calls `/api/cron/story-publication-reconcile` every minute. It reconciles up
-to 50 processing Stream stories and starts durable publication work for live stories
-whose dispatch is missing or stale.
+`/api/cron/media-operations-rollup` emits a 15-minute QoE summary and refreshes rolling
+seven-day creator quality/freshness scores from feed events.

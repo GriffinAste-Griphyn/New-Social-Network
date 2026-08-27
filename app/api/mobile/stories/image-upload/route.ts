@@ -6,6 +6,7 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import {
   directStoryImageDisplayPathname,
   directStoryImagePathname,
+  directStoryImageSourcePathname,
   directStoryImageThumbnailPathname,
   isAllowedDirectStoryImageContentType,
   maxStoryImageDisplayDerivativeBytes,
@@ -28,6 +29,7 @@ const imageUploadSchema = z.object({
 })
 
 const minimumDerivativeOnlyBuild = 285
+const minimumServerEncodedImageBuild = 357
 
 type ImageUploadPartAccess = "private"
 
@@ -133,27 +135,40 @@ export async function POST(request: Request) {
     parsed.data.fileName,
     uploadStartedAt,
   )
-  const [display, thumbnail] = await Promise.all([
-    createImageUploadPart({
-      pathname: directStoryImageDisplayPathname(
-        basePathname,
-        parsed.data.displayContentType,
-      ),
-      contentType: parsed.data.displayContentType,
-      maxSizeBytes: maxStoryImageDisplayDerivativeBytes,
-      access: "private",
-    }),
-    createImageUploadPart({
-      pathname: directStoryImageThumbnailPathname(basePathname),
-      contentType: "image/webp",
-      maxSizeBytes: maxStoryImageThumbnailDerivativeBytes,
-      access: "private",
-    }),
-  ])
+  const source = await createImageUploadPart({
+    pathname: directStoryImageSourcePathname(
+      basePathname,
+      parsed.data.contentType,
+    ),
+    contentType: parsed.data.contentType,
+    maxSizeBytes: maxStoryImageUploadBytes,
+    access: "private",
+  })
+  const [display, thumbnail] =
+    clientBuild < minimumServerEncodedImageBuild
+      ? await Promise.all([
+          createImageUploadPart({
+            pathname: directStoryImageDisplayPathname(
+              basePathname,
+              parsed.data.displayContentType,
+            ),
+            contentType: parsed.data.displayContentType,
+            maxSizeBytes: maxStoryImageDisplayDerivativeBytes,
+            access: "private",
+          }),
+          createImageUploadPart({
+            pathname: directStoryImageThumbnailPathname(basePathname),
+            contentType: "image/webp",
+            maxSizeBytes: maxStoryImageThumbnailDerivativeBytes,
+            access: "private",
+          }),
+        ])
+      : [null, null]
 
   return NextResponse.json({
     ok: true,
     basePathname,
+    source,
     display,
     thumbnail,
   })

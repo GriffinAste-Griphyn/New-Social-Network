@@ -201,7 +201,10 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
-    static let normalizedTargetBitsPerSecond = 8_256_000
+    static let normalizedTargetBitsPerSecond = 8_000_000
+    static let normalizedPeakBitsPerSecond = 12_000_000
+    private static let normalizedWidth = 1_080
+    private static let normalizedHeight = 1_920
 
     static func normalizedFileLengthLimit(durationSeconds: TimeInterval) -> Int64? {
         guard durationSeconds.isFinite, durationSeconds > 0 else {
@@ -227,7 +230,11 @@ enum StoryVideoUploadNormalizer {
             throw APIClientError.server("Story videos are capped at 2 minutes.", 0)
         }
 
-        if inspection.byteSize <= maxUploadBytes, inspection.isStreamCompatibleInput {
+        let requiresCompression = requiresClientCompression(inspection)
+
+        if inspection.byteSize <= maxUploadBytes,
+           inspection.isStreamCompatibleInput,
+           !requiresCompression {
             MediaPerformance.mark("video_upload_strategy stream_passthrough \(inspection.diagnosticSummary)")
             return PreparedStoryVideo(
                 url: url,
@@ -240,6 +247,7 @@ enum StoryVideoUploadNormalizer {
 
         if inspection.byteSize <= maxUploadBytes,
            inspection.canRemuxForStream,
+           !requiresCompression,
            let remuxedURL = await fastStartRemuxedVideoURL(for: url) {
             do {
                 let byteSize = try await StoryUploadFileIO.fileSize(at: remuxedURL)
@@ -267,7 +275,9 @@ enum StoryVideoUploadNormalizer {
         }
 
         let reason: String
-        if inspection.byteSize > maxUploadBytes {
+        if requiresCompression {
+            reason = "client_compression"
+        } else if inspection.byteSize > maxUploadBytes {
             reason = "large_input"
         } else if !inspection.hasFastStart {
             reason = "moov_after_media"
@@ -382,23 +392,29 @@ enum StoryVideoUploadNormalizer {
             }
 
             guard export.supportedFileTypes.contains(.mp4) else {
-                MediaPerformance.mark("video_upload_normalize_skipped preset=\(preset) unsupported_mp4")
+                MediaPerformance.mark(
+                    "video_upload_normalize_skipped preset=\(preset) unsupported_mp4"
+                )
                 continue
             }
 
             await exportVideo(export)
 
             if export.status == .completed {
-                let byteSize = (try? await StoryUploadFileIO.fileSize(at: outputURL)) ?? 0
+                let byteSize = try await StoryUploadFileIO.fileSize(at: outputURL)
 
                 if byteSize <= maxUploadBytes {
                     let mode = mirrorsHorizontally ? "mirrored" : "standard"
-                    MediaPerformance.mark("video_upload_normalized mode=\(mode) preset=\(preset) bytes=\(byteSize)")
+                    MediaPerformance.mark(
+                        "video_upload_normalized mode=\(mode) preset=\(preset) bytes=\(byteSize)"
+                    )
                     return outputURL
                 }
 
                 try? FileManager.default.removeItem(at: outputURL)
-                MediaPerformance.mark("video_upload_normalized_too_large preset=\(preset) bytes=\(byteSize)")
+                MediaPerformance.mark(
+                    "video_upload_normalized_too_large preset=\(preset) bytes=\(byteSize)"
+                )
                 continue
             }
 
@@ -448,6 +464,28 @@ enum StoryVideoUploadNormalizer {
         return outputURL
     }
 
+    private static func requiresClientCompression(
+        _ inspection: StoryVideoInspection
+    ) -> Bool {
+        let estimatedBitsPerSecond: Double
+        if let durationMs = inspection.durationMs, durationMs > 0 {
+            estimatedBitsPerSecond =
+                Double(inspection.byteSize) * 8 / (Double(durationMs) / 1_000)
+        } else {
+            estimatedBitsPerSecond = 0
+        }
+
+        let naturalSize = inspection.naturalSize ?? .zero
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(
+            inspection.preferredTransform ?? .identity
+        )
+        let shortEdge = min(abs(orientedRect.width), abs(orientedRect.height))
+        let longEdge = max(abs(orientedRect.width), abs(orientedRect.height))
+        return estimatedBitsPerSecond > Double(normalizedPeakBitsPerSecond) ||
+            shortEdge > Double(normalizedWidth) ||
+            longEdge > Double(normalizedHeight)
+    }
+
     private static func exportSession(
         asset: AVURLAsset,
         preset: String,
@@ -479,7 +517,10 @@ enum StoryVideoUploadNormalizer {
             exportTimeRange = timeRange
         }
 
-        guard let export = AVAssetExportSession(asset: exportAsset, presetName: preset) else {
+        guard let export = AVAssetExportSession(
+            asset: exportAsset,
+            presetName: preset
+        ) else {
             return nil
         }
 
@@ -506,8 +547,8 @@ enum StoryVideoUploadNormalizer {
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
         ]
-        var presets: [String] = []
 
+        var presets: [String] = []
         for candidate in candidates {
             guard !presets.contains(candidate) else {
                 continue

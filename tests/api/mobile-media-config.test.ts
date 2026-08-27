@@ -9,6 +9,7 @@ const mediaConfigEnvironmentNames = [
   "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
   "MOBILE_MEDIA_PREHEAT_CANARY_PERCENT",
   "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
+  "MOBILE_UPLOAD_CHUNK_BYTES",
   "MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED",
   "MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD",
   "MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED",
@@ -49,9 +50,10 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-08-25.2",
+      version: "2026-08-26.1",
       rolloutProfile: "preheat-canary",
       imageDerivativeUploadEnabled: true,
+      uploadChunkBytes: 5 * 1024 * 1024,
       imagePreheatLimit: { constrained: 2, standard: 4 },
       stackPreheatLimit: { constrained: 2, standard: 4 },
       preparedPlayerLimit: { constrained: 0, standard: 0 },
@@ -59,19 +61,19 @@ describe("mobile media runtime config", () => {
       offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
       offlineHLSCacheMaxAssets: 0,
       startupStreamingPeakBitRate: {
-        constrained: 2_000_000,
-        standard: 3_000_000,
+        constrained: 3_000_000,
+        standard: 8_000_000,
       },
       startupStreamingMaximumResolution: {
-        constrained: { width: 540, height: 960 },
-        standard: { width: 720, height: 1280 },
+        constrained: { width: 720, height: 1280 },
+        standard: { width: 1080, height: 1920 },
       },
       preparedStreamingPeakBitRate: {
-        constrained: 2_000_000,
-        standard: 8_256_000,
+        constrained: 3_000_000,
+        standard: 8_000_000,
       },
       preparedStreamingMaximumResolution: {
-        constrained: { width: 540, height: 960 },
+        constrained: { width: 720, height: 1280 },
         standard: { width: 1080, height: 1920 },
       },
     })
@@ -150,8 +152,8 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 1, standard: 3 },
       persistentVideoPreheatLimit: { constrained: 2, standard: 2 },
       startupStreamingPeakBitRate: {
-        constrained: 2_000_000,
-        standard: 3_000_000,
+        constrained: 3_000_000,
+        standard: 8_000_000,
       },
     })
     process.env.MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED = "false"
@@ -161,8 +163,8 @@ describe("mobile media runtime config", () => {
       preparedPlayerLimit: { constrained: 0, standard: 3 },
       persistentVideoPreheatLimit: { constrained: 1, standard: 2 },
       startupStreamingPeakBitRate: {
-        constrained: 4_000_000,
-        standard: 6_000_000,
+        constrained: 2_000_000,
+        standard: 4_000_000,
       },
       offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
     })

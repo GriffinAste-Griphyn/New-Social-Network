@@ -118,7 +118,6 @@ struct AuthView: View {
                         auth.stage = .signup
                     }
                     Button {
-                        hasAcceptedTerms = false
                         auth.stage = .login
                     } label: {
                             Text("Log in")
@@ -134,8 +133,8 @@ struct AuthView: View {
             case .login:
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
-                legalAgreementView(mode: .compact)
-                PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting, isDisabled: !hasAcceptedTerms) {
+                legalDocumentLinks
+                PrimaryButton(title: "Sign in", isLoading: auth.isSubmitting) {
                     verificationCode = ""
                     Task { await auth.login(email: email, password: password, api: api) }
                 }
@@ -147,7 +146,7 @@ struct AuthView: View {
             case .signup:
                 AuthTextField(title: "Email", text: $email, keyboard: .emailAddress)
                 AuthSecureField(title: "Password", text: $password)
-                legalAgreementView(mode: .full)
+                signupLegalAgreementView
                 PrimaryButton(title: "Create account", isLoading: auth.isSubmitting, isDisabled: !hasAcceptedTerms) {
                     verificationCode = ""
                     Task { await auth.signup(email: email, password: password, api: api) }
@@ -184,12 +183,7 @@ struct AuthView: View {
         .ubeyeCard()
     }
 
-    private enum LegalAgreementMode {
-        case compact
-        case full
-    }
-
-    private func legalAgreementView(mode: LegalAgreementMode) -> some View {
+    private var signupLegalAgreementView: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 9) {
                 Button {
@@ -207,11 +201,11 @@ struct AuthView: View {
                     hasAcceptedTerms.toggle()
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(mode == .full ? "Terms / EULA" : "I accept UBEYE's Terms / EULA")
+                        Text("Terms and policies")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(Color.ubeyeInk)
 
-                        Text(legalAgreementCopy(for: mode))
+                        Text("I agree to UBEYE's Terms and Community Guidelines and acknowledge the Privacy Policy.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.ubeyeMuted)
                             .lineSpacing(1)
@@ -222,14 +216,8 @@ struct AuthView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(hasAcceptedTerms ? "Terms accepted" : "Accept terms")
             }
-
-            HStack(spacing: 12) {
-                Link("Terms", destination: URL(string: "https://www.ubeye.ai/terms")!)
-                Link("Community Guidelines", destination: URL(string: "https://www.ubeye.ai/community-guidelines")!)
-            }
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(Color.ubeyeRed)
-            .padding(.leading, 33)
+            legalDocumentLinks
+                .padding(.leading, 33)
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
@@ -243,13 +231,15 @@ struct AuthView: View {
         )
     }
 
-    private func legalAgreementCopy(for mode: LegalAgreementMode) -> String {
-        switch mode {
-        case .compact:
-            "No tolerance for objectionable content or abusive users."
-        case .full:
-            "I agree to UBEYE's Terms and Community Guidelines. No tolerance for objectionable content or abusive users."
+    private var legalDocumentLinks: some View {
+        HStack(spacing: 12) {
+            Link("Terms", destination: LegalDocuments.termsURL)
+            Link("Privacy", destination: LegalDocuments.privacyPolicyURL)
+            Link("Community Guidelines", destination: LegalDocuments.communityGuidelinesURL)
         }
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(Color.ubeyeRed)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

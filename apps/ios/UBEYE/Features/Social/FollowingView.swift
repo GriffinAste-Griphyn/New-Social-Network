@@ -6,12 +6,19 @@ struct FollowingView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        NavigationStack(path: $navigationPath) {
+            ScrollViewReader { scrollProxy in
+                ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     header
+                        .id("following-feed-top")
+
+                    if let refreshError = store.refreshError, store.feed != nil {
+                        InlineNotice(message: "Couldn’t refresh. \(refreshError)", isError: true)
+                    }
 
                     if store.isLoading && store.feed == nil {
                         FollowingFeedLoadingSkeleton()
@@ -76,6 +83,19 @@ struct FollowingView: View {
                                 ProgressView()
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
+                            } else if store.nextPageError != nil {
+                                Button {
+                                    UBEYEFeedback.selection()
+                                    Task {
+                                        await store.loadNextPage(api: api, mediaEngine: mediaEngine)
+                                    }
+                                } label: {
+                                    Label("Retry loading more", systemImage: "arrow.clockwise")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .frame(maxWidth: .infinity, minHeight: 46)
+                                        .foregroundStyle(Color.ubeyeRed)
+                                }
+                                .buttonStyle(UBEYEPressButtonStyle())
                             }
                         }
                     }
@@ -115,6 +135,24 @@ struct FollowingView: View {
                     await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
+                guard notification.object as? String == AppTab.following.rawValue else {
+                    return
+                }
+
+                navigationPath = NavigationPath()
+                withAnimation(.snappy(duration: 0.28)) {
+                    scrollProxy.scrollTo("following-feed-top", anchor: .top)
+                }
+                Task {
+                    await store.load(
+                        api: api,
+                        mediaEngine: mediaEngine,
+                        showsLoading: false,
+                        useDiskCache: false
+                    )
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, store.feed != nil else {
                     return
@@ -126,6 +164,7 @@ struct FollowingView: View {
             }
             .fullScreenCover(item: $selectedStory) { route in
                 StoryStackViewer(route: route)
+            }
             }
         }
     }

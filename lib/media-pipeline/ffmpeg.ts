@@ -21,6 +21,9 @@ type ProbeStream = {
   avg_frame_rate?: string
   r_frame_rate?: string
   duration?: string
+  channels?: number
+  color_transfer?: string
+  color_primaries?: string
   tags?: { rotate?: string }
   side_data_list?: Array<{ rotation?: number }>
 }
@@ -33,6 +36,18 @@ type ProbeResult = {
 function requiredBinary(value: string | null | undefined, name: string) {
   if (!value) throw new Error(`${name} binary is unavailable in this deployment.`)
   return value
+}
+
+function aspectFitCanvasFilter(input: {
+  inputLabel: string
+  outputLabel?: string
+  width: number
+  height: number
+  pixelFormat?: string
+}) {
+  const { inputLabel, outputLabel = "", width, height, pixelFormat } = input
+  const format = pixelFormat ? `,format=${pixelFormat}` : ""
+  return `${inputLabel}scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1${format}${outputLabel}`
 }
 
 export function mediaBinaryPaths() {
@@ -149,7 +164,7 @@ function runCommand(command: string, args: string[]) {
   })
 }
 
-function parseProbeResult(result: Buffer) {
+function parseProbeResult(result: Buffer): MediaSourceMetadata {
   const probe = JSON.parse(result.toString("utf8")) as ProbeResult
   const video = probe.streams?.find((stream) => stream.codec_type === "video")
   const audio = probe.streams?.find((stream) => stream.codec_type === "audio")
@@ -170,8 +185,11 @@ function parseProbeResult(result: Buffer) {
     frameRate: frameRate(video.avg_frame_rate ?? video.r_frame_rate),
     videoCodec: video.codec_name,
     audioCodec: audio?.codec_name ?? null,
+    audioChannels: audio?.channels ?? null,
     hasAudio: Boolean(audio),
     rotation: Number.isFinite(rotation) ? rotation : 0,
+    colorTransfer: video.color_transfer ?? null,
+    colorPrimaries: video.color_primaries ?? null,
   } satisfies MediaSourceMetadata
 }
 
@@ -193,6 +211,32 @@ export async function inspectMediaStream(input: ReadableStream<Uint8Array>) {
   return parseProbeResult(result.stdout)
 }
 
+async function sha256ReadableStream(input: ReadableStream<Uint8Array>) {
+  const hash = createHash("sha256")
+  const reader = input.getReader()
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      hash.update(result.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return hash.digest("hex")
+}
+
+export async function inspectAndHashMediaStream(
+  input: ReadableStream<Uint8Array>,
+) {
+  const [probeStream, hashStream] = input.tee()
+  const [metadata, checksum] = await Promise.all([
+    inspectMediaStream(probeStream),
+    sha256ReadableStream(hashStream),
+  ])
+  return { metadata, checksum }
+}
+
 export async function inspectMediaFile(inputPath: string) {
   const { ffprobe } = mediaBinaryPaths()
   const result = await runCommand(ffprobe, [
@@ -210,38 +254,79 @@ export async function inspectMediaFile(inputPath: string) {
 export function renditionFfmpegArguments(input: {
   profile: MediaRenditionProfile
   outputDirectory: string
+  sourceMetadata?: Pick<
+    MediaSourceMetadata,
+    "rotation" | "colorTransfer" | "colorPrimaries" | "audioChannels"
+  >
+  inputPath?: string
 }) {
   const { profile, outputDirectory } = input
+  const normalizedRotation =
+    ((Math.round(input.sourceMetadata?.rotation ?? 0) % 360) + 360) % 360
+  const rotationFilter =
+    normalizedRotation === 90
+      ? "transpose=clock"
+      : normalizedRotation === 270
+        ? "transpose=cclock"
+        : normalizedRotation === 180
+          ? "hflip,vflip"
+          : null
+  const isHdr = ["smpte2084", "arib-std-b67"].includes(
+    input.sourceMetadata?.colorTransfer?.toLowerCase() ?? "",
+  )
+  const normalizationFilter = [
+    rotationFilter,
+    "yadif=deint=interlaced",
+    isHdr
+      ? "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+      : null,
+  ]
+    .filter(Boolean)
+    .join(",")
+  const normalizedInput = normalizationFilter
+    ? `[0:v]${normalizationFilter}[normalized]`
+    : null
+  const videoInputLabel = normalizationFilter ? "[normalized]" : "[0:v]"
   const filter = [
-    `scale=${profile.width}:${profile.height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
-    `pad=${profile.width}:${profile.height}:(ow-iw)/2:(oh-ih)/2:black`,
-    "setsar=1",
-  ].join(",")
+    normalizedInput,
+    aspectFitCanvasFilter({
+      inputLabel: videoInputLabel,
+      outputLabel: "[video-ready]",
+      width: profile.width,
+      height: profile.height,
+      pixelFormat: "yuv420p",
+    }),
+  ]
+    .filter(Boolean)
+    .join(";")
 
   return [
     "-hide_banner",
     "-nostdin",
     "-y",
+    "-noautorotate",
     "-i",
-    "pipe:0",
+    input.inputPath ?? "pipe:0",
+    "-filter_complex",
+    filter,
     "-map",
-    "0:v:0",
+    "[video-ready]",
     "-map",
     "0:a:0?",
-    "-vf",
-    filter,
     "-c:v",
     "libx264",
     "-preset",
-    "veryfast",
+    profile.preset,
+    "-tune",
+    "film",
     "-profile:v",
     "high",
     "-level:v",
     "4.1",
     "-pix_fmt",
     "yuv420p",
-    "-b:v",
-    String(profile.videoBitrate),
+    "-crf",
+    String(profile.crf),
     "-maxrate",
     String(profile.maxRate),
     "-bufsize",
@@ -250,14 +335,16 @@ export function renditionFfmpegArguments(input: {
     String(mediaPipelineLimits.maximumFrameRate),
     "-force_key_frames",
     `expr:gte(t,n_forced*${mediaPipelineLimits.segmentDurationSeconds})`,
-    "-sc_threshold",
-    "0",
+    "-x264-params",
+    "bframes=3:scenecut=0:keyint=60:min-keyint=60:ref=4",
     "-c:a",
     "aac",
     "-b:a",
     String(profile.audioBitrate),
+    "-af",
+    "loudnorm=I=-16:TP=-1.5:LRA=11",
     "-ac",
-    "2",
+    input.sourceMetadata?.audioChannels === 1 ? "1" : "2",
     "-hls_time",
     String(mediaPipelineLimits.segmentDurationSeconds),
     "-hls_playlist_type",
@@ -278,6 +365,7 @@ export async function encodeMediaRendition(input: {
   source: ReadableStream<Uint8Array>
   profile: MediaRenditionProfile
   outputDirectory: string
+  sourceMetadata?: MediaSourceMetadata
 }) {
   const { ffmpeg } = mediaBinaryPaths()
   const startedAt = Date.now()
@@ -301,6 +389,35 @@ export async function encodeMediaRendition(input: {
   return { files, encodingMs: Date.now() - startedAt }
 }
 
+export async function encodeMediaRenditionFile(input: {
+  inputPath: string
+  profile: MediaRenditionProfile
+  outputDirectory: string
+  sourceMetadata?: MediaSourceMetadata
+}) {
+  const { ffmpeg } = mediaBinaryPaths()
+  const startedAt = Date.now()
+  await runCommand(
+    ffmpeg,
+    renditionFfmpegArguments({
+      ...input,
+      inputPath: input.inputPath,
+    }),
+  )
+  const fileNames = (await readdir(input.outputDirectory)).sort()
+  const files = await Promise.all(
+    fileNames.map(async (fileName) => {
+      const body = await readFile(path.join(input.outputDirectory, fileName))
+      return {
+        fileName,
+        body,
+        checksum: createHash("sha256").update(body).digest("hex"),
+      }
+    }),
+  )
+  return { files, encodingMs: Date.now() - startedAt }
+}
+
 export async function generateMediaPoster(input: {
   source: ReadableStream<Uint8Array>
   outputPath: string
@@ -319,7 +436,11 @@ export async function generateMediaPoster(input: {
       "-frames:v",
       "1",
       "-vf",
-      "scale=540:960:force_original_aspect_ratio=increase,crop=540:960,setsar=1",
+      aspectFitCanvasFilter({
+        inputLabel: "",
+        width: 540,
+        height: 960,
+      }),
       "-q:v",
       "2",
       input.outputPath,
@@ -327,6 +448,39 @@ export async function generateMediaPoster(input: {
     input.source,
   )
 
+  const body = await readFile(input.outputPath)
+  if (body.byteLength === 0) throw new Error("FFmpeg produced an empty poster.")
+  return {
+    body,
+    checksum: createHash("sha256").update(body).digest("hex"),
+  }
+}
+
+export async function generateMediaPosterFile(input: {
+  inputPath: string
+  outputPath: string
+}) {
+  const { ffmpeg } = mediaBinaryPaths()
+  await runCommand(ffmpeg, [
+    "-hide_banner",
+    "-nostdin",
+    "-y",
+    "-i",
+    input.inputPath,
+    "-ss",
+    "0.1",
+    "-frames:v",
+    "1",
+    "-vf",
+    aspectFitCanvasFilter({
+      inputLabel: "",
+      width: 540,
+      height: 960,
+    }),
+    "-q:v",
+    "2",
+    input.outputPath,
+  ])
   const body = await readFile(input.outputPath)
   if (body.byteLength === 0) throw new Error("FFmpeg produced an empty poster.")
   return {

@@ -2,6 +2,7 @@ export {
   mediaAssetPurpose,
   mediaAssetStatus,
   mediaAssets,
+  imageProcessingJobs,
   mediaAuditEvents,
   mediaProcessingJobs,
   mediaProcessingJobStatus,

@@ -27,6 +27,46 @@ enum UBEYEMetrics {
     static let compactTopAvatar: CGFloat = 38
 }
 
+enum UBEYEFeedback {
+    static func selection() {
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light, intensity: CGFloat = 0.85) {
+        UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: intensity)
+    }
+
+    static func success() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    static func warning() {
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+    }
+
+    static func error() {
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+}
+
+struct UBEYEPressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var pressedScale: CGFloat = 0.96
+    var pressedOpacity: Double = 0.82
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .scaleEffect(configuration.isPressed && !reduceMotion ? pressedScale : 1)
+            .opacity(configuration.isPressed ? pressedOpacity : 1)
+            .animation(
+                reduceMotion ? .easeOut(duration: 0.08) : .snappy(duration: 0.16),
+                value: configuration.isPressed
+            )
+    }
+}
+
 extension View {
     func ubeyeScreen() -> some View {
         self
@@ -147,7 +187,10 @@ struct PrimaryButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            UBEYEFeedback.impact(.light)
+            action()
+        } label: {
             HStack {
                 if isLoading {
                     ProgressView()
@@ -162,6 +205,7 @@ struct PrimaryButton: View {
             .clipShape(Capsule())
             .foregroundStyle(.white)
         }
+        .buttonStyle(UBEYEPressButtonStyle())
         .disabled(isLoading || isDisabled)
     }
 }
@@ -183,14 +227,19 @@ struct CircleIconButton: View {
     var action: () -> Void = {}
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            UBEYEFeedback.selection()
+            action()
+        } label: {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .semibold))
                 .frame(width: 36, height: 36)
                 .foregroundStyle(Color.ubeyeInk)
                 .background(Color.ubeyeSubtle, in: Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
     }
 }
 
@@ -707,19 +756,17 @@ enum AppAudioSession {
 }
 
 enum MediaDiagnostics {
-    static func capturedVideoHasAudio(url: URL) -> Bool {
+    static func capturedVideoHasAudio(url: URL) async -> Bool {
         let asset = AVURLAsset(url: url)
-        let audioTrack = asset.tracks(withMediaType: .audio).first
+        let audioTracks = try? await asset.loadTracks(withMediaType: .audio)
 
-        guard let audioTrack else {
+        guard let audioTrack = audioTracks?.first else {
             MediaPerformance.mark("capture_audio_missing")
             return false
         }
 
-        let dataRate = Int(audioTrack.estimatedDataRate)
-        let formatDescription = audioTrack.formatDescriptions.first.map {
-            $0 as! CMAudioFormatDescription
-        }
+        let dataRate = Int((try? await audioTrack.load(.estimatedDataRate)) ?? 0)
+        let formatDescription = try? await audioTrack.load(.formatDescriptions).first
         let streamDescription = formatDescription.flatMap {
             CMAudioFormatDescriptionGetStreamBasicDescription($0)
         }
@@ -760,11 +807,11 @@ final class MediaControlConfig {
     }
 
     var qoeAccessLogSampleRate: Double {
-        read { min(max($0?.qoeAccessLogSampleRate ?? 1, 0), 1) }
+        read { min(max($0?.qoeAccessLogSampleRate ?? 0.1, 0), 1) }
     }
 
     var uploadChunkBytes: Int {
-        read { $0?.uploadChunkBytes ?? 3 * 1024 * 1024 }
+        read { $0?.uploadChunkBytes ?? 5 * 1024 * 1024 }
     }
 
     var mediaFileCacheMaxBytes: Int {
@@ -811,7 +858,7 @@ final class MediaControlConfig {
 
     func startupStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
-            let startupCap = isLimited ? 2_000_000.0 : 3_000_000.0
+            let startupCap = isLimited ? 3_000_000.0 : 8_000_000.0
             guard let pair = $0?.startupStreamingPeakBitRate else {
                 return startupCap
             }
@@ -823,8 +870,8 @@ final class MediaControlConfig {
     func startupStreamingMaximumResolution(isLimited: Bool) -> CGSize {
         read {
             let startupCap = isLimited
-                ? CGSize(width: 540, height: 960)
-                : CGSize(width: 720, height: 1280)
+                ? CGSize(width: 720, height: 1280)
+                : CGSize(width: 1080, height: 1920)
             guard let pair = $0?.startupStreamingMaximumResolution else {
                 return startupCap
             }
@@ -839,7 +886,7 @@ final class MediaControlConfig {
 
     func preparedStreamingPeakBitRate(isLimited: Bool) -> Double {
         read {
-            let preparedCap = isLimited ? 2_000_000.0 : 4_000_000.0
+            let preparedCap = isLimited ? 3_000_000.0 : 8_000_000.0
             guard let pair = $0?.preparedStreamingPeakBitRate else {
                 return preparedCap
             }
@@ -851,8 +898,8 @@ final class MediaControlConfig {
     func preparedStreamingMaximumResolution(isLimited: Bool) -> CGSize {
         read {
             let preparedCap = isLimited
-                ? CGSize(width: 540, height: 960)
-                : CGSize(width: 720, height: 1280)
+                ? CGSize(width: 720, height: 1280)
+                : CGSize(width: 1080, height: 1920)
             guard let pair = $0?.preparedStreamingMaximumResolution else {
                 return preparedCap
             }
@@ -897,14 +944,17 @@ final class MediaControlConfig {
 }
 
 @MainActor
-final class NetworkQualityMonitor {
+final class NetworkQualityMonitor: ObservableObject {
     static let shared = NetworkQualityMonitor()
 
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "ubeye.network-quality")
-    private(set) var isConstrained = false
-    private(set) var isCellular = false
-    private(set) var isExpensive = false
+    @Published private(set) var isConnected = true
+    @Published private(set) var isConstrained = false
+    @Published private(set) var isCellular = false
+    @Published private(set) var isExpensive = false
+    private let throughputLock = NSLock()
+    private var estimatedThroughputBitsPerSecond: Double?
 
     var isLimitedPath: Bool {
         isConstrained || isCellular || isExpensive
@@ -924,7 +974,7 @@ final class NetworkQualityMonitor {
     }
 
     private var shouldLimitPreheating: Bool {
-        isLimitedPath
+        isLimitedPath || measuredThroughputBitsPerSecond.map { $0 < 2_500_000 } == true
     }
 
     private var shouldLimitStreamingQuality: Bool {
@@ -964,16 +1014,48 @@ final class NetworkQualityMonitor {
     }
 
     var preparedStreamingPeakBitRate: Double {
-        MediaControlConfig.shared.preparedStreamingPeakBitRate(isLimited: shouldLimitPreheating)
+        MediaControlConfig.shared.preparedStreamingPeakBitRate(
+            isLimited: shouldLimitStreamingQuality
+        )
     }
 
     var preparedStreamingMaximumResolution: CGSize {
-        MediaControlConfig.shared.preparedStreamingMaximumResolution(isLimited: shouldLimitPreheating)
+        MediaControlConfig.shared.preparedStreamingMaximumResolution(
+            isLimited: shouldLimitStreamingQuality
+        )
+    }
+
+    var allowsStreamingHintRelaxation: Bool {
+        !shouldLimitStreamingQuality
+    }
+
+    var preparedForwardBufferDuration: TimeInterval {
+        shouldLimitPreheating ? 2 : 4
+    }
+
+    func recordPlaybackObservation(observedBitrate: Double, stalls: Int) {
+        guard observedBitrate.isFinite, observedBitrate > 0 else { return }
+        throughputLock.lock()
+        let stallPenalty = stalls > 0 ? 0.65 : 1.0
+        let sample = observedBitrate * stallPenalty
+        if let estimate = estimatedThroughputBitsPerSecond {
+            estimatedThroughputBitsPerSecond = estimate * 0.75 + sample * 0.25
+        } else {
+            estimatedThroughputBitsPerSecond = sample
+        }
+        throughputLock.unlock()
+    }
+
+    private var measuredThroughputBitsPerSecond: Double? {
+        throughputLock.lock()
+        defer { throughputLock.unlock() }
+        return estimatedThroughputBitsPerSecond
     }
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
+                self?.isConnected = path.status == .satisfied
                 self?.isConstrained = path.isConstrained
                 self?.isCellular = path.usesInterfaceType(.cellular)
                 self?.isExpensive = path.isExpensive

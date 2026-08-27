@@ -11,6 +11,7 @@ import { and, eq, inArray, isNull, or } from "drizzle-orm"
 import { getSession, isProfileComplete, revokeAllUserSessions } from "@/lib/auth"
 import type {
   LoginInput,
+  MobileSignupInput,
   PasswordResetInput,
   PasswordResetRequestInput,
   ProfileSetupInput,
@@ -154,7 +155,11 @@ function verifyPassword(password: string, storedHash: string) {
   )
 }
 
-export async function registerUser(input: SignupInput): Promise<AuthResult> {
+type RegisterUserInput = SignupInput | MobileSignupInput
+
+export async function registerUser(
+  input: RegisterUserInput,
+): Promise<AuthResult> {
   const db = getDb()
   const rateLimit = await consumeRateLimit(
     authEmailRateLimitKey("signup", input.email),
@@ -184,6 +189,17 @@ export async function registerUser(input: SignupInput): Promise<AuthResult> {
     }
   }
 
+  const legalAcceptance =
+    "acceptedTerms" in input && input.acceptedTerms
+      ? {
+          legalAcceptedAt: new Date(),
+          termsAcceptedVersion: input.termsVersion,
+          communityGuidelinesAcceptedVersion:
+            input.communityGuidelinesVersion,
+          privacyPolicyAcknowledgedVersion: input.privacyPolicyVersion,
+        }
+      : {}
+
   const [user] = await db
     .insert(users)
     .values({
@@ -191,6 +207,7 @@ export async function registerUser(input: SignupInput): Promise<AuthResult> {
       authProvider: "credentials",
       email: input.email,
       passwordHash: hashPassword(input.password),
+      ...legalAcceptance,
     })
     .returning()
 

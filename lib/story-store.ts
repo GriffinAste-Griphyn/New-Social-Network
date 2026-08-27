@@ -45,6 +45,7 @@ import {
 import { listFollowingProfiles } from "@/lib/follow-store"
 import { formatStoryPostedAt } from "@/lib/story-time"
 import { enqueueStoryPublication } from "@/lib/story-publication"
+import { enqueueStoryModeration } from "@/lib/story-moderation"
 import {
   publicStoryMediaUrl,
   StoryUploadError,
@@ -361,6 +362,7 @@ type CreateStoryInput = {
   createdAt?: Date
   moderationMediaUrl?: string | null
   moderationThumbnailUrl?: string | null
+  deferModeration?: boolean
 }
 
 type StoredAssetStory = {
@@ -1584,40 +1586,47 @@ export async function createStory(input: CreateStoryInput) {
     (input.storedAsset.assetKind === "image" ? input.storedAsset.mediaUrl : null)
   const mediaModerationThumbnailUrl =
     input.moderationThumbnailUrl ?? input.storedAsset.thumbnailUrl
-  const contentModeration = await moderateUserContent({
-    textParts: storyModerationTextParts({ ...input, elements }),
-    linkUrls: storyModerationLinkUrls(elements),
-    media: {
-      assetKind: input.storedAsset.assetKind,
-      contentType: input.storedAsset.contentType,
-      byteSize: input.storedAsset.byteSize,
-      durationMs: input.storedAsset.durationMs,
-      mediaUrl: mediaModerationUrl,
-      thumbnailUrl: mediaModerationThumbnailUrl,
-    },
-  })
-  const moderation: ContentModerationResult = mediaModerationReason
-    ? {
-        action: "hold",
-        provider: [contentModeration.provider, "local-media"].join("+"),
-        reason: mediaModerationReason,
-        categories: [
-          ...contentModeration.categories,
-          {
-            key: "unsupported_media",
-            confidence: 1,
-            reason: mediaModerationReason,
-            source: "local_media",
-          },
-        ],
-        rawResult: contentModeration.rawResult,
-        error: contentModeration.error,
-      }
-    : contentModeration
+  const contentModeration = input.deferModeration
+    ? null
+    : await moderateUserContent({
+        textParts: storyModerationTextParts({ ...input, elements }),
+        linkUrls: storyModerationLinkUrls(elements),
+        media: {
+          assetKind: input.storedAsset.assetKind,
+          contentType: input.storedAsset.contentType,
+          byteSize: input.storedAsset.byteSize,
+          durationMs: input.storedAsset.durationMs,
+          mediaUrl: mediaModerationUrl,
+          thumbnailUrl: mediaModerationThumbnailUrl,
+        },
+      })
+  const moderation: ContentModerationResult | null = contentModeration
+    ? mediaModerationReason
+      ? {
+          action: "hold",
+          provider: [contentModeration.provider, "local-media"].join("+"),
+          reason: mediaModerationReason,
+          categories: [
+            ...contentModeration.categories,
+            {
+              key: "unsupported_media",
+              confidence: 1,
+              reason: mediaModerationReason,
+              source: "local_media",
+            },
+          ],
+          rawResult: contentModeration.rawResult,
+          error: contentModeration.error,
+        }
+      : contentModeration
+    : null
+  const initialModerationStatus = moderation
+    ? moderationStatusFromResult(moderation)
+    : "pending"
   const isMediaReady = mediaAsset.processingStatus === "ready"
   const nextStoryStatus = deriveStoryPublicationStatus({
     currentStatus: "processing",
-    moderationStatus: moderationStatusFromResult(moderation),
+    moderationStatus: initialModerationStatus,
     providerReady:
       input.storedAsset.storageProvider === "cloudflare-stream"
         ? false
@@ -1627,11 +1636,13 @@ export async function createStory(input: CreateStoryInput) {
     scanStatus: mediaAsset.scanStatus,
   })
 
-  await applyMediaModerationResult({
-    mediaAssetId: mediaAsset.id,
-    actorUserId: input.session.id,
-    result: moderation,
-  }).catch(() => undefined)
+  if (moderation) {
+    await applyMediaModerationResult({
+      mediaAssetId: mediaAsset.id,
+      actorUserId: input.session.id,
+      result: moderation,
+    }).catch(() => undefined)
+  }
 
   await db
     .insert(creatorScores)
@@ -1677,19 +1688,21 @@ export async function createStory(input: CreateStoryInput) {
         : null,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
     status: nextStoryStatus,
-    moderationStatus: moderationStatusFromResult(moderation),
-    moderationReason: moderation.reason,
+    moderationStatus: initialModerationStatus,
+    moderationReason: moderation?.reason ?? null,
     brandSignalScore: brandSignalScore.toFixed(2),
     createdAt: input.createdAt ?? now,
   })
 
-  await recordModerationCheck({
-    targetKind: "story",
-    targetId: storyId,
-    actorUserId: input.session.id,
-    mediaAssetId: mediaAsset.id,
-    result: moderation,
-  }).catch(() => undefined)
+  if (moderation) {
+    await recordModerationCheck({
+      targetKind: "story",
+      targetId: storyId,
+      actorUserId: input.session.id,
+      mediaAssetId: mediaAsset.id,
+      result: moderation,
+    }).catch(() => undefined)
+  }
 
   if (mergedMentions.length > 0) {
     await db.insert(storyMentions).values(
@@ -1719,6 +1732,12 @@ export async function createStory(input: CreateStoryInput) {
         positionY: element.positionY ?? "74.00",
       })),
     )
+  }
+
+  if (!moderation) {
+    await enqueueStoryModeration(storyId).catch((error) => {
+      console.error("story_moderation_dispatch_deferred", { storyId, error })
+    })
   }
 
   if (

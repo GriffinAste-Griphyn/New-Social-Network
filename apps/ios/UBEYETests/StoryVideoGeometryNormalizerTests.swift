@@ -107,6 +107,40 @@ final class StoryVideoGeometryNormalizerTests: XCTestCase {
         )
     }
 
+    func testLandscapeVideoFitsPortraitCanvasWithoutCropping() {
+        let targetSize = CGSize(width: 1080, height: 1920)
+        let plan = StoryVideoGeometryNormalizer.aspectFitPlan(
+            naturalSize: CGSize(width: 1920, height: 1080),
+            preferredTransform: .identity,
+            mirrorsHorizontally: false,
+            targetSize: targetSize
+        )
+
+        XCTAssertEqual(plan.renderSize, targetSize)
+        XCTAssertEqual(plan.renderedSourceRect.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(plan.renderedSourceRect.maxX, targetSize.width, accuracy: 0.001)
+        XCTAssertGreaterThan(plan.renderedSourceRect.minY, 0)
+        XCTAssertLessThan(plan.renderedSourceRect.maxY, targetSize.height)
+        XCTAssertEqual(
+            plan.renderedSourceRect.width / plan.renderedSourceRect.height,
+            16 / 9,
+            accuracy: 0.001
+        )
+    }
+
+    func testPortraitVideoFillsPortraitCanvasWithoutCropping() {
+        let targetSize = CGSize(width: 1080, height: 1920)
+        let plan = StoryVideoGeometryNormalizer.aspectFitPlan(
+            naturalSize: targetSize,
+            preferredTransform: .identity,
+            mirrorsHorizontally: false,
+            targetSize: targetSize
+        )
+
+        XCTAssertEqual(plan.renderSize, targetSize)
+        XCTAssertEqual(plan.renderedSourceRect, CGRect(origin: .zero, size: targetSize))
+    }
+
     @discardableResult
     private func assertPlan(
         naturalSize: CGSize,
@@ -187,19 +221,19 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     func testCaptureQualityPreservesHighQualityBeforeAdaptiveTranscode() {
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .hevc, is4K: false),
-            15_000_000
+            8_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .h264, is4K: false),
-            20_000_000
+            10_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .hevc, is4K: true),
-            28_000_000
+            8_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .h264, is4K: true),
-            32_000_000
+            10_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.preferredCodec(from: [.h264, .hevc]),
@@ -231,6 +265,43 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
 
         XCTAssertGreaterThan(Int(pixel[0]), Int(pixel[2]) + 100)
         XCTAssertEqual(StoryVideoThumbnailGenerator.requestedTime, .zero)
+    }
+
+    func testHighBitrateSourceUsesCompatibleAppleExport() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("high-bitrate-source-\(UUID().uuidString).mp4")
+        try await writeVideoWithDistinctFirstFrame(
+            to: sourceURL,
+            firstFrame: (red: 60, green: 80, blue: 180),
+            laterFrame: (red: 80, green: 100, blue: 200)
+        )
+        // Keep the fixture above the 12 Mbps passthrough ceiling. Camera-originated
+        // 8–10 Mbps clips intentionally avoid a redundant client transcode.
+        try appendFreeAtom(byteCount: 5 * 1024 * 1024, to: sourceURL)
+        var preparedURL: URL?
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            if let preparedURL, preparedURL != sourceURL {
+                try? FileManager.default.removeItem(at: preparedURL)
+            }
+        }
+
+        let sourceBytes = try FileManager.default.attributesOfItem(
+            atPath: sourceURL.path
+        )[.size] as? NSNumber
+        let prepared = try await StoryVideoUploadNormalizer.prepare(
+            url: sourceURL,
+            source: .library,
+            maxDurationSeconds: 120
+        )
+        preparedURL = prepared.url
+        let hasFastStart = try await StoryUploadFileIO.hasFastStartMoov(
+            at: prepared.url
+        )
+
+        XCTAssertEqual(prepared.strategy, .normalized)
+        XCTAssertLessThan(prepared.byteSize, try XCTUnwrap(sourceBytes).int64Value)
+        XCTAssertTrue(hasFastStart)
     }
 
     func testVideoUploadResponsePersistsOwnerBoundSession() throws {
@@ -301,7 +372,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
         )
-        XCTAssertEqual(request.value(forHTTPHeaderField: "X-UBEYE-Media-Pipeline"), "hls-v2")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-UBEYE-Media-Pipeline"), "hls-v4")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
         XCTAssertEqual(json["clientUploadId"] as? String, "11111111-1111-1111-1111-111111111111")
         XCTAssertEqual(json["replaceUploadSessionId"] as? String, "expired-session")
@@ -527,12 +598,12 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     }
 
     @MainActor
-    func testLargePrivateBlobVideoUsesTwoPartResumableUpload() async throws {
+    func testEightMegabytePrivateBlobVideoUsesTwoPartResumableUpload() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("blob-multipart-\(UUID().uuidString).mp4")
         FileManager.default.createFile(atPath: sourceURL.path, contents: nil)
         let output = try FileHandle(forWritingTo: sourceURL)
-        try output.truncate(atOffset: 16 * 1024 * 1024)
+        try output.truncate(atOffset: 8 * 1024 * 1024)
         try output.close()
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
@@ -563,14 +634,17 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             session: session,
             tusChunkUploader: { request, bodyFileURL in
                 partRecorder.append(request)
+                let partNumber = try XCTUnwrap(
+                    request.value(forHTTPHeaderField: "x-mpu-part-number")
+                )
                 let partSize = try XCTUnwrap(
                     FileManager.default.attributesOfItem(atPath: bodyFileURL.path)[.size]
                         as? NSNumber
                 )
-                XCTAssertEqual(partSize.int64Value, 8 * 1024 * 1024)
-                let partNumber = try XCTUnwrap(
-                    request.value(forHTTPHeaderField: "x-mpu-part-number")
-                )
+                let expectedPartSize = partNumber == "1"
+                    ? 5 * 1024 * 1024
+                    : 3 * 1024 * 1024
+                XCTAssertEqual(partSize.int64Value, Int64(expectedPartSize))
                 let response = HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
                     statusCode: 200,
@@ -633,7 +707,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             .appendingPathComponent("blob-multipart-resume-\(UUID().uuidString).mp4")
         FileManager.default.createFile(atPath: sourceURL.path, contents: nil)
         let output = try FileHandle(forWritingTo: sourceURL)
-        try output.truncate(atOffset: 24 * 1024 * 1024)
+        try output.truncate(atOffset: 15 * 1024 * 1024)
         try output.close()
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
@@ -798,6 +872,18 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         guard writer.status == .completed else {
             throw writer.error ?? StoryVideoFixtureError.couldNotFinishWriter
         }
+    }
+
+    private func appendFreeAtom(byteCount: Int, to url: URL) throws {
+        let resolvedByteCount = max(byteCount, 8)
+        var bigEndianSize = UInt32(resolvedByteCount).bigEndian
+        var atom = Data(bytes: &bigEndianSize, count: MemoryLayout<UInt32>.size)
+        atom.append(Data("free".utf8))
+        atom.append(Data(repeating: 0, count: resolvedByteCount - 8))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: atom)
+        try handle.close()
     }
 
     private func waitUntilReadyForVideoData(

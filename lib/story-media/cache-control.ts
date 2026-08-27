@@ -11,7 +11,11 @@ export function getStoryMediaCacheControl(
   )
 
   if (signedMaxAgeSeconds > 0) {
-    return `private, max-age=${signedMaxAgeSeconds}`
+    const immutable =
+      mediaPathname.startsWith("media/") && !mediaPathname.endsWith(".m3u8")
+        ? ", immutable"
+        : ""
+    return `private, max-age=${signedMaxAgeSeconds}${immutable}`
   }
 
   return "private, no-store"
@@ -37,5 +41,5 @@ export function getStoryMediaCdnCacheControl(
     return "no-store"
   }
 
-  return `public, max-age=0, s-maxage=${sharedMaxAgeSeconds}, must-revalidate`
+  return `public, max-age=0, s-maxage=${sharedMaxAgeSeconds}, stale-while-revalidate=60, must-revalidate`
 }

@@ -1,13 +1,23 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
+import { eq } from "drizzle-orm"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { getDb } from "@/lib/db"
+import { mediaAssets, stories } from "@/lib/db/schema"
+import { enqueueImageProcessing } from "@/lib/image-processing-jobs"
+import { isAsyncMediaCompletionEnabled } from "@/lib/media-pipeline/features"
 import {
   createStory,
   getStoryTextOverlaysForOwner,
   getStoryUploadStatusForOwner,
 } from "@/lib/story-store"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
+import {
+  createServerEncodedStoryImageAsset,
+  createVercelImageProcessingStoredAsset,
+  type DirectStoryImageSourceInput,
+} from "@/lib/story-image-processing"
 import {
   createDirectBlobStoryImageAsset,
   directStoryImageUploadStartedAt,
@@ -42,9 +52,17 @@ const clientDerivativeSchema = z.object({
 
 const completeImageSchema = z.object({
   basePathname: z.string().trim().min(1).max(500),
-  displayDerivative: clientDerivativeSchema,
-  thumbnailDerivative: clientDerivativeSchema,
-  thumbHash: z.string().trim().min(20).max(80).regex(/^[A-Za-z0-9_-]+$/),
+  sourceUpload: clientDerivativeSchema.optional(),
+  displayDerivative: clientDerivativeSchema.optional(),
+  thumbnailDerivative: clientDerivativeSchema.optional(),
+  contentMode: z.enum(["fit", "fill"]).default("fit"),
+  thumbHash: z
+    .string()
+    .trim()
+    .min(20)
+    .max(80)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .optional(),
   caption: z.string().default(""),
   brandTags: z.string().default(""),
   stickers: z.string().default(""),
@@ -58,7 +76,12 @@ const completeImageSchema = z.object({
   quoteReplyId: z.string().default(""),
   quoteReplyPositionX: z.string().optional(),
   quoteReplyPositionY: z.string().optional(),
-})
+}).refine(
+  (value) =>
+    Boolean(value.sourceUpload) ||
+    Boolean(value.displayDerivative && value.thumbnailDerivative && value.thumbHash),
+  { message: "An image source or complete derivative set is required." },
+)
 
 function imageFieldsToFormData(fields: z.infer<typeof completeImageSchema>) {
   const formData = new FormData()
@@ -176,6 +199,7 @@ function imageCompletionFailure(stage: ImageCompletionStage, error: unknown) {
 
 export async function POST(request: Request) {
   let storedAsset: StoredStoryAsset | undefined
+  let storyPersisted = false
   let stage: ImageCompletionStage = "verify-variants"
 
   try {
@@ -226,14 +250,41 @@ export async function POST(request: Request) {
       )
     }
 
+    const clientBuild = Number.parseInt(
+      request.headers.get("x-ubeye-app-build") ?? "",
+      10,
+    )
+    const useAsyncCompletion =
+      Boolean(parsed.data.sourceUpload) &&
+      isAsyncMediaCompletionEnabled(clientBuild)
+
     stage = "verify-variants"
-    storedAsset = await createDirectBlobStoryImageAsset({
-      basePathname: parsed.data.basePathname,
-      ownerUserId: session.id,
-      displayDerivative: toClientDerivative(parsed.data.displayDerivative)!,
-      thumbnailDerivative: toClientDerivative(parsed.data.thumbnailDerivative)!,
-      thumbHash: parsed.data.thumbHash,
-    })
+    storedAsset = parsed.data.sourceUpload
+      ? useAsyncCompletion
+        ? createVercelImageProcessingStoredAsset({
+            source: toClientDerivative(
+              parsed.data.sourceUpload,
+            ) as DirectStoryImageSourceInput,
+            width: parsed.data.sourceUpload.width,
+            height: parsed.data.sourceUpload.height,
+          })
+        : await createServerEncodedStoryImageAsset({
+          basePathname: parsed.data.basePathname,
+          ownerUserId: session.id,
+          contentMode: "fit",
+          source: toClientDerivative(
+            parsed.data.sourceUpload,
+          ) as DirectStoryImageSourceInput,
+        })
+      : await createDirectBlobStoryImageAsset({
+          basePathname: parsed.data.basePathname,
+          ownerUserId: session.id,
+          displayDerivative: toClientDerivative(parsed.data.displayDerivative)!,
+          thumbnailDerivative: toClientDerivative(
+            parsed.data.thumbnailDerivative,
+          )!,
+          thumbHash: parsed.data.thumbHash!,
+        })
 
     const moderationMediaUrl =
       publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
@@ -263,7 +314,39 @@ export async function POST(request: Request) {
       moderationThumbnailUrl,
       createdAt:
         directStoryImageUploadStartedAt(parsed.data.basePathname) ?? undefined,
+      deferModeration: useAsyncCompletion,
     })
+    storyPersisted = true
+
+    if (useAsyncCompletion) {
+      const [createdStory] = await getDb()
+        .select({ mediaAssetId: stories.mediaAssetId })
+        .from(stories)
+        .where(eq(stories.id, storyId))
+        .limit(1)
+      if (createdStory) {
+        await getDb()
+          .update(mediaAssets)
+          .set({
+            providerStatus: "queued:fit",
+            providerPctComplete: 0,
+            updatedAt: new Date(),
+          })
+          .where(eq(mediaAssets.id, createdStory.mediaAssetId))
+        await enqueueImageProcessing({
+          mediaAssetId: createdStory.mediaAssetId,
+          basePathname: parsed.data.basePathname,
+          contentMode: "fit",
+          source: "image_complete_created",
+        }).catch((error) => {
+          console.error("image_processing_dispatch_deferred", {
+            storyId,
+            mediaAssetId: createdStory.mediaAssetId,
+            error,
+          })
+        })
+      }
+    }
 
     stage = "read-story"
     const storyStatus = await getStoryUploadStatusForOwner(storyId, session.id)
@@ -276,8 +359,10 @@ export async function POST(request: Request) {
       asset: publicAssetResponse(storedAsset, request),
       processingStatus: storyStatus?.processingStatus ?? storedAsset.processingStatus,
       providerStatus: storyStatus?.providerStatus ?? storedAsset.processingStatus,
-      providerPctComplete: storyStatus?.providerPctComplete ?? 100,
-      fullQualityReady: storyStatus?.fullQualityReady ?? true,
+      providerPctComplete:
+        storyStatus?.providerPctComplete ?? (useAsyncCompletion ? 0 : 100),
+      fullQualityReady:
+        storyStatus?.fullQualityReady ?? !useAsyncCompletion,
       providerError: storyStatus?.providerError ?? null,
       lastCheckedAt: storyStatus?.lastCheckedAt ?? null,
       readyAt: storyStatus?.readyAt ?? null,
@@ -289,7 +374,9 @@ export async function POST(request: Request) {
       textOverlays,
     })
   } catch (error) {
-    if (storedAsset) {
+    // Once the story owns the asset, recovery workers—not request cleanup—own
+    // its lifecycle. Deleting here would strand a persisted pending story.
+    if (storedAsset && !storyPersisted) {
       await removeStoredStoryAsset(storedAsset).catch(() => undefined)
     }
 

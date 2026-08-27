@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		03E12EC442CBCF298798C41C /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B406ECDBADF19D651536B10 /* KeychainStore.swift */; };
 		0D1863BA957CAA57945368E4 /* FollowingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A37BDCCB629BB2DF52A5E7 /* FollowingView.swift */; };
+		156ECF7DD76F201A88D9DF6C /* UXPolishTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412ACF4497895D77239DBC11 /* UXPolishTests.swift */; };
 		1711D1E6D918705F3AD50112 /* AuthStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C41C9A89DCD2F208021A68A /* AuthStore.swift */; };
 		1AD6BCC4CD515B5BC44FF4ED /* PushNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */; };
 		209C07B0805239729E7550C9 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */; };
@@ -35,6 +36,7 @@
 		A9F90621BC3D998F2E4280D5 /* UBEYEApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */; };
 		AD89FAD5C6EC764CC90397BC /* ThumbHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A17262BABB67CA0E2EA127 /* ThumbHash.swift */; };
 		AFF61561B47327B35EA21AA4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEB3E2F66807A7319AD96A0 /* RootView.swift */; };
+		B0CC9D5D484CEF3197B58B98 /* LegalDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05CEACE382715A96E0901076 /* LegalDocuments.swift */; };
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
 		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
@@ -58,6 +60,7 @@
 		024FE5F6D3B55D99126011A4 /* DesignFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignFixtures.swift; sourceTree = "<group>"; };
 		02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryComposerView.swift; sourceTree = "<group>"; };
 		03E023E109362F9ED0305266 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		05CEACE382715A96E0901076 /* LegalDocuments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegalDocuments.swift; sourceTree = "<group>"; };
 		062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		075C18A95AD8EF0E2D42987B /* PushNotificationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationStore.swift; sourceTree = "<group>"; };
 		12112239A2105E9146475DBB /* FollowingManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingManagementView.swift; sourceTree = "<group>"; };
@@ -68,6 +71,7 @@
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3B406ECDBADF19D651536B10 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		40C1081F0804D1398CE2B1AE /* UBEYETests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UBEYETests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		412ACF4497895D77239DBC11 /* UXPolishTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UXPolishTests.swift; sourceTree = "<group>"; };
 		4FF0753F45EF0E26F9ED7724 /* MediaPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPerformanceTests.swift; sourceTree = "<group>"; };
 		534A0877FD4FC81764C849C9 /* DailyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyView.swift; sourceTree = "<group>"; };
 		5CEB3E2F66807A7319AD96A0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -198,6 +202,7 @@
 			children = (
 				4FF0753F45EF0E26F9ED7724 /* MediaPerformanceTests.swift */,
 				A1CEFE9687838B2B32E9A1FF /* StoryVideoGeometryNormalizerTests.swift */,
+				412ACF4497895D77239DBC11 /* UXPolishTests.swift */,
 			);
 			path = UBEYETests;
 			sourceTree = "<group>";
@@ -242,6 +247,7 @@
 				6C41C9A89DCD2F208021A68A /* AuthStore.swift */,
 				D7A1F1D67951ADE8F59E2F59 /* AuthView.swift */,
 				3B406ECDBADF19D651536B10 /* KeychainStore.swift */,
+				05CEACE382715A96E0901076 /* LegalDocuments.swift */,
 			);
 			path = Auth;
 			sourceTree = "<group>";
@@ -366,6 +372,7 @@
 				255C8ACC23818516BB2441B2 /* HLSOfflineCache.swift in Sources */,
 				2F689534426F01B216B5C6A0 /* HomeView.swift in Sources */,
 				03E12EC442CBCF298798C41C /* KeychainStore.swift in Sources */,
+				B0CC9D5D484CEF3197B58B98 /* LegalDocuments.swift in Sources */,
 				591D2D226C03B3857EEE6C75 /* MediaEngine.swift in Sources */,
 				97114F957FFAED7D81A6A33F /* MediaPlaybackQuality.swift in Sources */,
 				8A0D4CD3CD2308FB686543F5 /* MobileModels.swift in Sources */,
@@ -392,6 +399,7 @@
 			files = (
 				2E652C712BBBCCC2AAC54C34 /* MediaPerformanceTests.swift in Sources */,
 				6F563896438BCE9026DB09EF /* StoryVideoGeometryNormalizerTests.swift in Sources */,
+				156ECF7DD76F201A88D9DF6C /* UXPolishTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -413,7 +421,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 356;
+				CURRENT_PROJECT_VERSION = 375;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -514,7 +522,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 356;
+				CURRENT_PROJECT_VERSION = 375;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

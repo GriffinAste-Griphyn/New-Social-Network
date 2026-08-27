@@ -44,6 +44,31 @@ enum StoryNavigationPolicy {
     }
 }
 
+enum StoryDismissGesturePolicy {
+    static func shouldDismiss(
+        translation: CGFloat,
+        predictedTranslation: CGFloat,
+        viewportHeight: CGFloat
+    ) -> Bool {
+        let distanceThreshold = min(max(viewportHeight * 0.14, 72), 132)
+        let velocityThreshold = min(max(viewportHeight * 0.28, 180), 320)
+        return translation >= distanceThreshold || predictedTranslation >= velocityThreshold
+    }
+}
+
+enum StoryDeletionPolicy {
+    static func subsequentItemID(
+        deleting itemID: String,
+        from orderedItemIDs: [String]
+    ) -> String? {
+        guard let deletedIndex = orderedItemIDs.firstIndex(of: itemID) else {
+            return nil
+        }
+
+        return orderedItemIDs[safe: deletedIndex + 1]
+    }
+}
+
 struct StoryMediaBufferPolicy {
     static func indices(activeIndex: Int, itemCount: Int) -> [Int] {
         guard itemCount > 0, (0..<itemCount).contains(activeIndex) else {
@@ -95,13 +120,19 @@ final class StoryStackStore: ObservableObject {
     @Published var stack: StoryStack?
     @Published var isLoading = false
     @Published var error: String?
-    @Published var replyText = ""
+    @Published var replyText = "" {
+        didSet {
+            persistActiveReplyDraft()
+        }
+    }
     @Published var replyConfirmation: String?
     @Published var reportConfirmation: String?
     @Published var isSendingReply = false
     @Published var isPerformingAction = false
     @Published var followedIds = Set<String>()
     @Published var locallyUnfollowedIds = Set<String>()
+    @Published private(set) var reactedStoryIds = Set<String>()
+    @Published private(set) var sendingReactionIds = Set<String>()
     @Published var storyReplies: [String: [StoryInteractionEvent]] = [:]
     @Published var repliesError: String?
     @Published var loadingRepliesStoryId: String?
@@ -112,6 +143,9 @@ final class StoryStackStore: ObservableObject {
 
     private var impressionStartedAt = Date()
     private var lastImpressionStoryId: String?
+    private var activeReplyDraftStoryId: String?
+    private var isRestoringReplyDraft = false
+    private let replyDraftDefaults = UserDefaults.standard
 
     func load(
         storyId: String,
@@ -155,6 +189,9 @@ final class StoryStackStore: ObservableObject {
         stack = nextStack
         impressionStartedAt = Date()
         lastImpressionStoryId = nextStack.items.first?.id
+        if let firstStoryId = nextStack.items.first?.id {
+            activateReplyDraft(for: firstStoryId)
+        }
     }
 
     func applyPendingUploads(
@@ -188,6 +225,7 @@ final class StoryStackStore: ObservableObject {
     }
 
     func markActiveItem(_ item: StoryStackItem) {
+        activateReplyDraft(for: item.id)
         if lastImpressionStoryId != item.id {
             impressionStartedAt = Date()
             lastImpressionStoryId = item.id
@@ -210,16 +248,48 @@ final class StoryStackStore: ObservableObject {
         }
 
         isSendingReply = true
+        UBEYEFeedback.impact(.light)
         error = nil
         replyConfirmation = nil
         do {
             let _: StoryInteractionResponse = try await api.sendStoryReply(storyId: item.id, body: trimmed, reaction: nil)
             replyText = ""
             replyConfirmation = "Message sent"
+            UBEYEFeedback.success()
         } catch {
             self.error = error.localizedDescription
+            UBEYEFeedback.error()
         }
         isSendingReply = false
+    }
+
+    private func activateReplyDraft(for storyId: String) {
+        guard activeReplyDraftStoryId != storyId else {
+            return
+        }
+
+        activeReplyDraftStoryId = storyId
+        isRestoringReplyDraft = true
+        replyText = replyDraftDefaults.string(forKey: replyDraftKey(for: storyId)) ?? ""
+        isRestoringReplyDraft = false
+    }
+
+    private func persistActiveReplyDraft() {
+        guard !isRestoringReplyDraft, let activeReplyDraftStoryId else {
+            return
+        }
+
+        let key = replyDraftKey(for: activeReplyDraftStoryId)
+        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            replyDraftDefaults.removeObject(forKey: key)
+        } else {
+            replyDraftDefaults.set(replyText, forKey: key)
+        }
+    }
+
+    private func replyDraftKey(for storyId: String) -> String {
+        "ubeye.story-reply-draft.\(storyId)"
     }
 
     func clearReplyConfirmation() {
@@ -312,14 +382,28 @@ final class StoryStackStore: ObservableObject {
     }
 
     func sendReaction(_ reaction: String, item: StoryStackItem, api: APIClient) async {
-        isSendingReply = true
+        guard !sendingReactionIds.contains(item.id) else {
+            return
+        }
+
+        reactedStoryIds.insert(item.id)
+        sendingReactionIds.insert(item.id)
         error = nil
+        defer { sendingReactionIds.remove(item.id) }
         do {
             let _: StoryInteractionResponse = try await api.sendStoryReply(storyId: item.id, body: nil, reaction: reaction)
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(
+                    .reaction,
+                    targetId: item.id,
+                    value: reaction
+                )
+                return
+            }
+            reactedStoryIds.remove(item.id)
             self.error = error.localizedDescription
         }
-        isSendingReply = false
     }
 
     func followCreator(api: APIClient) async {
@@ -335,13 +419,22 @@ final class StoryStackStore: ObservableObject {
         error = nil
         defer { isPerformingAction = false }
 
+        followedIds.insert(creatorId)
+        locallyUnfollowedIds.remove(creatorId)
+        UBEYEFeedback.selection()
+
         do {
             let _: BasicOkResponse = try await api.post("/api/mobile/follows", body: Body(creatorId: creatorId))
-            followedIds.insert(creatorId)
-            locallyUnfollowedIds.remove(creatorId)
             NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
+            UBEYEFeedback.success()
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId)
+                return
+            }
+            followedIds.remove(creatorId)
             self.error = error.localizedDescription
+            UBEYEFeedback.error()
         }
     }
 
@@ -358,13 +451,23 @@ final class StoryStackStore: ObservableObject {
         error = nil
         defer { isPerformingAction = false }
 
+        followedIds.remove(creatorId)
+        locallyUnfollowedIds.insert(creatorId)
+        UBEYEFeedback.selection()
+
         do {
             let _: BasicOkResponse = try await api.delete("/api/mobile/follows", body: Body(creatorId: creatorId))
-            followedIds.remove(creatorId)
-            locallyUnfollowedIds.insert(creatorId)
             NotificationCenter.default.post(name: .followingQueueDidChange, object: nil)
+            UBEYEFeedback.success()
         } catch {
+            if !NetworkQualityMonitor.shared.isConnected {
+                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: creatorId)
+                return
+            }
+            followedIds.insert(creatorId)
+            locallyUnfollowedIds.remove(creatorId)
             self.error = error.localizedDescription
+            UBEYEFeedback.error()
         }
     }
 
@@ -379,12 +482,31 @@ final class StoryStackStore: ObservableObject {
             let _: BasicOkResponse = try await api.delete("/api/mobile/stories/\(item.id)", body: EmptyPayload())
             api.invalidateStoryStacks(ids: [item.id, "my-story", stack?.id].compactMap { $0 })
             api.invalidateMobileFeedCache()
+            removeDeletedItem(item.id)
             NotificationCenter.default.post(name: .storyDidDelete, object: item.id)
             return true
         } catch {
             self.error = error.localizedDescription
             return false
         }
+    }
+
+    private func removeDeletedItem(_ itemID: String) {
+        guard let stack else {
+            return
+        }
+
+        self.stack = StoryStack(
+            id: stack.id,
+            creatorId: stack.creatorId,
+            creator: stack.creator,
+            handle: stack.handle,
+            avatarUrl: stack.avatarUrl,
+            items: stack.items.filter { $0.id != itemID }
+        )
+        storyReplies.removeValue(forKey: itemID)
+        storyViewerPages.removeValue(forKey: itemID)
+        viewerErrors.removeValue(forKey: itemID)
     }
 
     func report(item: StoryStackItem, reason: StoryReportReason, details: String?, api: APIClient) async -> Bool {
@@ -464,6 +586,7 @@ struct StoryStackViewer: View {
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var store = StoryStackStore()
     @State private var storyTimerState = StoryTimerState()
     @State private var index = 0
@@ -481,6 +604,12 @@ struct StoryStackViewer: View {
     @State private var isClearingCompletedStory = false
     @State private var keyboardHeight: CGFloat = 0
     @State private var pendingTransitionMeasurement: StoryTransitionMeasurement?
+    @State private var verticalDragOffset: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 844
+    @State private var isChromeVisible = true
+    @State private var showsReactionBurst = false
+    @State private var reactionBurstTask: Task<Void, Never>?
+    @AppStorage("ubeye.story-playback-muted") private var isStoryPlaybackMuted = false
     @GestureState private var isPressingStoryMedia = false
     @FocusState private var isReplyFieldFocused: Bool
 
@@ -517,62 +646,47 @@ struct StoryStackViewer: View {
                     EmptyStateView(title: "Story unavailable", message: error, systemImage: "exclamationmark.triangle")
                         .padding()
                 } else if let stack = store.stack, let item = stack.items[safe: index] {
+                    let canvasVerticalPlacement = storyCanvasVerticalPlacement(
+                        for: item
+                    )
                     let canvasLayout = StoryCanvasLayout(
                         containerSize: proxy.size,
                         reservedBottomHeight: storyCanvasReservedBottomHeight(
                             for: stack,
                             safeAreaBottom: safeAreaInsets.bottom
                         ),
-                        fillsAvailableHeight: true
+                        fillsAvailableHeight: canvasVerticalPlacement == .top,
+                        verticalPlacement: canvasVerticalPlacement
                     )
 
-                    storyMediaBuffer(stack: stack, activeIndex: index)
-                        .frame(
-                            width: canvasLayout.frame.width,
-                            height: canvasLayout.frame.height
-                        )
-                        .position(
-                            x: canvasLayout.frame.midX,
-                            y: canvasLayout.frame.midY
-                        )
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: storyCanvasCornerRadius,
-                                style: .continuous
-                            )
+                    Group {
+                    ZStack {
+                        StoryCanvasBackground()
+
+                        storyMediaBuffer(stack: stack, activeIndex: index)
+
+                        storyCanvasOverlay(item)
+                            .zIndex(1)
+                    }
+                        .storyCanvasFrame(
+                            canvasLayout,
+                            cornerRadius: canvasVerticalPlacement == .top
+                                ? 0
+                                : storyCanvasCornerRadius
                         )
                         .onAppear {
                             store.markActiveItem(item)
                             startStoryTimerIfNeeded(for: item)
                         }
                         .onDisappear {
-                            if let activeItem = store.stack?.items[safe: index] {
-                                Task {
-                                    await store.recordImpression(
-                                        item: activeItem,
-                                        completed: false,
-                                        api: api
-                                    )
-                                }
+                            Task {
+                                await store.recordImpression(
+                                    item: item,
+                                    completed: false,
+                                    api: api
+                                )
                             }
                         }
-
-                    storyCanvasOverlay(item)
-                        .frame(
-                            width: canvasLayout.frame.width,
-                            height: canvasLayout.frame.height
-                        )
-                        .position(
-                            x: canvasLayout.frame.midX,
-                            y: canvasLayout.frame.midY
-                        )
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: storyCanvasCornerRadius,
-                                style: .continuous
-                            )
-                        )
-                        .zIndex(1)
 
                     tapNavigationOverlay(item: item, viewportWidth: proxy.size.width)
                         .frame(width: proxy.size.width, height: proxy.size.height)
@@ -580,11 +694,14 @@ struct StoryStackViewer: View {
                     storyChromeScrim(stack: stack)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .allowsHitTesting(false)
+                        .opacity(isChromeVisible ? 1 : 0)
 
                     storyChrome(stack: stack, item: item, safeAreaInsets: safeAreaInsets)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .allowsHitTesting(true)
                         .zIndex(2)
+                        .opacity(isChromeVisible ? 1 : 0)
+                        .allowsHitTesting(isChromeVisible)
 
                     if !isClearingCompletedStory {
                         storyBottomOverlayChrome(
@@ -594,6 +711,18 @@ struct StoryStackViewer: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .zIndex(3)
+                        .opacity(isChromeVisible ? 1 : 0)
+                        .allowsHitTesting(isChromeVisible)
+                    }
+
+                    if showsReactionBurst {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 92, weight: .black))
+                            .foregroundStyle(.white)
+                            .shadow(color: Color.ubeyeRed.opacity(0.75), radius: 24)
+                            .transition(.scale(scale: 0.25).combined(with: .opacity))
+                            .allowsHitTesting(false)
+                            .zIndex(8)
                     }
 
                     if let ownerSheet {
@@ -609,9 +738,19 @@ struct StoryStackViewer: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+                    }
+                    .offset(y: max(verticalDragOffset, 0))
+                    .scaleEffect(storyDismissScale)
+                    .opacity(storyDismissOpacity)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .onAppear {
+                viewportHeight = proxy.size.height
+            }
+            .onChange(of: proxy.size.height) { _, height in
+                viewportHeight = height
+            }
         }
         .ignoresSafeArea(.container, edges: .all)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -688,6 +827,7 @@ struct StoryStackViewer: View {
             confirmationDismissTask?.cancel()
             reportConfirmationDismissTask?.cancel()
             completionDismissTask?.cancel()
+            reactionBurstTask?.cancel()
             storyTimerState.stop()
             mediaEngine.storyViewerDidDisappear()
         }
@@ -806,7 +946,9 @@ struct StoryStackViewer: View {
                     },
                     showsThumbnailWhileLoading: true,
                     preparesPlayerPool: false,
+                    isActive: isActive,
                     isPaused: !isActive || shouldPauseVideoPlayback,
+                    isMuted: isStoryPlaybackMuted,
                     onReadyForPlayback: {
                         guard isActive,
                               store.stack?.items[safe: index]?.id == item.id else {
@@ -888,7 +1030,9 @@ struct StoryStackViewer: View {
 
     @ViewBuilder
     private func storyImagePlaceholder(_ item: StoryStackItem) -> some View {
-        if let thumbnailUrl = item.playbackThumbnailUrl {
+        if item.assetKind == .image {
+            StoryCanvasBackground()
+        } else if let thumbnailUrl = item.playbackThumbnailUrl {
             CachedAsyncImage(url: thumbnailUrl) { image in
                 StoryCanvasImage(image: image)
             } placeholder: {
@@ -1169,6 +1313,27 @@ struct StoryStackViewer: View {
         return chromeHeight + restingBottomPadding
     }
 
+    private func storyCanvasVerticalPlacement(
+        for item: StoryStackItem
+    ) -> StoryCanvasVerticalPlacement {
+        let sourceRendition: StoryMediaRendition?
+        if let original = item.renditions?.original {
+            sourceRendition = original
+        } else if item.assetKind == .video {
+            sourceRendition = item.renditions?.playback
+        } else {
+            // Legacy image derivatives can be a transparent 9:16 canvas around a
+            // horizontal source. Without original dimensions, centering is the only
+            // placement that cannot shift the visible image away from screen center.
+            sourceRendition = nil
+        }
+
+        return StoryCanvasVerticalPlacement.forMediaDimensions(
+            width: sourceRendition?.width,
+            height: sourceRendition?.height
+        )
+    }
+
     private func replyConfirmationBottomInset(for stack: StoryStack, safeAreaBottom: CGFloat) -> CGFloat {
         let bottomPadding = bottomChromeBottomPadding(safeAreaBottom: safeAreaBottom)
 
@@ -1209,6 +1374,8 @@ struct StoryStackViewer: View {
 
             StoryViewerActions(
                 isOwnStack: isOwnStack(stack),
+                isVideo: item.assetKind == .video,
+                isMuted: isStoryPlaybackMuted,
                 canDeleteStory: !PendingStoryUploadStore.isPendingStoryId(item.id),
                 actionSize: storyActionSize,
                 isPerformingAction: store.isPerformingAction,
@@ -1230,6 +1397,10 @@ struct StoryStackViewer: View {
                 unfollowCreator: {
                     Task { await store.unfollowCreator(api: api) }
                 },
+                toggleMute: {
+                    UBEYEFeedback.selection()
+                    isStoryPlaybackMuted.toggle()
+                },
                 close: {
                     Task { await store.recordImpression(item: item, completed: false, api: api) }
                     dismiss()
@@ -1241,9 +1412,34 @@ struct StoryStackViewer: View {
     }
 
     private func deleteStory(_ item: StoryStackItem) async {
-        if await store.delete(item: item, api: api) {
-            dismiss()
+        let subsequentItemID = StoryDeletionPolicy.subsequentItemID(
+            deleting: item.id,
+            from: store.stack?.items.map(\.id) ?? []
+        )
+
+        guard await store.delete(item: item, api: api) else {
+            return
         }
+
+        deleteConfirmationItem = nil
+        ownerSheet = nil
+
+        guard let subsequentItemID,
+              let stack = store.stack,
+              let nextIndex = stack.items.firstIndex(where: { $0.id == subsequentItemID }),
+              let nextItem = stack.items[safe: nextIndex] else {
+            dismiss()
+            return
+        }
+
+        index = nextIndex
+        store.markActiveItem(nextItem)
+        resetStoryTimer(for: nextItem)
+        mediaEngine.prepare(
+            stack: stack,
+            around: nextIndex,
+            activeIdentity: nextItem.isPlayableVideo ? nextItem.playbackIdentity : nil
+        )
     }
 
     private func discoverFollowButton() -> some View {
@@ -1299,14 +1495,63 @@ struct StoryStackViewer: View {
 
     private func storyNavigationGesture(item: StoryStackItem, viewportWidth: CGFloat) -> some Gesture {
         verticalStorySwipeGesture.exclusively(
-            before: SpatialTapGesture().onEnded { value in
-                guard ownerSheet == nil else {
-                    return
+            before: TapGesture(count: 2)
+                .onEnded {
+                    reactToStory(item)
                 }
-                let width = max(viewportWidth, 1)
-                move(value.location.x < width / 2 ? -1 : 1, item: item)
-            }
+                .exclusively(
+                    before: SpatialTapGesture().onEnded { value in
+                        handleStoryTap(value.location.x, viewportWidth: viewportWidth, item: item)
+                    }
+                )
         )
+    }
+
+    private func handleStoryTap(_ x: CGFloat, viewportWidth: CGFloat, item: StoryStackItem) {
+        guard ownerSheet == nil else {
+            return
+        }
+
+        let width = max(viewportWidth, 1)
+        if x < width * 0.32 {
+            move(-1, item: item)
+        } else if x > width * 0.68 {
+            move(1, item: item)
+        } else {
+            UBEYEFeedback.selection()
+            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .snappy(duration: 0.2)) {
+                isChromeVisible.toggle()
+            }
+        }
+    }
+
+    private func reactToStory(_ item: StoryStackItem) {
+        guard let stack = store.stack, !isOwnStack(stack), ownerSheet == nil else {
+            return
+        }
+
+        UBEYEFeedback.impact(.medium, intensity: 0.95)
+        reactionBurstTask?.cancel()
+        withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.24, dampingFraction: 0.66)) {
+            showsReactionBurst = true
+        }
+        reactionBurstTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(620))
+            guard !Task.isCancelled else {
+                return
+            }
+            withAnimation(.easeOut(duration: 0.16)) {
+                showsReactionBurst = false
+            }
+        }
+        Task {
+            await store.sendReaction("❤️", item: item, api: api)
+            if store.reactedStoryIds.contains(item.id) {
+                UBEYEFeedback.success()
+            } else {
+                UBEYEFeedback.error()
+            }
+        }
     }
 
     private func replyComposer(_ item: StoryStackItem) -> some View {
@@ -1508,6 +1753,14 @@ struct StoryStackViewer: View {
 
     private var verticalStorySwipeGesture: some Gesture {
         DragGesture(minimumDistance: 28, coordinateSpace: .local)
+            .onChanged { value in
+                guard ownerSheet == nil,
+                      value.translation.height > 0,
+                      abs(value.translation.height) > abs(value.translation.width) * verticalSwipeDominanceRatio else {
+                    return
+                }
+                verticalDragOffset = value.translation.height
+            }
             .onEnded { value in
                 handleVerticalStorySwipe(value)
             }
@@ -1528,9 +1781,25 @@ struct StoryStackViewer: View {
         }
 
         if verticalDistance < 0 {
+            verticalDragOffset = 0
             handleStorySwipeUp(stack: stack, item: item)
+        } else if StoryDismissGesturePolicy.shouldDismiss(
+            translation: verticalDistance,
+            predictedTranslation: value.predictedEndTranslation.height,
+            viewportHeight: viewportHeight
+        ) {
+            UBEYEFeedback.impact(.light)
+            withAnimation(reduceMotion ? .easeOut(duration: 0.08) : .easeOut(duration: 0.14)) {
+                verticalDragOffset = viewportHeight
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(reduceMotion ? 20 : 110))
+                dismissStoryFromSwipe(item: item)
+            }
         } else {
-            dismissStoryFromSwipe(item: item)
+            withAnimation(reduceMotion ? .easeOut(duration: 0.1) : .spring(response: 0.28, dampingFraction: 0.82)) {
+                verticalDragOffset = 0
+            }
         }
     }
 
@@ -1572,6 +1841,8 @@ struct StoryStackViewer: View {
               let next = stack.items[safe: nextIndex] else {
             return
         }
+
+        UBEYEFeedback.selection()
 
         let targetWasBuffered = StoryMediaBufferPolicy.indices(
             activeIndex: index,
@@ -1828,6 +2099,18 @@ struct StoryStackViewer: View {
     private var shouldPauseStoryProgress: Bool {
         shouldPauseVideoPlayback ||
             isWaitingForCurrentVideo
+    }
+
+    private var storyDismissProgress: CGFloat {
+        min(max(verticalDragOffset / max(viewportHeight * 0.55, 1), 0), 1)
+    }
+
+    private var storyDismissScale: CGFloat {
+        reduceMotion ? 1 : 1 - storyDismissProgress * 0.055
+    }
+
+    private var storyDismissOpacity: Double {
+        Double(1 - storyDismissProgress * 0.18)
     }
 
     private var shouldPauseVideoPlayback: Bool {
@@ -2855,6 +3138,8 @@ private struct ReportStoryReasonView: View {
 
 private struct StoryViewerActions: View {
     let isOwnStack: Bool
+    let isVideo: Bool
+    let isMuted: Bool
     let canDeleteStory: Bool
     let actionSize: CGFloat
     let isPerformingAction: Bool
@@ -2863,18 +3148,32 @@ private struct StoryViewerActions: View {
     let blockCreator: () -> Void
     let canUnfollowCreator: Bool
     let unfollowCreator: () -> Void
+    let toggleMute: () -> Void
     let close: () -> Void
 
     @State private var isActionDialogPresented = false
 
     var body: some View {
         HStack(spacing: 16) {
+            if isVideo {
+                Button(action: toggleMute) {
+                    StoryViewerActionIcon(
+                        systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        size: actionSize,
+                        fontSize: 17
+                    )
+                }
+                .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
+                .accessibilityLabel(isMuted ? "Unmute story" : "Mute story")
+                .accessibilityValue(isMuted ? "Muted" : "Sound on")
+            }
+
             if isOwnStack {
                 if canDeleteStory {
                     Button(action: deleteStory) {
                         StoryViewerActionIcon(systemImage: "trash", size: actionSize, fontSize: 18)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                     .disabled(isPerformingAction)
                     .opacity(isPerformingAction ? 0.55 : 1)
                     .accessibilityLabel("Delete story")
@@ -2885,7 +3184,7 @@ private struct StoryViewerActions: View {
                 } label: {
                     StoryViewerActionIcon(systemImage: "ellipsis", size: actionSize, fontSize: 19)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
                 .disabled(isPerformingAction)
                 .opacity(isPerformingAction ? 0.55 : 1)
                 .accessibilityLabel("Story options")
@@ -2915,7 +3214,8 @@ private struct StoryViewerActions: View {
             Button(action: close) {
                 StoryViewerActionIcon(systemImage: "xmark", size: actionSize, fontSize: 20)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
+            .accessibilityLabel("Close story")
         }
     }
 }
@@ -2943,7 +3243,9 @@ struct AutoPlayVideoPlayer: View {
     let refreshSource: () async -> StoryVideoPlaybackSource?
     let showsThumbnailWhileLoading: Bool
     let preparesPlayerPool: Bool
+    let isActive: Bool
     let isPaused: Bool
+    let isMuted: Bool
     let onReadyForPlayback: () -> Void
     let onProgress: (Double) -> Void
     let onFinished: () -> Void
@@ -2958,7 +3260,9 @@ struct AutoPlayVideoPlayer: View {
         refreshSource: @escaping () async -> StoryVideoPlaybackSource? = { nil },
         showsThumbnailWhileLoading: Bool = true,
         preparesPlayerPool: Bool = true,
+        isActive: Bool = true,
         isPaused: Bool = false,
+        isMuted: Bool = false,
         onReadyForPlayback: @escaping () -> Void = {},
         onProgress: @escaping (Double) -> Void = { _ in },
         onFinished: @escaping () -> Void = {}
@@ -2971,7 +3275,9 @@ struct AutoPlayVideoPlayer: View {
         self.refreshSource = refreshSource
         self.showsThumbnailWhileLoading = showsThumbnailWhileLoading
         self.preparesPlayerPool = preparesPlayerPool
+        self.isActive = isActive
         self.isPaused = isPaused
+        self.isMuted = isMuted
         self.onReadyForPlayback = onReadyForPlayback
         self.onProgress = onProgress
         self.onFinished = onFinished
@@ -2981,7 +3287,7 @@ struct AutoPlayVideoPlayer: View {
         ZStack {
             Color.black
 
-            FullBleedVideoPlayer(
+            AspectFitVideoPlayer(
                 player: playback.player,
                 onPlayerAttached: { player in
                     playback.playerDidAttach(player)
@@ -3022,6 +3328,7 @@ struct AutoPlayVideoPlayer: View {
         }
         .background(Color.black)
         .onAppear {
+            playback.setMuted(isMuted)
             if preparesPlayerPool {
                 playerPool?.prepare(
                     sources: [source] + preloadSources,
@@ -3065,6 +3372,16 @@ struct AutoPlayVideoPlayer: View {
                 )
             }
         }
+        .onChange(of: isActive) { previousValue, nextValue in
+            guard StoryVideoVisitPolicy.shouldRewindForNextVisit(
+                previousIsActive: previousValue,
+                nextIsActive: nextValue
+            ) else {
+                return
+            }
+
+            playback.rewindForNextVisit()
+        }
         .onChange(of: isPaused) { _, nextValue in
             playback.updateCallbacks(
                 onReadyForPlayback: onReadyForPlayback,
@@ -3076,9 +3393,21 @@ struct AutoPlayVideoPlayer: View {
                 onReadyForPlayback()
             }
         }
+        .onChange(of: isMuted) { _, nextValue in
+            playback.setMuted(nextValue)
+        }
         .onDisappear {
             playback.stop(reason: "disappear")
         }
+    }
+}
+
+enum StoryVideoVisitPolicy {
+    static func shouldRewindForNextVisit(
+        previousIsActive: Bool,
+        nextIsActive: Bool
+    ) -> Bool {
+        previousIsActive && !nextIsActive
     }
 }
 
@@ -3176,8 +3505,8 @@ enum VideoPlaybackWatchdogPolicy {
 enum VideoQualityRampPolicy {
     static let sampleInterval: Duration = .milliseconds(250)
     static let timeoutSeconds: TimeInterval = 8
-    static let minimumForwardBufferSeconds: TimeInterval = 6
-    static let requiredHealthySamples = 3
+    static let minimumForwardBufferSeconds: TimeInterval = 2
+    static let requiredHealthySamples = 2
 
     static func shouldRelaxStreamingHints(
         isPlaybackLikelyToKeepUp: Bool,
@@ -3249,6 +3578,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var activePlaybackURL: URL?
     private var expectedDurationSeconds: TimeInterval?
     private var isPaused = false
+    private var isUserMuted = false
     private var didFinishPlayback = false
     private var lastPublishedProgress = 0.0
     private var stallObserver: NSObjectProtocol?
@@ -3347,7 +3677,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private func startPlayback(
         source: StoryVideoPlaybackSource,
         playerPool: StoryVideoPlaybackPool?,
-        resumeTimeSeconds: TimeInterval? = nil
+        resumeTimeSeconds: TimeInterval? = nil,
+        allowsStartupQualityLock: Bool = true
     ) {
         let url = source.url
         playTask?.cancel()
@@ -3395,7 +3726,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 return
             }
 
-            let playbackURL = prepared?.playbackURL ?? resolved?.playbackURL ?? selected.url
+            let resolvedPlaybackURL = resolved?.playbackURL ?? selected.url
+            let playbackURL = prepared?.playbackURL ?? (
+                allowsStartupQualityLock
+                    ? MediaPlaybackQuality.startupPlaybackURL(for: resolvedPlaybackURL)
+                    : MediaPlaybackQuality.adaptivePlaybackURL(for: resolvedPlaybackURL)
+            )
             activePlaybackURL = playbackURL
             let delivery = playbackDelivery(for: selected.url)
             let cacheState = prepared?.cacheState ?? resolved?.cacheState ?? "miss"
@@ -3416,15 +3752,18 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
             player?.pause()
             let next = prepared?.player ?? makeFreshPlayer(playbackURL: playbackURL)
-            if let prepared {
+            if prepared != nil {
                 MediaPlaybackQuality.applyStreamingHints(
                     for: next.currentItem,
                     playbackURL: playbackURL,
-                    profile: prepared.handoffStage == .staged ? .cold : .prepared
+                    profile: .prepared
                 )
             }
             next.pause()
             next.isMuted = true
+            if #available(iOS 26.0, *) {
+                next.networkResourcePriority = .high
+            }
             hasCompletedPreroll = prepared?.wasPrerolled == true
             shouldStartImmediatelyAfterPreroll = false
             player = next
@@ -3654,7 +3993,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             player.isMuted = true
             player.pause()
         case .visible:
-            player.isMuted = false
+            player.isMuted = isUserMuted
             if shouldStartImmediatelyAfterPreroll {
                 shouldStartImmediatelyAfterPreroll = false
                 player.playImmediately(atRate: 1)
@@ -3739,6 +4078,108 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 )
             }
         }
+    }
+
+    func setMuted(_ isMuted: Bool) {
+        isUserMuted = isMuted
+        guard let player else {
+            return
+        }
+
+        if playbackPhase == .visible {
+            player.isMuted = isMuted
+        } else {
+            // Preroll and hidden buffered players must remain silent regardless of
+            // the user's visible-playback preference.
+            player.isMuted = true
+        }
+    }
+
+    func rewindForNextVisit() {
+        guard let player,
+              let activeURL,
+              activeIdentity != nil else {
+            return
+        }
+
+        isPaused = true
+        player.pause()
+        player.isMuted = true
+        player.cancelPendingPrerolls()
+        player.currentItem?.cancelPendingSeeks()
+
+        playTask?.cancel()
+        playTask = nil
+        revealTask?.cancel()
+        revealTask = nil
+        seekTask?.cancel()
+        seekTask = nil
+        stallConfirmationTask?.cancel()
+        stallConfirmationTask = nil
+        stallRecoveryTask?.cancel()
+        stallRecoveryTask = nil
+        stallEpisodeStartedAt = nil
+        sameItemRecoveryTask?.cancel()
+        sameItemRecoveryTask = nil
+        rebuildTask?.cancel()
+        rebuildTask = nil
+        completionFallbackTask?.cancel()
+        completionFallbackTask = nil
+        progressWatchdogTask?.cancel()
+        progressWatchdogTask = nil
+        logQualityRampIfNeeded(result: "interrupted_story_reentry")
+        qualityRampTask?.cancel()
+        qualityRampTask = nil
+        logAccessLogIfNeeded(reason: "story_reentry")
+        if let startupInterval {
+            MediaPerformance.cancelInterval(startupInterval, reason: "story_reentry")
+            self.startupInterval = nil
+        }
+
+        playbackRetryCount = 0
+        sameItemRecoveryCount = 0
+        playbackAttemptId = UUID().uuidString.lowercased()
+        isReadyForPlayback = false
+        hasTerminalPlaybackFailure = false
+        didFinishPlayback = false
+        didUploadAccessLog = false
+        didUploadQualityRamp = false
+        didRelaxStreamingHints = false
+        shouldUploadQoE = MediaControlConfig.shared.shouldUploadAccessLog()
+        qualityRampStartedAt = nil
+        qualityRampLastSize = .zero
+        lastPublishedProgress = 0
+        revealTargetSeconds = 0
+        hasCompletedPreroll = false
+        shouldStartImmediatelyAfterPreroll = false
+
+        if let activePlaybackURL {
+            configureStreamingHints(
+                for: player.currentItem,
+                playbackURL: activePlaybackURL
+            )
+        }
+
+        let startedAt = Date()
+        playbackStartedAt = startedAt
+        startupMetadata = "source=reentry url=\(activeURL.lastPathComponent)"
+        startupInterval = MediaPerformance.beginInterval(
+            playbackEvent("video_startup \(startupMetadata)")
+        )
+        playbackPhase = .awaitingAttachment
+        observeReadiness(
+            player: player,
+            url: activeURL,
+            startedAt: startedAt,
+            generation: playbackGeneration,
+            source: "reentry"
+        )
+        MediaPerformance.mark(
+            playbackEvent(
+                "video_reentry_rewind position_ms=0 url=\(activeURL.lastPathComponent)"
+            )
+        )
+        playerDidAttach(player)
     }
 
     func updateCallbacks(
@@ -4593,7 +5034,12 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         )
 
         let recoveryAction = VideoPlaybackRecoveryPolicy.action(
-            itemIsReady: isReadyForPlayback && player.currentItem?.status == .readyToPlay,
+            // A bandwidth-focused Cloudflare startup manifest intentionally has
+            // one rendition. If that rendition cannot keep up, seeking the same
+            // item cannot downshift; rebuild immediately on the adaptive manifest.
+            itemIsReady: isReadyForPlayback &&
+                player.currentItem?.status == .readyToPlay &&
+                !MediaPlaybackQuality.isStartupQualityLocked(activePlaybackURL),
             currentItemRecoveryCount: sameItemRecoveryCount,
             playerRebuildCount: playbackRetryCount
         )
@@ -4788,6 +5234,9 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         let resumeTimeSeconds = isReadyForPlayback ? player.currentTime().seconds : nil
         let expectedDuration = expectedDurationSeconds
         let publishedProgress = lastPublishedProgress
+        let shouldUseAdaptiveFallback = MediaPlaybackQuality.isStartupQualityLocked(
+            activePlaybackURL
+        )
         playbackRetryCount += 1
         let resumeMilliseconds = resumeTimeSeconds.flatMap { $0.isFinite ? Int(max(0, $0) * 1_000) : nil } ?? 0
         let rebuildAttempt = playbackRetryCount
@@ -4836,7 +5285,8 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
             self.startPlayback(
                 source: nextSource,
                 playerPool: nil,
-                resumeTimeSeconds: resumeTimeSeconds
+                resumeTimeSeconds: resumeTimeSeconds,
+                allowsStartupQualityLock: !shouldUseAdaptiveFallback
             )
         }
         return true
@@ -4877,6 +5327,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         let presentationWidth = Int(max(0, presentationSize.width).rounded())
         let presentationHeight = Int(max(0, presentationSize.height).rounded())
 
+        NetworkQualityMonitor.shared.recordPlaybackObservation(
+            observedBitrate: event.observedBitrate,
+            stalls: event.numberOfStalls
+        )
+
         MediaPerformance.mark(
             playbackEvent(
                 "video_access_log reason=\(reason) delivery=\(delivery) observedBitrate=\(observedBitrate) indicatedBitrate=\(indicatedBitrate) width=\(presentationWidth) height=\(presentationHeight) stalls=\(event.numberOfStalls) transferDurationMs=\(transferDurationMs) watchedMs=\(watchedMs) downloadedMs=\(downloadedMs) bytes=\(event.numberOfBytesTransferred) uri=\(uri)"
@@ -4889,6 +5344,10 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         qualityRampTask = nil
 
         guard activePlaybackURL?.pathExtension.lowercased() == "m3u8" else {
+            return
+        }
+
+        guard NetworkQualityMonitor.shared.allowsStreamingHintRelaxation else {
             return
         }
 
@@ -5236,20 +5695,20 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     }
 }
 
-private struct FullBleedVideoPlayer: UIViewRepresentable {
+private struct AspectFitVideoPlayer: UIViewRepresentable {
     let player: AVPlayer?
     let onPlayerAttached: (AVPlayer) -> Void
     let onReadyForDisplay: (AVPlayer) -> Void
 
-    func makeUIView(context: Context) -> FullBleedPlayerView {
-        FullBleedPlayerView()
+    func makeUIView(context: Context) -> AspectFitPlayerView {
+        AspectFitPlayerView()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func updateUIView(_ view: FullBleedPlayerView, context: Context) {
+    func updateUIView(_ view: AspectFitPlayerView, context: Context) {
         view.attach(player)
         context.coordinator.observeReadyForDisplay(
             playerLayer: view.playerLayer,
@@ -5259,7 +5718,7 @@ private struct FullBleedVideoPlayer: UIViewRepresentable {
         )
     }
 
-    static func dismantleUIView(_ view: FullBleedPlayerView, coordinator: Coordinator) {
+    static func dismantleUIView(_ view: AspectFitPlayerView, coordinator: Coordinator) {
         coordinator.stopObserving()
         view.player = nil
     }
@@ -5331,7 +5790,7 @@ private struct FullBleedVideoPlayer: UIViewRepresentable {
     }
 }
 
-final class FullBleedPlayerView: UIView {
+final class AspectFitPlayerView: UIView {
     override static var layerClass: AnyClass {
         AVPlayerLayer.self
     }
@@ -5354,15 +5813,17 @@ final class FullBleedPlayerView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .clear
-        playerLayer.backgroundColor = UIColor.clear.cgColor
+        backgroundColor = .black
+        isOpaque = true
+        playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.videoGravity = .resizeAspect
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        backgroundColor = .clear
-        playerLayer.backgroundColor = UIColor.clear.cgColor
+        backgroundColor = .black
+        isOpaque = true
+        playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.videoGravity = .resizeAspect
     }
 }

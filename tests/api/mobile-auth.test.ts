@@ -16,6 +16,7 @@ import {
   requestPasswordReset,
   resetPassword,
 } from "@/lib/user-store"
+import { currentLegalVersions } from "@/lib/legal"
 
 vi.mock("@/lib/request-security", async () => {
   const actual =
@@ -61,12 +62,17 @@ const testUser = {
   creatorStatus: "active" as const,
 }
 
-function jsonRequest(path: string, body: unknown) {
+function jsonRequest(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   return new Request(`https://app.example.com${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-forwarded-for": "203.0.113.10",
+      ...headers,
     },
     body: JSON.stringify(body),
   })
@@ -91,6 +97,11 @@ describe("mobile auth API", () => {
       jsonRequest("/api/mobile/auth/signup", {
         email: "Creator@Example.com",
         password: "password123",
+        acceptedTerms: true,
+        termsVersion: currentLegalVersions.terms,
+        communityGuidelinesVersion:
+          currentLegalVersions.communityGuidelines,
+        privacyPolicyVersion: currentLegalVersions.privacyPolicy,
       }),
     )
 
@@ -102,8 +113,55 @@ describe("mobile auth API", () => {
     expect(registerUser).toHaveBeenCalledWith({
       email: "creator@example.com",
       password: "password123",
+      acceptedTerms: true,
+      termsVersion: currentLegalVersions.terms,
+      communityGuidelinesVersion: currentLegalVersions.communityGuidelines,
+      privacyPolicyVersion: currentLegalVersions.privacyPolicy,
     })
     expect(sendUserVerificationEmail).toHaveBeenCalledWith(testUser)
+  })
+
+  it("requires current legal acceptance when creating a mobile account", async () => {
+    const { POST } = await import("@/app/api/mobile/auth/signup/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/auth/signup", {
+        email: "creator@example.com",
+        password: "password123",
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await responseJson(response)).toMatchObject({
+      error: "Accept the Terms and Community Guidelines to create an account.",
+    })
+    expect(registerUser).not.toHaveBeenCalled()
+    expect(sendUserVerificationEmail).not.toHaveBeenCalled()
+  })
+
+  it("keeps signup compatible with iOS builds that enforced the legacy checkbox", async () => {
+    vi.mocked(registerUser).mockResolvedValue({ ok: true, user: testUser })
+
+    const { POST } = await import("@/app/api/mobile/auth/signup/route")
+    const response = await POST(
+      jsonRequest(
+        "/api/mobile/auth/signup",
+        {
+          email: "Creator@Example.com",
+          password: "password123",
+        },
+        { "x-ubeye-app-build": "356" },
+      ),
+    )
+
+    expect(response.status).toBe(200)
+    expect(registerUser).toHaveBeenCalledWith({
+      email: "creator@example.com",
+      password: "password123",
+      acceptedTerms: true,
+      termsVersion: currentLegalVersions.terms,
+      communityGuidelinesVersion: currentLegalVersions.communityGuidelines,
+      privacyPolicyVersion: currentLegalVersions.privacyPolicy,
+    })
   })
 
   it("resends verification and blocks login for unverified email", async () => {

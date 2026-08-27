@@ -19,12 +19,20 @@ export async function GET(request: Request) {
     )
   }
 
-  const candidates = await recoverableMediaJobIds({ limit: 1 })
-  for (const candidate of candidates) {
-    scheduleMediaProcessing(candidate.id, "scheduled_reconciliation")
-  }
+  const candidates = await recoverableMediaJobIds({ limit: 3 })
+  const results = await Promise.allSettled(
+    candidates.map((candidate) =>
+      scheduleMediaProcessing(candidate.id, "scheduled_reconciliation"),
+    ),
+  )
+  const scheduled = results.filter(({ status }) => status === "fulfilled").length
   return Response.json(
-    { ok: true, scanned: candidates.length, scheduled: candidates.length },
+    {
+      ok: true,
+      scanned: candidates.length,
+      scheduled,
+      failed: results.length - scheduled,
+    },
     { headers: { "Cache-Control": "private, no-store" } },
   )
 }

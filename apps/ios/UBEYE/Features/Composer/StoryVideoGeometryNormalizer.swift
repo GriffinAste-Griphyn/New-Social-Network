@@ -58,6 +58,47 @@ enum StoryVideoGeometryNormalizer {
         )
     }
 
+    static func aspectFitPlan(
+        naturalSize: CGSize,
+        preferredTransform: CGAffineTransform,
+        mirrorsHorizontally: Bool,
+        targetSize: CGSize
+    ) -> PresentationPlan {
+        let sourcePlan = presentationPlan(
+            naturalSize: naturalSize,
+            preferredTransform: preferredTransform,
+            mirrorsHorizontally: mirrorsHorizontally
+        )
+        let scale = min(
+            targetSize.width / max(sourcePlan.renderSize.width, 1),
+            targetSize.height / max(sourcePlan.renderSize.height, 1)
+        )
+        var transform = sourcePlan.transform.concatenating(
+            CGAffineTransform(scaleX: scale, y: scale)
+        )
+        let scaledSourceRect = CGRect(
+            origin: .zero,
+            size: naturalSize
+        ).applying(transform)
+        transform = transform.concatenating(
+            CGAffineTransform(
+                translationX: (targetSize.width - scaledSourceRect.width) / 2
+                    - scaledSourceRect.minX,
+                y: (targetSize.height - scaledSourceRect.height) / 2
+                    - scaledSourceRect.minY
+            )
+        )
+
+        return PresentationPlan(
+            renderSize: targetSize,
+            transform: transform,
+            renderedSourceRect: CGRect(
+                origin: .zero,
+                size: naturalSize
+            ).applying(transform)
+        )
+    }
+
     static func mirroredComposition(
         for asset: AVURLAsset,
         timeRange: CMTimeRange

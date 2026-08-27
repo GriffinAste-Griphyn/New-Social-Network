@@ -32,6 +32,136 @@ enum APIClientError: LocalizedError {
     }
 }
 
+@MainActor
+final class PendingSocialActionQueue {
+    static let shared = PendingSocialActionQueue()
+
+    enum Kind: String, Codable {
+        case follow
+        case unfollow
+        case reaction
+        case deleteReply
+    }
+
+    struct Action: Codable, Identifiable, Equatable {
+        let id: String
+        let kind: Kind
+        let targetId: String
+        let value: String?
+        let createdAt: Date
+    }
+
+    private struct CreatorPayload: Encodable {
+        let creatorId: String
+    }
+
+    private let defaultsKey = "ubeye.pending-social-actions.v1"
+    private var actions: [Action]
+    private var isFlushing = false
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let decoded = try? JSONDecoder().decode([Action].self, from: data) {
+            actions = decoded
+        } else {
+            actions = []
+        }
+    }
+
+    func enqueue(_ kind: Kind, targetId: String, value: String? = nil) {
+        let action = Action(
+            id: UUID().uuidString.lowercased(),
+            kind: kind,
+            targetId: targetId,
+            value: value,
+            createdAt: Date()
+        )
+        actions = Self.coalescing(action, into: actions)
+        persist()
+        MediaPerformance.mark("social_action_queued kind=\(kind.rawValue)")
+    }
+
+    static func coalescing(_ action: Action, into existing: [Action]) -> [Action] {
+        if action.kind == .follow || action.kind == .unfollow {
+            return existing.filter {
+                !(($0.kind == .follow || $0.kind == .unfollow) && $0.targetId == action.targetId)
+            } + [action]
+        }
+
+        guard !existing.contains(where: {
+            $0.kind == action.kind && $0.targetId == action.targetId && $0.value == action.value
+        }) else {
+            return existing
+        }
+
+        return existing + [action]
+    }
+
+    func flush(api: APIClient) async {
+        guard !isFlushing, NetworkQualityMonitor.shared.isConnected, !actions.isEmpty else {
+            return
+        }
+
+        isFlushing = true
+        defer { isFlushing = false }
+        var retained: [Action] = []
+
+        for action in actions {
+            guard NetworkQualityMonitor.shared.isConnected else {
+                retained.append(action)
+                continue
+            }
+
+            do {
+                try await perform(action, api: api)
+                MediaPerformance.mark("social_action_flushed kind=\(action.kind.rawValue)")
+            } catch {
+                let statusCode = (error as? APIClientError)?.statusCode
+                if statusCode == nil || statusCode.map({ $0 >= 500 }) == true {
+                    retained.append(action)
+                }
+                MediaPerformance.mark(
+                    "social_action_flush_failed kind=\(action.kind.rawValue) status=\(statusCode ?? 0)"
+                )
+            }
+        }
+
+        actions = retained
+        persist()
+    }
+
+    private func perform(_ action: Action, api: APIClient) async throws {
+        switch action.kind {
+        case .follow:
+            let _: BasicOkResponse = try await api.post(
+                "/api/mobile/follows",
+                body: CreatorPayload(creatorId: action.targetId)
+            )
+        case .unfollow:
+            let _: BasicOkResponse = try await api.delete(
+                "/api/mobile/follows",
+                body: CreatorPayload(creatorId: action.targetId)
+            )
+        case .reaction:
+            let _: StoryInteractionResponse = try await api.sendStoryReply(
+                storyId: action.targetId,
+                body: nil,
+                reaction: action.value ?? "❤️"
+            )
+        case .deleteReply:
+            try await api.deleteStoryInteraction(id: action.targetId)
+        }
+    }
+
+    private func persist() {
+        if actions.isEmpty {
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+        } else if let data = try? JSONEncoder().encode(actions) {
+            UserDefaults.standard.set(data, forKey: defaultsKey)
+        }
+    }
+}
+
 private struct BlobUploadErrorEnvelope: Decodable {
     struct BlobError: Decodable {
         let code: String?
@@ -68,6 +198,7 @@ private struct BlobMultipartCompleteResponse: Decodable {}
 @MainActor
 final class APIClient: ObservableObject {
     typealias TusChunkUploader = (URLRequest, URL) async throws -> (Data, URLResponse)
+    typealias BlobDataUploader = (URLRequest, Data) async throws -> (Data, URLResponse)
 
     @Published var baseURLString: String {
         didSet {
@@ -90,13 +221,15 @@ final class APIClient: ObservableObject {
     private static let deviceIdKey = "ubeye.ios.deviceId"
     private static let productionBaseURL = "https://www.ubeye.ai"
     private static let vercelBlobApiVersion = "12"
-    private static let mediaPipelineVersion = "hls-v2"
+    private static let mediaPipelineVersion = "hls-v4"
     private static let largeVideoUploadTimeout: TimeInterval = 10 * 60
-    private static let blobMultipartThresholdBytes: Int64 = 16 * 1024 * 1024
-    private static let blobMultipartPartBytes: Int64 = 8 * 1024 * 1024
-    private static let blobMultipartConcurrency = 2
+    private static let blobMultipartThresholdBytes: Int64 = 8 * 1024 * 1024
+    private static let blobMultipartPartBytes: Int64 = 5 * 1024 * 1024
+    private static let blobMultipartConcurrency = 4
     private let session: URLSession
     private let tusChunkUploader: TusChunkUploader
+    private let foregroundBlobFileUploader: TusChunkUploader
+    private let foregroundBlobDataUploader: BlobDataUploader
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let responseCache = MobileResponseDiskCache()
@@ -115,11 +248,45 @@ final class APIClient: ObservableObject {
     ) {
         MediaPreheater.configureURLCache()
         self.session = session
-        self.tusChunkUploader = tusChunkUploader ?? { request, bodyFileURL in
+        let backgroundUploader: TusChunkUploader = tusChunkUploader ?? { request, bodyFileURL in
             try await BackgroundTusUploadTransport.shared.upload(
                 request: request,
                 bodyFileURL: bodyFileURL
             )
+        }
+        self.tusChunkUploader = backgroundUploader
+        if let tusChunkUploader {
+            // Tests and specialized callers can keep injecting a deterministic
+            // transport. Production Blob uploads use the foreground session below.
+            self.foregroundBlobFileUploader = { request, sourceURL in
+                let stagedURL = try await Self.stageBlobUploadFile(sourceURL)
+                defer { try? FileManager.default.removeItem(at: stagedURL) }
+                return try await tusChunkUploader(request, stagedURL)
+            }
+            self.foregroundBlobDataUploader = { request, data in
+                let stagedURL = try await Self.stageTusChunk(
+                    data,
+                    uploadURL: request.url ?? URL(fileURLWithPath: "/"),
+                    offset: Int64(
+                        request.value(forHTTPHeaderField: "x-mpu-part-number") ?? "0"
+                    ) ?? 0
+                )
+                defer { try? FileManager.default.removeItem(at: stagedURL) }
+                return try await tusChunkUploader(request, stagedURL)
+            }
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.waitsForConnectivity = true
+            configuration.timeoutIntervalForRequest = Self.largeVideoUploadTimeout
+            configuration.timeoutIntervalForResource = Self.largeVideoUploadTimeout
+            configuration.httpMaximumConnectionsPerHost = 6
+            let blobSession = URLSession(configuration: configuration)
+            self.foregroundBlobFileUploader = { request, bodyFileURL in
+                try await blobSession.upload(for: request, fromFile: bodyFileURL)
+            }
+            self.foregroundBlobDataUploader = { request, data in
+                try await blobSession.upload(for: request, from: data)
+            }
         }
         #if DEBUG
         let storedBaseURL = UserDefaults.standard.string(forKey: Self.baseURLKey)
@@ -623,9 +790,8 @@ final class APIClient: ObservableObject {
 
     func completeImageStory(
         upload: ImageUploadResponse,
-        displayDerivative: PreparedImageDerivativeUpload,
-        thumbnailDerivative: PreparedImageDerivativeUpload,
-        thumbHash: String,
+        sourceUpload: PreparedImageDerivativeUpload,
+        contentMode: StoryImageContentMode,
         caption: String,
         brandTags: String,
         textOverlay: String,
@@ -641,9 +807,8 @@ final class APIClient: ObservableObject {
     ) async throws -> StoryUploadResponse {
         struct Body: Encodable {
             let basePathname: String
-            let displayDerivative: PreparedImageDerivativeUpload
-            let thumbnailDerivative: PreparedImageDerivativeUpload
-            let thumbHash: String
+            let sourceUpload: PreparedImageDerivativeUpload
+            let contentMode: StoryImageContentMode
             let caption: String
             let brandTags: String
             let stickers: String
@@ -663,9 +828,8 @@ final class APIClient: ObservableObject {
             "/api/mobile/stories/image-complete",
             body: Body(
                 basePathname: upload.basePathname,
-                displayDerivative: displayDerivative,
-                thumbnailDerivative: thumbnailDerivative,
-                thumbHash: thumbHash,
+                sourceUpload: sourceUpload,
+                contentMode: contentMode,
                 caption: caption,
                 brandTags: brandTags,
                 stickers: "",
@@ -839,18 +1003,17 @@ final class APIClient: ObservableObject {
         onRetry: ((String) -> Void)? = nil,
         maxChunkBytes: Int64 = 50 * 1024 * 1024,
         onProgress: ((Double) -> Void)? = nil
-    ) async throws {
+    ) async throws -> String? {
         if upload.uploadProtocol == "vercel-blob" {
             guard let source = upload.source else {
                 throw APIClientError.server("The media service did not provide a private upload target.", 0)
             }
-            try await uploadBlobVideoFile(
+            return try await uploadBlobVideoFile(
                 fileURL: fileURL,
                 source: source,
                 onRetry: onRetry,
                 onProgress: onProgress
             )
-            return
         }
 
         guard upload.uploadProtocol == "tus" else {
@@ -864,6 +1027,7 @@ final class APIClient: ObservableObject {
             maxChunkBytes: maxChunkBytes,
             onProgress: onProgress
         )
+        return nil
     }
 
     private func uploadBlobVideoFile(
@@ -871,21 +1035,20 @@ final class APIClient: ObservableObject {
         source: ImageUploadPart,
         onRetry: ((String) -> Void)?,
         onProgress: ((Double) -> Void)?
-    ) async throws {
+    ) async throws -> String? {
         let byteSize = try await StoryUploadFileIO.fileSize(at: fileURL)
         guard byteSize > 0, byteSize <= source.maxSizeBytes else {
             throw APIClientError.server("The prepared video does not match the upload target.", 0)
         }
 
         if byteSize >= Self.blobMultipartThresholdBytes {
-            try await uploadBlobVideoFileMultipart(
+            return try await uploadBlobVideoFileMultipart(
                 fileURL: fileURL,
                 byteSize: byteSize,
                 source: source,
                 onRetry: onRetry,
                 onProgress: onProgress
             )
-            return
         }
 
         var lastError: Error?
@@ -904,19 +1067,16 @@ final class APIClient: ObservableObject {
                 request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
                 request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
 
-                // Background upload transport owns and removes its body file when
-                // the request completes. Give it a disposable path so the pending
-                // story's only durable source remains available for completion and
-                // for any subsequent retry.
-                let stagedFileURL = try await Self.stageBlobUploadFile(fileURL)
-                defer { try? FileManager.default.removeItem(at: stagedFileURL) }
-                let (data, response) = try await tusChunkUploader(request, stagedFileURL)
+                let (data, response) = try await foregroundBlobFileUploader(
+                    request,
+                    fileURL
+                )
                 guard let http = response as? HTTPURLResponse,
                       200..<300 ~= http.statusCode else {
                     throw uploadError(data: data, response: response)
                 }
                 onProgress?(1)
-                return
+                return nil
             } catch {
                 lastError = error
                 guard attempt < 4 else { break }
@@ -934,7 +1094,7 @@ final class APIClient: ObservableObject {
         source: ImageUploadPart,
         onRetry: ((String) -> Void)?,
         onProgress: ((Double) -> Void)?
-    ) async throws {
+    ) async throws -> String {
         var state: BlobMultipartUploadState
         if let persistedState = try await Self.loadBlobMultipartState(
             pathname: source.pathname,
@@ -998,20 +1158,31 @@ final class APIClient: ObservableObject {
                     }
                 }
 
-                for try await part in group {
-                    completedParts[part.partNumber] = part
-                    uploadedBytes += Self.blobMultipartByteCount(
-                        partNumber: part.partNumber,
-                        totalByteSize: byteSize
-                    )
-                    // Commit each acknowledged part immediately. If its sibling
-                    // fails or the app is terminated between responses, the next
-                    // attempt resumes from the most precise durable checkpoint.
-                    state.completedParts = completedParts.values.sorted {
-                        $0.partNumber < $1.partNumber
+                var firstBatchError: Error?
+                while let result = await group.nextResult() {
+                    switch result {
+                    case .success(let part):
+                        completedParts[part.partNumber] = part
+                        uploadedBytes += Self.blobMultipartByteCount(
+                            partNumber: part.partNumber,
+                            totalByteSize: byteSize
+                        )
+                        // Drain the whole batch even after one sibling fails so
+                        // every acknowledged part reaches the durable checkpoint.
+                        state.completedParts = completedParts.values.sorted {
+                            $0.partNumber < $1.partNumber
+                        }
+                        try await Self.saveBlobMultipartState(state)
+                        onProgress?(min(Double(uploadedBytes) / Double(byteSize), 0.99))
+                    case .failure(let error):
+                        if firstBatchError == nil {
+                            firstBatchError = error
+                        }
                     }
-                    try await Self.saveBlobMultipartState(state)
-                    onProgress?(min(Double(uploadedBytes) / Double(byteSize), 0.99))
+                }
+
+                if let firstBatchError {
+                    throw firstBatchError
                 }
             }
         }
@@ -1031,6 +1202,7 @@ final class APIClient: ObservableObject {
         )
         await Self.removeBlobMultipartState(pathname: source.pathname)
         onProgress?(1)
+        return state.uploadId
     }
 
     private func createBlobMultipartUploadState(
@@ -1105,12 +1277,10 @@ final class APIClient: ObservableObject {
                 request.setValue(String(partData.count), forHTTPHeaderField: "x-content-length")
                 request.setValue(String(attempt - 1), forHTTPHeaderField: "x-api-blob-request-attempt")
 
-                let partFileURL = try await Self.stageTusChunk(
-                    partData,
-                    uploadURL: source.uploadUrl,
-                    offset: partOffset
+                let (data, response) = try await foregroundBlobDataUploader(
+                    request,
+                    partData
                 )
-                let (data, response) = try await tusChunkUploader(request, partFileURL)
                 guard let http = response as? HTTPURLResponse,
                       200..<300 ~= http.statusCode else {
                     throw uploadError(data: data, response: response)
@@ -1507,6 +1677,8 @@ final class APIClient: ObservableObject {
     func completeVideoStory(
         upload: VideoUploadResponse,
         fileURL: URL,
+        checksum: String,
+        uploadId: String?,
         poster: PreparedImageDerivativeUpload,
         caption: String,
         brandTags: String,
@@ -1527,6 +1699,8 @@ final class APIClient: ObservableObject {
             let uploadSessionId: String?
             let contentType: String
             let byteSize: Int64
+            let checksum: String
+            let uploadId: String?
             let durationMs: Int?
             let poster: PreparedImageDerivativeUpload
             let caption: String
@@ -1552,6 +1726,8 @@ final class APIClient: ObservableObject {
                 uploadSessionId: upload.uploadSessionId,
                 contentType: videoMimeType(for: fileURL),
                 byteSize: byteSize,
+                checksum: checksum,
+                uploadId: uploadId,
                 durationMs: durationMs,
                 poster: poster,
                 caption: caption,

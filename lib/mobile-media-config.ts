@@ -86,7 +86,8 @@ function booleanEnv(name: string, fallback: boolean) {
   return ["1", "true", "yes", "on"].includes(raw)
 }
 
-const fullQualityVideoBitRate = 8_256_000
+const constrainedQualityVideoBitRate = 3_000_000
+const fullQualityVideoBitRate = 8_000_000
 const fullQualityVideoWidth = 1_080
 const fullQualityVideoHeight = 1_920
 
@@ -102,17 +103,17 @@ export function getMobileMediaConfig(input: {
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-25.2",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-26.1",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
       true,
     ),
-    qoeAccessLogSampleRate: floatEnv("MOBILE_QOE_ACCESS_LOG_SAMPLE_RATE", 1, {
+    qoeAccessLogSampleRate: floatEnv("MOBILE_QOE_ACCESS_LOG_SAMPLE_RATE", 0.1, {
       min: 0,
       max: 1,
     }),
-    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 3 * 1024 * 1024, {
+    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 5 * 1024 * 1024, {
       min: 256 * 1024,
       max: 32 * 1024 * 1024,
     }),
@@ -192,35 +193,37 @@ export function getMobileMediaConfig(input: {
     startupStreamingPeakBitRate: {
       constrained: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        aggressiveConfigEnabled ? 2_000_000 : 4_000_000,
+        aggressiveConfigEnabled ? constrainedQualityVideoBitRate : 2_000_000,
         { min: 1_500_000, max: 16_000_000 },
       ),
       standard: integerEnv(
         "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
-        aggressiveConfigEnabled ? 3_000_000 : 6_000_000,
+        aggressiveConfigEnabled ? fullQualityVideoBitRate : 4_000_000,
         { min: 1_500_000, max: 20_000_000 },
       ),
     },
     startupStreamingMaximumResolution: {
       constrained: {
-        width: integerEnv("MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED", 540, {
-          min: 360,
-          max: 1080,
-        }),
-        height: integerEnv("MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED", 960, {
-          min: 640,
-          max: 1920,
-        }),
+        width: integerEnv(
+          "MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED",
+          aggressiveConfigEnabled ? 720 : 540,
+          { min: 360, max: 1080 },
+        ),
+        height: integerEnv(
+          "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED",
+          aggressiveConfigEnabled ? 1280 : 960,
+          { min: 640, max: 1920 },
+        ),
       },
       standard: {
         width: integerEnv(
           "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
-          aggressiveConfigEnabled ? 720 : 1080,
+          aggressiveConfigEnabled ? fullQualityVideoWidth : 720,
           { min: 540, max: 2160 },
         ),
         height: integerEnv(
           "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
-          aggressiveConfigEnabled ? 1280 : 1920,
+          aggressiveConfigEnabled ? fullQualityVideoHeight : 1280,
           { min: 960, max: 3840 },
         ),
       },
@@ -228,35 +231,37 @@ export function getMobileMediaConfig(input: {
     preparedStreamingPeakBitRate: {
       constrained: integerEnv(
         "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        2_000_000,
+        aggressiveConfigEnabled ? constrainedQualityVideoBitRate : 2_000_000,
         { min: 1_500_000, max: 8_500_000 },
       ),
       standard: integerEnv(
         "MOBILE_PREPARED_STREAMING_PEAK_BITRATE_STANDARD",
-        fullQualityVideoBitRate,
+        aggressiveConfigEnabled ? fullQualityVideoBitRate : 4_000_000,
         { min: 3_000_000, max: 20_000_000 },
       ),
     },
     preparedStreamingMaximumResolution: {
       constrained: {
-        width: integerEnv("MOBILE_PREPARED_MAX_WIDTH_CONSTRAINED", 540, {
-          min: 360,
-          max: 1080,
-        }),
-        height: integerEnv("MOBILE_PREPARED_MAX_HEIGHT_CONSTRAINED", 960, {
-          min: 640,
-          max: 1920,
-        }),
+        width: integerEnv(
+          "MOBILE_PREPARED_MAX_WIDTH_CONSTRAINED",
+          aggressiveConfigEnabled ? 720 : 540,
+          { min: 360, max: 1080 },
+        ),
+        height: integerEnv(
+          "MOBILE_PREPARED_MAX_HEIGHT_CONSTRAINED",
+          aggressiveConfigEnabled ? 1280 : 960,
+          { min: 640, max: 1920 },
+        ),
       },
       standard: {
         width: integerEnv(
           "MOBILE_PREPARED_MAX_WIDTH_STANDARD",
-          fullQualityVideoWidth,
+          aggressiveConfigEnabled ? fullQualityVideoWidth : 720,
           { min: 720, max: 2160 },
         ),
         height: integerEnv(
           "MOBILE_PREPARED_MAX_HEIGHT_STANDARD",
-          fullQualityVideoHeight,
+          aggressiveConfigEnabled ? fullQualityVideoHeight : 1280,
           { min: 1280, max: 3840 },
         ),
       },

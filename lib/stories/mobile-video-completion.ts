@@ -40,6 +40,7 @@ type CompleteMobileVideoStoryInput = {
   createdAt?: Date
   providerStatusFallback?: string | null
   providerErrorFallback?: string | null
+  deferModeration?: boolean
   onStoryCreated?: (storyId: string) => void | Promise<void>
 }
 
@@ -245,6 +246,7 @@ export async function completeMobileVideoStory(
     moderationMediaUrl,
     moderationThumbnailUrl,
     createdAt: input.createdAt,
+    deferModeration: input.deferModeration,
   })
 
   await input.onStoryCreated?.(storyId)

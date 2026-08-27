@@ -325,6 +325,14 @@ export const users = pgTable(
       .notNull()
       .default("inactive"),
     isCreatorMode: boolean("is_creator_mode").notNull().default(false),
+    legalAcceptedAt: timestamp("legal_accepted_at", { withTimezone: true }),
+    termsAcceptedVersion: text("terms_accepted_version"),
+    communityGuidelinesAcceptedVersion: text(
+      "community_guidelines_accepted_version",
+    ),
+    privacyPolicyAcknowledgedVersion: text(
+      "privacy_policy_acknowledged_version",
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -487,6 +495,36 @@ export const mediaProcessingJobs = pgTable(
       table.status,
       table.updatedAt,
     ),
+  ],
+)
+
+export const imageProcessingJobs = pgTable(
+  "image_processing_jobs",
+  {
+    id: text("id").primaryKey(),
+    mediaAssetId: text("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    workflowRunId: text("workflow_run_id"),
+    sourcePathname: text("source_pathname").notNull(),
+    basePathname: text("base_pathname").notNull(),
+    contentMode: text("content_mode").notNull().default("fit"),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("image_processing_jobs_asset_uidx").on(table.mediaAssetId),
+    uniqueIndex("image_processing_jobs_run_uidx").on(table.workflowRunId),
+    index("image_processing_jobs_status_idx").on(table.status, table.updatedAt),
   ],
 )
 

@@ -403,6 +403,19 @@ export function directStoryImageDisplayPathname(
   return `${basePathname}-display.${contentType === "image/avif" ? "avif" : "webp"}`
 }
 
+export function directStoryImageSourcePathname(
+  basePathname: string,
+  contentType: string,
+) {
+  const extension =
+    contentType.toLowerCase() === "image/png"
+      ? "png"
+      : contentType.toLowerCase() === "image/webp"
+        ? "webp"
+        : "jpg"
+  return `${basePathname}-source.${extension}`
+}
+
 export function directStoryImageThumbnailPathname(basePathname: string) {
   return `${basePathname}-thumb.webp`
 }
@@ -443,7 +456,7 @@ async function waitForDirectBlobMetadata(input: {
   contentType: string
   byteSize: number
 }) {
-  const retryDelaysMs = [0, 150, 400, 900]
+  const retryDelaysMs = [0, 150]
 
   for (const delayMs of retryDelaysMs) {
     if (delayMs > 0) {

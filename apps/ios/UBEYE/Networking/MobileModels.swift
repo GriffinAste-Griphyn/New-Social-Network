@@ -204,7 +204,7 @@ struct StoryMediaRenditions: Codable, Hashable {
     let original: StoryMediaRendition?
 }
 
-struct QuotedStoryReply: Identifiable, Hashable {
+struct QuotedStoryReply: Codable, Identifiable, Hashable {
     let id: String
     let actorName: String
     let actorHandle: String
@@ -768,8 +768,9 @@ struct ImageUploadPart: Codable, Hashable {
 struct ImageUploadResponse: Codable {
     let ok: Bool
     let basePathname: String
-    let display: ImageUploadPart
-    let thumbnail: ImageUploadPart
+    let source: ImageUploadPart?
+    let display: ImageUploadPart?
+    let thumbnail: ImageUploadPart?
 }
 
 struct BlobUploadResult: Codable {
@@ -867,6 +868,8 @@ struct StoryStatusResponse: Codable {
         let providerError: String?
         let isLive: Bool
         let pollAfterMs: Int?
+        let moderationStatus: String?
+        let moderationReason: String?
     }
 
     let ok: Bool
@@ -885,6 +888,9 @@ enum StoryReadinessPolicy {
             return .live
         }
         if story.processingStatus == "error" || story.providerStatus == "error" {
+            return .failed
+        }
+        if story.moderationStatus == "rejected" || story.moderationStatus == "flagged" {
             return .failed
         }
         return nil

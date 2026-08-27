@@ -6,6 +6,7 @@ import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
+import { forwardCloudflarePlaybackOptions } from "@/lib/story-media/access"
 import {
   getStoryMediaCacheControl,
   getStoryMediaCdnCacheControl,
@@ -16,6 +17,7 @@ import {
   parseCloudflareStreamMediaPathname,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-storage"
+import { rewriteHlsPlaylistForStoryMedia } from "@/lib/story-media/hls"
 
 export const runtime = "nodejs"
 
@@ -29,7 +31,8 @@ function encodeStoryMediaPathname(pathname: string) {
 function isSafeStoryBlobPathname(pathname: string) {
   return (
     (pathname.startsWith("stories/") ||
-      pathname.startsWith("media-originals/")) &&
+      pathname.startsWith("media-originals/") ||
+      pathname.startsWith("media/")) &&
     pathname
       .split("/")
       .every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
@@ -118,9 +121,15 @@ function rangeNotSatisfiable(size: number) {
   })
 }
 
+function blobToken(blobPathname: string) {
+  return blobPathname.startsWith("media/")
+    ? process.env.MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN
+    : process.env.BLOB_READ_WRITE_TOKEN
+}
+
 async function getBlobMetadata(blobPathname: string) {
   try {
-    return await head(blobPathname)
+    return await head(blobPathname, { token: blobToken(blobPathname) })
   } catch (error) {
     if (error instanceof Error && error.name === "BlobNotFoundError") {
       return null
@@ -232,10 +241,14 @@ export async function GET(
   }
 
   if (cloudflareStreamMedia) {
-    const remoteUrl =
+    const baseRemoteUrl =
       cloudflareStreamMedia.kind === "thumbnail"
         ? await createCloudflareStreamThumbnailUrl(cloudflareStreamMedia.uid)
         : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
+    const remoteUrl =
+      cloudflareStreamMedia.kind === "playback"
+        ? forwardCloudflarePlaybackOptions(baseRemoteUrl, request.url)
+        : baseRemoteUrl
     const response = NextResponse.redirect(remoteUrl, { status: 302 })
     const isPlaybackManifest = cloudflareStreamMedia.kind === "playback"
 
@@ -266,6 +279,7 @@ export async function GET(
   }
 
   const isVideo = blobMetadata.contentType.startsWith("video/")
+  const isHlsPlaylist = blobPathname.endsWith(".m3u8")
   const requestedRange = isVideo ? request.headers.get("range") : null
   const byteRange = parseByteRange(requestedRange, blobMetadata.size)
 
@@ -275,7 +289,8 @@ export async function GET(
 
   const result = await get(blobPathname, {
     access: "private",
-    ifNoneMatch: byteRange
+    token: blobToken(blobPathname),
+    ifNoneMatch: byteRange || isHlsPlaylist
       ? undefined
       : request.headers.get("if-none-match") ?? undefined,
     headers: byteRange
@@ -303,6 +318,28 @@ export async function GET(
   }
 
   headers.set("Content-Type", result.blob.contentType ?? blobMetadata.contentType)
+
+  if (isHlsPlaylist && result.statusCode === 200 && result.stream) {
+    const playlist = rewriteHlsPlaylistForStoryMedia(
+      await new Response(result.stream).text(),
+      blobPathname,
+    )
+    const body = Buffer.from(playlist, "utf8")
+    const isMaster = blobPathname.endsWith("/master.m3u8")
+    headers.delete("ETag")
+    headers.set(
+      "Cache-Control",
+      isMaster ? "private, max-age=0, must-revalidate" : "private, max-age=3600",
+    )
+    headers.set(
+      "CDN-Cache-Control",
+      isMaster
+        ? "public, max-age=0, s-maxage=10, stale-while-revalidate=30, must-revalidate"
+        : getStoryMediaCdnCacheControl(request, mediaPathname),
+    )
+    headers.set("Content-Length", body.byteLength.toString())
+    return new Response(body, { headers })
+  }
 
   if (isVideo) {
     headers.set("Accept-Ranges", "bytes")
