@@ -450,7 +450,7 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryImageTranscoderFitPreservesTheWholePhotoWithoutCropping() throws {
+    func testStoryImageTranscoderFitTopAlignsWithoutCropping() throws {
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let encoded = try XCTUnwrap(
             StoryImageTranscoder.storyCanvasJPEG(
@@ -475,13 +475,13 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertGreaterThan(topCenterPixel[0], 240)
-        XCTAssertGreaterThan(topCenterPixel[1], 240)
-        XCTAssertGreaterThan(topCenterPixel[2], 240)
+        XCTAssertGreaterThan(topCenterPixel[0], topCenterPixel[2])
         XCTAssertGreaterThan(bottomCenterPixel[0], 240)
         XCTAssertGreaterThan(bottomCenterPixel[1], 240)
         XCTAssertGreaterThan(bottomCenterPixel[2], 240)
-        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+        XCTAssertGreaterThan(centerPixel[0], 240)
+        XCTAssertGreaterThan(centerPixel[1], 240)
+        XCTAssertGreaterThan(centerPixel[2], 240)
     }
 
     func testStoryImageTranscoderFitCanvasLeavesLetterboxTransparent() throws {
@@ -502,13 +502,12 @@ final class MediaPerformanceTests: XCTestCase {
         let topPixel = try XCTUnwrap(
             rgbaPixel(in: image, x: image.width / 2, y: 4)
         )
-        let centerPixel = try XCTUnwrap(
-            rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
+        let bottomPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: image.height - 5)
         )
 
-        XCTAssertLessThan(topPixel[3], 10)
-        XCTAssertGreaterThan(centerPixel[3], 245)
-        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+        XCTAssertGreaterThan(topPixel[3], 245)
+        XCTAssertLessThan(bottomPixel[3], 10)
     }
 
     func testStoryCanvasLayoutCentersAcrossViewerChromeVariants() {
@@ -603,6 +602,53 @@ final class MediaPerformanceTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
+            .center
+        )
+    }
+
+    func testStoryCanvasPlacementUsesPortraitPlaybackForImagesEvenWithStaleOriginalDimensions() {
+        let playback = StoryMediaRendition(
+            mediaUrl: URL(string: "https://example.com/story.avif")!,
+            thumbnailUrl: nil,
+            placeholderUrl: nil,
+            storageProvider: "vercel-blob",
+            storageKey: "stories/playback.avif",
+            contentType: "image/avif",
+            byteSize: 100,
+            checksum: nil,
+            width: 1_080,
+            height: 1_920,
+            durationMs: nil,
+            processingStatus: "ready"
+        )
+        let staleCameraOriginal = StoryMediaRendition(
+            mediaUrl: URL(string: "https://example.com/original.jpg")!,
+            thumbnailUrl: nil,
+            placeholderUrl: nil,
+            storageProvider: "vercel-blob",
+            storageKey: "stories/original.jpg",
+            contentType: "image/jpeg",
+            byteSize: 1_000,
+            checksum: nil,
+            width: 4_032,
+            height: 2_268,
+            durationMs: nil,
+            processingStatus: "ready"
+        )
+        let renditions = StoryMediaRenditions(
+            playback: playback,
+            original: staleCameraOriginal
+        )
+
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forRenditions(
+                renditions,
+                prefersPlaybackDimensions: true
+            ),
+            .top
+        )
+        XCTAssertEqual(
+            StoryCanvasVerticalPlacement.forRenditions(renditions),
             .center
         )
     }
@@ -757,10 +803,10 @@ final class MediaPerformanceTests: XCTestCase {
         let darkTopPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 2))
         let darkBottomPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 637))
 
+        XCTAssertGreaterThan(lightTopPixel[2], lightTopPixel[0])
+        XCTAssertGreaterThan(darkTopPixel[2], darkTopPixel[0])
         for component in 0..<3 {
-            XCTAssertLessThan(lightTopPixel[component], 10)
             XCTAssertLessThan(lightBottomPixel[component], 10)
-            XCTAssertLessThan(darkTopPixel[component], 10)
             XCTAssertLessThan(darkBottomPixel[component], 10)
         }
     }

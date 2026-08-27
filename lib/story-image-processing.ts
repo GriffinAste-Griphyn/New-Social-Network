@@ -29,7 +29,7 @@ export type StoryImageContentMode = "fit" | "fill"
 export function storyImageResizeOptions(contentMode: StoryImageContentMode) {
   return {
     fit: contentMode === "fill" ? ("cover" as const) : ("contain" as const),
-    position: "centre" as const,
+    position: contentMode === "fill" ? ("centre" as const) : ("north" as const),
     kernel: sharp.kernel.lanczos3,
     background: { r: 0, g: 0, b: 0, alpha: contentMode === "fill" ? 1 : 0 },
   }

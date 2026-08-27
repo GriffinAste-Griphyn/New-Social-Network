@@ -524,9 +524,15 @@ enum StoryImageTranscoder {
             width: sourceSize.width * scale,
             height: sourceSize.height * scale
         )
+        // Core Graphics uses a bottom-left drawing origin here. Fit-mode story
+        // photos must therefore use the remaining vertical space as their Y
+        // origin so the encoded pixels begin at the visual top of the canvas.
+        let fittedOriginY = contentMode == .fit
+            ? targetSize.height - fittedSize.height
+            : (targetSize.height - fittedSize.height) / 2
         let fittedRect = CGRect(
             x: (targetSize.width - fittedSize.width) / 2,
-            y: (targetSize.height - fittedSize.height) / 2,
+            y: fittedOriginY,
             width: fittedSize.width,
             height: fittedSize.height
         )

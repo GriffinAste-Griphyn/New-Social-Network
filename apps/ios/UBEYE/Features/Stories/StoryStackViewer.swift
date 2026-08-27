@@ -1433,21 +1433,13 @@ struct StoryStackViewer: View {
     private func storyCanvasVerticalPlacement(
         for item: StoryStackItem
     ) -> StoryCanvasVerticalPlacement {
-        let sourceRendition: StoryMediaRendition?
-        if let original = item.renditions?.original {
-            sourceRendition = original
-        } else if item.assetKind == .video {
-            sourceRendition = item.renditions?.playback
-        } else {
-            // Legacy image derivatives can be a transparent 9:16 canvas around a
-            // horizontal source. Without original dimensions, centering is the only
-            // placement that cannot shift the visible image away from screen center.
-            sourceRendition = nil
-        }
-
-        return StoryCanvasVerticalPlacement.forMediaDimensions(
-            width: sourceRendition?.width,
-            height: sourceRendition?.height
+        // Playback derivatives are canonical portrait canvases. They are also
+        // the only dimensions available while an image source is pending or
+        // for legacy image records, so never silently revert those stories to
+        // a vertically centered screen frame.
+        StoryCanvasVerticalPlacement.forRenditions(
+            item.renditions,
+            prefersPlaybackDimensions: item.assetKind == .image
         )
     }
 

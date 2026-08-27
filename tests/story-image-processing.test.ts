@@ -28,10 +28,10 @@ describe("story image processing", () => {
     })
   })
 
-  it("uses transparent letterboxing for fit images", async () => {
+  it("top-aligns transparent letterboxing for fit images", async () => {
     expect(storyImageResizeOptions("fit")).toMatchObject({
       fit: "contain",
-      position: "centre",
+      position: "north",
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
 
@@ -55,8 +55,9 @@ describe("story image processing", () => {
       return Array.from(data.subarray(offset, offset + 4))
     }
 
-    expect(pixel(180, 20)).toEqual([0, 0, 0, 0])
-    expect(pixel(180, 320)).toEqual([220, 30, 30, 255])
+    expect(pixel(180, 20)).toEqual([220, 30, 30, 255])
+    expect(pixel(180, 320)).toEqual([0, 0, 0, 0])
+    expect(pixel(180, 620)).toEqual([0, 0, 0, 0])
   })
 
   it("builds playback canvases without a blurred or cover-cropped layer", async () => {
@@ -79,8 +80,9 @@ describe("story image processing", () => {
     }
 
     expect(info).toMatchObject({ width: 1080, height: 1920, channels: 4 })
-    expect(pixel(540, 20)).toEqual([0, 0, 0, 0])
-    expect(pixel(540, 960)).toEqual([220, 30, 30, 255])
+    expect(pixel(540, 20)).toEqual([220, 30, 30, 255])
+    expect(pixel(540, 960)).toEqual([0, 0, 0, 0])
+    expect(pixel(540, 1900)).toEqual([0, 0, 0, 0])
   })
 
   it("preserves transparent letterboxing through the production AVIF encoding", async () => {
@@ -105,8 +107,9 @@ describe("story image processing", () => {
       data[(y * info.width + x) * info.channels + 3]
 
     expect(info).toMatchObject({ width: 1080, height: 1920, channels: 4 })
-    expect(alpha(540, 20)).toBe(0)
-    expect(alpha(540, 960)).toBe(255)
+    expect(alpha(540, 20)).toBe(255)
+    expect(alpha(540, 960)).toBe(0)
+    expect(alpha(540, 1900)).toBe(0)
   })
 
   it("always cover-crops thumbnails even when story playback is fit", async () => {

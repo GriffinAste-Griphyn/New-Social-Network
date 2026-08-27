@@ -79,6 +79,19 @@ enum StoryCanvasVerticalPlacement: Equatable {
     case top
     case center
 
+    static func forRenditions(
+        _ renditions: StoryMediaRenditions?,
+        prefersPlaybackDimensions: Bool = false
+    ) -> Self {
+        let sourceRendition = prefersPlaybackDimensions
+            ? renditions?.playback
+            : renditions?.original ?? renditions?.playback
+        return forMediaDimensions(
+            width: sourceRendition?.width,
+            height: sourceRendition?.height
+        )
+    }
+
     static func forMediaDimensions(width: Int?, height: Int?) -> Self {
         guard let width,
               let height,
@@ -135,6 +148,7 @@ struct StoryCanvasForegroundImage: View {
         image
             .resizable()
             .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
