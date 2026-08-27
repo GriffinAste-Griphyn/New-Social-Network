@@ -16,26 +16,30 @@ const client = postgres(connectionString, {
   idle_timeout: 5,
 })
 
+function describeError(error) {
+  if (!(error instanceof Error)) {
+    return { message: String(error) }
+  }
+
+  return {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    detail: error.detail,
+    hint: error.hint,
+    schema: error.schema_name,
+    table: error.table_name,
+    column: error.column_name,
+    constraint: error.constraint_name,
+    cause: error.cause ? describeError(error.cause) : undefined,
+  }
+}
+
 try {
   await migrate(drizzle(client), { migrationsFolder: "./drizzle" })
   console.log("Database migrations applied successfully.")
 } catch (error) {
-  const details =
-    error instanceof Error
-      ? {
-          name: error.name,
-          message: error.message,
-          code: error.code,
-          detail: error.detail,
-          hint: error.hint,
-          schema: error.schema_name,
-          table: error.table_name,
-          column: error.column_name,
-          constraint: error.constraint_name,
-        }
-      : { message: String(error) }
-
-  console.error("Database migration failed:", details)
+  console.error("Database migration failed:", describeError(error))
   process.exitCode = 1
 } finally {
   await client.end({ timeout: 5 })
