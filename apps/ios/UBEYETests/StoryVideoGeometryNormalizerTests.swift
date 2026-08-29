@@ -267,7 +267,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(StoryVideoThumbnailGenerator.requestedTime, .zero)
     }
 
-    func testHighBitrateSourceUsesCompatibleAppleExport() async throws {
+    func testHighBitrateCompatibleSourceUsesLosslessRemux() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("high-bitrate-source-\(UUID().uuidString).mp4")
         try await writeVideoWithDistinctFirstFrame(
@@ -275,8 +275,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             firstFrame: (red: 60, green: 80, blue: 180),
             laterFrame: (red: 80, green: 100, blue: 200)
         )
-        // Keep the fixture above the 12 Mbps passthrough ceiling. Camera-originated
-        // 8–10 Mbps clips intentionally avoid a redundant client transcode.
+        // Inflate the fixture without changing its streams. Compatible sources
+        // should keep their original audio/video and only be remuxed for fast start.
         try appendFreeAtom(byteCount: 5 * 1024 * 1024, to: sourceURL)
         var preparedURL: URL?
         defer {
@@ -299,7 +299,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             at: prepared.url
         )
 
-        XCTAssertEqual(prepared.strategy, .normalized)
+        XCTAssertEqual(prepared.strategy, .streamRemux)
         XCTAssertLessThan(prepared.byteSize, try XCTUnwrap(sourceBytes).int64Value)
         XCTAssertTrue(hasFastStart)
     }

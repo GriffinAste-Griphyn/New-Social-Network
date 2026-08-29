@@ -37,8 +37,6 @@ export async function redisCommand<T>(command: Array<string | number>) {
     headers: {
       Authorization: `Bearer ${config.token}`,
       "Content-Type": "application/json",
-      "Keep-Alive": "timeout=30",
-      Connection: "keep-alive",
     },
     body: JSON.stringify(command),
     cache: "no-store",
@@ -69,8 +67,6 @@ export async function redisPipeline<T = unknown>(
     headers: {
       Authorization: `Bearer ${config.token}`,
       "Content-Type": "application/json",
-      "Keep-Alive": "timeout=30",
-      Connection: "keep-alive",
     },
     body: JSON.stringify(commands),
     cache: "no-store",
