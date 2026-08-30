@@ -4,6 +4,7 @@ import { createCloudflareStreamPlaybackUrl } from "@/lib/story-storage"
 import {
   checkCloudflareStreamPlayback,
   checkVercelHlsPlayback,
+  discoverCloudflareStreamPlaybackCanaries,
 } from "@/lib/video-health"
 
 vi.mock("@/lib/story-storage", () => ({
@@ -69,6 +70,64 @@ describe("video playback health probe", () => {
       ok: false,
       status: 200,
       error: "The playback canary did not return an HLS manifest.",
+    })
+  })
+
+  it("discovers ready playback canaries through the Stream account API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          success: true,
+          result: [
+            { uid: "0123456789abcdef0123456789abcdef" },
+            { uid: "not-a-uid" },
+          ],
+        }),
+      ),
+    )
+
+    const result = await discoverCloudflareStreamPlaybackCanaries({
+      accountId: "account-id",
+      apiToken: "api-token",
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      uids: ["0123456789abcdef0123456789abcdef"],
+    })
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/client/v4/accounts/account-id/stream",
+      }),
+      expect.objectContaining({
+        headers: { Authorization: "Bearer api-token" },
+      }),
+    )
+  })
+
+  it("reports Stream account API authorization failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          { success: false, errors: [{ message: "Authentication error" }] },
+          { status: 403 },
+        ),
+      ),
+    )
+
+    await expect(
+      discoverCloudflareStreamPlaybackCanaries({
+        accountId: "account-id",
+        apiToken: "bad-token",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+      uids: [],
+      error: "Cloudflare Stream API probe failed: Authentication error",
     })
   })
 

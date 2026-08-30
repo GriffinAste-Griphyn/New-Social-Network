@@ -7,6 +7,8 @@ import { mediaProcessingJobs, mediaRenditions } from "@/lib/db/schema"
 import {
   checkCloudflareStreamPlayback,
   checkVercelHlsPlayback,
+  discoverCloudflareStreamPlaybackCanaries,
+  type VideoPlaybackProbeResult,
 } from "@/lib/video-health"
 
 export const runtime = "nodejs"
@@ -99,13 +101,33 @@ export async function GET() {
       : [null, null, null, null]
   const playbackCanaryRequired = process.env.NODE_ENV === "production"
   const latestHlsMasterUrl = latestHlsMasterRows?.[0]?.mediaUrl ?? null
-  const playbackProbe = customPipeline
+  const cloudflareCanaryDiscovery =
+    !customPipeline &&
+    process.env.CLOUDFLARE_STREAM_ACCOUNT_ID &&
+    process.env.CLOUDFLARE_STREAM_API_TOKEN
+      ? await discoverCloudflareStreamPlaybackCanaries({
+          accountId: process.env.CLOUDFLARE_STREAM_ACCOUNT_ID,
+          apiToken: process.env.CLOUDFLARE_STREAM_API_TOKEN,
+        })
+      : null
+  let playbackProbe: VideoPlaybackProbeResult | null = customPipeline
     ? latestHlsMasterUrl
       ? await checkVercelHlsPlayback(latestHlsMasterUrl)
       : null
-    : playbackCanaryUid
-      ? await checkCloudflareStreamPlayback(playbackCanaryUid)
-      : null
+    : null
+  if (!customPipeline) {
+    const candidateUids = Array.from(
+      new Set(
+        [playbackCanaryUid, ...(cloudflareCanaryDiscovery?.uids ?? [])].filter(
+          (uid): uid is string => Boolean(uid),
+        ),
+      ),
+    ).slice(0, 5)
+    for (const candidateUid of candidateUids) {
+      playbackProbe = await checkCloudflareStreamPlayback(candidateUid)
+      if (playbackProbe.ok) break
+    }
+  }
   const checks = {
     storyVideoProcessor: ["cloudflare-stream", "vercel-hls"].includes(
       processor ?? "",
@@ -128,6 +150,8 @@ export async function GET() {
       playbackProbe?.ok === true,
     cloudflareAccountId: isConfigured(process.env.CLOUDFLARE_STREAM_ACCOUNT_ID),
     cloudflareApiToken: isConfigured(process.env.CLOUDFLARE_STREAM_API_TOKEN),
+    cloudflareApiProbe:
+      customPipeline || cloudflareCanaryDiscovery?.ok === true,
     cloudflareCustomerSubdomain: isConfigured(
       process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN,
     ),
@@ -141,7 +165,10 @@ export async function GET() {
       isConfigured(process.env.CLOUDFLARE_STREAM_SIGNING_KEY_JWK) ||
       isConfigured(process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM),
     cloudflarePlaybackCanary:
-      !playbackCanaryRequired || Boolean(playbackCanaryUid),
+      !playbackCanaryRequired ||
+      Boolean(
+        playbackCanaryUid || (cloudflareCanaryDiscovery?.uids.length ?? 0) > 0,
+      ),
     cloudflarePlaybackProbe:
       !playbackCanaryRequired && !playbackCanaryUid
         ? true
@@ -158,6 +185,7 @@ export async function GET() {
         checks.vercelHlsPlaybackProbe
       : checks.cloudflareAccountId &&
         checks.cloudflareApiToken &&
+        checks.cloudflareApiProbe &&
         checks.cloudflareCustomerSubdomain &&
         (process.env.NODE_ENV !== "production" ||
           (checks.cloudflareWebhookSecret &&
@@ -174,6 +202,14 @@ export async function GET() {
       checks,
       processingJobs,
       playbackProbe,
+      cloudflareCanaryDiscovery: cloudflareCanaryDiscovery
+        ? {
+            ok: cloudflareCanaryDiscovery.ok,
+            status: cloudflareCanaryDiscovery.status,
+            candidateCount: cloudflareCanaryDiscovery.uids.length,
+            error: cloudflareCanaryDiscovery.error,
+          }
+        : null,
       optional: {
         customPipeline:
           "Private originals and public immutable HLS delivery use separate Vercel Blob stores.",

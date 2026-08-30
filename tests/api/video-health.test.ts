@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db"
 import {
   checkCloudflareStreamPlayback,
   checkVercelHlsPlayback,
+  discoverCloudflareStreamPlaybackCanaries,
 } from "@/lib/video-health"
 
 vi.mock("@vercel/blob", () => ({ del: vi.fn(), put: vi.fn() }))
@@ -14,6 +15,7 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))
 vi.mock("@/lib/video-health", () => ({
   checkCloudflareStreamPlayback: vi.fn(),
   checkVercelHlsPlayback: vi.fn(),
+  discoverCloudflareStreamPlaybackCanaries: vi.fn(),
 }))
 
 const originalEnv = { ...process.env }
@@ -48,6 +50,11 @@ describe("video health API", () => {
       status: 200,
       latencyMs: 42,
       checkedAt: "2026-08-24T12:00:00.000Z",
+    })
+    vi.mocked(discoverCloudflareStreamPlaybackCanaries).mockResolvedValue({
+      ok: true,
+      status: 200,
+      uids: [],
     })
     vi.mocked(checkVercelHlsPlayback).mockResolvedValue({
       ok: true,
@@ -102,6 +109,7 @@ describe("video health API", () => {
         storyVideoProcessor: true,
         cloudflareAccountId: true,
         cloudflareApiToken: true,
+        cloudflareApiProbe: true,
         cloudflareCustomerSubdomain: true,
       },
     })
@@ -259,5 +267,65 @@ describe("video health API", () => {
         status: 403,
       },
     })
+  })
+
+  it("falls back to a ready Stream asset when the configured canary is gone", async () => {
+    Object.defineProperty(process.env, "NODE_ENV", {
+      value: "production",
+      configurable: true,
+    })
+    process.env.STORY_VIDEO_PROCESSOR = "cloudflare-stream"
+    process.env.CLOUDFLARE_STREAM_ACCOUNT_ID = "account"
+    process.env.CLOUDFLARE_STREAM_API_TOKEN = "token"
+    process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN = "stream.example.com"
+    process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET = "webhook"
+    process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID = "key"
+    process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM = "pem"
+    process.env.CLOUDFLARE_STREAM_HEALTHCHECK_UID =
+      "0123456789abcdef0123456789abcdef"
+    vi.mocked(discoverCloudflareStreamPlaybackCanaries).mockResolvedValue({
+      ok: true,
+      status: 200,
+      uids: ["fedcba9876543210fedcba9876543210"],
+    })
+    vi.mocked(checkCloudflareStreamPlayback)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        latencyMs: 40,
+        checkedAt: "2026-08-30T07:00:00.000Z",
+        error: "The playback canary returned HTTP 404.",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        latencyMs: 45,
+        checkedAt: "2026-08-30T07:00:01.000Z",
+      })
+
+    const { GET } = await import("@/app/api/health/video/route")
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      checks: {
+        cloudflareApiProbe: true,
+        cloudflarePlaybackProbe: true,
+      },
+      cloudflareCanaryDiscovery: {
+        ok: true,
+        candidateCount: 1,
+      },
+      playbackProbe: { ok: true, status: 200 },
+    })
+    expect(checkCloudflareStreamPlayback).toHaveBeenNthCalledWith(
+      1,
+      "0123456789abcdef0123456789abcdef",
+    )
+    expect(checkCloudflareStreamPlayback).toHaveBeenNthCalledWith(
+      2,
+      "fedcba9876543210fedcba9876543210",
+    )
   })
 })

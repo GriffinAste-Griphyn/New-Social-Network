@@ -14,6 +14,13 @@ export type VideoPlaybackProbeResult = {
   }
 }
 
+export type CloudflareStreamCanaryDiscoveryResult = {
+  ok: boolean
+  uids: string[]
+  status: number | null
+  error?: string
+}
+
 const probeTimeoutMs = 5_000
 const probeCacheTtlMs = 60_000
 
@@ -32,6 +39,65 @@ const cachedVercelHlsProbes = new Map<
 
 function validCloudflareStreamUid(uid: string) {
   return /^[a-f0-9]{32}$/i.test(uid)
+}
+
+export async function discoverCloudflareStreamPlaybackCanaries(input: {
+  accountId: string
+  apiToken: string
+}): Promise<CloudflareStreamCanaryDiscoveryResult> {
+  let status: number | null = null
+
+  try {
+    const url = new URL(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(input.accountId)}/stream`,
+    )
+    url.searchParams.set("status", "ready")
+    url.searchParams.set("limit", "10")
+    url.searchParams.set("asc", "false")
+
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${input.apiToken}` },
+      signal: AbortSignal.timeout(probeTimeoutMs),
+    })
+    status = response.status
+    const payload = (await response.json().catch(() => null)) as {
+      success?: boolean
+      result?: Array<{ uid?: string }>
+      errors?: Array<{ message?: string }>
+    } | null
+
+    if (!response.ok || payload?.success !== true) {
+      const apiMessage = payload?.errors?.find((error) => error.message)?.message
+      throw new Error(
+        apiMessage
+          ? `Cloudflare Stream API probe failed: ${apiMessage}`
+          : `Cloudflare Stream API probe returned HTTP ${response.status}.`,
+      )
+    }
+
+    return {
+      ok: true,
+      status,
+      uids: Array.from(
+        new Set(
+          (payload.result ?? [])
+            .map((video) => video.uid?.trim() ?? "")
+            .filter(validCloudflareStreamUid),
+        ),
+      ),
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status,
+      uids: [],
+      error:
+        error instanceof Error
+          ? error.message
+          : "Cloudflare Stream API probe failed.",
+    }
+  }
 }
 
 async function runPlaybackProbe(uid: string): Promise<VideoPlaybackProbeResult> {
