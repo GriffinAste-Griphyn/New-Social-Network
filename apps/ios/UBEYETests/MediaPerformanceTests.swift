@@ -293,13 +293,6 @@ final class MediaPerformanceTests: XCTestCase {
 
         XCTAssertEqual(size.width, 800)
         XCTAssertEqual(size.height, 1_200)
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: size.width,
-                height: size.height
-            ),
-            .top
-        )
     }
 
     func testParsesEventNameAndMetadata() {
@@ -450,7 +443,7 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryImageTranscoderFitTopAlignsWithoutCropping() throws {
+    func testStoryImageTranscoderFitCentersWithoutCropping() throws {
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let encoded = try XCTUnwrap(
             StoryImageTranscoder.storyCanvasJPEG(
@@ -475,13 +468,13 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertGreaterThan(topCenterPixel[0], topCenterPixel[2])
+        XCTAssertGreaterThan(topCenterPixel[0], 240)
+        XCTAssertGreaterThan(topCenterPixel[1], 240)
+        XCTAssertGreaterThan(topCenterPixel[2], 240)
         XCTAssertGreaterThan(bottomCenterPixel[0], 240)
         XCTAssertGreaterThan(bottomCenterPixel[1], 240)
         XCTAssertGreaterThan(bottomCenterPixel[2], 240)
-        XCTAssertGreaterThan(centerPixel[0], 240)
-        XCTAssertGreaterThan(centerPixel[1], 240)
-        XCTAssertGreaterThan(centerPixel[2], 240)
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
     func testStoryImageTranscoderFitCanvasLeavesLetterboxTransparent() throws {
@@ -502,12 +495,13 @@ final class MediaPerformanceTests: XCTestCase {
         let topPixel = try XCTUnwrap(
             rgbaPixel(in: image, x: image.width / 2, y: 4)
         )
-        let bottomPixel = try XCTUnwrap(
-            rgbaPixel(in: image, x: image.width / 2, y: image.height - 5)
+        let centerPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertGreaterThan(topPixel[3], 245)
-        XCTAssertLessThan(bottomPixel[3], 10)
+        XCTAssertLessThan(topPixel[3], 10)
+        XCTAssertGreaterThan(centerPixel[3], 245)
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
     func testStoryCanvasLayoutCentersAcrossViewerChromeVariants() {
@@ -532,7 +526,7 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryCanvasLayoutFillsFromAbsoluteTopToBottomChrome() {
+    func testStoryCanvasLayoutFillsPortraitMediaFromAbsoluteTopToBottomChrome() {
         let screenSize = CGSize(width: 393, height: 852)
         let reservedBottomHeight = CGFloat(90)
         let layout = StoryCanvasLayout(
@@ -563,53 +557,27 @@ final class MediaPerformanceTests: XCTestCase {
 
     func testStoryCanvasPlacementUsesSourceOrientation() {
         XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: 1_080,
-                height: 1_920
-            ),
+            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_080, height: 1_920),
             .top
         )
         XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: 1_080,
-                height: 2_340
-            ),
-            .top
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: 1_080,
-                height: 1_350
-            ),
-            .top
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: 1_920,
-                height: 1_080
-            ),
+            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_920, height: 1_080),
             .center
         )
         XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: 1_080,
-                height: 1_080
-            ),
+            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_080, height: 1_080),
             .center
         )
         XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(
-                width: nil,
-                height: nil
-            ),
+            StoryCanvasVerticalPlacement.forMediaDimensions(width: nil, height: nil),
             .center
         )
     }
 
-    func testStoryCanvasPlacementUsesPortraitPlaybackForImagesEvenWithStaleOriginalDimensions() {
+    func testStoryCanvasPlacementKeepsLandscapeSourcesCenteredInsideCanonicalImageCanvas() {
         let playback = StoryMediaRendition(
             mediaUrl: URL(string: "https://example.com/story.avif")!,
-            thumbnailUrl: nil,
+            thumbnailUrl: URL(string: "https://example.com/story-thumb.webp")!,
             placeholderUrl: nil,
             storageProvider: "vercel-blob",
             storageKey: "stories/playback.avif",
@@ -621,7 +589,7 @@ final class MediaPerformanceTests: XCTestCase {
             durationMs: nil,
             processingStatus: "ready"
         )
-        let staleCameraOriginal = StoryMediaRendition(
+        let landscapeOriginal = StoryMediaRendition(
             mediaUrl: URL(string: "https://example.com/original.jpg")!,
             thumbnailUrl: nil,
             placeholderUrl: nil,
@@ -637,7 +605,7 @@ final class MediaPerformanceTests: XCTestCase {
         )
         let renditions = StoryMediaRenditions(
             playback: playback,
-            original: staleCameraOriginal
+            original: landscapeOriginal
         )
 
         XCTAssertEqual(
@@ -651,9 +619,6 @@ final class MediaPerformanceTests: XCTestCase {
             StoryCanvasVerticalPlacement.forRenditions(renditions),
             .center
         )
-    }
-
-    func testStoryCanvasPlacementKeepsCanonicalImageFrameWhileRenditionMetadataLoads() {
         XCTAssertEqual(
             StoryCanvasVerticalPlacement.forRenditions(
                 nil,
@@ -737,7 +702,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testStoryImageDerivativeBuilderProducesCanonicalBoundedVariants() async throws {
-        XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fill)
+        XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fit)
 
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let fileURL = FileManager.default.temporaryDirectory
@@ -792,6 +757,76 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
+    func testStoryImageVerticalAlignmentCorrectsOnlyAsymmetricTransparentPadding() {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: 360, height: 640),
+            format: format
+        )
+        let topAligned = renderer.image { context in
+            UIColor.red.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 360, height: 270))
+        }
+        let centered = renderer.image { context in
+            UIColor.red.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 185, width: 360, height: 270))
+        }
+
+        XCTAssertEqual(
+            StoryImageVerticalAlignmentPolicy.correctionFraction(for: topAligned),
+            185 / 640,
+            accuracy: 0.002
+        )
+        XCTAssertEqual(
+            StoryImageVerticalAlignmentPolicy.correctionFraction(for: centered),
+            0,
+            accuracy: 0.002
+        )
+    }
+
+    @MainActor
+    func testProgressiveImageLoaderClearsPresentationStateBetweenRequests() async throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(
+            size: CGSize(width: 36, height: 64),
+            format: format
+        ).image { context in
+            UIColor.red.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 36, height: 27))
+        }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("progressive-loader-\(UUID().uuidString).png")
+        try XCTUnwrap(image.pngData()).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let loader = ProgressiveImageLoader()
+        await loader.load(
+            placeholderURL: nil,
+            thumbnailURL: nil,
+            fullURL: fileURL,
+            correctsAsymmetricTransparentPadding: true
+        )
+
+        XCTAssertNotNil(loader.image)
+        XCTAssertEqual(loader.stage, .full)
+        XCTAssertGreaterThan(loader.verticalContentOffsetFraction, 0)
+
+        await loader.load(
+            placeholderURL: nil,
+            thumbnailURL: nil,
+            fullURL: nil
+        )
+
+        XCTAssertNil(loader.image)
+        XCTAssertEqual(loader.stage, .none)
+        XCTAssertEqual(loader.verticalContentOffsetFraction, 0)
+    }
+
+    @MainActor
     func testStoryCanvasImageUsesBlackLetterboxingInEveryColorScheme() throws {
         let sourceImage = makeHorizontalEdgeMarkerImage(width: 400, height: 400)
         let lightRenderer = ImageRenderer(
@@ -814,32 +849,116 @@ final class MediaPerformanceTests: XCTestCase {
         let darkTopPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 2))
         let darkBottomPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 637))
 
-        XCTAssertGreaterThan(lightTopPixel[2], lightTopPixel[0])
-        XCTAssertGreaterThan(darkTopPixel[2], darkTopPixel[0])
         for component in 0..<3 {
+            XCTAssertLessThan(lightTopPixel[component], 10)
             XCTAssertLessThan(lightBottomPixel[component], 10)
+            XCTAssertLessThan(darkTopPixel[component], 10)
             XCTAssertLessThan(darkBottomPixel[component], 10)
         }
     }
 
     @MainActor
-    func testStoryCardThumbnailImageFillsCardWithoutLetterboxing() throws {
+    func testStoryCardThumbnailImageFitsWithoutCropping() throws {
         let sourceImage = UIImage(data: makeTestImageData(width: 400, height: 400))!
         let renderer = ImageRenderer(
             content: StoryCardThumbnailImage(image: Image(uiImage: sourceImage))
-                .frame(width: 132, height: 192)
+                .frame(
+                    width: HomeStoryCardMetrics.width,
+                    height: HomeStoryCardMetrics.height
+                )
                 .clipped()
         )
         renderer.scale = 1
 
         let renderedImage = try XCTUnwrap(renderer.uiImage?.cgImage)
-        let topPixel = try XCTUnwrap(rgbaPixel(in: renderedImage, x: 66, y: 2))
-        let bottomPixel = try XCTUnwrap(rgbaPixel(in: renderedImage, x: 66, y: 189))
+        let centerX = renderedImage.width / 2
+        let topPixel = try XCTUnwrap(rgbaPixel(in: renderedImage, x: centerX, y: 2))
+        let centerPixel = try XCTUnwrap(
+            rgbaPixel(in: renderedImage, x: centerX, y: renderedImage.height / 2)
+        )
+        let bottomPixel = try XCTUnwrap(
+            rgbaPixel(in: renderedImage, x: centerX, y: renderedImage.height - 3)
+        )
 
-        XCTAssertGreaterThan(topPixel[2], topPixel[0])
-        XCTAssertGreaterThan(topPixel[2], topPixel[1])
-        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[0])
-        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[1])
+        for component in 0..<3 {
+            XCTAssertLessThan(topPixel[component], 10)
+            XCTAssertLessThan(bottomPixel[component], 10)
+        }
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[1])
+    }
+
+    func testHomeStoryCardUsesTheStoryCanvasAspectRatio() {
+        XCTAssertEqual(
+            HomeStoryCardMetrics.width / HomeStoryCardMetrics.height,
+            StoryMediaContract.aspectRatio,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testStoryCardThumbnailSelectionUsesVersionedFitPreviewForImages() {
+        let playbackURL = URL(string: "https://cdn.example.com/story.avif?token=playback")!
+        let thumbnailURL = URL(string: "https://cdn.example.com/story-fit-thumb.webp?token=thumb")!
+        let originalURL = URL(string: "https://cdn.example.com/original.jpg?token=original")!
+
+        func imageCard(thumbnail: URL) -> StoryCard {
+            StoryCard(
+                id: UUID().uuidString,
+                creator: "Creator",
+                handle: "creator",
+                assetKind: .image,
+                mediaUrl: playbackURL,
+                thumbnailUrl: thumbnail,
+                placeholderUrl: nil,
+                renditions: StoryMediaRenditions(
+                    playback: StoryMediaRendition(
+                        mediaUrl: playbackURL,
+                        thumbnailUrl: thumbnail,
+                        placeholderUrl: nil,
+                        storageProvider: "vercel-blob",
+                        storageKey: "stories/playback.avif",
+                        contentType: "image/avif",
+                        byteSize: 100,
+                        checksum: nil,
+                        width: 1_080,
+                        height: 1_920,
+                        durationMs: nil,
+                        processingStatus: "ready"
+                    ),
+                    original: StoryMediaRendition(
+                        mediaUrl: originalURL,
+                        thumbnailUrl: nil,
+                        placeholderUrl: nil,
+                        storageProvider: "vercel-blob",
+                        storageKey: "stories/original.jpg",
+                        contentType: "image/jpeg",
+                        byteSize: 1_000,
+                        checksum: nil,
+                        width: 1_600,
+                        height: 1_200,
+                        durationMs: nil,
+                        processingStatus: "ready"
+                    )
+                ),
+                title: "",
+                processingStatus: "ready",
+                textOverlays: nil,
+                durationSeconds: nil,
+                lastUploadedAt: nil,
+                progressPercent: nil,
+                timelineSegmentCount: nil
+            )
+        }
+
+        XCTAssertEqual(imageCard(thumbnail: thumbnailURL).cardThumbnailUrl, thumbnailURL)
+
+        let legacyPlaybackThumbnail = URL(
+            string: "https://cdn.example.com/story-thumb.webp?token=legacy-thumbnail-signature"
+        )!
+        XCTAssertEqual(
+            imageCard(thumbnail: legacyPlaybackThumbnail).cardThumbnailUrl,
+            legacyPlaybackThumbnail
+        )
     }
 
     @MainActor
@@ -1588,8 +1707,29 @@ final class MediaPerformanceTests: XCTestCase {
 
     func testVideoStartupFastPathRequiresMatchingCompletedPreroll() {
         XCTAssertEqual(VideoStartupPolicy.freshForwardBufferDuration, 8)
-        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: false), 5)
-        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: true), 8)
+        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: false), 8)
+        XCTAssertEqual(VideoStartupPolicy.firstFrameTimeout(isLimitedNetwork: true), 12)
+        XCTAssertEqual(
+            VideoStartupPolicy.readinessTimeoutAction(
+                playerStatus: .unknown,
+                itemStatus: .unknown
+            ),
+            .continueBufferedPlayback
+        )
+        XCTAssertEqual(
+            VideoStartupPolicy.readinessTimeoutAction(
+                playerStatus: .readyToPlay,
+                itemStatus: .unknown
+            ),
+            .continueBufferedPlayback
+        )
+        XCTAssertEqual(
+            VideoStartupPolicy.readinessTimeoutAction(
+                playerStatus: .readyToPlay,
+                itemStatus: .failed
+            ),
+            .fail
+        )
         XCTAssertTrue(
             VideoStartupPolicy.canReuseCompletedPreroll(
                 wasPrerolled: true,

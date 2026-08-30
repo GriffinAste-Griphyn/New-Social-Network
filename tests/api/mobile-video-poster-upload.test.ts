@@ -62,15 +62,22 @@ vi.mock("@/lib/story-storage", () => ({
 const originalEnv = { ...process.env }
 const uid = "f".repeat(32)
 
-function uploadRequest() {
+function uploadRequest(input?: { build?: number; pipeline?: string; byteSize?: number }) {
+  const headers = new Headers({ "content-type": "application/json" })
+  if (input?.build !== undefined) {
+    headers.set("x-ubeye-app-build", String(input.build))
+  }
+  if (input?.pipeline) {
+    headers.set("x-ubeye-media-pipeline", input.pipeline)
+  }
   return new Request("https://app.example.com/api/mobile/stories/video-upload", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       clientUploadId: "d8f95cd5-a079-47ef-b46b-4122f40ce766",
       fileName: "story.mp4",
       contentType: "video/mp4",
-      byteSize: 4_096,
+      byteSize: input?.byteSize ?? 4_096,
       maxDurationSeconds: 120,
     }),
   })
@@ -108,7 +115,7 @@ describe("mobile video poster upload preparation", () => {
 
   it("returns a private retry-safe poster target with every TUS session", async () => {
     const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
-    const response = await POST(uploadRequest())
+    const response = await POST(uploadRequest({ build: 389, pipeline: "hls-v4" }))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -131,7 +138,7 @@ describe("mobile video poster upload preparation", () => {
   it("fails before allocating Cloudflare media when private poster storage is unavailable", async () => {
     delete process.env.BLOB_READ_WRITE_TOKEN
     const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
-    const response = await POST(uploadRequest())
+    const response = await POST(uploadRequest({ build: 389, pipeline: "hls-v4" }))
 
     expect(response.status).toBe(503)
     expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
@@ -148,7 +155,7 @@ describe("mobile video poster upload preparation", () => {
     }) as never)
 
     const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
-    const response = await POST(uploadRequest())
+    const response = await POST(uploadRequest({ build: 389, pipeline: "hls-v4" }))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -166,5 +173,43 @@ describe("mobile video poster upload preparation", () => {
       }),
     )
     expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+  })
+
+  it("keeps a bounded Cloudflare fallback for installed clients without the Vercel protocol", async () => {
+    process.env.STORY_VIDEO_PROCESSOR = "vercel-hls"
+    process.env.MEDIA_PIPELINE_ENABLED = "true"
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(uploadRequest({ build: 352, pipeline: "hls-v1" }))
+
+    expect(response.status).toBe(200)
+    expect(createCloudflareStreamTusUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ allowLegacyClientFallback: true }),
+    )
+    expect(createMediaUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({ storageProvider: "cloudflare-stream" }),
+    )
+  })
+
+  it("preserves oversized originals by falling back to Cloudflare processing", async () => {
+    process.env.STORY_VIDEO_PROCESSOR = "vercel-hls"
+    process.env.MEDIA_PIPELINE_ENABLED = "true"
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(
+      uploadRequest({
+        build: 389,
+        pipeline: "hls-v4",
+        byteSize: 301 * 1024 * 1024,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createCloudflareStreamTusUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ allowLegacyClientFallback: true }),
+    )
+    expect(createMediaUploadSession).toHaveBeenCalledWith(
+      expect.objectContaining({ storageProvider: "cloudflare-stream" }),
+    )
   })
 })

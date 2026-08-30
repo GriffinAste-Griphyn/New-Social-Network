@@ -417,6 +417,13 @@ export function directStoryImageSourcePathname(
 }
 
 export function directStoryImageThumbnailPathname(basePathname: string) {
+  // Keep the presentation contract in the object key. Older `-thumb.webp`
+  // objects may have been cover-cropped by clients, while this generation is
+  // guaranteed to preserve the complete 9:16 playback canvas.
+  return `${basePathname}-fit-thumb.webp`
+}
+
+export function legacyDirectStoryImageThumbnailPathname(basePathname: string) {
   return `${basePathname}-thumb.webp`
 }
 
@@ -638,6 +645,7 @@ export async function createDirectBlobStoryImageAsset(input: {
   displayDerivative: DirectStoryImageClientDerivativeInput
   thumbnailDerivative: DirectStoryImageClientDerivativeInput
   thumbHash: string
+  thumbnailVariant?: "fit" | "legacy-cover"
 }): Promise<StoredStoryAsset> {
   const expectedPrefix = `stories/web-direct/${input.ownerUserId.replace(
     /[^a-zA-Z0-9_-]/g,
@@ -664,7 +672,10 @@ export async function createDirectBlobStoryImageAsset(input: {
     height: directStoryImageDisplayHeight,
   })
   const clientThumbnail = await verifyDirectStoryImageClientDerivative({
-    expectedPathname: directStoryImageThumbnailPathname(input.basePathname),
+    expectedPathname:
+      input.thumbnailVariant === "legacy-cover"
+        ? legacyDirectStoryImageThumbnailPathname(input.basePathname)
+        : directStoryImageThumbnailPathname(input.basePathname),
     derivative: input.thumbnailDerivative,
     maxByteSize: maxStoryImageThumbnailDerivativeBytes,
     contentTypes: ["image/webp"],
@@ -863,8 +874,6 @@ export async function createCloudflareStreamThumbnailUrl(uid: string) {
 }
 
 export async function setCloudflareStreamThumbnailAtDefaultTime(uid: string) {
-  assertCloudflareStreamUploadsEnabled()
-
   if (!isCloudflareStreamUid(uid)) {
     throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
   }
@@ -896,8 +905,6 @@ export async function setCloudflareStreamThumbnailAtDefaultTime(uid: string) {
 }
 
 export async function getCloudflareStreamVideoDetails(uid: string) {
-  assertCloudflareStreamUploadsEnabled()
-
   if (!isCloudflareStreamUid(uid)) {
     throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
   }
@@ -1029,8 +1036,11 @@ export async function createCloudflareStreamTusUpload(input: {
   fileName: string
   uploadLengthBytes: number
   maxDurationSeconds: number
+  allowLegacyClientFallback?: boolean
 }): Promise<CloudflareTusUpload> {
-  assertCloudflareStreamUploadsEnabled()
+  if (!input.allowLegacyClientFallback) {
+    assertCloudflareStreamUploadsEnabled()
+  }
 
   if (
     !Number.isSafeInteger(input.uploadLengthBytes) ||
@@ -1087,8 +1097,6 @@ export function createCloudflareStreamStoredVideoAsset(input: {
   processingStatus?: StoryAssetProcessingStatus
   providerPctComplete?: number | null
 }): StoredStoryAsset {
-  assertCloudflareStreamUploadsEnabled()
-
   if (!isCloudflareStreamUid(input.uid)) {
     throw new StoryUploadError("Cloudflare Stream returned an invalid video id.")
   }
@@ -1177,7 +1185,9 @@ async function removeDirectStoryImageDerivatives(mediaUrl: string) {
     return
   }
 
-  const derivativeMatch = pathname.match(/^(.*)-(?:display|thumb)\.(?:avif|webp)$/i)
+  const derivativeMatch = pathname.match(
+    /^(.*)-(?:display\.(?:avif|webp)|(?:fit-)?thumb\.webp)$/i,
+  )
   const basePathname = derivativeMatch?.[1]
   if (!basePathname) {
     return
@@ -1187,6 +1197,7 @@ async function removeDirectStoryImageDerivatives(mediaUrl: string) {
     del(directStoryImageDisplayPathname(basePathname, "image/avif")),
     del(directStoryImageDisplayPathname(basePathname, "image/webp")),
     del(directStoryImageThumbnailPathname(basePathname)),
+    del(legacyDirectStoryImageThumbnailPathname(basePathname)),
   ])
 }
 

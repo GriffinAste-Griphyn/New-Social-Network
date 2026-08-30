@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -7,13 +7,17 @@ import { promisify } from "node:util"
 import { afterEach, describe, expect, it } from "vitest"
 
 import {
+  mediaAudioProfile,
   mediaRenditionProfiles,
   selectRenditionProfiles,
   validateSourceMetadata,
 } from "@/lib/media-pipeline/contracts"
 import {
+  audioRenditionFfmpegArguments,
+  encodeMediaAudioRenditionFile,
   encodeMediaRendition,
   generateMediaPoster,
+  inspectAudioMediaFile,
   inspectMediaFile,
   inspectMediaStream,
   mediaBinaryPaths,
@@ -99,6 +103,33 @@ describe("custom media pipeline contracts", () => {
     expect(master).toContain("FRAME-RATE=29.970")
   })
 
+  it("uses one high-quality audio group across every adaptive video variant", () => {
+    const profile = mediaRenditionProfiles[0]
+    const master = buildHlsMasterPlaylist(
+      [
+        {
+          profile,
+          playlistUrl: "360p/index.m3u8",
+          codec: "avc1.640029",
+          byteSize: 750_000,
+          durationMs: 10_000,
+          frameRate: 30,
+        },
+      ],
+      {
+        playlistUrl: "audio/index.m3u8",
+        codec: "mp4a.40.2",
+        bitrate: mediaAudioProfile.bitrate,
+      },
+    )
+
+    expect(master).toContain('TYPE=AUDIO,GROUP-ID="audio"')
+    expect(master).toContain('URI="audio/index.m3u8"')
+    expect(master).toContain('CODECS="avc1.640029,mp4a.40.2"')
+    expect(master).toContain('AUDIO="audio"')
+    expect(master).toContain("AVERAGE-BANDWIDTH=760000")
+  })
+
   it("does not advertise an audio bitrate for silent sources", () => {
     const profile = mediaRenditionProfiles[0]
     const master = buildHlsMasterPlaylist([
@@ -126,11 +157,23 @@ describe("custom media pipeline contracts", () => {
     expect(args).toContain("independent_segments+temp_file")
     expect(args).toContain("expr:gte(t,n_forced*2)")
     expect(args).toContain("yuv420p")
+    expect(args).toContain("-an")
+    expect(args).not.toContain("loudnorm=I=-16:TP=-1.5:LRA=11")
     const filter = args[args.indexOf("-filter_complex") + 1]
     expect(filter).toContain("force_original_aspect_ratio=decrease")
     expect(filter).toContain("pad=360:640:(ow-iw)/2:(oh-ih)/2:color=black")
     expect(filter).not.toContain("force_original_aspect_ratio=increase")
     expect(filter).not.toContain("boxblur")
+
+    const audioArgs = audioRenditionFfmpegArguments({
+      inputPath: "/tmp/source.mp4",
+      outputDirectory: "/tmp/audio",
+      audioChannels: 2,
+    })
+    expect(audioArgs[audioArgs.indexOf("-b:a") + 1]).toBe("160000")
+    expect(audioArgs[audioArgs.indexOf("-ar") + 1]).toBe("48000")
+    expect(audioArgs[audioArgs.indexOf("-ac") + 1]).toBe("2")
+    expect(audioArgs).not.toContain("-af")
   })
 })
 
@@ -140,6 +183,7 @@ describe("bundled FFmpeg smoke test", () => {
     temporaryDirectories.push(directory)
     const sourcePath = path.join(directory, "source.mp4")
     const outputDirectory = path.join(directory, "hls")
+    const audioOutputDirectory = path.join(directory, "audio")
     const posterPath = path.join(directory, "poster.jpg")
     const { ffmpeg } = mediaBinaryPaths()
 
@@ -167,7 +211,10 @@ describe("bundled FFmpeg smoke test", () => {
       sourcePath,
     ])
     await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(outputDirectory, { recursive: true }),
+      Promise.all([
+        mkdir(outputDirectory, { recursive: true }),
+        mkdir(audioOutputDirectory, { recursive: true }),
+      ]),
     )
     const sourceBuffer = await readFile(sourcePath)
     const metadata = await inspectMediaStream(
@@ -177,6 +224,11 @@ describe("bundled FFmpeg smoke test", () => {
       source: new Blob([sourceBuffer]).stream() as ReadableStream<Uint8Array>,
       profile: mediaRenditionProfiles[0],
       outputDirectory,
+    })
+    const encodedAudio = await encodeMediaAudioRenditionFile({
+      inputPath: sourcePath,
+      outputDirectory: audioOutputDirectory,
+      audioChannels: metadata.audioChannels,
     })
     const poster = await generateMediaPoster({
       source: new Blob([sourceBuffer]).stream() as ReadableStream<Uint8Array>,
@@ -188,6 +240,8 @@ describe("bundled FFmpeg smoke test", () => {
     expect(encoded.files.some(({ fileName }) => fileName === "index.m3u8")).toBe(true)
     expect(encoded.files.some(({ fileName }) => fileName === "init.mp4")).toBe(true)
     expect(encoded.files.some(({ fileName }) => fileName.endsWith(".m4s"))).toBe(true)
+    expect(encodedAudio.files.some(({ fileName }) => fileName === "index.m3u8"))
+      .toBe(true)
     expect(poster.body.byteLength).toBeGreaterThan(0)
     await expect(
       inspectMediaFile(path.join(outputDirectory, "index.m3u8")),
@@ -195,6 +249,46 @@ describe("bundled FFmpeg smoke test", () => {
       width: 360,
       height: 640,
       videoCodec: "h264",
+      hasAudio: false,
+    })
+    await expect(
+      inspectAudioMediaFile(path.join(audioOutputDirectory, "index.m3u8")),
+    ).resolves.toMatchObject({
+      audioCodec: "aac",
+      audioChannels: 1,
+      audioSampleRate: 48_000,
+      hasVideo: false,
+    })
+
+    const masterPath = path.join(directory, "master.m3u8")
+    await writeFile(
+      masterPath,
+      buildHlsMasterPlaylist(
+        [
+          {
+            profile: mediaRenditionProfiles[0],
+            playlistUrl: "hls/index.m3u8",
+            codec: "avc1.640029",
+            byteSize: encoded.files.reduce(
+              (total, file) => total + file.body.byteLength,
+              0,
+            ),
+            durationMs: metadata.durationMs,
+            frameRate: metadata.frameRate,
+          },
+        ],
+        {
+          playlistUrl: "audio/index.m3u8",
+          codec: "mp4a.40.2",
+          bitrate: mediaAudioProfile.bitrate,
+        },
+      ),
+    )
+    await expect(inspectMediaFile(masterPath)).resolves.toMatchObject({
+      width: 360,
+      height: 640,
+      videoCodec: "h264",
+      audioCodec: "aac",
       hasAudio: true,
     })
   }, 30_000)

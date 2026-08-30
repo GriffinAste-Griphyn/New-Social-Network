@@ -712,9 +712,7 @@ struct StoryStackViewer: View {
                     EmptyStateView(title: "Story unavailable", message: error, systemImage: "exclamationmark.triangle")
                         .padding()
                 } else if let stack = store.stack, let item = stack.items[safe: index] {
-                    let canvasVerticalPlacement = storyCanvasVerticalPlacement(
-                        for: item
-                    )
+                    let canvasVerticalPlacement = storyCanvasVerticalPlacement(for: item)
                     let canvasLayout = StoryCanvasLayout(
                         containerSize: proxy.size,
                         reservedBottomHeight: storyCanvasReservedBottomHeight(
@@ -1151,9 +1149,13 @@ struct StoryStackViewer: View {
                 ProgressiveCachedImage(
                     placeholderURL: item.playbackPlaceholderUrl,
                     thumbnailURL: item.playbackThumbnailUrl,
-                    fullURL: item.playbackMediaUrl
-                ) { image, _ in
-                    StoryCanvasImage(image: image)
+                    fullURL: item.playbackMediaUrl,
+                    correctsAsymmetricTransparentPadding: true
+                ) { image, _, verticalContentOffsetFraction in
+                    StoryCanvasImage(
+                        image: image,
+                        verticalContentOffsetFraction: verticalContentOffsetFraction
+                    )
                 } placeholder: {
                     StoryCanvasBackground()
                 } onReady: { _ in
@@ -1161,6 +1163,7 @@ struct StoryStackViewer: View {
                         completeStoryTransitionIfNeeded(for: item)
                     }
                 }
+                .id(item.id)
                 .onChange(of: isActive) { _, nextIsActive in
                     guard nextIsActive,
                           MediaImageCache.shared.cachedImage(for: item.playbackMediaUrl) != nil else {
@@ -1397,13 +1400,17 @@ struct StoryStackViewer: View {
     }
 
     private func storyOverlayChipContent(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
-        HStack(spacing: 6) {
+        let displayLabel = overlay.kind == "text"
+            ? normalizedStoryOverlayText(overlay.label)
+            : overlay.label
+
+        return HStack(spacing: 6) {
             if overlay.kind == "link" {
                 Image(systemName: "link")
                     .font(.system(size: 13, weight: .semibold))
             }
 
-            Text(overlay.label)
+            Text(displayLabel)
                 .font(.system(size: StoryTextOverlayAppearance.fontSize, weight: .regular))
                 .tracking(StoryTextOverlayAppearance.letterSpacing)
                 .multilineTextAlignment(.center)
@@ -1494,13 +1501,12 @@ struct StoryStackViewer: View {
     private func storyCanvasVerticalPlacement(
         for item: StoryStackItem
     ) -> StoryCanvasVerticalPlacement {
-        // Playback derivatives are canonical portrait canvases. They are also
-        // the only dimensions available while an image source is pending or
-        // for legacy image records, so never silently revert those stories to
-        // a vertically centered screen frame.
+        // Source orientation distinguishes full-height portrait media from
+        // letterboxed landscape media even though image playback derivatives
+        // share a canonical 9:16 canvas. Missing legacy image metadata uses the
+        // portrait-safe fallback so full-height stories never slide downward.
         StoryCanvasVerticalPlacement.forRenditions(
             item.renditions,
-            prefersPlaybackDimensions: item.assetKind == .image,
             missingDimensionsFallback: item.assetKind == .image ? .top : .center
         )
     }
@@ -3936,7 +3942,23 @@ enum VideoStartupPolicy {
     static let freshForwardBufferDuration: TimeInterval = 8
 
     static func firstFrameTimeout(isLimitedNetwork: Bool) -> TimeInterval {
-        isLimitedNetwork ? 8 : 5
+        isLimitedNetwork ? 12 : 8
+    }
+
+    enum ReadinessTimeoutAction: Equatable {
+        case continueBufferedPlayback
+        case fail
+    }
+
+    static func readinessTimeoutAction(
+        playerStatus: AVPlayer.Status,
+        itemStatus: AVPlayerItem.Status
+    ) -> ReadinessTimeoutAction {
+        if playerStatus == .failed || itemStatus == .failed {
+            return .fail
+        }
+
+        return .continueBufferedPlayback
     }
 
     static func canReuseCompletedPreroll(
@@ -4143,6 +4165,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
     private var revealTargetSeconds: TimeInterval = 0
     private var hasCompletedPreroll = false
     private var shouldStartImmediatelyAfterPreroll = false
+    private var shouldPlayWhileAwaitingFirstFrame = false
     private var stallEpisodeStartedAt: Date?
 
     func play(
@@ -4210,6 +4233,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         playbackGeneration += 1
         let generation = playbackGeneration
         playbackPhase = .resolving
+        shouldPlayWhileAwaitingFirstFrame = false
         revealTargetSeconds = resumeTimeSeconds.flatMap { value in
             value.isFinite ? max(0, value) : nil
         } ?? 0
@@ -4345,17 +4369,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 player: attachedPlayer,
                 generation: generation
             )
-            guard isReadyToPosition,
-                  !Task.isCancelled,
+            guard !Task.isCancelled,
                   self.isCurrentPlayer(attachedPlayer, generation: generation) else {
-                if self.isCurrentPlayer(attachedPlayer, generation: generation),
-                   let activeURL = self.activeURL {
-                    self.recoverOrFail(
-                        player: attachedPlayer,
-                        url: activeURL,
-                        reason: "preroll_readiness_timeout"
-                    )
-                }
+                return
+            }
+            guard isReadyToPosition else {
+                self.handlePrerollReadinessTimeout(
+                    player: attachedPlayer,
+                    generation: generation,
+                    reason: "preroll_readiness_timeout"
+                )
                 return
             }
 
@@ -4385,17 +4408,16 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
                 player: attachedPlayer,
                 generation: generation
             )
-            guard isReadyToPreroll,
-                  !Task.isCancelled,
+            guard !Task.isCancelled,
                   self.isCurrentPlayer(attachedPlayer, generation: generation) else {
-                if self.isCurrentPlayer(attachedPlayer, generation: generation),
-                   let activeURL = self.activeURL {
-                    self.recoverOrFail(
-                        player: attachedPlayer,
-                        url: activeURL,
-                        reason: "preroll_readiness_lost"
-                    )
-                }
+                return
+            }
+            guard isReadyToPreroll else {
+                self.handlePrerollReadinessTimeout(
+                    player: attachedPlayer,
+                    generation: generation,
+                    reason: "preroll_readiness_lost"
+                )
                 return
             }
 
@@ -4439,6 +4461,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         playbackPhase = .awaitingFirstFrame
         shouldStartImmediatelyAfterPreroll = hasCompletedPreroll
+        shouldPlayWhileAwaitingFirstFrame = hasCompletedPreroll
 
         if layerReadyForDisplay {
             attemptRevealVideo(reason: reason)
@@ -4450,6 +4473,42 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         if !isReadyForPlayback, !isPaused, hasCompletedPreroll {
             player.isMuted = true
             player.playImmediately(atRate: 1)
+        }
+    }
+
+    private func handlePrerollReadinessTimeout(
+        player: AVPlayer,
+        generation: Int,
+        reason: String
+    ) {
+        guard isCurrentPlayer(player, generation: generation),
+              let item = player.currentItem,
+              let activeURL else {
+            return
+        }
+
+        switch VideoStartupPolicy.readinessTimeoutAction(
+            playerStatus: player.status,
+            itemStatus: item.status
+        ) {
+        case .fail:
+            handlePlaybackFailure(
+                player: player,
+                url: activeURL,
+                reason: "\(reason)_failed"
+            )
+        case .continueBufferedPlayback:
+            seekTask = nil
+            hasCompletedPreroll = false
+            shouldStartImmediatelyAfterPreroll = false
+            shouldPlayWhileAwaitingFirstFrame = true
+            playbackPhase = .awaitingFirstFrame
+            MediaPerformance.mark(
+                playbackEvent(
+                    "video_startup_fallback reason=\(reason) player_status=\(player.status.rawValue) item_status=\(item.status.rawValue) url=\(activeURL.lastPathComponent)"
+                )
+            )
+            updatePlaybackState(for: player)
         }
     }
 
@@ -4512,7 +4571,11 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         switch playbackPhase {
         case .awaitingFirstFrame:
             player.isMuted = true
-            player.pause()
+            if shouldPlayWhileAwaitingFirstFrame {
+                player.play()
+            } else {
+                player.pause()
+            }
         case .visible:
             player.isMuted = isUserMuted
             if shouldStartImmediatelyAfterPreroll {
@@ -4673,6 +4736,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTargetSeconds = 0
         hasCompletedPreroll = false
         shouldStartImmediatelyAfterPreroll = false
+        shouldPlayWhileAwaitingFirstFrame = false
 
         if let activePlaybackURL {
             configureStreamingHints(
@@ -4842,6 +4906,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
 
         let startedAt = playbackStartedAt ?? Date()
         playbackPhase = .visible
+        shouldPlayWhileAwaitingFirstFrame = false
         isReadyForPlayback = true
         startQualityRampMonitoring(player: player, generation: generation)
         if let activeURL {
@@ -5536,6 +5601,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         refreshSourceBeforeRebuild: Bool = true
     ) {
         guard self.player === player,
+              !hasTerminalPlaybackFailure,
               sameItemRecoveryTask == nil,
               rebuildTask == nil else {
             return
@@ -6115,6 +6181,7 @@ private final class AutoPlayVideoPlaybackController: ObservableObject {
         revealTargetSeconds = 0
         hasCompletedPreroll = false
         shouldStartImmediatelyAfterPreroll = false
+        shouldPlayWhileAwaitingFirstFrame = false
     }
 
     private func removeTimeObserver() {

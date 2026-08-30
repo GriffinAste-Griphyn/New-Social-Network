@@ -795,7 +795,7 @@ enum AppAudioSession {
             try session.setCategory(
                 .playAndRecord,
                 mode: .videoRecording,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
+                options: [.defaultToSpeaker]
             )
             try session.setPreferredSampleRate(48_000)
             if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
@@ -1946,13 +1946,13 @@ enum MediaPreheater {
     @MainActor
     static func preheat(feed: MobileFeedResponse) {
         let imageUrls = [
-            feed.myStory.latestThumbnailUrl,
+            feed.myStory.cardThumbnailUrl,
             feed.myStory.owner.imageUrl
         ] +
         feed.followingProfiles.map(\.imageUrl) +
         feed.suggestedAccounts.map(\.imageUrl) +
-        feed.verticalFollowingStories.map { $0.playbackThumbnailUrl ?? ($0.assetKind == .image ? $0.playbackMediaUrl : nil) } +
-        feed.followingStories.map { $0.playbackThumbnailUrl ?? ($0.assetKind == .image ? $0.playbackMediaUrl : nil) } +
+        feed.verticalFollowingStories.map(\.cardThumbnailUrl) +
+        feed.followingStories.map(\.cardThumbnailUrl) +
         feed.discoverTiles.map { $0.thumbnailUrl ?? $0.imageUrl }
 
         MediaImageCache.shared.preheat(

@@ -45,6 +45,7 @@ describe("direct media processing stage planning", () => {
       planNextMediaProcessingStage({
         source,
         hasPoster: true,
+        hasAudioRendition: true,
         readyVariantLabels: new Set(),
       }),
     ).toMatchObject({
@@ -53,11 +54,23 @@ describe("direct media processing stage planning", () => {
     })
   })
 
+  it("bootstraps the shared audio rendition before publishing video", () => {
+    expect(
+      planNextMediaProcessingStage({
+        source,
+        hasPoster: true,
+        hasAudioRendition: false,
+        readyVariantLabels: new Set(),
+      }),
+    ).toEqual({ kind: "bootstrap" })
+  })
+
   it("publishes each verified rendition set before encoding more", () => {
     expect(
       planNextMediaProcessingStage({
         source,
         hasPoster: true,
+        hasAudioRendition: true,
         readyVariantLabels: new Set(["540p"]),
         publishedVariantLabels: new Set(),
       }),
@@ -71,6 +84,7 @@ describe("direct media processing stage planning", () => {
       planNextMediaProcessingStage({
         source,
         hasPoster: true,
+        hasAudioRendition: true,
         readyVariantLabels: new Set(["540p"]),
         publishedVariantLabels: new Set(["540p"]),
       }),
@@ -85,6 +99,7 @@ describe("direct media processing stage planning", () => {
       planNextMediaProcessingStage({
         source,
         hasPoster: true,
+        hasAudioRendition: true,
         readyVariantLabels: new Set(["360p", "540p", "720p", "1080p"]),
         publishedVariantLabels: new Set([
           "360p",

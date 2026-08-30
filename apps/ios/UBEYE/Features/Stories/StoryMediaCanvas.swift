@@ -93,10 +93,8 @@ enum StoryCanvasVerticalPlacement: Equatable {
               height > 0 else {
             return missingDimensionsFallback
         }
-        return forMediaDimensions(
-            width: width,
-            height: height
-        )
+
+        return forMediaDimensions(width: width, height: height)
     }
 
     static func forMediaDimensions(width: Int?, height: Int?) -> Self {
@@ -150,12 +148,16 @@ extension View {
 
 struct StoryCanvasForegroundImage: View {
     let image: Image
+    var verticalContentOffsetFraction: CGFloat = 0
 
     var body: some View {
-        image
-            .resizable()
-            .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        GeometryReader { proxy in
+            image
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .offset(y: proxy.size.height * verticalContentOffsetFraction)
+        }
     }
 }
 
@@ -167,12 +169,70 @@ struct StoryCanvasBackground: View {
 
 struct StoryCanvasImage: View {
     let image: Image
+    var verticalContentOffsetFraction: CGFloat = 0
 
     var body: some View {
         StoryCanvasBackground()
             .overlay {
-                StoryCanvasForegroundImage(image: image)
+                StoryCanvasForegroundImage(
+                    image: image,
+                    verticalContentOffsetFraction: verticalContentOffsetFraction
+                )
             }
             .clipped()
+    }
+}
+
+enum StoryImageVerticalAlignmentPolicy {
+    static func correctionFraction(for image: UIImage) -> CGFloat {
+        guard let cgImage = image.cgImage,
+              cgImage.width > 0,
+              cgImage.height > 0,
+              cgImage.bitsPerPixel % 8 == 0,
+              let data = cgImage.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else {
+            return 0
+        }
+
+        let bytesPerPixel = cgImage.bitsPerPixel / 8
+        let usesLittleEndian32BitOrder = cgImage.bitsPerPixel == 32 &&
+            cgImage.bitmapInfo.contains(.byteOrder32Little)
+        let alphaOffset: Int
+        switch cgImage.alphaInfo {
+        case .premultipliedFirst, .first:
+            alphaOffset = usesLittleEndian32BitOrder ? bytesPerPixel - 1 : 0
+        case .premultipliedLast, .last:
+            alphaOffset = usesLittleEndian32BitOrder ? 0 : bytesPerPixel - 1
+        default:
+            return 0
+        }
+        guard alphaOffset >= 0, alphaOffset < bytesPerPixel else {
+            return 0
+        }
+
+        let sampledXPositions = [0.25, 0.5, 0.75].map {
+            min(max(Int(CGFloat(cgImage.width - 1) * $0), 0), cgImage.width - 1)
+        }
+        let visibilityThreshold: UInt8 = 8
+        func rowHasVisibleContent(_ y: Int) -> Bool {
+            sampledXPositions.contains { x in
+                let offset = y * cgImage.bytesPerRow + x * bytesPerPixel + alphaOffset
+                return bytes[offset] > visibilityThreshold
+            }
+        }
+
+        guard let firstVisibleRow = (0..<cgImage.height).first(where: rowHasVisibleContent),
+              let lastVisibleRow = (0..<cgImage.height).reversed().first(where: rowHasVisibleContent) else {
+            return 0
+        }
+
+        let topPadding = firstVisibleRow
+        let bottomPadding = cgImage.height - lastVisibleRow - 1
+        let paddingAsymmetry = bottomPadding - topPadding
+        guard abs(paddingAsymmetry) >= max(cgImage.height / 100, 2) else {
+            return 0
+        }
+
+        return CGFloat(paddingAsymmetry) / CGFloat(cgImage.height) / 2
     }
 }

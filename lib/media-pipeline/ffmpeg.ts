@@ -8,6 +8,7 @@ import ffmpegStaticPath from "ffmpeg-static"
 import ffprobeInstaller from "@ffprobe-installer/ffprobe"
 
 import {
+  mediaAudioProfile,
   mediaPipelineLimits,
   type MediaRenditionProfile,
   type MediaSourceMetadata,
@@ -22,6 +23,8 @@ type ProbeStream = {
   r_frame_rate?: string
   duration?: string
   channels?: number
+  sample_rate?: string
+  bit_rate?: string
   color_transfer?: string
   color_primaries?: string
   tags?: { rotate?: string }
@@ -31,6 +34,15 @@ type ProbeStream = {
 type ProbeResult = {
   streams?: ProbeStream[]
   format?: { duration?: string }
+}
+
+export type MediaAudioMetadata = {
+  durationMs: number
+  audioCodec: string
+  audioChannels: number | null
+  audioSampleRate: number | null
+  audioBitrate: number | null
+  hasVideo: boolean
 }
 
 function requiredBinary(value: string | null | undefined, name: string) {
@@ -193,6 +205,32 @@ function parseProbeResult(result: Buffer): MediaSourceMetadata {
   } satisfies MediaSourceMetadata
 }
 
+function parseAudioProbeResult(result: Buffer): MediaAudioMetadata {
+  const probe = JSON.parse(result.toString("utf8")) as ProbeResult
+  const video = probe.streams?.find((stream) => stream.codec_type === "video")
+  const audio = probe.streams?.find((stream) => stream.codec_type === "audio")
+
+  if (!audio?.codec_name) {
+    throw new Error("The encoded package does not contain a readable audio stream.")
+  }
+
+  const durationSeconds = Number(audio.duration ?? probe.format?.duration)
+  const parsedSampleRate = Number(audio.sample_rate)
+  const parsedBitrate = Number(audio.bit_rate)
+  return {
+    durationMs: Math.round(durationSeconds * 1_000),
+    audioCodec: audio.codec_name,
+    audioChannels: audio.channels ?? null,
+    audioSampleRate:
+      Number.isFinite(parsedSampleRate) && parsedSampleRate > 0
+        ? parsedSampleRate
+        : null,
+    audioBitrate:
+      Number.isFinite(parsedBitrate) && parsedBitrate > 0 ? parsedBitrate : null,
+    hasVideo: Boolean(video),
+  }
+}
+
 export async function inspectMediaStream(input: ReadableStream<Uint8Array>) {
   const { ffprobe } = mediaBinaryPaths()
   const result = await runWithInput(
@@ -249,6 +287,20 @@ export async function inspectMediaFile(inputPath: string) {
     inputPath,
   ])
   return parseProbeResult(result.stdout)
+}
+
+export async function inspectAudioMediaFile(inputPath: string) {
+  const { ffprobe } = mediaBinaryPaths()
+  const result = await runCommand(ffprobe, [
+    "-v",
+    "error",
+    "-show_streams",
+    "-show_format",
+    "-of",
+    "json",
+    inputPath,
+  ])
+  return parseAudioProbeResult(result.stdout)
 }
 
 export function renditionFfmpegArguments(input: {
@@ -311,8 +363,6 @@ export function renditionFfmpegArguments(input: {
     filter,
     "-map",
     "[video-ready]",
-    "-map",
-    "0:a:0?",
     "-c:v",
     "libx264",
     "-preset",
@@ -337,14 +387,7 @@ export function renditionFfmpegArguments(input: {
     `expr:gte(t,n_forced*${mediaPipelineLimits.segmentDurationSeconds})`,
     "-x264-params",
     "bframes=3:scenecut=0:keyint=60:min-keyint=60:ref=4",
-    "-c:a",
-    "aac",
-    "-b:a",
-    String(profile.audioBitrate),
-    "-af",
-    "loudnorm=I=-16:TP=-1.5:LRA=11",
-    "-ac",
-    input.sourceMetadata?.audioChannels === 1 ? "1" : "2",
+    "-an",
     "-hls_time",
     String(mediaPipelineLimits.segmentDurationSeconds),
     "-hls_playlist_type",
@@ -358,6 +401,48 @@ export function renditionFfmpegArguments(input: {
     "-hls_segment_filename",
     path.join(outputDirectory, "segment-%05d.m4s"),
     path.join(outputDirectory, "index.m3u8"),
+  ]
+}
+
+export function audioRenditionFfmpegArguments(input: {
+  outputDirectory: string
+  audioChannels?: number | null
+  inputPath: string
+}) {
+  return [
+    "-hide_banner",
+    "-nostdin",
+    "-y",
+    "-i",
+    input.inputPath,
+    "-map",
+    "0:a:0",
+    "-vn",
+    "-c:a",
+    "aac",
+    "-profile:a",
+    "aac_low",
+    "-aac_coder",
+    "twoloop",
+    "-b:a",
+    String(mediaAudioProfile.bitrate),
+    "-ar",
+    String(mediaAudioProfile.sampleRate),
+    "-ac",
+    input.audioChannels === 1 ? "1" : "2",
+    "-hls_time",
+    String(mediaPipelineLimits.segmentDurationSeconds),
+    "-hls_playlist_type",
+    "vod",
+    "-hls_segment_type",
+    "fmp4",
+    "-hls_flags",
+    "independent_segments+temp_file",
+    "-hls_fmp4_init_filename",
+    "init.mp4",
+    "-hls_segment_filename",
+    path.join(input.outputDirectory, "segment-%05d.m4s"),
+    path.join(input.outputDirectory, "index.m3u8"),
   ]
 }
 
@@ -404,6 +489,28 @@ export async function encodeMediaRenditionFile(input: {
       inputPath: input.inputPath,
     }),
   )
+  const fileNames = (await readdir(input.outputDirectory)).sort()
+  const files = await Promise.all(
+    fileNames.map(async (fileName) => {
+      const body = await readFile(path.join(input.outputDirectory, fileName))
+      return {
+        fileName,
+        body,
+        checksum: createHash("sha256").update(body).digest("hex"),
+      }
+    }),
+  )
+  return { files, encodingMs: Date.now() - startedAt }
+}
+
+export async function encodeMediaAudioRenditionFile(input: {
+  inputPath: string
+  outputDirectory: string
+  audioChannels?: number | null
+}) {
+  const { ffmpeg } = mediaBinaryPaths()
+  const startedAt = Date.now()
+  await runCommand(ffmpeg, audioRenditionFfmpegArguments(input))
   const fileNames = (await readdir(input.outputDirectory)).sort()
   const files = await Promise.all(
     fileNames.map(async (fileName) => {

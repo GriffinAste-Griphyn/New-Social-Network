@@ -2,6 +2,70 @@ import XCTest
 @testable import UBEYE
 
 final class UXPolishTests: XCTestCase {
+    func testPendingModerationCanRemainVisibleWhileStoryFinishes() {
+        XCTAssertTrue(
+            StoryUploadVisibilityPolicy.shouldPublishImmediately(
+                moderationStatus: "pending"
+            )
+        )
+        XCTAssertFalse(
+            StoryUploadVisibilityPolicy.shouldPublishImmediately(
+                moderationStatus: "flagged"
+            )
+        )
+    }
+
+    func testStoryOverlayTextCollapsesRepeatedWhitespace() {
+        XCTAssertEqual(
+            normalizedStoryOverlayText("  one\u{00a0} \t two\nthree  "),
+            "one two three"
+        )
+        XCTAssertEqual(
+            normalizedStoryOverlayText(
+                "one  ",
+                preservesTrailingSpace: true
+            ),
+            "one "
+        )
+    }
+
+    @MainActor
+    func testStoryComposerClearsStaleUploadStatusForNewPresentation() {
+        let store = StoryComposerStore()
+        store.uploadStatus = "Story posted"
+
+        store.beginPresentation()
+
+        XCTAssertNil(store.uploadStatus)
+    }
+
+    @MainActor
+    func testStoryComposerPersistsTheMostRecentExactOverlayText() {
+        let draftKey = "ubeye.story-composer-text-draft.v1"
+        let defaults = UserDefaults.standard
+        let previousDraft = defaults.data(forKey: draftKey)
+        defer {
+            if let previousDraft {
+                defaults.set(previousDraft, forKey: draftKey)
+            } else {
+                defaults.removeObject(forKey: draftKey)
+            }
+        }
+        defaults.removeObject(forKey: draftKey)
+
+        let store = StoryComposerStore()
+        store.textOverlay = "First sentence.  Second sentence."
+        store.persistTextDraft()
+        store.textOverlay = "First sentence. Second sentence."
+        store.persistTextDraft()
+
+        let restoredStore = StoryComposerStore()
+        XCTAssertEqual(
+            restoredStore.textOverlay,
+            "First sentence. Second sentence."
+        )
+    }
+
     func testTabSelectionDistinguishesSwitchFromReselect() {
         XCTAssertEqual(
             AppTabSelectionPolicy.decision(current: .home, requested: .discover),

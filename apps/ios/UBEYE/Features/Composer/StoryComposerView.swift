@@ -524,15 +524,9 @@ enum StoryImageTranscoder {
             width: sourceSize.width * scale,
             height: sourceSize.height * scale
         )
-        // Core Graphics uses a bottom-left drawing origin here. Fit-mode story
-        // photos must therefore use the remaining vertical space as their Y
-        // origin so the encoded pixels begin at the visual top of the canvas.
-        let fittedOriginY = contentMode == .fit
-            ? targetSize.height - fittedSize.height
-            : (targetSize.height - fittedSize.height) / 2
         let fittedRect = CGRect(
             x: (targetSize.width - fittedSize.width) / 2,
-            y: fittedOriginY,
+            y: (targetSize.height - fittedSize.height) / 2,
             width: fittedSize.width,
             height: fittedSize.height
         )
@@ -792,6 +786,10 @@ final class StoryComposerStore: ObservableObject {
         quoteReplyPositionY = draft.quoteReplyPositionY
     }
 
+    func beginPresentation() {
+        uploadStatus = nil
+    }
+
     func persistTextDraft() {
         let draft = StoryComposerTextDraft(
             caption: caption,
@@ -825,11 +823,11 @@ final class StoryComposerStore: ObservableObject {
 
     private var thumbnailOverlaySpecs: [StoryThumbnailOverlaySpec] {
         var overlays: [StoryThumbnailOverlaySpec] = []
-        let trimmedText = textOverlay.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedText.isEmpty {
+        let normalizedText = normalizedStoryOverlayText(textOverlay)
+        if !normalizedText.isEmpty {
             overlays.append(
                 StoryThumbnailOverlaySpec(
-                    label: trimmedText,
+                    label: normalizedText,
                     positionX: textOverlayPositionX,
                     positionY: textOverlayPositionY,
                     isLink: false
@@ -870,7 +868,7 @@ final class StoryComposerStore: ObservableObject {
         PendingStoryUploadDraft(
             caption: caption,
             brandTags: brandTags,
-            textOverlay: textOverlay,
+            textOverlay: normalizedStoryOverlayText(textOverlay),
             textOverlayPositionX: textOverlayPositionX,
             textOverlayPositionY: textOverlayPositionY,
             linkLabel: linkLabel,
@@ -885,12 +883,12 @@ final class StoryComposerStore: ObservableObject {
 
     private var pendingTextOverlays: [StoryTextOverlay] {
         var overlays: [StoryTextOverlay] = []
-        let trimmedText = textOverlay.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedText.isEmpty {
+        let normalizedText = normalizedStoryOverlayText(textOverlay)
+        if !normalizedText.isEmpty {
             overlays.append(
                 StoryTextOverlay(
                     id: "pending-text-\(UUID().uuidString.lowercased())",
-                    label: trimmedText,
+                    label: normalizedText,
                     positionX: textOverlayPositionX,
                     positionY: textOverlayPositionY,
                     kind: "text",
@@ -1788,6 +1786,7 @@ struct StoryComposerView: View {
             .clipped()
         }
         .task {
+            store.beginPresentation()
             store.applyQuotedReply(quotedReply)
             if isActive {
                 await camera.requestAccessAndConfigure()
@@ -1797,6 +1796,7 @@ struct StoryComposerView: View {
         }
         .onChange(of: isActive) { _, nextIsActive in
             if nextIsActive {
+                store.beginPresentation()
                 camera.start()
             } else {
                 camera.stop()
@@ -2006,6 +2006,7 @@ struct StoryComposerView: View {
                     EditableStoryOverlayChip(
                         text: $store.textOverlay,
                         maximumLength: StoryComposerLimits.textOverlay,
+                        normalizesWhitespace: true,
                         placeholder: "Text",
                         systemImage: nil,
                         positionX: store.textOverlayPositionX,
@@ -2032,6 +2033,7 @@ struct StoryComposerView: View {
                     EditableStoryOverlayChip(
                         text: $store.linkUrl,
                         maximumLength: StoryComposerLimits.linkURL,
+                        normalizesWhitespace: false,
                         placeholder: "Paste link",
                         systemImage: "link",
                         positionX: store.linkOverlayPositionX,
@@ -2098,12 +2100,25 @@ struct StoryComposerView: View {
     }
 
     private func finishOverlayInput() {
-        if overlayInputMode == .link {
-            store.normalizeLinkDraft()
-        }
-
+        let finishingMode = overlayInputMode
+        let finishingFocusRequestAt = overlayFocusRequestAt
         isOverlayInputFocused = false
-        overlayInputMode = nil
+
+        // Resigning the first responder can deliver one final TextField binding
+        // update (autocorrection, smart spacing, or a deletion). Keep the editor
+        // alive through that update before snapshotting the draft for upload.
+        Task { @MainActor in
+            await Task.yield()
+            guard overlayInputMode == finishingMode,
+                  overlayFocusRequestAt == finishingFocusRequestAt else {
+                return
+            }
+            if finishingMode == .link {
+                store.normalizeLinkDraft()
+            }
+            store.persistTextDraft()
+            overlayInputMode = nil
+        }
     }
 
     private func updateComposerKeyboard(
@@ -2581,8 +2596,10 @@ struct StoryComposerView: View {
 private struct EditableStoryOverlayChip: View {
     @Binding var text: String
     let maximumLength: Int
+    let normalizesWhitespace: Bool
     @State private var measuredChipSize: CGSize = .zero
     @State private var dragStartCenter: CGPoint?
+    @State private var editingText: String?
     let placeholder: String
     let systemImage: String?
     let positionX: Double
@@ -2663,6 +2680,14 @@ private struct EditableStoryOverlayChip: View {
                         }
                     }
             )
+            .onChange(of: isEditing) { wasEditing, nextIsEditing in
+                if nextIsEditing {
+                    editingText = text
+                } else if wasEditing, let editingText {
+                    text = editingText
+                    self.editingText = nil
+                }
+            }
     }
 
     private var resolvedCenterY: CGFloat {
@@ -2704,7 +2729,7 @@ private struct EditableStoryOverlayChip: View {
                 .textInputAutocapitalization(autocapitalization)
                 .autocorrectionDisabled(autocorrectionDisabled)
                 .submitLabel(.done)
-                .onSubmit(onSubmit)
+                .onSubmit(commitEditingTextAndSubmit)
                 .font(.system(size: StoryTextOverlayAppearance.fontSize, weight: .regular))
                 .tracking(StoryTextOverlayAppearance.letterSpacing)
                 .multilineTextAlignment(.center)
@@ -2720,7 +2745,7 @@ private struct EditableStoryOverlayChip: View {
                         .font(.system(size: 12, weight: .semibold))
                 }
 
-                Text(displayText ?? text)
+                Text(displayText ?? sanitizedInputValue(text, preservesTrailingSpace: false))
                     .font(.system(size: StoryTextOverlayAppearance.fontSize, weight: .regular))
                     .tracking(StoryTextOverlayAppearance.letterSpacing)
                     .lineLimit(4)
@@ -2745,26 +2770,55 @@ private struct EditableStoryOverlayChip: View {
     private var sanitizedTextBinding: Binding<String> {
         Binding(
             get: {
-                text
+                editingText ?? text
             },
             set: { nextValue in
+                let sanitizedValue: String
                 if nextValue.contains(where: \.isNewline) {
-                    text = storyTextPrefix(
-                        nextValue
-                            .split(whereSeparator: \.isNewline)
-                            .joined(separator: " "),
+                    sanitizedValue = storyTextPrefix(
+                        sanitizedInputValue(nextValue, preservesTrailingSpace: true),
                         maximumUTF16Length: maximumLength
                     )
+                    editingText = sanitizedValue
+                    text = sanitizedValue
                     DispatchQueue.main.async {
-                        onSubmit()
+                        commitEditingTextAndSubmit()
                     }
                 } else {
-                    text = storyTextPrefix(
-                        nextValue,
+                    sanitizedValue = storyTextPrefix(
+                        sanitizedInputValue(nextValue, preservesTrailingSpace: true),
                         maximumUTF16Length: maximumLength
                     )
+                    editingText = sanitizedValue
+                    text = sanitizedValue
                 }
             }
+        )
+    }
+
+    private func commitEditingTextAndSubmit() {
+        let committedText = storyTextPrefix(
+            sanitizedInputValue(editingText ?? text, preservesTrailingSpace: false),
+            maximumUTF16Length: maximumLength
+        )
+        editingText = committedText
+        text = committedText
+        onSubmit()
+    }
+
+    private func sanitizedInputValue(
+        _ value: String,
+        preservesTrailingSpace: Bool
+    ) -> String {
+        guard normalizesWhitespace else {
+            return value.contains(where: \.isNewline)
+                ? value.split(whereSeparator: \.isNewline).joined(separator: " ")
+                : value
+        }
+
+        return normalizedStoryOverlayText(
+            value,
+            preservesTrailingSpace: preservesTrailingSpace
         )
     }
 

@@ -7,7 +7,6 @@ import { getMobileInitialStoryStacks } from "@/lib/mobile-story-stacks"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import { getFeedData } from "@/lib/story-store"
 import { publicStoryMediaUrl } from "@/lib/story-storage"
-import { refreshProcessingCloudflareStories } from "@/lib/stories/cloudflare-status"
 
 export const runtime = "nodejs"
 const initialStoryStackLimit = 4
@@ -291,7 +290,6 @@ async function feedResponse(
     timelineLimit: pageRequest.limit + 1,
     useSnapshot: !validCursor,
   })
-  await refreshProcessingCloudflareStories({ limit: 50 })
   const followingStories = collapseStoryCardsByCreator(
     feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
   )

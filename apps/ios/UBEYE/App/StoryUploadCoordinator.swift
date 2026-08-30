@@ -6,6 +6,14 @@ import SDWebImage
 import SDWebImageWebPCoder
 import UIKit
 
+enum StoryUploadVisibilityPolicy {
+    static func shouldPublishImmediately(moderationStatus: String?) -> Bool {
+        moderationStatus == nil ||
+            moderationStatus == "approved" ||
+            moderationStatus == "pending"
+    }
+}
+
 @MainActor
 final class StoryUploadCoordinator: ObservableObject {
     @Published private(set) var registrations: [StoryUploadResponse] = []
@@ -24,9 +32,9 @@ final class StoryUploadCoordinator: ObservableObject {
         preheatUploadThumbnail(response)
 
         let moderationPending = response.moderationStatus == "pending"
-        guard response.moderationStatus == nil ||
-                response.moderationStatus == "approved" ||
-                moderationPending else {
+        guard StoryUploadVisibilityPolicy.shouldPublishImmediately(
+            moderationStatus: response.moderationStatus
+        ) else {
             StoryUploadDiagnostics.mark("under_review", response: response)
             if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
                 notice.showPosting()
@@ -36,8 +44,9 @@ final class StoryUploadCoordinator: ObservableObject {
             return
         }
 
+        publishRegisteredUpload(response)
+
         if !moderationPending {
-            publishRegisteredUpload(response)
             refreshVisibleStoryState(response, api: api)
         }
 
@@ -465,7 +474,10 @@ enum StoryUploadFileIO {
 }
 
 enum StoryImageDerivativeBuilder {
-    static let thumbnailContentMode = StoryImageContentMode.fill
+    // Story cards are previews of the composed story, not decorative cover
+    // art. Keep the entire source visible so the thumbnail never suggests a
+    // crop that playback does not apply.
+    static let thumbnailContentMode = StoryImageContentMode.fit
 
     static func build(fileURL: URL) async throws -> LocalImageDerivativeSet {
         try await Task.detached(priority: .userInitiated) {
@@ -892,9 +904,7 @@ final class PendingStoryUploadStore: ObservableObject {
             !pendingCards.contains { $0.id == item.id }
         } + pendingCards
         let latestItem = mergedItems.last
-        let latestThumbnailUrl = latestItem.flatMap {
-            $0.assetKind == .image ? $0.playbackMediaUrl : $0.playbackThumbnailUrl
-        }
+        let latestThumbnailUrl = latestItem?.cardThumbnailUrl
         let myStory = MyStorySummary(
             owner: feed.myStory.owner,
             hasActiveStory: true,

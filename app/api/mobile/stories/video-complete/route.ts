@@ -332,27 +332,26 @@ export async function POST(request: Request) {
       let verifiedHeight = parsed.data.height ?? null
 
       if (useAsyncCompletion) {
-        if (!verifiedDurationMs || !verifiedWidth || !verifiedHeight) {
-          throw new MediaUploadSessionError(
-            "The completed video is missing required media details.",
-            400,
-          )
-        }
-        const sourceFailure = validateSourceMetadata({
-          durationMs: verifiedDurationMs,
-          width: verifiedWidth,
-          height: verifiedHeight,
-          frameRate: null,
-          videoCodec: "pending-verification",
-          audioCodec: null,
-          hasAudio: false,
-          rotation: 0,
-        })
-        if (sourceFailure) {
-          throw new MediaUploadSessionError(
-            `Video quality validation failed: ${sourceFailure}.`,
-            400,
-          )
+        // Current iOS builds provide duration but not source dimensions. Treat
+        // client metadata as an optional early rejection only; the worker is
+        // authoritative and probes every source before encoding.
+        if (verifiedDurationMs && verifiedWidth && verifiedHeight) {
+          const sourceFailure = validateSourceMetadata({
+            durationMs: verifiedDurationMs,
+            width: verifiedWidth,
+            height: verifiedHeight,
+            frameRate: null,
+            videoCodec: "pending-verification",
+            audioCodec: null,
+            hasAudio: false,
+            rotation: 0,
+          })
+          if (sourceFailure) {
+            throw new MediaUploadSessionError(
+              `Video quality validation failed: ${sourceFailure}.`,
+              400,
+            )
+          }
         }
       } else {
         const sourceBlob = await get(parsed.data.uid, {

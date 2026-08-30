@@ -256,13 +256,26 @@ enum ProgressiveImageStage: Int, Comparable {
 final class ProgressiveImageLoader: ObservableObject {
     @Published private(set) var image: UIImage?
     @Published private(set) var stage: ProgressiveImageStage = .none
+    @Published private(set) var verticalContentOffsetFraction: CGFloat = 0
     private var generation = 0
     private var requestStage: ProgressiveImageStage = .none
 
-    func load(placeholderURL: URL?, thumbnailURL: URL?, fullURL: URL?) async {
+    func load(
+        placeholderURL: URL?,
+        thumbnailURL: URL?,
+        fullURL: URL?,
+        correctsAsymmetricTransparentPadding: Bool = false
+    ) async {
         generation &+= 1
         let currentGeneration = generation
         let startedAt = Date()
+
+        // SwiftUI can preserve this loader while the surrounding story changes.
+        // Clear the previous rendition before awaiting the next one so a slow
+        // request never flashes the prior story or reuses its alignment offset.
+        image = nil
+        stage = .none
+        verticalContentOffsetFraction = 0
         requestStage = .none
 
         var bestStagesByURL: [URL: ProgressiveImageStage] = [:]
@@ -283,7 +296,13 @@ final class ProgressiveImageLoader: ObservableObject {
 
         for candidate in bestStagesByURL.sorted(by: { $0.value < $1.value }) {
             if let cached = MediaImageCache.shared.cachedImage(for: candidate.key) {
-                promote(cached, to: candidate.value, generation: currentGeneration, startedAt: startedAt)
+                promote(
+                    cached,
+                    to: candidate.value,
+                    generation: currentGeneration,
+                    startedAt: startedAt,
+                    correctsAsymmetricTransparentPadding: correctsAsymmetricTransparentPadding
+                )
             }
         }
         if requestStage == .full { return }
@@ -303,7 +322,13 @@ final class ProgressiveImageLoader: ObservableObject {
                     return
                 }
                 if let loaded {
-                    promote(loaded, to: candidateStage, generation: currentGeneration, startedAt: startedAt)
+                    promote(
+                        loaded,
+                        to: candidateStage,
+                        generation: currentGeneration,
+                        startedAt: startedAt,
+                        correctsAsymmetricTransparentPadding: correctsAsymmetricTransparentPadding
+                    )
                     if requestStage == .full {
                         group.cancelAll()
                     }
@@ -316,10 +341,14 @@ final class ProgressiveImageLoader: ObservableObject {
         _ candidate: UIImage,
         to candidateStage: ProgressiveImageStage,
         generation candidateGeneration: Int,
-        startedAt: Date
+        startedAt: Date,
+        correctsAsymmetricTransparentPadding: Bool
     ) {
         guard candidateGeneration == generation, candidateStage >= requestStage else { return }
         image = candidate
+        verticalContentOffsetFraction = correctsAsymmetricTransparentPadding
+            ? StoryImageVerticalAlignmentPolicy.correctionFraction(for: candidate)
+            : 0
         stage = candidateStage
         requestStage = candidateStage
         MediaPerformance.measure("image_ready stage=\(candidateStage)", since: startedAt)
@@ -330,7 +359,8 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
     let placeholderURL: URL?
     let thumbnailURL: URL?
     let fullURL: URL?
-    private let content: (Image, ProgressiveImageStage) -> Content
+    let correctsAsymmetricTransparentPadding: Bool
+    private let content: (Image, ProgressiveImageStage, CGFloat) -> Content
     private let placeholder: () -> Placeholder
     private let onReady: (ProgressiveImageStage) -> Void
     @StateObject private var loader = ProgressiveImageLoader()
@@ -339,29 +369,36 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
         placeholderURL: URL?,
         thumbnailURL: URL?,
         fullURL: URL?,
-        @ViewBuilder content: @escaping (Image, ProgressiveImageStage) -> Content,
+        correctsAsymmetricTransparentPadding: Bool = false,
+        @ViewBuilder content: @escaping (Image, ProgressiveImageStage, CGFloat) -> Content,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
         onReady: @escaping (ProgressiveImageStage) -> Void = { _ in }
     ) {
         self.placeholderURL = placeholderURL
         self.thumbnailURL = thumbnailURL
         self.fullURL = fullURL
+        self.correctsAsymmetricTransparentPadding = correctsAsymmetricTransparentPadding
         self.content = content
         self.placeholder = placeholder
         self.onReady = onReady
     }
 
     private var loadKey: String {
-        [placeholderURL, thumbnailURL, fullURL]
+        let urls = [placeholderURL, thumbnailURL, fullURL]
             .map { $0?.absoluteString ?? "-" }
             .joined(separator: "|")
+        return "\(urls)|correct-padding:\(correctsAsymmetricTransparentPadding)"
     }
 
     var body: some View {
         ZStack {
             placeholder()
             if let image = loader.image {
-                content(Image(uiImage: image), loader.stage)
+                content(
+                    Image(uiImage: image),
+                    loader.stage,
+                    loader.verticalContentOffsetFraction
+                )
             }
         }
         .transaction { transaction in
@@ -376,7 +413,8 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
             await loader.load(
                 placeholderURL: placeholderURL,
                 thumbnailURL: thumbnailURL,
-                fullURL: fullURL
+                fullURL: fullURL,
+                correctsAsymmetricTransparentPadding: correctsAsymmetricTransparentPadding
             )
         }
         .onChange(of: loader.stage) { _, stage in

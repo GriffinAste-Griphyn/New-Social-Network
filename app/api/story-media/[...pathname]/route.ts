@@ -325,7 +325,7 @@ export async function GET(
       blobPathname,
     )
     const body = Buffer.from(playlist, "utf8")
-    const isMaster = blobPathname.endsWith("/master.m3u8")
+    const isMaster = /\/master(?:-[a-z0-9-]+)?\.m3u8$/i.test(blobPathname)
     headers.delete("ETag")
     headers.set(
       "Cache-Control",

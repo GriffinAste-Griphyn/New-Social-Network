@@ -44,8 +44,13 @@ export async function processMediaWorkflow(jobId: string) {
       inspection.source,
     )
     const firstRendition = initial.rendition
+    const audio = initial.audio
     const poster = initial.poster
-    const initialMaster = await publishMasterPlaylistStep(jobId, [firstRendition])
+    const initialMaster = await publishMasterPlaylistStep(
+      jobId,
+      [firstRendition],
+      audio,
+    )
     const remainingProfiles = inspection.profiles.filter(
       (profile) => profile.label !== firstProfile.label,
     )
@@ -79,7 +84,7 @@ export async function processMediaWorkflow(jobId: string) {
     const finalMaster = await publishMasterPlaylistStep(jobId, [
       firstRendition,
       ...remainingRenditions,
-    ])
+    ], audio)
     await completeMediaProcessingStep(
       jobId,
       inspection.source,

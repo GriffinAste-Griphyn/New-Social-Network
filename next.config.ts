@@ -17,7 +17,23 @@ const nextConfig: NextConfig = {
     // or its authenticated continuation route. These native binaries are
     // loaded through platform-specific packages, so every server trace that
     // imports the scheduler must explicitly carry them.
-    "/*": [
+    "/api/mobile/stories/video-complete": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/@ffprobe-installer/**/*",
+    ],
+    "/api/mobile/stories/*/status": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/@ffprobe-installer/**/*",
+    ],
+    "/api/internal/media-processing": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/@ffprobe-installer/**/*",
+    ],
+    "/api/cron/media-processing-reconcile": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/@ffprobe-installer/**/*",
+    ],
+    "/.well-known/workflow/v1/*": [
       "./node_modules/ffmpeg-static/ffmpeg",
       "./node_modules/@ffprobe-installer/**/*",
     ],

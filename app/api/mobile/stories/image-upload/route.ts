@@ -7,8 +7,8 @@ import {
   directStoryImageDisplayPathname,
   directStoryImagePathname,
   directStoryImageSourcePathname,
-  directStoryImageThumbnailPathname,
   isAllowedDirectStoryImageContentType,
+  legacyDirectStoryImageThumbnailPathname,
   maxStoryImageDisplayDerivativeBytes,
   maxStoryImageThumbnailDerivativeBytes,
   maxStoryImageUploadBytes,
@@ -157,7 +157,7 @@ export async function POST(request: Request) {
             access: "private",
           }),
           createImageUploadPart({
-            pathname: directStoryImageThumbnailPathname(basePathname),
+            pathname: legacyDirectStoryImageThumbnailPathname(basePathname),
             contentType: "image/webp",
             maxSizeBytes: maxStoryImageThumbnailDerivativeBytes,
             access: "private",

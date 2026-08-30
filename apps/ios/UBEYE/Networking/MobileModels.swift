@@ -249,6 +249,13 @@ extension StoryCard {
         activeVideoRendition?.thumbnailUrl ?? renditions?.playback.thumbnailUrl ?? thumbnailUrl
     }
 
+    var cardThumbnailUrl: URL? {
+        // Feed cards must stay thumbnail-first. Falling back to the playback
+        // canvas for legacy image thumbnails multiplies network and decode work
+        // during feed preheating; corrected framing belongs in the derivative.
+        return playbackThumbnailUrl ?? playbackMediaUrl
+    }
+
     var playbackPlaceholderUrl: URL? {
         activeVideoRendition?.placeholderUrl ?? placeholderUrl ?? playbackThumbnailUrl
     }
@@ -321,6 +328,12 @@ struct MyStorySummary: Codable, Hashable {
     let latestTextOverlays: [StoryTextOverlay]?
     let expiresSoonLabel: String?
     let items: [StoryCard]
+}
+
+extension MyStorySummary {
+    var cardThumbnailUrl: URL? {
+        items.last?.cardThumbnailUrl ?? latestThumbnailUrl
+    }
 }
 
 struct MobileFeedResponse: Codable {

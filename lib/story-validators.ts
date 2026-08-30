@@ -2,7 +2,14 @@ import { z } from "zod"
 
 export const storyCaptionSchema = z.string().trim().max(220)
 export const storyElementLabelSchema = z.string().trim().min(1).max(64)
-export const storyTextOverlaySchema = z.string().trim().min(1).max(220)
+export function normalizeStoryTextOverlay(value: string) {
+  return value.replace(/\s+/gu, " ").trim()
+}
+
+export const storyTextOverlaySchema = z
+  .string()
+  .transform(normalizeStoryTextOverlay)
+  .pipe(z.string().min(1).max(220))
 export const storyQuoteReplyIdSchema = z.string().trim().min(1).max(120)
 export const storyLinkUrlSchema = z.url().max(320)
 

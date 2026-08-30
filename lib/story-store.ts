@@ -58,6 +58,7 @@ import {
 import { getBlockedPeerIds, isBlockedBetween } from "@/lib/social-safety"
 import {
   extractCaptionMentions,
+  normalizeStoryTextOverlay,
   type StoryElementInput,
 } from "@/lib/story-validators"
 
@@ -436,7 +437,10 @@ function textOverlaysFromElements(elements: StoryElementRecord[]) {
     .filter(isStoryOverlayElement)
     .map((element) => ({
       id: element.id,
-      label: element.label,
+      label:
+        element.kind === "text"
+          ? normalizeStoryTextOverlay(element.label)
+          : element.label,
       kind: element.kind,
       href: element.href,
       sourceInteractionId: element.sourceInteractionId,
@@ -846,7 +850,10 @@ function buildMyStorySummary(
       elements: (elementsByStory.get(row.id) ?? []).map((element) => ({
         id: element.id,
         kind: element.kind,
-        label: element.label,
+        label:
+          element.kind === "text"
+            ? normalizeStoryTextOverlay(element.label)
+            : element.label,
         href: element.href,
         sourceInteractionId: element.sourceInteractionId,
         sourceActorName: element.sourceActorName,
@@ -873,11 +880,9 @@ function buildMyStorySummary(
     owner,
     hasActiveStory: items.length > 0,
     liveCount: items.length,
-    latestThumbnailUrl: latest
-      ? latest.assetKind === "image"
-        ? latest.mediaUrl
-        : latest.thumbnailUrl
-      : null,
+    latestThumbnailUrl:
+      latest?.thumbnailUrl ??
+      (latest?.assetKind === "image" ? latest.mediaUrl : null),
     latestAssetKind: latest?.assetKind ?? null,
     expiresSoonLabel:
       shortestWindow === null ? null : formatExpiresSoonLabel(shortestWindow),
@@ -978,14 +983,11 @@ async function getLiveStoryRowsForCreator(
 ) {
   const db = getDb()
   const statusFilter = options.includeOwnerProcessing
-    ? or(
-        eq(stories.status, "live"),
-        and(
-          eq(stories.status, "processing"),
-          eq(stories.processingStatus, "processing"),
-        ),
-      )
+    ? inArray(stories.status, ["live", "processing"])
     : eq(stories.status, "live")
+  const moderationFilter = options.includeOwnerProcessing
+    ? inArray(stories.moderationStatus, ["approved", "pending"])
+    : eq(stories.moderationStatus, "approved")
 
   const rows = await db
     .select({
@@ -1033,14 +1035,13 @@ async function getLiveStoryRowsForCreator(
       and(
         eq(stories.creatorId, creatorId),
         statusFilter,
-        eq(stories.moderationStatus, "approved"),
+        moderationFilter,
         gt(stories.expiresAt, new Date()),
         isNotNull(users.displayName),
         isNotNull(users.handle),
       ),
     )
     .orderBy(desc(stories.createdAt))
-    .limit(24)
 
   return rows.flatMap((row) => {
     const story = toCompleteStoryRow(row)

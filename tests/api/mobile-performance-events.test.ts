@@ -16,66 +16,12 @@ vi.mock("@/lib/request-security", () => ({
   requestIpSubject: vi.fn(() => "203.0.113.40"),
 }))
 
-vi.mock("@/lib/mobile-performance-events", () => ({
-  mobilePerformanceEventNames: [
-    "api_request",
-    "api_server_timing",
-    "feed_disk_cache_clear",
-    "feed_disk_cache_hit",
-    "feed_disk_cache_miss",
-    "feed_disk_cache_restore",
-    "feed_disk_cache_write",
-    "feed_disk_restore",
-    "feed_load",
-    "feed_media_commit",
-    "feed_media_deferred",
-    "feed_media_preparation",
-    "feed_media_preheat",
-    "feed_refresh_failed",
-    "media_cache_summary",
-    "media_file_cache_failed",
-    "media_file_cache_hit",
-    "media_file_cache_skip",
-    "media_file_cache_write",
-    "thumbnail_generation_swap",
-    "story_open",
-    "story_open_warm",
-    "story_stack_cache_clear",
-    "story_stack_cache_hit",
-    "story_stack_cache_miss",
-    "story_stack_disk_cache_hit",
-    "story_stack_disk_cache_miss",
-    "story_stack_disk_cache_write",
-    "story_stack_disk_restore",
-    "story_stack_display_cache_hit",
-    "story_stack_fetch_join",
-    "story_stack_network",
-    "story_stack_prefetch_end",
-    "story_stack_prefetch_start",
-    "story_transition_visible",
-    "video_disk_cache_hit",
-    "video_dismissed",
-    "video_ended",
-    "video_player_pool_wait",
-    "video_player_prepared",
-    "video_player_staged",
-    "video_preroll_reused",
-    "video_prerolled",
-    "video_retry",
-    "video_recovered",
-    "video_startup",
-    "video_upload_failed",
-    "video_upload_phase",
-    "video_upload_retry",
-    "video_upload_succeeded",
-    "video_first_frame",
-    "video_item_ready",
-    "video_stalled",
-    "video_terminal_failure",
-    "video_quality_ramp",
-  ],
-  recordMobilePerformanceEvents: vi.fn(),
-}))
+vi.mock("@/lib/mobile-performance-events", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/mobile-performance-events")
+  >("@/lib/mobile-performance-events")
+  return { ...actual, recordMobilePerformanceEvents: vi.fn() }
+})
 
 const session = {
   id: "user_123",
@@ -207,6 +153,33 @@ describe("mobile performance events API", () => {
         expect.objectContaining({ name: "feed_media_commit" }),
         expect.objectContaining({ name: "thumbnail_generation_swap" }),
       ],
+    })
+  })
+
+  it("accepts interaction and responsiveness diagnostics emitted by iOS", async () => {
+    const names = [
+      "image_ready",
+      "interaction_latency",
+      "keyboard_latency",
+      "gesture_outcome",
+      "frame_hitch",
+      "prefetch_intent",
+      "resource_mode",
+      "undo_action",
+    ]
+    const { POST } = await import("@/app/api/mobile/performance-events/route")
+    const response = await POST(
+      jsonRequest("/api/mobile/performance-events", {
+        events: names.map((name) => ({ name, durationMs: 16 })),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
+      userId: session.id,
+      events: names.map((name) =>
+        expect.objectContaining({ name, durationMs: 16 }),
+      ),
     })
   })
 

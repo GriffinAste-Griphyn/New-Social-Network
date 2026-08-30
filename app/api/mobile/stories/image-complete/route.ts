@@ -284,6 +284,7 @@ export async function POST(request: Request) {
             parsed.data.thumbnailDerivative,
           )!,
           thumbHash: parsed.data.thumbHash!,
+          thumbnailVariant: "legacy-cover",
         })
 
     const moderationMediaUrl =

@@ -1,5 +1,5 @@
 export const mediaPipelineVersion = "hls-v4"
-export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-v4"
+export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-aac-v5"
 export const maximumMediaProcessingAttempts = 8
 
 export type MediaSourceMetadata = {
@@ -23,10 +23,15 @@ export type MediaRenditionProfile = {
   videoBitrate: number
   maxRate: number
   bufferSize: number
-  audioBitrate: number
   crf: number
   preset: "fast" | "medium"
 }
+
+export const mediaAudioProfile = {
+  label: "audio",
+  bitrate: 160_000,
+  sampleRate: 48_000,
+} as const
 
 export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
   {
@@ -36,7 +41,6 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
     videoBitrate: 700_000,
     maxRate: 900_000,
     bufferSize: 1_800_000,
-    audioBitrate: 64_000,
     crf: 26,
     preset: "fast",
   },
@@ -47,7 +51,6 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
     videoBitrate: 1_600_000,
     maxRate: 2_200_000,
     bufferSize: 4_400_000,
-    audioBitrate: 96_000,
     crf: 24,
     preset: "medium",
   },
@@ -58,7 +61,6 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
     videoBitrate: 2_800_000,
     maxRate: 3_800_000,
     bufferSize: 7_600_000,
-    audioBitrate: 128_000,
     crf: 23,
     preset: "medium",
   },
@@ -69,7 +71,6 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
     videoBitrate: 6_000_000,
     maxRate: 8_000_000,
     bufferSize: 16_000_000,
-    audioBitrate: 128_000,
     crf: 22,
     preset: "medium",
   },
@@ -77,7 +78,9 @@ export const mediaRenditionProfiles: readonly MediaRenditionProfile[] = [
 
 export const mediaPipelineLimits = {
   maximumDurationMs: 120_000,
-  maximumSourceBytes: 512 * 1024 * 1024,
+  // Leave room for the source, generated renditions, and HLS segments inside
+  // the function's 500 MB temporary filesystem.
+  maximumSourceBytes: 300 * 1024 * 1024,
   minimumDimension: 240,
   segmentDurationSeconds: 2,
   maximumFrameRate: 30,

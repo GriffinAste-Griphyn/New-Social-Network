@@ -12,7 +12,11 @@ import {
   MediaUploadSessionError,
   retireMediaUploadSession,
 } from "@/lib/media-upload-sessions"
-import { isVercelHlsPipelineEnabled } from "@/lib/media-pipeline/contracts"
+import {
+  isVercelHlsPipelineEnabled,
+  mediaPipelineLimits,
+} from "@/lib/media-pipeline/contracts"
+import { supportsVercelHlsUpload } from "@/lib/media-pipeline/features"
 import { originalVideoPathname } from "@/lib/media-pipeline/paths"
 import {
   createCloudflareStreamTusUpload,
@@ -221,7 +225,18 @@ export async function POST(request: Request) {
 
   try {
     assertVideoPosterUploadsConfigured()
-    const useVercelHls = isVercelHlsPipelineEnabled()
+    const vercelHlsEnabled = isVercelHlsPipelineEnabled()
+    const clientBuild = Number.parseInt(
+      request.headers.get("x-ubeye-app-build") ?? "",
+      10,
+    )
+    const useVercelHls =
+      vercelHlsEnabled &&
+      parsed.data.byteSize <= mediaPipelineLimits.maximumSourceBytes &&
+      supportsVercelHlsUpload(
+        clientBuild,
+        request.headers.get("x-ubeye-media-pipeline"),
+      )
     const storageProvider = useVercelHls
       ? ("vercel-blob" as const)
       : ("cloudflare-stream" as const)
@@ -357,6 +372,7 @@ export async function POST(request: Request) {
       fileName: parsed.data.fileName,
       uploadLengthBytes: parsed.data.byteSize,
       maxDurationSeconds: parsed.data.maxDurationSeconds,
+      allowLegacyClientFallback: vercelHlsEnabled && !useVercelHls,
     })
 
     let uploadSession

@@ -6,6 +6,14 @@ export function createMediaDeliveryPrefix() {
   return `media/${mediaPipelineVersion}/${randomBytes(18).toString("base64url")}`
 }
 
+export function migrateMediaDeliveryPrefix(
+  outputPrefix: string,
+  encoderVersion: string,
+) {
+  const safeVersion = encoderVersion.replace(/[^a-z0-9.-]/gi, "-")
+  return `${outputPrefix}/encoder-${safeVersion}`
+}
+
 export function originalVideoPathname(input: {
   ownerUserId: string
   uploadSessionId: string
@@ -18,4 +26,3 @@ export function originalVideoPathname(input: {
 export function renditionPrefix(outputPrefix: string, label: string) {
   return `${outputPrefix}/${label}`
 }
-

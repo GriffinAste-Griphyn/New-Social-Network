@@ -6,8 +6,8 @@ enum HomeFeedMediaPresentationPolicy {
 
     static func requiredThumbnailURLs(for feed: MobileFeedResponse) -> [URL] {
         requiredThumbnailURLs(
-            myStoryURL: feed.myStory.latestThumbnailUrl,
-            followingURLs: feed.followingStories.map { $0.playbackThumbnailUrl ?? $0.playbackMediaUrl },
+            myStoryURL: feed.myStory.cardThumbnailUrl,
+            followingURLs: feed.followingStories.map(\.cardThumbnailUrl),
             discoverURLs: feed.discoverTiles.map { $0.thumbnailUrl ?? $0.imageUrl }
         )
     }
@@ -512,9 +512,7 @@ final class FeedStore: ObservableObject {
                 owner: current.myStory.owner,
                 hasActiveStory: !myStoryItems.isEmpty,
                 liveCount: myStoryItems.count,
-            latestThumbnailUrl: latestMyStoryItem.flatMap {
-                    $0.assetKind == .image ? $0.playbackMediaUrl : $0.playbackThumbnailUrl
-                },
+                latestThumbnailUrl: latestMyStoryItem?.cardThumbnailUrl,
                 latestAssetKind: latestMyStoryItem?.assetKind,
                 latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
                 expiresSoonLabel: myStoryItems.isEmpty ? nil : current.myStory.expiresSoonLabel,
@@ -1066,6 +1064,11 @@ private struct HomeFeedLoadingSkeleton: View {
     }
 }
 
+enum HomeStoryCardMetrics {
+    static let height: CGFloat = 192
+    static let width = height * StoryMediaContract.aspectRatio
+}
+
 private struct HomeStoryCardLoadingSkeleton: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -1077,7 +1080,7 @@ private struct HomeStoryCardLoadingSkeleton: View {
             }
             .padding(12)
         }
-        .frame(width: 132, height: 192)
+        .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
         .ubeyeMediaCardChrome()
     }
 }
@@ -1135,12 +1138,12 @@ struct MyStoryHomeCard: View {
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
-                CachedAsyncImage(url: myStory.latestThumbnailUrl) { image in
+                CachedAsyncImage(url: myStory.cardThumbnailUrl) { image in
                     StoryCardThumbnailImage(image: image)
                 } placeholder: {
                     MyStoryCardSkeleton()
                 }
-                .frame(width: 132, height: 192)
+                .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 LinearGradient(
@@ -1152,7 +1155,7 @@ struct MyStoryHomeCard: View {
 
                 if let overlays = myStory.latestTextOverlays, !overlays.isEmpty {
                     StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
-                        .frame(width: 132, height: 192)
+                        .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 }
 
                 if isAwaitingReady {
@@ -1178,7 +1181,7 @@ struct MyStoryHomeCard: View {
                 .foregroundStyle(.white)
                 .padding(12)
             }
-            .frame(width: 132, height: 192)
+            .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
             .ubeyeMediaCardChrome()
         }
         .buttonStyle(.plain)
@@ -1388,12 +1391,12 @@ struct StoryThumb: View {
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
-                CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
+                CachedAsyncImage(url: story.cardThumbnailUrl) { image in
                     StoryCardThumbnailImage(image: image)
                 } placeholder: {
                     Color.ubeyeSubtle
                 }
-                .frame(width: 132, height: 192)
+                .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 LinearGradient(
@@ -1405,7 +1408,7 @@ struct StoryThumb: View {
 
                 if let overlays = story.textOverlays, !overlays.isEmpty {
                     StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
-                        .frame(width: 132, height: 192)
+                        .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 }
 
                 Text(story.creator)
@@ -1413,9 +1416,13 @@ struct StoryThumb: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .padding(12)
-                    .frame(width: 132, height: 192, alignment: .bottomLeading)
+                    .frame(
+                        width: HomeStoryCardMetrics.width,
+                        height: HomeStoryCardMetrics.height,
+                        alignment: .bottomLeading
+                    )
             }
-            .frame(width: 132, height: 192)
+            .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .ubeyeMediaCardChrome()
         }
@@ -1429,9 +1436,13 @@ struct StoryCardThumbnailImage: View {
     let image: Image
 
     var body: some View {
-        image
-            .resizable()
-            .scaledToFill()
+        Color.black
+            .overlay {
+                image
+                    .resizable()
+                    .scaledToFit()
+            }
+            .clipped()
     }
 }
 

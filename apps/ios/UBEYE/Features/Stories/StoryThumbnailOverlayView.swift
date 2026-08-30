@@ -1,5 +1,37 @@
 import SwiftUI
 
+func normalizedStoryOverlayText(
+    _ value: String,
+    preservesTrailingSpace: Bool = false
+) -> String {
+    var result = ""
+    var pendingWhitespace = false
+
+    for character in value {
+        let isWhitespace = character.unicodeScalars.allSatisfy {
+            CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+
+        if isWhitespace {
+            if !result.isEmpty {
+                pendingWhitespace = true
+            }
+        } else {
+            if pendingWhitespace {
+                result.append(" ")
+            }
+            result.append(character)
+            pendingWhitespace = false
+        }
+    }
+
+    if preservesTrailingSpace, pendingWhitespace {
+        result.append(" ")
+    }
+
+    return result
+}
+
 enum StoryTextOverlayAppearance {
     static let fontSize: CGFloat = 16
     static let letterSpacing: CGFloat = 0.2
@@ -51,13 +83,17 @@ struct StoryThumbnailOverlayView: View {
     }
 
     private func chip(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
-        HStack(spacing: 4) {
+        let displayLabel = overlay.kind == "text"
+            ? normalizedStoryOverlayText(overlay.label)
+            : overlay.label
+
+        return HStack(spacing: 4) {
             if overlay.kind == "link" {
                 Image(systemName: "link")
                     .font(.system(size: max(fontSize - 2, 7), weight: .bold))
             }
 
-            Text(overlay.label)
+            Text(displayLabel)
                 .font(.system(size: fontSize, weight: .bold))
                 .lineLimit(maxLines)
                 .multilineTextAlignment(.center)
@@ -77,7 +113,7 @@ struct StoryThumbnailOverlayView: View {
     }
 
     private func quoteReplyCard(_ overlay: StoryTextOverlay, maxWidth: CGFloat) -> some View {
-        // Keep the reply legible without letting it dominate a 132×192 tile.
+        // Keep the reply legible without letting it dominate the compact 9:16 tile.
         // The compact proportions, dark treatment, and restrained tilt
         // preserve the lightweight comment-sticker character of the source UI.
         let cardWidth = min(maxWidth, max(fontSize * 10, 60))

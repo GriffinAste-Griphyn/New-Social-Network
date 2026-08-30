@@ -28,4 +28,16 @@ describe("story input validation", () => {
     expect(storyCaptionSchema.safeParse("x".repeat(221)).success).toBe(false)
     expect(storyTextOverlaySchema.safeParse("x".repeat(221)).success).toBe(false)
   })
+
+  it("collapses repeated whitespace inside text overlays", () => {
+    const formData = new FormData()
+    formData.set("textOverlays", "  one\u00a0 \t two\nthree  ")
+
+    expect(parseStoryElements(formData)).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        label: "one two three",
+      }),
+    ])
+  })
 })

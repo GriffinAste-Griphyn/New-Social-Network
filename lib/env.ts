@@ -35,6 +35,10 @@ const envSchema = z.object({
     z.enum(["true", "false"]).default("false"),
   ),
   MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN: optionalString(),
+  MEDIA_DELIVERY_ACCESS: z.preprocess(
+    blankToUndefined,
+    z.enum(["private", "public"]).optional(),
+  ),
   CLOUDFLARE_STREAM_ACCOUNT_ID: optionalString(),
   CLOUDFLARE_STREAM_API_TOKEN: optionalString(),
   CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN: optionalString(),
@@ -107,6 +111,9 @@ export function assertProductionEnvironment() {
     }
     if (!parsed.MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN) {
       missing.push("MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN")
+    }
+    if (parsed.MEDIA_DELIVERY_ACCESS !== "public") {
+      missing.push("MEDIA_DELIVERY_ACCESS=public")
     }
   } else {
     const cloudflareRequired: Array<keyof Env> = [

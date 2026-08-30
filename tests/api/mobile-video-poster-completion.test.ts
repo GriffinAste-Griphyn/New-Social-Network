@@ -297,4 +297,50 @@ describe("mobile video poster completion", () => {
     )
     expect(createCloudflareStreamStoredVideoAsset).not.toHaveBeenCalled()
   })
+
+  it("lets the worker inspect dimensions omitted by an async-capable client", async () => {
+    const customUid =
+      "media-originals/creator-1/57fd8bc6-296a-499c-8f47-42fbd122403c/source.mp4"
+    process.env.MEDIA_ASYNC_COMPLETION_ENABLED = "true"
+    vi.mocked(head).mockResolvedValue({
+      pathname: customUid,
+      size: 4_096,
+      contentType: "video/mp4",
+      etag: "source-etag",
+    } as never)
+    vi.mocked(createVercelHlsProcessingStoredVideoAsset).mockReturnValue({
+      assetKind: "video",
+      mediaUrl: `/api/story-media/${customUid}`,
+      thumbnailUrl: posterUrl,
+      storageProvider: "vercel-blob",
+      storageKey: customUid,
+      contentType: "video/mp4",
+      byteSize: 4_096,
+      checksum: "c".repeat(64),
+      width: null,
+      height: null,
+      durationMs: 5_000,
+      processingStatus: "processing",
+    } as never)
+    vi.mocked(getDb).mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ mediaAssetId: "media-123" }],
+          }),
+        }),
+      }),
+    } as never)
+
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      completionRequest({ build: 389, includePoster: true, uid: customUid }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(inspectAndHashMediaStream).not.toHaveBeenCalled()
+    expect(createVercelHlsProcessingStoredVideoAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ width: null, height: null }),
+    )
+  })
 })

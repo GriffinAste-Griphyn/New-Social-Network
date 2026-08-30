@@ -379,6 +379,13 @@
       "when": 1787855360000,
       "tag": "0053_versioned_legal_acceptance",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1787959800000,
+      "tag": "0054_interaction_performance_diagnostics",
+      "breakpoints": true
     }
   ]
 }

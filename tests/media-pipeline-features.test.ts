@@ -6,6 +6,8 @@ import {
   isDirectMediaDeliveryEnabled,
   mediaDeliveryAccess,
   minimumAsyncMediaCompletionBuild,
+  minimumVercelHlsUploadBuild,
+  supportsVercelHlsUpload,
 } from "@/lib/media-pipeline/features"
 
 const originalAsyncCompletion = process.env.MEDIA_ASYNC_COMPLETION_ENABLED
@@ -44,5 +46,17 @@ describe("media pipeline rollout features", () => {
     process.env.MEDIA_DELIVERY_ACCESS = "public"
     expect(mediaDeliveryAccess()).toBe("public")
     expect(isDirectMediaDeliveryEnabled()).toBe(true)
+  })
+
+  it("only assigns Vercel uploads to clients that advertise the protocol", () => {
+    expect(
+      supportsVercelHlsUpload(minimumVercelHlsUploadBuild, "hls-v2"),
+    ).toBe(true)
+    expect(supportsVercelHlsUpload(389, "hls-v4")).toBe(true)
+    expect(
+      supportsVercelHlsUpload(minimumVercelHlsUploadBuild - 1, "hls-v4"),
+    ).toBe(false)
+    expect(supportsVercelHlsUpload(389, null)).toBe(false)
+    expect(supportsVercelHlsUpload(389, "hls-v1")).toBe(false)
   })
 })

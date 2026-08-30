@@ -16,7 +16,7 @@ vi.mock("@vercel/blob", () => ({
 
 const basePathname = "stories/web-direct/creator_123/upload_123"
 const displayPathname = `${basePathname}-display.avif`
-const thumbnailPathname = `${basePathname}-thumb.webp`
+const thumbnailPathname = `${basePathname}-fit-thumb.webp`
 
 function blobMetadata(pathname: string, contentType: string, size: number) {
   return {

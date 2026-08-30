@@ -28,10 +28,15 @@ describe("signed HLS media delivery", () => {
 
   it("signs master variants, CMAF maps, and segments independently", () => {
     const master = rewriteHlsPlaylistForStoryMedia(
-      "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n540p/index.m3u8\n",
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",URI="audio/index.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=1000,AUDIO="audio"\n540p/index.m3u8\n',
       "media/hls-v2/asset/master.m3u8",
     )
-    const masterVariant = signedPathname(master.split("\n")[2])
+    const audioUri = master.match(/TYPE=AUDIO[^\n]+URI="([^"]+)"/)?.[1]
+    expect(audioUri && signedPathname(audioUri)).toEqual({
+      pathname: "media/hls-v2/asset/audio/index.m3u8",
+      valid: true,
+    })
+    const masterVariant = signedPathname(master.split("\n")[3])
     expect(masterVariant).toEqual({
       pathname: "media/hls-v2/asset/540p/index.m3u8",
       valid: true,

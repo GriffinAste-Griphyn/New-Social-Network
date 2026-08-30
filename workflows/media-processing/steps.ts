@@ -19,6 +19,8 @@ import {
 import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
 import {
   maximumMediaProcessingAttempts,
+  mediaAudioProfile,
+  mediaEncoderVersion,
   mediaPipelineLimits,
   selectRenditionProfiles,
   type MediaRenditionProfile,
@@ -27,19 +29,25 @@ import {
 } from "@/lib/media-pipeline/contracts"
 import { mediaDeliveryAccess } from "@/lib/media-pipeline/features"
 import {
+  encodeMediaAudioRenditionFile,
   encodeMediaRendition,
   encodeMediaRenditionFile,
   generateMediaPoster,
   generateMediaPosterFile,
+  inspectAudioMediaFile,
   inspectMediaFile,
   inspectAndHashMediaStream,
   mediaContentType,
 } from "@/lib/media-pipeline/ffmpeg"
 import {
   buildHlsMasterPlaylist,
+  type PublishedAudioRendition,
   type PublishedRendition,
 } from "@/lib/media-pipeline/manifest"
-import { renditionPrefix } from "@/lib/media-pipeline/paths"
+import {
+  migrateMediaDeliveryPrefix,
+  renditionPrefix,
+} from "@/lib/media-pipeline/paths"
 import { buildStoryMediaRoute } from "@/lib/story-media/access"
 import { enqueueStoryPublication } from "@/lib/story-publication"
 import { deriveStoryPublicationStatus } from "@/lib/stories/cloudflare-status"
@@ -59,6 +67,20 @@ type EncodedRendition = {
   codec: string
   durationMs: number
   frameRate: number | null
+}
+
+export type EncodedAudioRendition = {
+  playlistPathname: string
+  playlistUrl: string
+  byteSize: number
+  checksum: string
+  segmentCount: number
+  encodingMs: number
+  codec: string
+  durationMs: number
+  bitrate: number
+  channels: number
+  sampleRate: number
 }
 
 type PublishedMaster = {
@@ -186,10 +208,16 @@ export async function claimMediaProcessingWorkflowStep(
   }
   const attempt = job.attempts + 1
   const now = new Date()
+  const outputPrefix =
+    job.encoderVersion === mediaEncoderVersion
+      ? job.outputPrefix
+      : migrateMediaDeliveryPrefix(job.outputPrefix, mediaEncoderVersion)
   const [claimed] = await getDb()
     .update(mediaProcessingJobs)
     .set({
       workflowRunId,
+      encoderVersion: mediaEncoderVersion,
+      outputPrefix,
       status: "inspecting",
       attempts: attempt,
       progressPct: Math.max(job.progressPct, 1),
@@ -213,7 +241,7 @@ export async function claimMediaProcessingWorkflowStep(
 
   await getDb()
     .update(mediaAssets)
-    .set({ workflowRunId, updatedAt: now })
+    .set({ workflowRunId, encoderVersion: mediaEncoderVersion, updatedAt: now })
     .where(eq(mediaAssets.id, job.mediaAssetId))
 
   return { attempt }
@@ -357,7 +385,7 @@ async function encodeMediaRenditionCore(
       checksum: existing.checksum,
       segmentCount: details.segmentCount ?? 0,
       encodingMs: details.encodingMs ?? 0,
-      codec: existing.codec ?? "avc1.640029",
+      codec: "avc1.640029",
       durationMs: existing.durationMs ?? sourceMetadata.durationMs,
       frameRate:
         ((existing.qualityDetails ?? {}) as { frameRate?: number | null })
@@ -414,7 +442,7 @@ async function encodeMediaRenditionCore(
       encodedMetadata.width !== profile.width ||
       encodedMetadata.height !== profile.height ||
       encodedMetadata.videoCodec !== "h264" ||
-      encodedMetadata.hasAudio !== sourceMetadata.hasAudio ||
+      encodedMetadata.hasAudio ||
       Math.abs(encodedMetadata.durationMs - sourceMetadata.durationMs) >
         durationToleranceMs
     ) {
@@ -456,9 +484,7 @@ async function encodeMediaRenditionCore(
       storageKey: uploadedPlaylist.pathname,
       mediaUrl: deliveryMediaUrl(uploadedPlaylist),
       contentType: "application/vnd.apple.mpegurl",
-      codec: sourceMetadata.hasAudio
-        ? "avc1.640029,mp4a.40.2"
-        : "avc1.640029",
+      codec: "avc1.640029",
       width: profile.width,
       height: profile.height,
       durationMs: encodedMetadata.durationMs,
@@ -537,6 +563,211 @@ async function encodeMediaRenditionCore(
   }
 }
 
+async function encodeMediaAudioRenditionCore(
+  jobId: string,
+  sourceMetadata: MediaSourceMetadata,
+  stagedSourcePath?: string,
+): Promise<EncodedAudioRendition | null> {
+  if (!sourceMetadata.hasAudio) return null
+
+  const job = await readJob(jobId)
+  const [existing] = await getDb()
+    .select()
+    .from(mediaRenditions)
+    .where(
+      and(
+        eq(mediaRenditions.mediaAssetId, job.mediaAssetId),
+        eq(mediaRenditions.kind, "hls-audio"),
+        eq(mediaRenditions.label, mediaAudioProfile.label),
+        eq(mediaRenditions.encoderVersion, job.encoderVersion),
+        eq(mediaRenditions.status, "ready"),
+        eq(mediaRenditions.qualityStatus, "passed"),
+      ),
+    )
+    .limit(1)
+
+  if (existing) {
+    const details = (existing.qualityDetails ?? {}) as {
+      segmentCount?: number
+      encodingMs?: number
+      verifiedChannels?: number
+      verifiedSampleRate?: number
+    }
+    return {
+      playlistPathname: existing.storageKey,
+      playlistUrl: existing.mediaUrl,
+      byteSize: existing.byteSize,
+      checksum: existing.checksum,
+      segmentCount: details.segmentCount ?? 0,
+      encodingMs: details.encodingMs ?? 0,
+      codec: existing.codec ?? "mp4a.40.2",
+      durationMs: existing.durationMs ?? sourceMetadata.durationMs,
+      bitrate: existing.bitrate ?? mediaAudioProfile.bitrate,
+      channels: details.verifiedChannels ?? (sourceMetadata.audioChannels === 1 ? 1 : 2),
+      sampleRate: details.verifiedSampleRate ?? mediaAudioProfile.sampleRate,
+    }
+  }
+
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-audio-"))
+  try {
+    const sourcePath = stagedSourcePath ?? path.join(tempDirectory, "source")
+    if (!stagedSourcePath) {
+      await stagePrivateSource(job.sourcePathname, sourcePath)
+    }
+    const outputDirectory = path.join(tempDirectory, mediaAudioProfile.label)
+    await mkdir(outputDirectory, { recursive: true })
+    const encoded = await encodeMediaAudioRenditionFile({
+      inputPath: sourcePath,
+      outputDirectory,
+      audioChannels: sourceMetadata.audioChannels,
+    })
+    const playlistFile = encoded.files.find(
+      (file) => file.fileName === "index.m3u8",
+    )
+    const initFile = encoded.files.find((file) => file.fileName === "init.mp4")
+    const segmentCount = encoded.files.filter((file) =>
+      file.fileName.endsWith(".m4s"),
+    ).length
+    if (!playlistFile || !initFile || segmentCount === 0) {
+      throw new Error("FFmpeg produced an incomplete audio package.")
+    }
+
+    const encodedMetadata = await inspectAudioMediaFile(
+      path.join(outputDirectory, "index.m3u8"),
+    )
+    const expectedChannels = sourceMetadata.audioChannels === 1 ? 1 : 2
+    const durationToleranceMs = Math.max(
+      1_500,
+      Math.round(sourceMetadata.durationMs * 0.03),
+    )
+    const bitrateIsInvalid =
+      encodedMetadata.audioBitrate !== null &&
+      (encodedMetadata.audioBitrate < 120_000 ||
+        encodedMetadata.audioBitrate > 190_000)
+    if (
+      encodedMetadata.audioCodec !== "aac" ||
+      encodedMetadata.hasVideo ||
+      encodedMetadata.audioChannels !== expectedChannels ||
+      encodedMetadata.audioSampleRate !== mediaAudioProfile.sampleRate ||
+      bitrateIsInvalid ||
+      Math.abs(encodedMetadata.durationMs - sourceMetadata.durationMs) >
+        durationToleranceMs
+    ) {
+      throw new Error("Encoded audio package failed structural quality control.")
+    }
+
+    const uploaded = await publishRenditionFiles({
+      prefix: renditionPrefix(job.outputPrefix, mediaAudioProfile.label),
+      files: encoded.files,
+      token: deliveryBlobToken(),
+    })
+    const uploadedPlaylist = uploaded.find((blob) =>
+      blob.pathname.endsWith("/index.m3u8"),
+    )
+    if (!uploadedPlaylist) {
+      throw new Error("The audio playlist was not published.")
+    }
+
+    const byteSize = encoded.files.reduce(
+      (total, file) => total + file.body.byteLength,
+      0,
+    )
+    const measuredBitrate = Math.max(
+      1,
+      Math.ceil(
+        (byteSize * 8) /
+          Math.max(encodedMetadata.durationMs / 1_000, 0.001),
+      ),
+    )
+    const now = new Date()
+    const values = {
+      id: `media-rendition-${randomUUID()}`,
+      mediaAssetId: job.mediaAssetId,
+      processingJobId: job.id,
+      kind: "hls-audio",
+      label: mediaAudioProfile.label,
+      storageProvider: "vercel-blob" as const,
+      storageKey: uploadedPlaylist.pathname,
+      mediaUrl: deliveryMediaUrl(uploadedPlaylist),
+      contentType: "application/vnd.apple.mpegurl",
+      codec: "mp4a.40.2",
+      durationMs: encodedMetadata.durationMs,
+      bitrate: measuredBitrate,
+      byteSize,
+      checksum: playlistFile.checksum,
+      status: "ready" as const,
+      qualityStatus: "passed" as const,
+      qualityDetails: {
+        segmentCount,
+        encodingMs: encoded.encodingMs,
+        initByteSize: initFile.body.byteLength,
+        verifiedDurationMs: encodedMetadata.durationMs,
+        verifiedAudioCodec: encodedMetadata.audioCodec,
+        verifiedAudioBitrate: encodedMetadata.audioBitrate,
+        verifiedChannels: encodedMetadata.audioChannels,
+        verifiedSampleRate: encodedMetadata.audioSampleRate,
+        measuredBitrate,
+        loudnessNormalization: false,
+      },
+      encoderVersion: job.encoderVersion,
+      createdAt: now,
+      updatedAt: now,
+    }
+    const [recorded] = await getDb()
+      .insert(mediaRenditions)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          mediaRenditions.mediaAssetId,
+          mediaRenditions.kind,
+          mediaRenditions.label,
+          mediaRenditions.encoderVersion,
+        ],
+        set: {
+          processingJobId: values.processingJobId,
+          storageKey: values.storageKey,
+          mediaUrl: values.mediaUrl,
+          contentType: values.contentType,
+          codec: values.codec,
+          durationMs: values.durationMs,
+          bitrate: values.bitrate,
+          byteSize: values.byteSize,
+          checksum: values.checksum,
+          status: values.status,
+          qualityStatus: values.qualityStatus,
+          qualityDetails: values.qualityDetails,
+          updatedAt: now,
+        },
+      })
+      .returning()
+
+    logMediaPipeline("info", "audio_rendition_encoded", {
+      jobId,
+      mediaAssetId: job.mediaAssetId,
+      bitrate: measuredBitrate,
+      channels: encodedMetadata.audioChannels,
+      sampleRate: encodedMetadata.audioSampleRate,
+      encodingMs: encoded.encodingMs,
+    })
+
+    return {
+      playlistPathname: recorded.storageKey,
+      playlistUrl: recorded.mediaUrl,
+      byteSize,
+      checksum: playlistFile.checksum,
+      segmentCount,
+      encodingMs: encoded.encodingMs,
+      codec: values.codec,
+      durationMs: encodedMetadata.durationMs,
+      bitrate: measuredBitrate,
+      channels: expectedChannels,
+      sampleRate: mediaAudioProfile.sampleRate,
+    }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true })
+  }
+}
+
 export async function encodeMediaRenditionStep(
   jobId: string,
   profile: MediaRenditionProfile,
@@ -544,6 +775,14 @@ export async function encodeMediaRenditionStep(
 ) {
   "use step"
   return encodeMediaRenditionCore(jobId, profile, sourceMetadata)
+}
+
+export async function encodeMediaAudioRenditionStep(
+  jobId: string,
+  sourceMetadata: MediaSourceMetadata,
+) {
+  "use step"
+  return encodeMediaAudioRenditionCore(jobId, sourceMetadata)
 }
 
 export async function encodeMediaRenditionBatchStep(
@@ -578,6 +817,7 @@ export async function encodeMediaRenditionBatchStep(
 export async function publishMasterPlaylistStep(
   jobId: string,
   renditions: EncodedRendition[],
+  audio?: EncodedAudioRendition | null,
 ): Promise<PublishedMaster> {
   "use step"
 
@@ -588,6 +828,11 @@ export async function publishMasterPlaylistStep(
   if (ordered.length === 0 || ordered.some((item) => item.segmentCount < 1)) {
     throw new MediaProcessingFatalError(
       "No verified HLS renditions are available to publish.",
+    )
+  }
+  if (audio && audio.segmentCount < 1) {
+    throw new MediaProcessingFatalError(
+      "No verified HLS audio rendition is available to publish.",
     )
   }
 
@@ -602,11 +847,19 @@ export async function publishMasterPlaylistStep(
         frameRate: item.frameRate,
       }),
     ),
+    audio
+      ? ({
+          playlistUrl: `${mediaAudioProfile.label}/index.m3u8`,
+          codec: audio.codec,
+          bitrate: audio.bitrate,
+        } satisfies PublishedAudioRendition)
+      : null,
   )
   const body = Buffer.from(playlist, "utf8")
   const checksum = createHash("sha256").update(body).digest("hex")
   const renditionLabels = ordered.map((item) => item.profile.label)
-  const masterFileName = `master-${renditionLabels.join("-")}.m3u8`
+  const masterFileName =
+    `master-${renditionLabels.join("-")}-${checksum.slice(0, 12)}.m3u8`
   const blob = await put(`${job.outputPrefix}/${masterFileName}`, body, {
     access: mediaDeliveryAccess(),
     token: deliveryBlobToken(),
@@ -633,7 +886,11 @@ export async function publishMasterPlaylistStep(
       checksum,
       status: "ready",
       qualityStatus: "passed",
-      qualityDetails: { renditionCount: ordered.length, renditionLabels },
+      qualityDetails: {
+        renditionCount: ordered.length,
+        renditionLabels,
+        hasAudioRendition: Boolean(audio),
+      },
       encoderVersion: job.encoderVersion,
       createdAt: now,
       updatedAt: now,
@@ -653,7 +910,11 @@ export async function publishMasterPlaylistStep(
         checksum,
         status: "ready",
         qualityStatus: "passed",
-        qualityDetails: { renditionCount: ordered.length, renditionLabels },
+        qualityDetails: {
+          renditionCount: ordered.length,
+          renditionLabels,
+          hasAudioRendition: Boolean(audio),
+        },
         updatedAt: now,
       },
     })
@@ -800,11 +1061,12 @@ export async function encodeInitialMediaStep(
   try {
     const sourcePath = path.join(tempDirectory, "source")
     await stagePrivateSource(job.sourcePathname, sourcePath)
-    const [rendition, poster] = await Promise.all([
+    const [rendition, audio, poster] = await Promise.all([
       encodeMediaRenditionCore(jobId, profile, sourceMetadata, sourcePath),
+      encodeMediaAudioRenditionCore(jobId, sourceMetadata, sourcePath),
       generateMediaPosterCore(jobId, sourcePath),
     ])
-    return { rendition, poster }
+    return { rendition, audio, poster }
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
   }

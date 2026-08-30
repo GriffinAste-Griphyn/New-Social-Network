@@ -9,13 +9,16 @@ import {
 } from "@/lib/db/schema"
 import {
   maximumMediaProcessingAttempts,
+  mediaEncoderVersion,
   selectRenditionProfiles,
   type MediaRenditionProfile,
   type MediaSourceMetadata,
 } from "@/lib/media-pipeline/contracts"
+import { migrateMediaDeliveryPrefix } from "@/lib/media-pipeline/paths"
 import {
   activatePlayableMediaProcessingStep,
   completeMediaProcessingStep,
+  encodeMediaAudioRenditionStep,
   encodeMediaRenditionStep,
   failMediaProcessingStep,
   generateMediaPosterStep,
@@ -57,10 +60,17 @@ type DirectJob = Awaited<ReturnType<typeof readDirectJob>>
 export function planNextMediaProcessingStage(input: {
   source: MediaSourceMetadata | null
   hasPoster: boolean
+  hasAudioRendition?: boolean
   readyVariantLabels: Set<string>
   publishedVariantLabels?: Set<string>
 }): MediaProcessingStage {
-  if (!input.source || !input.hasPoster) return { kind: "bootstrap" }
+  if (
+    !input.source ||
+    !input.hasPoster ||
+    (input.source.hasAudio && !input.hasAudioRendition)
+  ) {
+    return { kind: "bootstrap" }
+  }
 
   const profiles = selectRenditionProfiles(input.source)
   const readyProfiles = profiles.filter((profile) =>
@@ -139,7 +149,34 @@ async function acquireDirectMediaProcessingJob(
     ) {
       return { state: "already_running" as const }
     }
-    return { state: "claimed" as const, attempt: expectedAttempt, job }
+    const outputPrefix =
+      job.encoderVersion === mediaEncoderVersion
+        ? job.outputPrefix
+        : migrateMediaDeliveryPrefix(job.outputPrefix, mediaEncoderVersion)
+    if (job.encoderVersion !== mediaEncoderVersion) {
+      const now = new Date()
+      await db
+        .update(mediaProcessingJobs)
+        .set({
+          encoderVersion: mediaEncoderVersion,
+          outputPrefix,
+          updatedAt: now,
+        })
+        .where(eq(mediaProcessingJobs.id, job.id))
+      await db
+        .update(mediaAssets)
+        .set({ encoderVersion: mediaEncoderVersion, updatedAt: now })
+        .where(eq(mediaAssets.id, job.mediaAssetId))
+    }
+    return {
+      state: "claimed" as const,
+      attempt: expectedAttempt,
+      job: {
+        ...job,
+        encoderVersion: mediaEncoderVersion,
+        outputPrefix,
+      },
+    }
   }
 
   if (job.attempts >= maximumMediaProcessingAttempts) {
@@ -158,10 +195,16 @@ async function acquireDirectMediaProcessingJob(
   const now = new Date()
   const nextAttempt = job.attempts + 1
   const preservedProgress = Math.max(job.progressPct, 1)
+  const outputPrefix =
+    job.encoderVersion === mediaEncoderVersion
+      ? job.outputPrefix
+      : migrateMediaDeliveryPrefix(job.outputPrefix, mediaEncoderVersion)
   const [claimed] = await db
     .update(mediaProcessingJobs)
     .set({
       workflowRunId: null,
+      encoderVersion: mediaEncoderVersion,
+      outputPrefix,
       status: "inspecting",
       progressPct: preservedProgress,
       attempts: nextAttempt,
@@ -198,6 +241,7 @@ async function acquireDirectMediaProcessingJob(
     .update(mediaAssets)
     .set({
       workflowRunId: null,
+      encoderVersion: mediaEncoderVersion,
       processingStatus: alreadyPlayable ? "ready" : "processing",
       providerStatus: alreadyPlayable ? "enhancing" : "processing",
       providerPctComplete: Math.max(
@@ -220,7 +264,13 @@ async function acquireDirectMediaProcessingJob(
   return {
     state: "claimed" as const,
     attempt: nextAttempt,
-    job: { ...job, attempts: nextAttempt, status: "inspecting" as const },
+    job: {
+      ...job,
+      encoderVersion: mediaEncoderVersion,
+      outputPrefix,
+      attempts: nextAttempt,
+      status: "inspecting" as const,
+    },
   }
 }
 
@@ -251,6 +301,10 @@ async function readReadyOutputs(job: NonNullable<DirectJob>) {
   return {
     hasPoster: outputs.some(
       (output) => output.kind === "poster" && output.label === "540x960",
+    ),
+    hasAudioRendition: outputs.some(
+      (output) =>
+        output.kind === "hls-audio" && output.label === "audio",
     ),
     readyVariantLabels: new Set(
       outputs
@@ -315,8 +369,13 @@ async function executeMediaProcessingSlice(job: NonNullable<DirectJob>) {
 
   switch (stage.kind) {
     case "bootstrap":
-      await inspectMediaSourceStep(job.id)
-      await generateMediaPosterStep(job.id)
+      {
+        const inspected = await inspectMediaSourceStep(job.id)
+        await Promise.all([
+          generateMediaPosterStep(job.id),
+          encodeMediaAudioRenditionStep(job.id, inspected.source),
+        ])
+      }
       await updateDirectProgress(job, 15)
       return { completed: false }
     case "rendition": {
@@ -338,7 +397,8 @@ async function executeMediaProcessingSlice(job: NonNullable<DirectJob>) {
         ),
       )
       const poster = await generateMediaPosterStep(job.id)
-      const master = await publishMasterPlaylistStep(job.id, renditions)
+      const audio = await encodeMediaAudioRenditionStep(job.id, inspected.source)
+      const master = await publishMasterPlaylistStep(job.id, renditions, audio)
       if (stage.isFinal) {
         await completeMediaProcessingStep(
           job.id,

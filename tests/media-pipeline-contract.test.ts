@@ -87,7 +87,9 @@ describe("aggressive media pipeline contract", () => {
     expect(directStoryImageDisplayPathname(base, "image/webp")).toBe(
       `${base}-display.webp`,
     )
-    expect(directStoryImageThumbnailPathname(base)).toBe(`${base}-thumb.webp`)
+    expect(directStoryImageThumbnailPathname(base)).toBe(
+      `${base}-fit-thumb.webp`,
+    )
   })
 
   it("uses the playback start frame for every Stream loading poster", () => {
