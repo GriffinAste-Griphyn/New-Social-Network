@@ -8,6 +8,7 @@ import ffmpegStaticPath from "ffmpeg-static"
 import ffprobeInstaller from "@ffprobe-installer/ffprobe"
 
 import {
+  maximumRenditionFrameRate,
   mediaAudioProfile,
   mediaPipelineLimits,
   type MediaRenditionProfile,
@@ -27,6 +28,7 @@ type ProbeStream = {
   bit_rate?: string
   color_transfer?: string
   color_primaries?: string
+  field_order?: string
   tags?: { rotate?: string }
   side_data_list?: Array<{ rotation?: number }>
 }
@@ -202,6 +204,7 @@ function parseProbeResult(result: Buffer): MediaSourceMetadata {
     rotation: Number.isFinite(rotation) ? rotation : 0,
     colorTransfer: video.color_transfer ?? null,
     colorPrimaries: video.color_primaries ?? null,
+    fieldOrder: video.field_order ?? null,
   } satisfies MediaSourceMetadata
 }
 
@@ -308,7 +311,12 @@ export function renditionFfmpegArguments(input: {
   outputDirectory: string
   sourceMetadata?: Pick<
     MediaSourceMetadata,
-    "rotation" | "colorTransfer" | "colorPrimaries" | "audioChannels"
+    | "rotation"
+    | "colorTransfer"
+    | "colorPrimaries"
+    | "audioChannels"
+    | "frameRate"
+    | "fieldOrder"
   >
   inputPath?: string
 }) {
@@ -326,9 +334,21 @@ export function renditionFfmpegArguments(input: {
   const isHdr = ["smpte2084", "arib-std-b67"].includes(
     input.sourceMetadata?.colorTransfer?.toLowerCase() ?? "",
   )
+  const fieldOrder = input.sourceMetadata?.fieldOrder?.toLowerCase() ?? ""
+  const isInterlaced = ["tt", "bb", "tb", "bt", "interlaced"].includes(
+    fieldOrder,
+  )
+  const outputFrameRate = maximumRenditionFrameRate(
+    profile,
+    input.sourceMetadata?.frameRate,
+  )
+  const gopFrames = Math.max(
+    1,
+    Math.round(outputFrameRate * mediaPipelineLimits.segmentDurationSeconds),
+  )
   const normalizationFilter = [
     rotationFilter,
-    "yadif=deint=interlaced",
+    isInterlaced ? "yadif=deint=interlaced" : null,
     isHdr
       ? "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
       : null,
@@ -372,7 +392,7 @@ export function renditionFfmpegArguments(input: {
     "-profile:v",
     "high",
     "-level:v",
-    "4.1",
+    outputFrameRate > 30 ? "4.2" : "4.1",
     "-pix_fmt",
     "yuv420p",
     "-crf",
@@ -382,11 +402,11 @@ export function renditionFfmpegArguments(input: {
     "-bufsize",
     String(profile.bufferSize),
     "-fpsmax",
-    String(mediaPipelineLimits.maximumFrameRate),
+    String(outputFrameRate),
     "-force_key_frames",
     `expr:gte(t,n_forced*${mediaPipelineLimits.segmentDurationSeconds})`,
     "-x264-params",
-    "bframes=3:scenecut=0:keyint=60:min-keyint=60:ref=4",
+    `bframes=3:scenecut=0:keyint=${gopFrames}:min-keyint=${gopFrames}:ref=4`,
     "-an",
     "-hls_time",
     String(mediaPipelineLimits.segmentDurationSeconds),
@@ -545,11 +565,15 @@ export async function generateMediaPoster(input: {
       "-vf",
       aspectFitCanvasFilter({
         inputLabel: "",
-        width: 540,
-        height: 960,
+        width: 1080,
+        height: 1920,
       }),
-      "-q:v",
-      "2",
+      "-c:v",
+      "libwebp",
+      "-quality",
+      "80",
+      "-compression_level",
+      "4",
       input.outputPath,
     ],
     input.source,
@@ -581,11 +605,15 @@ export async function generateMediaPosterFile(input: {
     "-vf",
     aspectFitCanvasFilter({
       inputLabel: "",
-      width: 540,
-      height: 960,
+      width: 1080,
+      height: 1920,
     }),
-    "-q:v",
-    "2",
+    "-c:v",
+    "libwebp",
+    "-quality",
+    "80",
+    "-compression_level",
+    "4",
     input.outputPath,
   ])
   const body = await readFile(input.outputPath)
@@ -600,5 +628,6 @@ export function mediaContentType(fileName: string) {
   if (fileName.endsWith(".m3u8")) return "application/vnd.apple.mpegurl"
   if (fileName.endsWith(".m4s")) return "video/iso.segment"
   if (fileName.endsWith(".mp4")) return "video/mp4"
+  if (fileName.endsWith(".webp")) return "image/webp"
   return "application/octet-stream"
 }

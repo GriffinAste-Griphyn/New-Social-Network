@@ -1,5 +1,5 @@
 export const mediaPipelineVersion = "hls-v4"
-export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-aac-v5"
+export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-aac-v6"
 export const maximumMediaProcessingAttempts = 8
 
 export type MediaSourceMetadata = {
@@ -14,6 +14,7 @@ export type MediaSourceMetadata = {
   rotation: number
   colorTransfer?: string | null
   colorPrimaries?: string | null
+  fieldOrder?: string | null
 }
 
 export type MediaRenditionProfile = {
@@ -83,8 +84,22 @@ export const mediaPipelineLimits = {
   maximumSourceBytes: 300 * 1024 * 1024,
   minimumDimension: 240,
   segmentDurationSeconds: 2,
-  maximumFrameRate: 30,
+  maximumFrameRate: 60,
+  maximumHighFrameRateRenditionHeight: 1_280,
 } as const
+
+export function maximumRenditionFrameRate(
+  profile: Pick<MediaRenditionProfile, "height">,
+  sourceFrameRate?: number | null,
+) {
+  const source = Math.max(sourceFrameRate ?? 30, 1)
+  const ceiling =
+    source > 30 &&
+    profile.height <= mediaPipelineLimits.maximumHighFrameRateRenditionHeight
+      ? mediaPipelineLimits.maximumFrameRate
+      : 30
+  return Math.min(source, ceiling)
+}
 
 export function isVercelHlsPipelineEnabled() {
   return (

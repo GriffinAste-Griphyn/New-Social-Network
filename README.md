@@ -24,8 +24,8 @@ Recommended production integrations for the first serious build:
 
 - Neon for Postgres
 - Cloudflare R2 for story-photo originals and immutable image delivery
-- Vercel Blob for legacy private media and the optional adaptive-video pipeline
-- Vercel Workflow plus bundled FFmpeg for story-video processing
+- Cloudflare Stream for production story-video ingest, transcoding, and edge delivery
+- Vercel Blob plus Vercel Workflow for the optional custom-HLS canary
 - Stripe Connect for payouts
 
 ## Story media setup
@@ -54,7 +54,7 @@ Attach the delivery bucket to the `media.ubeye.ai` custom domain and enable
 Cloudflare caching for the immutable derivative paths. Production rejects
 Cloudflare's rate-limited `r2.dev` development hostname.
 
-The custom Vercel HLS path uses two Blob stores. `BLOB_READ_WRITE_TOKEN` must
+The optional custom Vercel HLS canary uses two Blob stores. `BLOB_READ_WRITE_TOKEN` must
 belong to a private store for originals. `MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN`
 must belong to a public store for opaque, versioned HLS packages and posters.
 Apply migration `0049_vercel_hls_media_pipeline.sql` before enabling it.
@@ -67,14 +67,14 @@ STORY_VIDEO_PROCESSOR=vercel-hls
 MEDIA_PIPELINE_ENABLED=true
 ```
 
-Deploy the code and migration first with the legacy
+Keep production video on
 `STORY_VIDEO_PROCESSOR=cloudflare-stream` setting and
-`MEDIA_PIPELINE_ENABLED=false`. After preview validation, change the processor
-to `vercel-hls` and the flag to `true` together. Previously issued Cloudflare
-uploads remain completable, and custom uploads already in flight remain
-completable after a rollback.
+`MEDIA_PIPELINE_ENABLED=false`. If the custom pipeline is evaluated, enable
+`vercel-hls` and the flag together only in a measured preview/canary. Previously
+issued Cloudflare uploads remain completable, and custom uploads already in
+flight remain completable after a rollback.
 
-The legacy Cloudflare rollback configuration is:
+The production Cloudflare Stream configuration is:
 
 ```bash
 STORY_STORAGE_PROVIDER=vercel-blob
@@ -125,8 +125,9 @@ MOBILE_BLOB_MULTIPART_CONCURRENCY_STANDARD=4
 ```
 
 Install the Vercel Workflow integration before deployment. Vercel invokes the
-publication and custom-media reconciliation routes using `CRON_SECRET`. Image
-and video processing reconciliation run every ten minutes.
+publication and custom-media reconciliation routes using `CRON_SECRET`. Image,
+video, and publication reconciliation run every five minutes; moderation runs
+every ten minutes; cleanup and operations rollups run hourly.
 
 ## Admin setup
 

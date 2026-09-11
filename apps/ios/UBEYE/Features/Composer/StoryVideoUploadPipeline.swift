@@ -53,15 +53,6 @@ struct StoryVideoInspection {
         )
     }
 
-    var needsUploadSizeOptimization: Bool {
-        guard let estimatedBitsPerSecond else {
-            return false
-        }
-
-        return estimatedBitsPerSecond >
-            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond
-    }
-
     private var hasStreamSupportedCodecs: Bool {
         guard !codecTypes.isEmpty else {
             return false
@@ -83,7 +74,7 @@ struct StoryVideoInspection {
             "fastStart=\(hasFastStart)",
             "streamContainer=\(hasStreamSupportedContainer)",
             "streamCompatible=\(isStreamCompatibleInput)",
-            "sizeOptimized=\(!needsUploadSizeOptimization)",
+            "qualityPreserved=true",
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -257,7 +248,6 @@ enum StoryVideoUploadNormalizer {
     // upload master. This envelope includes room for high-quality audio and
     // container overhead while keeping the visible 1080p/30 fps ceiling.
     static let normalizedTargetBitsPerSecond = 6_500_000
-    static let passthroughMaximumBitsPerSecond = 8_000_000
 
     static func normalizedFileLengthLimit(durationSeconds: TimeInterval) -> Int64? {
         guard durationSeconds.isFinite, durationSeconds > 0 else {
@@ -284,8 +274,7 @@ enum StoryVideoUploadNormalizer {
         }
 
         if inspection.byteSize <= maxUploadBytes,
-           inspection.isStreamCompatibleInput,
-           !inspection.needsUploadSizeOptimization {
+           inspection.isStreamCompatibleInput {
             MediaPerformance.mark("video_upload_strategy stream_passthrough \(inspection.diagnosticSummary)")
             return PreparedStoryVideo(
                 url: url,
@@ -298,7 +287,6 @@ enum StoryVideoUploadNormalizer {
 
         if inspection.byteSize <= maxUploadBytes,
            inspection.canRemuxForStream,
-           !inspection.needsUploadSizeOptimization,
            let remuxedURL = await fastStartRemuxedVideoURL(for: url) {
             do {
                 let byteSize = try await StoryUploadFileIO.fileSize(at: remuxedURL)
@@ -326,9 +314,7 @@ enum StoryVideoUploadNormalizer {
         }
 
         let reason: String
-        if inspection.needsUploadSizeOptimization {
-            reason = "high_bitrate"
-        } else if inspection.byteSize > maxUploadBytes {
+        if inspection.byteSize > maxUploadBytes {
             reason = "large_input"
         } else if !inspection.hasFastStart {
             reason = "moov_after_media"

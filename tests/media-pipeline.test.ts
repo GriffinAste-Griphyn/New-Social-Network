@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   mediaAudioProfile,
+  maximumRenditionFrameRate,
   mediaRenditionProfiles,
   selectRenditionProfiles,
   validateSourceMetadata,
@@ -23,7 +24,10 @@ import {
   mediaBinaryPaths,
   renditionFfmpegArguments,
 } from "@/lib/media-pipeline/ffmpeg"
-import { buildHlsMasterPlaylist } from "@/lib/media-pipeline/manifest"
+import {
+  buildHlsMasterPlaylist,
+  measureHlsPackageBandwidth,
+} from "@/lib/media-pipeline/manifest"
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
@@ -89,8 +93,8 @@ describe("custom media pipeline contracts", () => {
         profile,
         playlistUrl: "360p/index.m3u8",
         codec: "avc1.640029,mp4a.40.2",
-        byteSize: 1_000_000,
-        durationMs: 10_000,
+        averageBandwidth: 800_000,
+        peakBandwidth: 1_040_000,
         frameRate: 29.97,
       },
     ])
@@ -99,8 +103,9 @@ describe("custom media pipeline contracts", () => {
     expect(master).toContain("RESOLUTION=360x640")
     expect(master).toContain("360p/index.m3u8")
     expect(master).toContain("AVERAGE-BANDWIDTH=800000")
-    expect(master).toContain("BANDWIDTH=920000")
+    expect(master).toContain("BANDWIDTH=1040000")
     expect(master).toContain("FRAME-RATE=29.970")
+    expect(master).toContain("VIDEO-RANGE=SDR")
   })
 
   it("uses one high-quality audio group across every adaptive video variant", () => {
@@ -111,15 +116,16 @@ describe("custom media pipeline contracts", () => {
           profile,
           playlistUrl: "360p/index.m3u8",
           codec: "avc1.640029",
-          byteSize: 750_000,
-          durationMs: 10_000,
+          averageBandwidth: 600_000,
+          peakBandwidth: 720_000,
           frameRate: 30,
         },
       ],
       {
         playlistUrl: "audio/index.m3u8",
         codec: "mp4a.40.2",
-        bitrate: mediaAudioProfile.bitrate,
+        averageBandwidth: mediaAudioProfile.bitrate,
+        peakBandwidth: 180_000,
       },
     )
 
@@ -128,6 +134,7 @@ describe("custom media pipeline contracts", () => {
     expect(master).toContain('CODECS="avc1.640029,mp4a.40.2"')
     expect(master).toContain('AUDIO="audio"')
     expect(master).toContain("AVERAGE-BANDWIDTH=760000")
+    expect(master).toContain("BANDWIDTH=900000")
   })
 
   it("does not advertise an audio bitrate for silent sources", () => {
@@ -137,8 +144,8 @@ describe("custom media pipeline contracts", () => {
         profile,
         playlistUrl: "360p/index.m3u8",
         codec: "avc1.640029",
-        byteSize: 750_000,
-        durationMs: 10_000,
+        averageBandwidth: 600_000,
+        peakBandwidth: 690_000,
         frameRate: 30,
       },
     ])
@@ -146,6 +153,28 @@ describe("custom media pipeline contracts", () => {
     expect(master).toContain("BANDWIDTH=690000")
     expect(master).toContain("AVERAGE-BANDWIDTH=600000")
     expect(master).not.toContain("mp4a")
+  })
+
+  it("measures average and peak rates from media segments only", () => {
+    expect(
+      measureHlsPackageBandwidth([
+        {
+          fileName: "index.m3u8",
+          body: Buffer.from(
+            "#EXTM3U\n#EXTINF:2.000,\nsegment-00000.m4s\n#EXTINF:1.000,\nsegment-00001.m4s\n",
+          ),
+        },
+        { fileName: "init.mp4", body: Buffer.alloc(50_000) },
+        { fileName: "segment-00000.m4s", body: Buffer.alloc(100_000) },
+        { fileName: "segment-00001.m4s", body: Buffer.alloc(100_000) },
+      ]),
+    ).toEqual({
+      averageBandwidth: 533_334,
+      peakBandwidth: 800_000,
+      segmentCount: 2,
+      mediaByteSize: 200_000,
+      durationSeconds: 3,
+    })
   })
 
   it("pins two-second CMAF HLS packaging arguments", () => {
@@ -175,6 +204,40 @@ describe("custom media pipeline contracts", () => {
     expect(audioArgs[audioArgs.indexOf("-ac") + 1]).toBe("2")
     expect(audioArgs).not.toContain("-af")
   })
+
+  it("preserves high frame rate only through the 720p rendition", () => {
+    const profile720 = mediaRenditionProfiles.find(
+      (profile) => profile.label === "720p",
+    )!
+    const profile1080 = mediaRenditionProfiles.find(
+      (profile) => profile.label === "1080p",
+    )!
+    expect(maximumRenditionFrameRate(profile720, 59.94)).toBe(59.94)
+    expect(maximumRenditionFrameRate(profile1080, 59.94)).toBe(30)
+
+    const progressiveArgs = renditionFfmpegArguments({
+      profile: profile720,
+      outputDirectory: "/tmp/rendition",
+      sourceMetadata: { ...sourceMetadata(1920), frameRate: 59.94, fieldOrder: "progressive" },
+    })
+    const progressiveFilter =
+      progressiveArgs[progressiveArgs.indexOf("-filter_complex") + 1]
+    expect(progressiveFilter).not.toContain("yadif")
+    expect(progressiveArgs[progressiveArgs.indexOf("-fpsmax") + 1]).toBe("59.94")
+    expect(progressiveArgs[progressiveArgs.indexOf("-level:v") + 1]).toBe("4.2")
+    expect(progressiveArgs[progressiveArgs.indexOf("-x264-params") + 1]).toContain(
+      "keyint=120:min-keyint=120",
+    )
+
+    const interlacedArgs = renditionFfmpegArguments({
+      profile: profile720,
+      outputDirectory: "/tmp/rendition",
+      sourceMetadata: { ...sourceMetadata(1920), fieldOrder: "tt" },
+    })
+    expect(interlacedArgs[interlacedArgs.indexOf("-filter_complex") + 1]).toContain(
+      "yadif=deint=interlaced",
+    )
+  })
 })
 
 describe("bundled FFmpeg smoke test", () => {
@@ -184,7 +247,7 @@ describe("bundled FFmpeg smoke test", () => {
     const sourcePath = path.join(directory, "source.mp4")
     const outputDirectory = path.join(directory, "hls")
     const audioOutputDirectory = path.join(directory, "audio")
-    const posterPath = path.join(directory, "poster.jpg")
+    const posterPath = path.join(directory, "poster.webp")
     const { ffmpeg } = mediaBinaryPaths()
 
     await execFileAsync(ffmpeg, [
@@ -269,18 +332,14 @@ describe("bundled FFmpeg smoke test", () => {
             profile: mediaRenditionProfiles[0],
             playlistUrl: "hls/index.m3u8",
             codec: "avc1.640029",
-            byteSize: encoded.files.reduce(
-              (total, file) => total + file.body.byteLength,
-              0,
-            ),
-            durationMs: metadata.durationMs,
+            ...measureHlsPackageBandwidth(encoded.files),
             frameRate: metadata.frameRate,
           },
         ],
         {
           playlistUrl: "audio/index.m3u8",
           codec: "mp4a.40.2",
-          bitrate: mediaAudioProfile.bitrate,
+          ...measureHlsPackageBandwidth(encodedAudio.files),
         },
       ),
     )

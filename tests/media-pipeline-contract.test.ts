@@ -50,8 +50,8 @@ describe("aggressive media pipeline contract", () => {
 
   it("uses a descending high-fidelity image quality ladder", () => {
     expect(storyMediaContract.imageEncoding).toEqual({
-      displayAvifQualities: [0.65, 0.6, 0.55, 0.5],
-      displayWebpQualities: [0.85, 0.8, 0.75, 0.7, 0.65],
+      displayAvifQualities: [0.75, 0.7, 0.65, 0.6],
+      displayWebpQualities: [0.9, 0.85, 0.8, 0.75, 0.7],
       thumbnailWebpQualities: [0.8, 0.75, 0.7, 0.65, 0.6],
       deliveryQuality: 85,
     })
@@ -74,6 +74,8 @@ describe("aggressive media pipeline contract", () => {
   it("accepts only the documented source media types", () => {
     expect(isSupportedStoryImageInputContentType("image/jpeg")).toBe(true)
     expect(isSupportedStoryImageInputContentType("IMAGE/WEBP")).toBe(true)
+    expect(isSupportedStoryImageInputContentType("image/avif")).toBe(true)
+    expect(isSupportedStoryImageInputContentType("image/heic")).toBe(false)
     expect(isSupportedStoryImageInputContentType("image/gif")).toBe(false)
     expect(isSupportedStoryVideoInputContentType("video/mp4")).toBe(true)
     expect(isSupportedStoryVideoInputContentType("video/quicktime")).toBe(true)

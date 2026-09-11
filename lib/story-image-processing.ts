@@ -43,18 +43,76 @@ export function storyImageResizeOptions(contentMode: StoryImageContentMode) {
   }
 }
 
-export async function createStoryCanvasImage(sourceBody: Buffer) {
-  return sharp(sourceBody, {
+export async function createStoryCanvasImage(
+  sourceBody: Buffer,
+  contentMode: StoryImageContentMode = "fit",
+) {
+  const sourceOptions = {
     autoOrient: true,
     failOn: "warning",
     limitInputPixels: 80_000_000,
-  })
+  } as const
+  const metadata = await sharp(sourceBody, sourceOptions).metadata()
+  const sourceHasAlpha = Boolean(metadata.hasAlpha)
+
+  if (contentMode === "fill") {
+    const filled = sharp(sourceBody, sourceOptions)
+      .resize(
+        storyMediaContract.canvas.width,
+        storyMediaContract.canvas.height,
+        storyImageResizeOptions("fill"),
+      )
+      .sharpen({ sigma: 0.6 })
+    return sourceHasAlpha ? filled.ensureAlpha() : filled.removeAlpha()
+  }
+
+  if (sourceHasAlpha) {
+    return sharp(sourceBody, sourceOptions)
+      .resize(
+        storyMediaContract.canvas.width,
+        storyMediaContract.canvas.height,
+        storyImageResizeOptions("fit"),
+      )
+      .sharpen({ sigma: 0.6 })
+      .ensureAlpha()
+  }
+
+  const background = await sharp(sourceBody, sourceOptions)
     .resize(
       storyMediaContract.canvas.width,
       storyMediaContract.canvas.height,
-      storyImageResizeOptions("fit"),
+      storyImageResizeOptions("fill"),
     )
-    .ensureAlpha()
+    .blur(28)
+    .modulate({ brightness: 0.7, saturation: 0.85 })
+    .removeAlpha()
+    .toBuffer()
+  const foreground = await sharp(sourceBody, sourceOptions)
+    .resize(storyMediaContract.canvas.width, storyMediaContract.canvas.height, {
+      fit: "inside",
+      kernel: sharp.kernel.lanczos3,
+      withoutEnlargement: false,
+    })
+    .sharpen({ sigma: 0.6 })
+    .removeAlpha()
+    .toBuffer({ resolveWithObject: true })
+
+  const canvas = await sharp(background)
+    .composite([
+      {
+        input: foreground.data,
+        left: Math.floor((storyMediaContract.canvas.width - foreground.info.width) / 2),
+        top: Math.floor((storyMediaContract.canvas.height - foreground.info.height) / 2),
+      },
+    ])
+    .removeAlpha()
+    .png()
+    .toBuffer()
+
+  // Materialize the composite before callers clone and resize it. Sharp applies
+  // resize before composite in a shared pipeline, which can otherwise make the
+  // full-height foreground larger than a downstream thumbnail canvas.
+  return sharp(canvas)
 }
 
 export function storyImageThumbnailResizeOptions() {
@@ -207,9 +265,11 @@ export async function createServerEncodedStoryImageAsset(input: {
   }
 
   const originalDimensions = await storyImageDisplayDimensions(sourceBody)
-  const image = await createStoryCanvasImage(sourceBody)
+  const image = await createStoryCanvasImage(sourceBody, input.contentMode)
   const displayAvif = await encodeWithinBudget({
-    qualities: [85, 80, 75, 70, 65],
+    qualities: storyMediaContract.imageEncoding.displayAvifQualities.map(
+      (quality) => Math.round(quality * 100),
+    ),
     maxByteSize: maxStoryImageDisplayDerivativeBytes,
     encode: (quality) =>
       image
@@ -220,7 +280,9 @@ export async function createServerEncodedStoryImageAsset(input: {
   const displayWebp = displayAvif
     ? null
     : await encodeWithinBudget({
-        qualities: [85, 80, 75, 70, 65],
+        qualities: storyMediaContract.imageEncoding.displayWebpQualities.map(
+          (quality) => Math.round(quality * 100),
+        ),
         maxByteSize: maxStoryImageDisplayDerivativeBytes,
         encode: (quality) =>
           image.clone().webp({ quality, effort: 6, smartSubsample: true }).toBuffer(),
@@ -230,17 +292,15 @@ export async function createServerEncodedStoryImageAsset(input: {
     throw new StoryUploadError("The image could not fit the delivery budget.")
   }
 
-  const thumbnailImage = sharp(sourceBody, {
-    autoOrient: true,
-    failOn: "warning",
-    limitInputPixels: 80_000_000,
-  }).resize(
+  const thumbnailImage = image.clone().resize(
     storyMediaContract.thumbnail.width,
     storyMediaContract.thumbnail.height,
-    storyImageThumbnailResizeOptions(),
+    { fit: "fill", kernel: sharp.kernel.lanczos3 },
   )
   const thumbnail = await encodeWithinBudget({
-    qualities: [85, 80, 75, 70, 65, 60],
+    qualities: storyMediaContract.imageEncoding.thumbnailWebpQualities.map(
+      (quality) => Math.round(quality * 100),
+    ),
     maxByteSize: maxStoryImageThumbnailDerivativeBytes,
     encode: (quality) =>
       thumbnailImage

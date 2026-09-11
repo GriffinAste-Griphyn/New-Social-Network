@@ -84,7 +84,7 @@ describe("story image processing", () => {
     expect(pixel(180, 620)).toEqual([0, 0, 0, 0])
   })
 
-  it("builds playback canvases without a blurred or cover-cropped layer", async () => {
+  it("builds opaque playback canvases with a subdued blurred fit background", async () => {
     const source = await sharp({
       create: {
         width: 400,
@@ -100,16 +100,17 @@ describe("story image processing", () => {
       .toBuffer({ resolveWithObject: true })
     const pixel = (x: number, y: number) => {
       const offset = (y * info.width + x) * info.channels
-      return Array.from(data.subarray(offset, offset + 4))
+      return Array.from(data.subarray(offset, offset + 3))
     }
 
-    expect(info).toMatchObject({ width: 1080, height: 1920, channels: 4 })
-    expect(pixel(540, 20)).toEqual([0, 0, 0, 0])
-    expect(pixel(540, 960)).toEqual([220, 30, 30, 255])
-    expect(pixel(540, 1900)).toEqual([0, 0, 0, 0])
+    expect(info).toMatchObject({ width: 1080, height: 1920, channels: 3 })
+    expect(pixel(540, 20)[0]).toBeLessThan(pixel(540, 960)[0]!)
+    expect(pixel(540, 20)[0]).toBeGreaterThan(100)
+    expect(pixel(540, 960)).toEqual([220, 30, 30])
+    expect(pixel(540, 1900)[0]).toBeLessThan(pixel(540, 960)[0]!)
   })
 
-  it("preserves transparent letterboxing through the production AVIF encoding", async () => {
+  it("does not add an alpha channel to opaque production AVIF output", async () => {
     const source = await sharp({
       create: {
         width: 400,
@@ -123,17 +124,25 @@ describe("story image processing", () => {
     const encoded = await (await createStoryCanvasImage(source))
       .avif({ quality: 85, effort: 6, chromaSubsampling: "4:2:0", bitdepth: 8 })
       .toBuffer()
-    const { data, info } = await sharp(encoded)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-    const alpha = (x: number, y: number) =>
-      data[(y * info.width + x) * info.channels + 3]
+    const info = await sharp(encoded).metadata()
+    expect(info).toMatchObject({ width: 1080, height: 1920, hasAlpha: false })
+  })
 
-    expect(info).toMatchObject({ width: 1080, height: 1920, channels: 4 })
-    expect(alpha(540, 20)).toBe(0)
-    expect(alpha(540, 960)).toBe(255)
-    expect(alpha(540, 1900)).toBe(0)
+  it("preserves alpha when the source actually contains transparency", async () => {
+    const source = await sharp({
+      create: {
+        width: 400,
+        height: 300,
+        channels: 4,
+        background: { r: 220, g: 30, b: 30, alpha: 0.5 },
+      },
+    })
+      .png()
+      .toBuffer()
+    const rendered = await (await createStoryCanvasImage(source)).png().toBuffer()
+    const info = await sharp(rendered).metadata()
+
+    expect(info).toMatchObject({ width: 1080, height: 1920, hasAlpha: true })
   })
 
   it("keeps the full story visible in thumbnails", async () => {

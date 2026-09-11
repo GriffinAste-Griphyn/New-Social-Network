@@ -36,7 +36,7 @@ describe("story image quality selection", () => {
 
     await expect(
       highestQualityImageWithinBudget({
-        qualities: [0.65, 0.6, 0.55],
+        qualities: [0.75, 0.7, 0.65],
         maxByteSize: 1_500_000,
         encode,
       }),

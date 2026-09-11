@@ -185,12 +185,23 @@ function storyCanvas(image: ImageBitmap, width: number, height: number) {
   const context = canvas.getContext("2d", { alpha: false })
   if (!context) throw new Error("Could not prepare this image.")
 
-  context.fillStyle = "#000000"
-  context.fillRect(0, 0, width, height)
-
   const containScale = Math.min(width / image.width, height / image.height)
   const containWidth = image.width * containScale
   const containHeight = image.height * containScale
+  const coverScale = Math.max(width / image.width, height / image.height) * 1.08
+  const coverWidth = image.width * coverScale
+  const coverHeight = image.height * coverScale
+
+  context.save()
+  context.filter = `blur(${Math.max(width, height) * 0.025}px) brightness(70%) saturate(85%)`
+  context.drawImage(
+    image,
+    (width - coverWidth) / 2,
+    (height - coverHeight) / 2,
+    coverWidth,
+    coverHeight,
+  )
+  context.restore()
   context.drawImage(
     image,
     (width - containWidth) / 2,

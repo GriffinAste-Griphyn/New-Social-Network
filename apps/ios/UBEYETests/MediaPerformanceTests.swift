@@ -541,9 +541,9 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
-    func testStoryImageTranscoderFitCanvasLeavesLetterboxTransparent() throws {
+    func testStoryImageTranscoderFitCanvasUsesBlurredOpaqueBackground() throws {
         let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("transparent-fit-\(UUID().uuidString).png")
+            .appendingPathComponent("opaque-fit-\(UUID().uuidString).png")
         try makeCropTestImageData(width: 1_600, height: 1_200)
             .write(to: fileURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: fileURL) }
@@ -563,9 +563,47 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertLessThan(topPixel[3], 10)
+        XCTAssertGreaterThan(topPixel[3], 245)
+        XCTAssertGreaterThan(
+            Int(topPixel[0]) + Int(topPixel[1]) + Int(topPixel[2]),
+            20
+        )
         XCTAssertGreaterThan(centerPixel[3], 245)
         XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+    }
+
+    func testStoryImageTranscoderPreservesTransparentFitCanvas() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let sourceData = UIGraphicsImageRenderer(
+            size: CGSize(width: 400, height: 300),
+            format: format
+        ).pngData { context in
+            context.cgContext.clear(CGRect(x: 0, y: 0, width: 400, height: 300))
+            UIColor.systemRed.setFill()
+            context.fill(CGRect(x: 100, y: 50, width: 200, height: 200))
+        }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transparent-fit-\(UUID().uuidString).png")
+        try sourceData.write(to: fileURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let image = try XCTUnwrap(
+            StoryImageTranscoder.storyCanvasImage(
+                fileURL: fileURL,
+                width: StoryImageUpload.playbackCanvasWidth,
+                height: StoryImageUpload.playbackCanvasHeight,
+                contentMode: .fit
+            )
+        )
+        let topPixel = try XCTUnwrap(rgbaPixel(in: image, x: image.width / 2, y: 4))
+        let centerPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
+        )
+
+        XCTAssertLessThan(topPixel[3], 10)
+        XCTAssertGreaterThan(centerPixel[3], 245)
     }
 
     func testStoryCanvasLayoutCentersAcrossViewerChromeVariants() {
@@ -745,11 +783,11 @@ final class MediaPerformanceTests: XCTestCase {
         )
         XCTAssertEqual(
             StoryMediaContract.displayAVIFQualityCandidates,
-            [0.65, 0.60, 0.55, 0.50]
+            [0.75, 0.70, 0.65, 0.60]
         )
         XCTAssertEqual(
             StoryMediaContract.displayWebPQualityCandidates,
-            [0.85, 0.80, 0.75, 0.70, 0.65]
+            [0.90, 0.85, 0.80, 0.75, 0.70]
         )
         XCTAssertEqual(
             StoryMediaContract.thumbnailWebPQualityCandidates,
@@ -791,6 +829,17 @@ final class MediaPerformanceTests: XCTestCase {
             StoryMediaContract.maximumImageThumbnailDerivativeBytes
         )
         XCTAssertFalse(derivatives.thumbHash.isEmpty)
+
+        if derivatives.display.contentType == "image/avif" {
+            let avifURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("story-source-\(UUID().uuidString).avif")
+            try derivatives.display.data.write(to: avifURL, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: avifURL) }
+            let preparedUpload = await StoryImageUpload.prepare(fileURL: avifURL)
+            let upload = try XCTUnwrap(preparedUpload)
+            XCTAssertEqual(upload.mimeType, "image/avif")
+            XCTAssertEqual(upload.data, derivatives.display.data)
+        }
     }
 
     @MainActor
@@ -1261,10 +1310,6 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 10),
             8_125_000
-        )
-        XCTAssertEqual(
-            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond,
-            8_000_000
         )
         XCTAssertNil(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 0)

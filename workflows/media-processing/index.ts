@@ -5,7 +5,7 @@ import {
   claimMediaProcessingWorkflowStep,
   completeMediaProcessingStep,
   encodeInitialMediaStep,
-  encodeMediaRenditionBatchStep,
+  encodeMediaRenditionStep,
   failMediaProcessingStep,
   inspectMediaSourceStep,
   publishMasterPlaylistStep,
@@ -76,11 +76,22 @@ export async function processMediaWorkflow(jobId: string) {
       [firstProfile],
       35,
     )
-    const remainingRenditions = await encodeMediaRenditionBatchStep(
-      jobId,
-      remainingProfiles,
-      inspection.source,
-    )
+    const remainingRenditions = []
+    const renditionConcurrency = 2
+    for (
+      let index = 0;
+      index < remainingProfiles.length;
+      index += renditionConcurrency
+    ) {
+      const batch = remainingProfiles.slice(index, index + renditionConcurrency)
+      remainingRenditions.push(
+        ...(await Promise.all(
+          batch.map((profile) =>
+            encodeMediaRenditionStep(jobId, profile, inspection.source),
+          ),
+        )),
+      )
+    }
     const finalMaster = await publishMasterPlaylistStep(jobId, [
       firstRendition,
       ...remainingRenditions,

@@ -439,6 +439,8 @@ export function directStoryImageSourcePathname(
       ? "png"
       : contentType.toLowerCase() === "image/webp"
         ? "webp"
+        : contentType.toLowerCase() === "image/avif"
+          ? "avif"
         : "jpg"
   return `${basePathname}-source.${extension}`
 }

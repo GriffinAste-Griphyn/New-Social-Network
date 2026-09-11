@@ -267,7 +267,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(StoryVideoThumbnailGenerator.requestedTime, .zero)
     }
 
-    func testHighBitrateCompatibleSourceIsOptimizedForUpload() async throws {
+    func testHighBitrateCompatibleSourcePreservesOriginalQuality() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("high-bitrate-source-\(UUID().uuidString).mp4")
         try await writeVideoWithDistinctFirstFrame(
@@ -275,8 +275,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             firstFrame: (red: 60, green: 80, blue: 180),
             laterFrame: (red: 80, green: 100, blue: 200)
         )
-        // Inflate the fixture without changing its streams. A high-bandwidth
-        // source should still be reduced to the app's visible delivery ceiling.
+        // Inflate the fixture without changing its streams. Compatible sources
+        // retain their original encoded quality for the server-side transcode.
         try appendFreeAtom(byteCount: 5 * 1024 * 1024, to: sourceURL)
         var preparedURL: URL?
         defer {
@@ -299,8 +299,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             at: prepared.url
         )
 
-        XCTAssertEqual(prepared.strategy, .normalized)
-        XCTAssertLessThan(prepared.byteSize, try XCTUnwrap(sourceBytes).int64Value)
+        XCTAssertEqual(prepared.strategy, .streamPassthrough)
+        XCTAssertEqual(prepared.byteSize, try XCTUnwrap(sourceBytes).int64Value)
         XCTAssertTrue(hasFastStart)
     }
 
@@ -317,11 +317,10 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         )
 
         XCTAssertEqual(inspection.estimatedBitsPerSecond, 6_000_000)
-        XCTAssertFalse(inspection.needsUploadSizeOptimization)
         XCTAssertTrue(inspection.isStreamCompatibleInput)
     }
 
-    func testOversizedBitrateIsSelectedForQualityPreservingOptimization() throws {
+    func testHighBitrateCompatibleInputRemainsStreamCompatible() throws {
         let inspection = StoryVideoInspection(
             source: .library,
             originalURL: URL(fileURLWithPath: "/tmp/high-bitrate.mp4"),
@@ -333,11 +332,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             hasFastStart: true
         )
 
-        XCTAssertGreaterThan(
-            try XCTUnwrap(inspection.estimatedBitsPerSecond),
-            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond
-        )
-        XCTAssertTrue(inspection.needsUploadSizeOptimization)
+        XCTAssertGreaterThan(try XCTUnwrap(inspection.estimatedBitsPerSecond), 8_000_000)
+        XCTAssertTrue(inspection.isStreamCompatibleInput)
     }
 
     func testVideoUploadResponsePersistsOwnerBoundSession() throws {

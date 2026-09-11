@@ -8,6 +8,8 @@ import { pipeline } from "node:stream/promises"
 
 import { get, head, put } from "@vercel/blob"
 import { and, eq } from "drizzle-orm"
+import sharp from "sharp"
+import { rgbaToThumbHash } from "thumbhash"
 
 import { getDb } from "@/lib/db"
 import {
@@ -42,6 +44,7 @@ import {
 } from "@/lib/media-pipeline/ffmpeg"
 import {
   buildHlsMasterPlaylist,
+  measureHlsPackageBandwidth,
   type PublishedAudioRendition,
   type PublishedRendition,
 } from "@/lib/media-pipeline/manifest"
@@ -68,6 +71,8 @@ type EncodedRendition = {
   codec: string
   durationMs: number
   frameRate: number | null
+  averageBandwidth: number
+  peakBandwidth: number
 }
 
 export type EncodedAudioRendition = {
@@ -79,7 +84,8 @@ export type EncodedAudioRendition = {
   encodingMs: number
   codec: string
   durationMs: number
-  bitrate: number
+  averageBandwidth: number
+  peakBandwidth: number
   channels: number
   sampleRate: number
 }
@@ -96,11 +102,28 @@ type PublishedPoster = {
   url: string
   byteSize: number
   checksum: string
+  placeholderUrl: string
 }
 
 const renditionUploadConcurrency = 8
 const workflowLeaseRecoveryMs = 15 * 60 * 1_000
 const activeJobStatuses = ["inspecting", "encoding", "publishing"] as const
+
+function avcCodecString(frameRate: number | null) {
+  return (frameRate ?? 30) > 30 ? "avc1.64002a" : "avc1.640029"
+}
+
+async function posterThumbHash(body: Buffer) {
+  const { data, info } = await sharp(body)
+    .resize(18, 32, { fit: "fill" })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const encoded = Buffer.from(
+    rgbaToThumbHash(info.width, info.height, data),
+  ).toString("base64url")
+  return `thumbhash:${encoded}`
+}
 
 function logMediaPipeline(
   level: "info" | "error",
@@ -381,6 +404,9 @@ async function encodeMediaRenditionCore(
     const details = (existing.qualityDetails ?? {}) as {
       segmentCount?: number
       encodingMs?: number
+      measuredBitrate?: number
+      measuredPeakBitrate?: number
+      frameRate?: number | null
     }
     return {
       profile,
@@ -390,11 +416,13 @@ async function encodeMediaRenditionCore(
       checksum: existing.checksum,
       segmentCount: details.segmentCount ?? 0,
       encodingMs: details.encodingMs ?? 0,
-      codec: "avc1.640029",
+      codec: existing.codec ?? avcCodecString(details.frameRate ?? sourceMetadata.frameRate),
       durationMs: existing.durationMs ?? sourceMetadata.durationMs,
-      frameRate:
-        ((existing.qualityDetails ?? {}) as { frameRate?: number | null })
-          .frameRate ?? sourceMetadata.frameRate,
+      frameRate: details.frameRate ?? sourceMetadata.frameRate,
+      averageBandwidth: details.measuredBitrate ?? existing.bitrate ?? 1,
+      peakBandwidth:
+        details.measuredPeakBitrate ??
+        Math.ceil((details.measuredBitrate ?? existing.bitrate ?? 1) * 1.15),
     }
   }
 
@@ -474,10 +502,11 @@ async function encodeMediaRenditionCore(
       (total, file) => total + file.body.byteLength,
       0,
     )
-    const measuredBitrate = Math.max(
-      1,
-      Math.ceil((byteSize * 8) / Math.max(encodedMetadata.durationMs / 1_000, 0.001)),
-    )
+    const measuredBandwidth = measureHlsPackageBandwidth(encoded.files)
+    if (measuredBandwidth.segmentCount !== segmentCount) {
+      throw new Error(`Could not measure every ${profile.label} HLS segment.`)
+    }
+    const measuredBitrate = measuredBandwidth.averageBandwidth
     const now = new Date()
     const values = {
       id: `media-rendition-${randomUUID()}`,
@@ -489,7 +518,7 @@ async function encodeMediaRenditionCore(
       storageKey: uploadedPlaylist.pathname,
       mediaUrl: deliveryMediaUrl(uploadedPlaylist),
       contentType: "application/vnd.apple.mpegurl",
-      codec: "avc1.640029",
+      codec: avcCodecString(encodedMetadata.frameRate),
       width: profile.width,
       height: profile.height,
       durationMs: encodedMetadata.durationMs,
@@ -509,6 +538,8 @@ async function encodeMediaRenditionCore(
         verifiedAudioCodec: encodedMetadata.audioCodec,
         frameRate: encodedMetadata.frameRate,
         measuredBitrate,
+        measuredPeakBitrate: measuredBandwidth.peakBandwidth,
+        mediaByteSize: measuredBandwidth.mediaByteSize,
       },
       encoderVersion: job.encoderVersion,
       createdAt: now,
@@ -562,6 +593,8 @@ async function encodeMediaRenditionCore(
       codec: values.codec,
       durationMs: encodedMetadata.durationMs,
       frameRate: encodedMetadata.frameRate,
+      averageBandwidth: measuredBandwidth.averageBandwidth,
+      peakBandwidth: measuredBandwidth.peakBandwidth,
     }
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
@@ -597,6 +630,8 @@ async function encodeMediaAudioRenditionCore(
       encodingMs?: number
       verifiedChannels?: number
       verifiedSampleRate?: number
+      measuredBitrate?: number
+      measuredPeakBitrate?: number
     }
     return {
       playlistPathname: existing.storageKey,
@@ -607,7 +642,14 @@ async function encodeMediaAudioRenditionCore(
       encodingMs: details.encodingMs ?? 0,
       codec: existing.codec ?? "mp4a.40.2",
       durationMs: existing.durationMs ?? sourceMetadata.durationMs,
-      bitrate: existing.bitrate ?? mediaAudioProfile.bitrate,
+      averageBandwidth:
+        details.measuredBitrate ?? existing.bitrate ?? mediaAudioProfile.bitrate,
+      peakBandwidth:
+        details.measuredPeakBitrate ??
+        Math.ceil(
+          (details.measuredBitrate ?? existing.bitrate ?? mediaAudioProfile.bitrate) *
+            1.15,
+        ),
       channels: details.verifiedChannels ?? (sourceMetadata.audioChannels === 1 ? 1 : 2),
       sampleRate: details.verifiedSampleRate ?? mediaAudioProfile.sampleRate,
     }
@@ -677,13 +719,11 @@ async function encodeMediaAudioRenditionCore(
       (total, file) => total + file.body.byteLength,
       0,
     )
-    const measuredBitrate = Math.max(
-      1,
-      Math.ceil(
-        (byteSize * 8) /
-          Math.max(encodedMetadata.durationMs / 1_000, 0.001),
-      ),
-    )
+    const measuredBandwidth = measureHlsPackageBandwidth(encoded.files)
+    if (measuredBandwidth.segmentCount !== segmentCount) {
+      throw new Error("Could not measure every audio HLS segment.")
+    }
+    const measuredBitrate = measuredBandwidth.averageBandwidth
     const now = new Date()
     const values = {
       id: `media-rendition-${randomUUID()}`,
@@ -712,6 +752,8 @@ async function encodeMediaAudioRenditionCore(
         verifiedChannels: encodedMetadata.audioChannels,
         verifiedSampleRate: encodedMetadata.audioSampleRate,
         measuredBitrate,
+        measuredPeakBitrate: measuredBandwidth.peakBandwidth,
+        mediaByteSize: measuredBandwidth.mediaByteSize,
         loudnessNormalization: false,
       },
       encoderVersion: job.encoderVersion,
@@ -749,7 +791,8 @@ async function encodeMediaAudioRenditionCore(
     logMediaPipeline("info", "audio_rendition_encoded", {
       jobId,
       mediaAssetId: job.mediaAssetId,
-      bitrate: measuredBitrate,
+      averageBandwidth: measuredBandwidth.averageBandwidth,
+      peakBandwidth: measuredBandwidth.peakBandwidth,
       channels: encodedMetadata.audioChannels,
       sampleRate: encodedMetadata.audioSampleRate,
       encodingMs: encoded.encodingMs,
@@ -764,7 +807,8 @@ async function encodeMediaAudioRenditionCore(
       encodingMs: encoded.encodingMs,
       codec: values.codec,
       durationMs: encodedMetadata.durationMs,
-      bitrate: measuredBitrate,
+      averageBandwidth: measuredBandwidth.averageBandwidth,
+      peakBandwidth: measuredBandwidth.peakBandwidth,
       channels: expectedChannels,
       sampleRate: mediaAudioProfile.sampleRate,
     }
@@ -845,18 +889,19 @@ export async function publishMasterPlaylistStep(
     ordered.map(
       (item): PublishedRendition => ({
         profile: item.profile,
-        playlistUrl: `${item.profile.label}/index.m3u8`,
+        playlistUrl: item.playlistUrl,
         codec: item.codec,
-        byteSize: item.byteSize,
-        durationMs: item.durationMs,
+        averageBandwidth: item.averageBandwidth,
+        peakBandwidth: item.peakBandwidth,
         frameRate: item.frameRate,
       }),
     ),
     audio
       ? ({
-          playlistUrl: `${mediaAudioProfile.label}/index.m3u8`,
+          playlistUrl: audio.playlistUrl,
           codec: audio.codec,
-          bitrate: audio.bitrate,
+          averageBandwidth: audio.averageBandwidth,
+          peakBandwidth: audio.peakBandwidth,
         } satisfies PublishedAudioRendition)
       : null,
   )
@@ -957,24 +1002,28 @@ async function generateMediaPosterCore(
       and(
         eq(mediaRenditions.mediaAssetId, job.mediaAssetId),
         eq(mediaRenditions.kind, "poster"),
-        eq(mediaRenditions.label, "540x960"),
+        eq(mediaRenditions.label, "1080x1920"),
         eq(mediaRenditions.encoderVersion, job.encoderVersion),
         eq(mediaRenditions.status, "ready"),
       ),
     )
     .limit(1)
   if (existing) {
+    const details = (existing.qualityDetails ?? {}) as {
+      placeholderUrl?: string
+    }
     return {
       pathname: existing.storageKey,
       url: existing.mediaUrl,
       byteSize: existing.byteSize,
       checksum: existing.checksum,
+      placeholderUrl: details.placeholderUrl ?? existing.mediaUrl,
     }
   }
 
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ubeye-poster-"))
   try {
-    const outputPath = path.join(tempDirectory, "poster.jpg")
+    const outputPath = path.join(tempDirectory, "poster.webp")
     const poster = stagedSourcePath
       ? await generateMediaPosterFile({
           inputPath: stagedSourcePath,
@@ -983,13 +1032,14 @@ async function generateMediaPosterCore(
       : await readPrivateSource(job.sourcePathname).then((source) =>
           generateMediaPoster({ source: source.stream, outputPath }),
         )
-    const blob = await put(`${job.outputPrefix}/poster.jpg`, poster.body, {
+    const placeholderUrl = await posterThumbHash(poster.body)
+    const blob = await put(`${job.outputPrefix}/poster.webp`, poster.body, {
       access: mediaDeliveryAccess(),
       token: deliveryBlobToken(),
       addRandomSuffix: false,
       allowOverwrite: true,
       cacheControlMaxAge: 31_536_000,
-      contentType: "image/jpeg",
+      contentType: "image/webp",
     })
     const now = new Date()
     await getDb()
@@ -999,18 +1049,18 @@ async function generateMediaPosterCore(
         mediaAssetId: job.mediaAssetId,
         processingJobId: job.id,
         kind: "poster",
-        label: "540x960",
+        label: "1080x1920",
         storageProvider: "vercel-blob",
         storageKey: blob.pathname,
         mediaUrl: deliveryMediaUrl(blob),
-        contentType: "image/jpeg",
-        width: 540,
-        height: 960,
+        contentType: "image/webp",
+        width: 1080,
+        height: 1920,
         byteSize: poster.body.byteLength,
         checksum: poster.checksum,
         status: "ready",
         qualityStatus: "passed",
-        qualityDetails: { sourceTimeSeconds: 0.1 },
+        qualityDetails: { sourceTimeSeconds: 0.1, placeholderUrl },
         encoderVersion: job.encoderVersion,
         createdAt: now,
         updatedAt: now,
@@ -1028,6 +1078,7 @@ async function generateMediaPosterCore(
           mediaUrl: deliveryMediaUrl(blob),
           byteSize: poster.body.byteLength,
           checksum: poster.checksum,
+          qualityDetails: { sourceTimeSeconds: 0.1, placeholderUrl },
           status: "ready",
           qualityStatus: "passed",
           updatedAt: now,
@@ -1043,6 +1094,7 @@ async function generateMediaPosterCore(
       url: deliveryMediaUrl(blob),
       byteSize: poster.body.byteLength,
       checksum: poster.checksum,
+      placeholderUrl,
     }
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
@@ -1102,7 +1154,7 @@ async function publishPlayableMediaReferences(input: {
       storageKey: master.pathname,
       mediaUrl: master.url,
       thumbnailUrl: poster.url,
-      placeholderUrl: poster.url,
+      placeholderUrl: poster.placeholderUrl,
       contentType: "application/vnd.apple.mpegurl",
       byteSize: master.byteSize,
       checksum: master.checksum,
@@ -1149,7 +1201,7 @@ async function publishPlayableMediaReferences(input: {
       .set({
         mediaUrl: master.url,
         thumbnailUrl: poster.url,
-        placeholderUrl: poster.url,
+        placeholderUrl: poster.placeholderUrl,
         storageProvider: "vercel-blob",
         storageKey: master.pathname,
         contentType: "application/vnd.apple.mpegurl",

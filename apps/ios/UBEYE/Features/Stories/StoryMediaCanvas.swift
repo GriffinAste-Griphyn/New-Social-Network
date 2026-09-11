@@ -8,10 +8,10 @@ enum StoryMediaContract {
     static let maximumImageDisplayDerivativeBytes = 1_500_000
     static let maximumImageThumbnailDerivativeBytes = 150_000
     static let displayAVIFQualityCandidates: [CGFloat] = [
-        0.65, 0.60, 0.55, 0.50,
+        0.75, 0.70, 0.65, 0.60,
     ]
     static let displayWebPQualityCandidates: [Double] = [
-        0.85, 0.80, 0.75, 0.70, 0.65,
+        0.90, 0.85, 0.80, 0.75, 0.70,
     ]
     static let thumbnailWebPQualityCandidates: [Double] = [
         0.80, 0.75, 0.70, 0.65, 0.60,

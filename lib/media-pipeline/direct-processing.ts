@@ -300,7 +300,7 @@ async function readReadyOutputs(job: NonNullable<DirectJob>) {
 
   return {
     hasPoster: outputs.some(
-      (output) => output.kind === "poster" && output.label === "540x960",
+      (output) => output.kind === "poster" && output.label === "1080x1920",
     ),
     hasAudioRendition: outputs.some(
       (output) =>

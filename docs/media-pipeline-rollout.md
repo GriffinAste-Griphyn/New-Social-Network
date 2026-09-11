@@ -1,4 +1,4 @@
-# Media pipeline rollout
+# Custom HLS canary rollout
 
 Date: August 26, 2026
 
@@ -12,8 +12,8 @@ Date: August 26, 2026
   usage quota is exhausted.
 - Processed HLS remains private by default. Set `MEDIA_DELIVERY_ACCESS=public` only after
   `MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN` belongs to a public delivery store.
-- Existing story URLs and in-flight Workflow deployments remain valid. HLS v3 uses new
-  opaque prefixes and immutable master names; it does not overwrite v2 objects.
+- Existing story URLs and in-flight Workflow deployments remain valid. Encoder-versioned
+  opaque prefixes and immutable master names do not overwrite older objects.
 
 ## Deployment order
 
@@ -27,13 +27,13 @@ Date: August 26, 2026
 5. Provision/verify a public delivery Blob store, set `MEDIA_DELIVERY_ACCESS=public` in a
    preview deployment, and verify that master, variant, init, and segment requests go
    directly to Blob without the story-media Function.
-6. Promote the identical configuration gradually. Keep the private route and legacy
-   Cloudflare completion path during the rollback window.
+6. Promote the identical configuration only as a measured canary. Keep Cloudflare Stream
+   as the production default and retain both completion paths during the rollback window.
 
-The current Vercel Hobby project runs each reconciliation cron once per day. Immediate
-Workflow dispatch and authenticated story-status polling are the primary recovery paths;
-the daily crons are a final orphan sweep. On Vercel Pro, restore the documented five-minute
-reconciliation cadence for tighter unattended recovery.
+Immediate Workflow dispatch and authenticated story-status polling are the primary recovery
+paths. Video, image, and publication reconcilers run every five minutes, moderation runs
+every ten minutes, and cleanup plus operational rollups run hourly. These schedules require
+a Vercel plan that supports their configured cadence.
 
 ## Rollback
 

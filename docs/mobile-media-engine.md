@@ -10,7 +10,8 @@ The refactor must move media work off the tap path. Opening a story should bind 
 
 - Replace AVFoundation.
 - Rewrite the whole feed or story viewer UI.
-- Keep Cloudflare only as the legacy rollback/drain path. New media uses the Vercel HLS workflow.
+- Make the custom Vercel HLS implementation the production default. Cloudflare Stream
+  remains the primary video path; custom HLS is an explicitly enabled canary.
 
 ## Performance Targets
 
@@ -135,13 +136,14 @@ Stories and media assets carry explicit playback and optional original rendition
 2. Original rendition: optional archive metadata; it is never selected by the viewer or
    inserted into the player/preheat pools.
 
-Every newly composed video goes through the owner-bound Vercel Blob pipeline, including
-small H.264 MP4/M4V files. Compatible files can skip a local re-encode, but never skip
-adaptive server transcoding. The creator sees a local optimistic preview while processing;
-other users see the story only after full provider readiness and moderation approval.
-When normalization is required, its 8.256 Mbps output envelope is invariant across Wi-Fi,
-cellular, constrained, and expensive network paths; network conditions must not reduce
-the quality of the durable source upload.
+Every newly composed video goes through the selected owner-bound adaptive-video provider.
+Cloudflare Stream is the production default; the Vercel Blob/Workflow HLS implementation
+is available only behind its explicit canary flags. Compatible MP4/MOV H.264 or HEVC/AAC
+inputs skip a local re-encode, preserving the uploaded master; a fast-start remux is used
+when that is the only compatibility issue. The creator sees a local optimistic preview
+while processing, and other users see the story only after full provider readiness and
+moderation approval. Network conditions must not reduce the quality of the durable source
+upload.
 
 The mobile API exposes the same `renditions.playback` and `renditions.original` shape on feed stories, stack stories, video completion responses, and cached stack manifests. iOS always renders from playback helpers and treats the original rendition as quality/archive metadata.
 
@@ -151,7 +153,7 @@ The mobile API exposes the same `renditions.playback` and `renditions.original` 
 2. Route Home tap warming through `MediaEngine` before presenting the viewer.
 3. Centralize story stack/media preheat APIs behind intent-based methods.
 4. Add first-stack media manifest fields to feed responses and iOS models.
-5. Tighten video upload strategy so only playback-optimized originals skip normalization.
+5. Preserve compatible video masters and normalize only incompatible or over-limit inputs.
 6. Reduce high-frequency SwiftUI invalidation in story progress updates.
 7. Add dual-rendition schema/API support for playback and original media metadata.
 8. Add original-rendition background attach after normalized video upload.

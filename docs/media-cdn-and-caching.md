@@ -9,8 +9,8 @@ The mobile media path is intentionally layered:
 1. `MediaImageCache` keeps decoded, downsampled `UIImage` instances in a cost-bounded `NSCache`.
 2. `MediaFileDiskCache` keeps progressive images and videos in an LRU bounded by bytes and available device capacity.
 3. `URLCache` and AVFoundation retain transport-level responses and bounded HLS state.
-4. The custom pipeline serves opaque, immutable adaptive HLS from a public
-   Vercel Blob store; a separate private Blob store retains originals.
+4. Cloudflare Stream is the primary adaptive-video edge. The custom canary serves opaque,
+   immutable HLS from a public Vercel Blob store and keeps originals in a private store.
 5. The origin route authorizes private media and never exposes an unsigned original.
 
 HLS playlists are not copied into the progressive file cache. A playlist without its
@@ -25,16 +25,17 @@ Build 363+ uploads one source image and returns a processing story immediately. 
 server worker verifies the checksum, produces the display/thumbnail/ThumbHash derivatives,
 and atomically promotes them. Older builds keep the client-derivative compatibility path.
 
-Image delivery uses a stable authorized JPEG route as the canonical URL. Private-media
-responses use private cache directives bounded by the access-token lifetime; they are
-never marked public or immutable. Generated photo canvases keep letterboxing transparent;
-clients render that space as flat black rather than baking color into the image derivative.
+Image uploads place the source in a private R2 bucket and publish versioned AVIF/WebP
+derivatives through the `media.ubeye.ai` delivery bucket. The delivery objects are immutable;
+the source is never exposed. Opaque source images use a blurred, darkened cover background
+behind the fitted foreground instead of black bars. Transparency is retained only when the
+source actually has alpha.
 
 Current image delivery uses:
 
 - display: maximum 1080 x 1920 and 1.5 MB;
 - thumbnail: maximum 360 x 640 and 150 KB;
-- placeholder: 18 x 32 JPEG data URL, capped at 16 KB;
+- placeholder: compact inline ThumbHash;
 - server JPEG fallback for old clients only.
 
 Clients encode each derivative with a descending quality ladder and select the highest
@@ -92,9 +93,9 @@ interruption), including presentation dimensions and AVFoundation indicated/obse
 bitrate. The same per-playback QoE sampling decision governs both quality-ramp and final
 access-log upload.
 
-Camera uploads use a delivery-aware 5 Mbps HEVC or 7 Mbps H.264 1080p envelope so normal
-captures can bypass a redundant client transcode. Gallery imports above the 8 Mbps or
-1080p envelope are normalized to 3.5 Mbps before upload.
+Compatible MP4/MOV H.264 or HEVC/AAC camera and gallery inputs preserve the original bytes.
+If fast-start metadata is the only issue, iOS remuxes without re-encoding. Inputs are
+normalized only when they exceed the upload limit or use an incompatible container/codec.
 
 ## Disk eviction
 
@@ -138,19 +139,20 @@ crossfade between the poster and live video.
 - `MEDIA_DELIVERY_ACCESS=public` only after that delivery store is configured public;
   omission retains the private proxy rollback path
 - `MEDIA_ASYNC_COMPLETION_ENABLED=false` as the emergency build-363 async kill switch
-- `STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` only
-  after migration and preview verification
-- Cloudflare credentials only during the rollback/drain window
+- Cloudflare Stream credentials with `STORY_VIDEO_PROCESSOR=cloudflare-stream` for
+  production video
+- `STORY_VIDEO_PROCESSOR=vercel-hls` and `MEDIA_PIPELINE_ENABLED=true` only for a
+  migration-complete, preview-verified custom-HLS canary
 
 Roll out image format changes by rendition version. Never change the bytes behind an existing immutable derivative URL.
 
-Vercel calls `/api/cron/media-upload-cleanup` daily. It removes expired incomplete
+Vercel calls `/api/cron/media-upload-cleanup` hourly. It removes expired incomplete
 private-Blob or Cloudflare uploads before deleting their session rows, and prunes
 completed session rows after seven days without deleting published media.
 
-Vercel calls video, image, moderation, and publication reconciliation every five minutes.
-Workers retry pending or failed jobs up to bounded attempt limits; each workflow step and
-rendition path is idempotent. Media upload cleanup remains daily.
+Vercel calls video, image, and publication reconciliation every five minutes and moderation
+reconciliation every ten minutes. Workers retry pending or failed jobs up to bounded attempt
+limits; each workflow step and rendition path is idempotent.
 
-`/api/cron/media-operations-rollup` emits a 15-minute QoE summary and refreshes rolling
-seven-day creator quality/freshness scores from feed events.
+`/api/cron/media-operations-rollup` runs hourly, emits the current QoE summary, and refreshes
+rolling seven-day creator quality/freshness scores from feed events.

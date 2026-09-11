@@ -17,8 +17,8 @@ export const storyMediaContract = {
     maxImagePlaceholderBytes: 16_000,
   },
   imageEncoding: {
-    displayAvifQualities: [0.65, 0.6, 0.55, 0.5],
-    displayWebpQualities: [0.85, 0.8, 0.75, 0.7, 0.65],
+    displayAvifQualities: [0.75, 0.7, 0.65, 0.6],
+    displayWebpQualities: [0.9, 0.85, 0.8, 0.75, 0.7],
     thumbnailWebpQualities: [0.8, 0.75, 0.7, 0.65, 0.6],
     deliveryQuality: 85,
   },
@@ -30,6 +30,7 @@ export const storyMediaContract = {
     "image/jpeg",
     "image/png",
     "image/webp",
+    "image/avif",
   ],
   videoInputContentTypes: [
     "video/mp4",

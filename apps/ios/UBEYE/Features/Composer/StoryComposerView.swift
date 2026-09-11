@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 import ImageIO
 import Photos
 import PhotosUI
@@ -271,6 +272,10 @@ private struct StoryImageFormat {
         case UTType.webP.identifier:
             fileExtension = "webp"
             mimeType = "image/webp"
+            isDirectUploadCompatible = true
+        case "public.avif":
+            fileExtension = "avif"
+            mimeType = "image/avif"
             isDirectUploadCompatible = true
         default:
             fileExtension = "jpg"
@@ -610,6 +615,7 @@ enum StoryImageTranscoder {
             width: fittedSize.width,
             height: fittedSize.height
         )
+        let sourceHasAlpha = imageHasAlpha(sourceImage)
 
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
@@ -619,13 +625,40 @@ enum StoryImageTranscoder {
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                bitmapInfo: sourceHasAlpha
+                    ? CGImageAlphaInfo.premultipliedLast.rawValue
+                    : CGImageAlphaInfo.noneSkipLast.rawValue
               ) else {
             return nil
         }
 
         context.interpolationQuality = .high
-        if contentMode == .fit {
+        if contentMode == .fit, !sourceHasAlpha {
+            if let background = blurredFitBackground(
+                sourceImage,
+                width: width,
+                height: height
+            ) {
+                context.draw(background, in: CGRect(origin: .zero, size: targetSize))
+            } else {
+                let coverScale = max(widthScale, heightScale)
+                let coverSize = CGSize(
+                    width: sourceSize.width * coverScale,
+                    height: sourceSize.height * coverScale
+                )
+                context.draw(
+                    sourceImage,
+                    in: CGRect(
+                        x: (targetSize.width - coverSize.width) / 2,
+                        y: (targetSize.height - coverSize.height) / 2,
+                        width: coverSize.width,
+                        height: coverSize.height
+                    )
+                )
+            }
+            context.setFillColor(CGColor(gray: 0, alpha: 0.30))
+            context.fill(CGRect(origin: .zero, size: targetSize))
+        } else if contentMode == .fit {
             context.clear(CGRect(origin: .zero, size: targetSize))
         } else {
             context.setFillColor(CGColor(gray: 0, alpha: 1))
@@ -633,6 +666,117 @@ enum StoryImageTranscoder {
         }
         context.draw(sourceImage, in: fittedRect)
         return context.makeImage()
+    }
+
+    private static func imageHasAlpha(_ image: CGImage) -> Bool {
+        switch image.alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast, .alphaOnly:
+            true
+        case .none, .noneSkipFirst, .noneSkipLast:
+            false
+        @unknown default:
+            true
+        }
+    }
+
+    private static func blurredFitBackground(
+        _ sourceImage: CGImage,
+        width: Int,
+        height: Int
+    ) -> CGImage? {
+        let backgroundWidth = max(32, width / 8)
+        let backgroundHeight = max(32, height / 8)
+        let bytesPerRow = backgroundWidth * 4
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var sourcePixels = Data(count: bytesPerRow * backgroundHeight)
+        let rendered = sourcePixels.withUnsafeMutableBytes { pixels in
+            guard let baseAddress = pixels.baseAddress,
+                  let context = CGContext(
+                    data: baseAddress,
+                    width: backgroundWidth,
+                    height: backgroundHeight,
+                    bitsPerComponent: 8,
+                    bytesPerRow: bytesPerRow,
+                    space: colorSpace,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else {
+                return false
+            }
+            let targetSize = CGSize(width: backgroundWidth, height: backgroundHeight)
+            let scale = max(
+                targetSize.width / CGFloat(sourceImage.width),
+                targetSize.height / CGFloat(sourceImage.height)
+            ) * 1.08
+            let coverSize = CGSize(
+                width: CGFloat(sourceImage.width) * scale,
+                height: CGFloat(sourceImage.height) * scale
+            )
+            context.interpolationQuality = .medium
+            context.draw(
+                sourceImage,
+                in: CGRect(
+                    x: (targetSize.width - coverSize.width) / 2,
+                    y: (targetSize.height - coverSize.height) / 2,
+                    width: coverSize.width,
+                    height: coverSize.height
+                )
+            )
+            return true
+        }
+        guard rendered else {
+            return nil
+        }
+        var blurredPixels = Data(count: sourcePixels.count)
+        let blurError = sourcePixels.withUnsafeMutableBytes { sourceBuffer in
+            blurredPixels.withUnsafeMutableBytes { destinationBuffer in
+                guard let sourceAddress = sourceBuffer.baseAddress,
+                      let destinationAddress = destinationBuffer.baseAddress else {
+                    return kvImageNullPointerArgument
+                }
+                var source = vImage_Buffer(
+                    data: sourceAddress,
+                    height: vImagePixelCount(backgroundHeight),
+                    width: vImagePixelCount(backgroundWidth),
+                    rowBytes: bytesPerRow
+                )
+                var destination = vImage_Buffer(
+                    data: destinationAddress,
+                    height: vImagePixelCount(backgroundHeight),
+                    width: vImagePixelCount(backgroundWidth),
+                    rowBytes: bytesPerRow
+                )
+                return vImageBoxConvolve_ARGB8888(
+                    &source,
+                    &destination,
+                    nil,
+                    0,
+                    0,
+                    9,
+                    9,
+                    nil,
+                    vImage_Flags(kvImageEdgeExtend)
+                )
+            }
+        }
+        guard blurError == kvImageNoError,
+              let provider = CGDataProvider(data: blurredPixels as CFData) else {
+            return nil
+        }
+        return CGImage(
+            width: backgroundWidth,
+            height: backgroundHeight,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo(
+                rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+            ),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        )
     }
 
     private static func downsampledImage(
