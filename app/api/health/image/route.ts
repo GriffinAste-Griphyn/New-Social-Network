@@ -5,6 +5,7 @@ import {
   probeCloudflareR2Buckets,
 } from "@/lib/cloudflare-r2"
 import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
+import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
 
 export const runtime = "nodejs"
 
@@ -27,6 +28,7 @@ export async function GET() {
     cloudflareR2Selected,
     cloudflareR2Configured,
     cloudflareR2ApiProbe,
+    durableMediaWorkers: areDurableMediaWorkersEnabled(),
     publicDeliveryUrl: Boolean(
       process.env.CLOUDFLARE_R2_PUBLIC_BASE_URL?.trim(),
     ),
@@ -34,6 +36,7 @@ export async function GET() {
   const ok =
     checks.storyImageStorageProvider &&
     checks.profileAvatarStorageProvider &&
+    checks.durableMediaWorkers &&
     (cloudflareR2Selected
       ? cloudflareR2Configured &&
         cloudflareR2ApiProbe &&

@@ -426,17 +426,13 @@ final class MediaPerformanceTests: XCTestCase {
         )
         let width = try XCTUnwrap(properties[kCGImagePropertyPixelWidth] as? NSNumber)
         let height = try XCTUnwrap(properties[kCGImagePropertyPixelHeight] as? NSNumber)
-        XCTAssertLessThanOrEqual(
-            max(width.intValue, height.intValue),
-            StoryImageUpload.preferredUploadPixelDimension
-        )
-        XCTAssertLessThanOrEqual(
-            max(upload.image.cgImage?.width ?? 0, upload.image.cgImage?.height ?? 0),
-            StoryImageUpload.maximumPreviewPixelDimension
-        )
+        XCTAssertEqual(width.intValue, StoryImageUpload.playbackCanvasWidth)
+        XCTAssertEqual(height.intValue, StoryImageUpload.playbackCanvasHeight)
+        XCTAssertEqual(upload.image.cgImage?.width, StoryImageUpload.playbackCanvasWidth)
+        XCTAssertEqual(upload.image.cgImage?.height, StoryImageUpload.playbackCanvasHeight)
     }
 
-    func testStoryImageUploadPreservesCameraJPEGBytes() throws {
+    func testStoryImageUploadPreparesCameraJPEGForTheStoryCanvas() throws {
         let sourceData = try makeOrientedJPEGData(width: 1_200, height: 800)
         let upload = try XCTUnwrap(
             StoryImageUpload(
@@ -447,7 +443,20 @@ final class MediaPerformanceTests: XCTestCase {
 
         XCTAssertEqual(upload.fileName, "story-photo.jpg")
         XCTAssertEqual(upload.mimeType, "image/jpeg")
-        XCTAssertEqual(upload.data, sourceData)
+        XCTAssertNotEqual(upload.data, sourceData)
+
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(upload.data as CFData, nil))
+        let properties = try XCTUnwrap(
+            CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any]
+        )
+        XCTAssertEqual(
+            (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+            StoryImageUpload.playbackCanvasWidth
+        )
+        XCTAssertEqual(
+            (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+            StoryImageUpload.playbackCanvasHeight
+        )
     }
 
     func testStoryImageTranscoderHonorsOrientationFromFileURL() throws {
@@ -532,16 +541,16 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertGreaterThan(topCenterPixel[0], 240)
-        XCTAssertGreaterThan(topCenterPixel[1], 240)
-        XCTAssertGreaterThan(topCenterPixel[2], 240)
-        XCTAssertGreaterThan(bottomCenterPixel[0], 240)
-        XCTAssertGreaterThan(bottomCenterPixel[1], 240)
-        XCTAssertGreaterThan(bottomCenterPixel[2], 240)
+        XCTAssertLessThan(topCenterPixel[0], 10)
+        XCTAssertLessThan(topCenterPixel[1], 10)
+        XCTAssertLessThan(topCenterPixel[2], 10)
+        XCTAssertLessThan(bottomCenterPixel[0], 10)
+        XCTAssertLessThan(bottomCenterPixel[1], 10)
+        XCTAssertLessThan(bottomCenterPixel[2], 10)
         XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
-    func testStoryImageTranscoderFitCanvasUsesBlurredOpaqueBackground() throws {
+    func testStoryImageTranscoderFitCanvasUsesSolidBlackLetterboxing() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("opaque-fit-\(UUID().uuidString).png")
         try makeCropTestImageData(width: 1_600, height: 1_200)
@@ -564,15 +573,14 @@ final class MediaPerformanceTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(topPixel[3], 245)
-        XCTAssertGreaterThan(
-            Int(topPixel[0]) + Int(topPixel[1]) + Int(topPixel[2]),
-            20
-        )
+        XCTAssertLessThan(topPixel[0], 10)
+        XCTAssertLessThan(topPixel[1], 10)
+        XCTAssertLessThan(topPixel[2], 10)
         XCTAssertGreaterThan(centerPixel[3], 245)
         XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
     }
 
-    func testStoryImageTranscoderPreservesTransparentFitCanvas() throws {
+    func testStoryImageTranscoderMakesTransparentFitCanvasOpaque() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
@@ -602,7 +610,10 @@ final class MediaPerformanceTests: XCTestCase {
             rgbaPixel(in: image, x: image.width / 2, y: image.height / 2)
         )
 
-        XCTAssertLessThan(topPixel[3], 10)
+        XCTAssertGreaterThan(topPixel[3], 245)
+        XCTAssertLessThan(topPixel[0], 10)
+        XCTAssertLessThan(topPixel[1], 10)
+        XCTAssertLessThan(topPixel[2], 10)
         XCTAssertGreaterThan(centerPixel[3], 245)
     }
 
@@ -804,7 +815,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testStoryImageDerivativeBuilderProducesCanonicalBoundedVariants() async throws {
-        XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fit)
+        XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fill)
 
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
         let fileURL = FileManager.default.temporaryDirectory
@@ -837,14 +848,18 @@ final class MediaPerformanceTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: avifURL) }
             let preparedUpload = await StoryImageUpload.prepare(fileURL: avifURL)
             let upload = try XCTUnwrap(preparedUpload)
-            XCTAssertEqual(upload.mimeType, "image/avif")
-            XCTAssertEqual(upload.data, derivatives.display.data)
+            XCTAssertEqual(upload.mimeType, "image/jpeg")
+            XCTAssertNotEqual(upload.data, derivatives.display.data)
+            XCTAssertEqual(upload.image.cgImage?.width, StoryImageUpload.playbackCanvasWidth)
+            XCTAssertEqual(upload.image.cgImage?.height, StoryImageUpload.playbackCanvasHeight)
         }
     }
 
     @MainActor
-    func testStoryCanvasImagePreservesBothHorizontalEdges() throws {
-        let sourceImage = makeHorizontalEdgeMarkerImage(width: 400, height: 400)
+    func testStoryCanvasImageFillsTheCanvasWithoutVerticalBands() throws {
+        let sourceImage = try XCTUnwrap(
+            UIImage(data: makeTestImageData(width: 400, height: 400))
+        )
         let renderer = ImageRenderer(
             content: StoryCanvasImage(image: Image(uiImage: sourceImage))
                 .frame(width: 360, height: 640)
@@ -852,21 +867,21 @@ final class MediaPerformanceTests: XCTestCase {
         renderer.scale = 1
         let renderedUIImage = try XCTUnwrap(renderer.uiImage)
         let renderedImage = try XCTUnwrap(renderedUIImage.cgImage)
-        let leftPixel = try XCTUnwrap(
-            rgbaPixel(in: renderedImage, x: 2, y: renderedImage.height / 2)
+        let topPixel = try XCTUnwrap(
+            rgbaPixel(in: renderedImage, x: renderedImage.width / 2, y: 2)
         )
-        let rightPixel = try XCTUnwrap(
+        let bottomPixel = try XCTUnwrap(
             rgbaPixel(
                 in: renderedImage,
-                x: renderedImage.width - 3,
-                y: renderedImage.height / 2
+                x: renderedImage.width / 2,
+                y: renderedImage.height - 3
             )
         )
 
-        XCTAssertGreaterThan(leftPixel[0], leftPixel[1])
-        XCTAssertGreaterThan(leftPixel[0], leftPixel[2])
-        XCTAssertGreaterThan(rightPixel[1], rightPixel[0])
-        XCTAssertGreaterThan(rightPixel[1], rightPixel[2])
+        XCTAssertGreaterThan(topPixel[2], topPixel[0])
+        XCTAssertGreaterThan(topPixel[2], topPixel[1])
+        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[0])
+        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[1])
     }
 
     @MainActor
@@ -940,8 +955,10 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoryCanvasImageUsesBlackLetterboxingInEveryColorScheme() throws {
-        let sourceImage = makeHorizontalEdgeMarkerImage(width: 400, height: 400)
+    func testStoryCanvasImageFillsEveryColorScheme() throws {
+        let sourceImage = try XCTUnwrap(
+            UIImage(data: makeTestImageData(width: 400, height: 400))
+        )
         let lightRenderer = ImageRenderer(
             content: StoryCanvasImage(image: Image(uiImage: sourceImage))
                 .frame(width: 360, height: 640)
@@ -962,11 +979,9 @@ final class MediaPerformanceTests: XCTestCase {
         let darkTopPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 2))
         let darkBottomPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 637))
 
-        for component in 0..<3 {
-            XCTAssertLessThan(lightTopPixel[component], 10)
-            XCTAssertLessThan(lightBottomPixel[component], 10)
-            XCTAssertLessThan(darkTopPixel[component], 10)
-            XCTAssertLessThan(darkBottomPixel[component], 10)
+        for pixel in [lightTopPixel, lightBottomPixel, darkTopPixel, darkBottomPixel] {
+            XCTAssertGreaterThan(pixel[2], pixel[0])
+            XCTAssertGreaterThan(pixel[2], pixel[1])
         }
     }
 

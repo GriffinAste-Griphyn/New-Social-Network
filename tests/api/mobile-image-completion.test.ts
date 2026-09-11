@@ -135,6 +135,7 @@ function completionRequest(
 describe("mobile image completion", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    process.env.MEDIA_ASYNC_COMPLETION_ENABLED = "false"
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
     vi.mocked(isCloudflareR2StoryImageStorageEnabled).mockReturnValue(false)
     vi.mocked(headCloudflareR2Original).mockResolvedValue({
@@ -239,7 +240,7 @@ describe("mobile image completion", () => {
     expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith({
       basePathname: reservedBasePathname,
       ownerUserId: session.id,
-      contentMode: "fit",
+      contentMode: "fill",
       storageProvider: "vercel-blob",
       source: sourceUpload,
     })
@@ -248,6 +249,7 @@ describe("mobile image completion", () => {
 
   it("queues Cloudflare R2 originals without blocking on image encoding", async () => {
     process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    process.env.MEDIA_ASYNC_COMPLETION_ENABLED = "true"
     vi.mocked(isCloudflareR2StoryImageStorageEnabled).mockReturnValue(true)
     vi.mocked(createStory).mockResolvedValue(
       "22222222-2222-4222-8222-222222222222",
@@ -280,11 +282,14 @@ describe("mobile image completion", () => {
       height: sourceUpload.height,
     })
     expect(enqueueImageProcessing).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaAssetId: "media-image-1" }),
+      expect.objectContaining({
+        mediaAssetId: "media-image-1",
+        contentMode: "fill",
+      }),
     )
   })
 
-  it("forces fit-only server encoding when an older client requests fill", async () => {
+  it("overrides legacy fit requests with fill-only server encoding", async () => {
     vi.mocked(createStory).mockResolvedValue(
       "22222222-2222-4222-8222-222222222222",
     )
@@ -301,12 +306,12 @@ describe("mobile image completion", () => {
     )
 
     const response = await POST(
-      completionRequest({ sourceUpload, contentMode: "fill" }),
+      completionRequest({ sourceUpload, contentMode: "fit" }),
     )
 
     expect(response.status).toBe(200)
     expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith(
-      expect.objectContaining({ contentMode: "fit" }),
+      expect.objectContaining({ contentMode: "fill" }),
     )
   })
 })

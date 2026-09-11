@@ -154,7 +154,7 @@ struct StoryCanvasForegroundImage: View {
         GeometryReader { proxy in
             image
                 .resizable()
-                .scaledToFit()
+                .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .offset(y: proxy.size.height * verticalContentOffsetFraction)
         }

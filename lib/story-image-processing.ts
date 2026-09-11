@@ -45,7 +45,7 @@ export function storyImageResizeOptions(contentMode: StoryImageContentMode) {
 
 export async function createStoryCanvasImage(
   sourceBody: Buffer,
-  contentMode: StoryImageContentMode = "fit",
+  contentMode: StoryImageContentMode = "fill",
 ) {
   const sourceOptions = {
     autoOrient: true,
@@ -77,46 +77,18 @@ export async function createStoryCanvasImage(
       .ensureAlpha()
   }
 
-  const background = await sharp(sourceBody, sourceOptions)
+  return sharp(sourceBody, sourceOptions)
     .resize(
       storyMediaContract.canvas.width,
       storyMediaContract.canvas.height,
-      storyImageResizeOptions("fill"),
+      storyImageResizeOptions("fit"),
     )
-    .blur(28)
-    .modulate({ brightness: 0.7, saturation: 0.85 })
-    .removeAlpha()
-    .toBuffer()
-  const foreground = await sharp(sourceBody, sourceOptions)
-    .resize(storyMediaContract.canvas.width, storyMediaContract.canvas.height, {
-      fit: "inside",
-      kernel: sharp.kernel.lanczos3,
-      withoutEnlargement: false,
-    })
     .sharpen({ sigma: 0.6 })
     .removeAlpha()
-    .toBuffer({ resolveWithObject: true })
-
-  const canvas = await sharp(background)
-    .composite([
-      {
-        input: foreground.data,
-        left: Math.floor((storyMediaContract.canvas.width - foreground.info.width) / 2),
-        top: Math.floor((storyMediaContract.canvas.height - foreground.info.height) / 2),
-      },
-    ])
-    .removeAlpha()
-    .png()
-    .toBuffer()
-
-  // Materialize the composite before callers clone and resize it. Sharp applies
-  // resize before composite in a shared pipeline, which can otherwise make the
-  // full-height foreground larger than a downstream thumbnail canvas.
-  return sharp(canvas)
 }
 
 export function storyImageThumbnailResizeOptions() {
-  return storyImageResizeOptions("fit")
+  return storyImageResizeOptions("fill")
 }
 
 export async function storyImageDisplayDimensions(sourceBody: Buffer) {

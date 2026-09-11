@@ -56,7 +56,7 @@ describe("Cloudflare R2 story image processing", () => {
     const asset = await createServerEncodedStoryImageAsset({
       basePathname,
       ownerUserId: "creator_123",
-      contentMode: "fit",
+      contentMode: "fill",
       storageProvider: "cloudflare-r2",
       source: {
         pathname: sourcePathname,

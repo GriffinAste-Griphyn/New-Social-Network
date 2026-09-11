@@ -518,10 +518,8 @@ enum StoryUploadFileIO {
 }
 
 enum StoryImageDerivativeBuilder {
-    // Story cards are previews of the composed story, not decorative cover
-    // art. Keep the entire source visible so the thumbnail never suggests a
-    // crop that playback does not apply.
-    static let thumbnailContentMode = StoryImageContentMode.fit
+    // Story cards mirror the edge-to-edge playback crop.
+    static let thumbnailContentMode = StoryImageContentMode.fill
 
     static func build(fileURL: URL) async throws -> LocalImageDerivativeSet {
         try await Task.detached(priority: .userInitiated) {
@@ -529,7 +527,7 @@ enum StoryImageDerivativeBuilder {
                 fileURL: fileURL,
                 width: StoryImageUpload.playbackCanvasWidth,
                 height: StoryImageUpload.playbackCanvasHeight,
-                contentMode: .fit
+                contentMode: .fill
             ),
             let thumbnailImage = StoryImageTranscoder.storyCanvasImage(
                 fileURL: fileURL,
@@ -1146,7 +1144,7 @@ final class PendingStoryUploadStore: ObservableObject {
             let response = try await api.completeImageStory(
                 upload: preparedUpload,
                 sourceUpload: sourceUpload,
-                contentMode: .fit,
+                contentMode: upload.imageContentMode ?? .fill,
                 caption: upload.draft.caption,
                 brandTags: upload.draft.brandTags,
                 textOverlay: upload.draft.textOverlay,

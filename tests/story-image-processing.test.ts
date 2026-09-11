@@ -84,7 +84,7 @@ describe("story image processing", () => {
     expect(pixel(180, 620)).toEqual([0, 0, 0, 0])
   })
 
-  it("builds opaque playback canvases with a subdued blurred fit background", async () => {
+  it("fills playback canvases edge to edge without synthetic background bands", async () => {
     const source = await sharp({
       create: {
         width: 400,
@@ -104,10 +104,9 @@ describe("story image processing", () => {
     }
 
     expect(info).toMatchObject({ width: 1080, height: 1920, channels: 3 })
-    expect(pixel(540, 20)[0]).toBeLessThan(pixel(540, 960)[0]!)
-    expect(pixel(540, 20)[0]).toBeGreaterThan(100)
+    expect(pixel(540, 20)).toEqual([220, 30, 30])
     expect(pixel(540, 960)).toEqual([220, 30, 30])
-    expect(pixel(540, 1900)[0]).toBeLessThan(pixel(540, 960)[0]!)
+    expect(pixel(540, 1900)).toEqual([220, 30, 30])
   })
 
   it("does not add an alpha channel to opaque production AVIF output", async () => {
@@ -145,9 +144,9 @@ describe("story image processing", () => {
     expect(info).toMatchObject({ width: 1080, height: 1920, hasAlpha: true })
   })
 
-  it("keeps the full story visible in thumbnails", async () => {
+  it("fills thumbnails edge to edge", async () => {
     expect(storyImageThumbnailResizeOptions()).toMatchObject({
-      fit: "contain",
+      fit: "cover",
       position: "centre",
     })
 
@@ -169,7 +168,7 @@ describe("story image processing", () => {
     const topCenterOffset = 180 * info.channels
     const centerOffset = (320 * info.width + 180) * info.channels
 
-    expect(Array.from(data.subarray(topCenterOffset, topCenterOffset + 3))).toEqual([0, 0, 0])
+    expect(Array.from(data.subarray(topCenterOffset, topCenterOffset + 3))).toEqual([220, 30, 30])
     expect(Array.from(data.subarray(centerOffset, centerOffset + 3))).toEqual([220, 30, 30])
   })
 })

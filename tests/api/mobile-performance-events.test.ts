@@ -95,40 +95,45 @@ describe("mobile performance events API", () => {
     })
   })
 
-  it("accepts upload diagnostic events", async () => {
+  it("accepts every image upload and MetricKit diagnostic emitted by iOS", async () => {
+    const names = [
+      "image_upload_failed",
+      "image_upload_phase",
+      "image_upload_succeeded",
+      "metric_kit_diagnostic",
+      "metric_kit_payload",
+    ]
     const { POST } = await import("@/app/api/mobile/performance-events/route")
     const response = await POST(
       jsonRequest("/api/mobile/performance-events", {
-        events: [
-          {
-            name: "video_upload_failed",
-            durationMs: 2400,
-            metadata: {
-              attempt: "attempt_123",
-              phase: "videoUpload",
-              retries: "2",
-              reason: "network",
-            },
+        events: names.map((name) => ({
+          name,
+          durationMs: 2400,
+          metadata: {
+            attempt: "attempt_123",
+            phase: "imageUpload",
+            retries: "2",
+            reason: "network",
           },
-        ],
+        })),
       }),
     )
 
     expect(response.status).toBe(200)
     expect(recordMobilePerformanceEvents).toHaveBeenCalledWith({
       userId: session.id,
-      events: [
+      events: names.map((name) =>
         expect.objectContaining({
-          name: "video_upload_failed",
+          name,
           durationMs: 2400,
           metadata: {
             attempt: "attempt_123",
-            phase: "videoUpload",
+            phase: "imageUpload",
             retries: "2",
             reason: "network",
           },
         }),
-      ],
+      ),
     })
   })
 

@@ -19,6 +19,7 @@ describe("image health API", () => {
     process.env.STORY_IMAGE_STORAGE_PROVIDER = "cloudflare-r2"
     process.env.CLOUDFLARE_R2_PUBLIC_BASE_URL = "https://media.ubeye.ai"
     process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    process.env.MEDIA_ASYNC_COMPLETION_ENABLED = "true"
   })
 
   afterEach(() => {
@@ -38,6 +39,7 @@ describe("image health API", () => {
         cloudflareR2Selected: true,
         cloudflareR2Configured: true,
         cloudflareR2ApiProbe: true,
+        durableMediaWorkers: true,
         publicDeliveryUrl: true,
       },
     })
@@ -54,6 +56,18 @@ describe("image health API", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: false,
       checks: { cloudflareR2ApiProbe: false },
+    })
+  })
+
+  it("reports unhealthy when durable media workers are disabled", async () => {
+    process.env.MEDIA_ASYNC_COMPLETION_ENABLED = "false"
+    const { GET } = await import("@/app/api/health/image/route")
+    const response = await GET()
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      checks: { durableMediaWorkers: false },
     })
   })
 })

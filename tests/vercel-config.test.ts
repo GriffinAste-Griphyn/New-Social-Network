@@ -8,7 +8,7 @@ type VercelConfig = {
 }
 
 describe("Vercel media recovery schedules", () => {
-  it("keeps processing recovery frequent and maintenance hourly", async () => {
+  it("keeps every recovery job on a distinct Hobby-compatible daily schedule", async () => {
     const config = JSON.parse(
       await readFile(path.join(process.cwd(), "vercel.json"), "utf8"),
     ) as VercelConfig
@@ -17,12 +17,12 @@ describe("Vercel media recovery schedules", () => {
     )
 
     expect(schedules).toMatchObject({
-      "/api/cron/media-upload-cleanup": "17 * * * *",
-      "/api/cron/media-processing-reconcile": "*/5 * * * *",
-      "/api/cron/image-processing-reconcile": "*/5 * * * *",
-      "/api/cron/story-moderation-reconcile": "*/10 * * * *",
-      "/api/cron/story-publication-reconcile": "*/5 * * * *",
-      "/api/cron/media-operations-rollup": "47 * * * *",
+      "/api/cron/media-upload-cleanup": "20 3 * * *",
+      "/api/cron/media-processing-reconcile": "5 0 * * *",
+      "/api/cron/image-processing-reconcile": "15 0 * * *",
+      "/api/cron/story-moderation-reconcile": "25 0 * * *",
+      "/api/cron/story-publication-reconcile": "35 0 * * *",
+      "/api/cron/media-operations-rollup": "45 0 * * *",
     })
   })
 })

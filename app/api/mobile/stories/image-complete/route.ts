@@ -61,7 +61,7 @@ const completeImageSchema = z.object({
   sourceUpload: clientDerivativeSchema.optional(),
   displayDerivative: clientDerivativeSchema.optional(),
   thumbnailDerivative: clientDerivativeSchema.optional(),
-  contentMode: z.enum(["fit", "fill"]).default("fit"),
+  contentMode: z.enum(["fit", "fill"]).default("fill"),
   thumbHash: z
     .string()
     .trim()
@@ -268,6 +268,10 @@ export async function POST(request: Request) {
     const useAsyncCompletion =
       Boolean(parsed.data.sourceUpload) &&
       isAsyncMediaCompletionEnabled(clientBuild)
+    // All new story photos use an edge-to-edge 9:16 crop. Continue accepting
+    // the legacy `fit` value so older clients remain compatible, but never
+    // reintroduce blurred or letterboxed delivery canvases.
+    const contentMode = "fill" as const
 
     if (
       parsed.data.storageProvider === "cloudflare-r2" &&
@@ -309,7 +313,7 @@ export async function POST(request: Request) {
         : await createServerEncodedStoryImageAsset({
           basePathname: parsed.data.basePathname,
           ownerUserId: session.id,
-          contentMode: "fit",
+          contentMode,
           storageProvider: parsed.data.storageProvider,
           source: toClientDerivative(
             parsed.data.sourceUpload,
@@ -368,7 +372,7 @@ export async function POST(request: Request) {
         await getDb()
           .update(mediaAssets)
           .set({
-            providerStatus: "queued:fit",
+            providerStatus: `queued:${contentMode}`,
             providerPctComplete: 0,
             updatedAt: new Date(),
           })
@@ -376,7 +380,7 @@ export async function POST(request: Request) {
         await enqueueImageProcessing({
           mediaAssetId: createdStory.mediaAssetId,
           basePathname: parsed.data.basePathname,
-          contentMode: "fit",
+          contentMode,
           source: "image_complete_created",
         }).catch((error) => {
           console.error("image_processing_dispatch_deferred", {

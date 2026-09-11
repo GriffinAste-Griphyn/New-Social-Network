@@ -1750,7 +1750,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
       return await createServerEncodedStoryImageAsset({
         basePathname,
         ownerUserId: "server",
-        contentMode: "fit",
+        contentMode: "fill",
         storageProvider: "cloudflare-r2",
         source: {
           pathname: sourcePathname,

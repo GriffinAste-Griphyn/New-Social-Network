@@ -393,6 +393,13 @@
       "when": 1788109412722,
       "tag": "0055_cloudflare_r2_media_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1789148634000,
+      "tag": "0056_image_upload_diagnostics",
+      "breakpoints": true
     }
   ]
 }

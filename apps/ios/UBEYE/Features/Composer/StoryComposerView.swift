@@ -1,5 +1,4 @@
 import AVFoundation
-import Accelerate
 import ImageIO
 import Photos
 import PhotosUI
@@ -30,14 +29,10 @@ struct StoryVideoUpload {
 
 struct StoryImageUpload: Equatable, @unchecked Sendable {
     static let maximumUploadBytes = StoryMediaContract.maximumImageUploadBytes
-    static let maximumPreservedUploadBytes = 6 * 1024 * 1024
-    static let preferredUploadPixelDimension = 2_160
-    static let preferredUploadJPEGQuality: CGFloat = 0.90
+    static let preferredUploadJPEGQuality: CGFloat = 0.88
     static let maximumTranscodedPixelDimension = 4_096
     static let maximumPreviewPixelDimension = 2_560
     static let transcodedJPEGQuality: CGFloat = 0.95
-    static let fallbackTranscodedPixelDimension = 3_072
-    static let fallbackJPEGQuality: CGFloat = 0.88
     static let playbackCanvasWidth = Int(StoryCanvasLayout.playbackPixelSize.width)
     static let playbackCanvasHeight = Int(StoryCanvasLayout.playbackPixelSize.height)
     static let playbackJPEGQuality: CGFloat = 0.78
@@ -80,54 +75,14 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         fallbackFileName: String = "story-photo",
         displayImage: UIImage? = nil
     ) {
-        let format = StoryImageFormat(data: data)
-        if let format,
-           format.isDirectUploadCompatible,
-           data.count <= Self.maximumUploadBytes,
-           StoryImageTranscoder.shouldPreserveUploadSource(
-             data: data,
-             maximumByteCount: Self.maximumPreservedUploadBytes,
-             maximumPixelDimension: Self.preferredUploadPixelDimension
-           ),
-           let previewImage = StoryImageTranscoder.previewImage(
-             data: data,
-             maxPixelDimension: Self.maximumPreviewPixelDimension
-           ) ?? displayImage {
-            image = previewImage
-            self.data = data
-            fileName = Self.normalizedFileName(
-                fallbackFileName,
-                fileExtension: format.fileExtension
-            )
-            mimeType = format.mimeType
-            return
-        }
-
-        let preferredPixelDimension = format?.isDirectUploadCompatible == true
-            ? Self.preferredUploadPixelDimension
-            : Self.maximumTranscodedPixelDimension
-        let preferredQuality = format?.isDirectUploadCompatible == true
-            ? Self.preferredUploadJPEGQuality
-            : Self.transcodedJPEGQuality
-        guard var normalized = StoryImageTranscoder.normalizedJPEG(
+        guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
             data: data,
-            maxPixelDimension: preferredPixelDimension,
-            quality: preferredQuality
-        ) else {
+            width: Self.playbackCanvasWidth,
+            height: Self.playbackCanvasHeight,
+            quality: Self.preferredUploadJPEGQuality,
+            contentMode: .fill
+        ), normalized.data.count <= Self.maximumUploadBytes else {
             return nil
-        }
-        if normalized.data.count > Self.maximumUploadBytes {
-            guard let reduced = StoryImageTranscoder.normalizedJPEG(
-                data: data,
-                maxPixelDimension: min(
-                    preferredPixelDimension,
-                    Self.fallbackTranscodedPixelDimension
-                ),
-                quality: Self.fallbackJPEGQuality
-            ), reduced.data.count <= Self.maximumUploadBytes else {
-                return nil
-            }
-            normalized = reduced
         }
         guard let previewImage = StoryImageTranscoder.previewImage(
             data: normalized.data,
@@ -146,58 +101,14 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         fileURL: URL,
         fallbackFileName: String = "story-photo"
     ) {
-        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let format = StoryImageFormat(fileURL: fileURL)
-        if let format,
-           format.isDirectUploadCompatible,
-           fileSize > 0,
-           fileSize <= Self.maximumUploadBytes,
-           StoryImageTranscoder.shouldPreserveUploadSource(
-             fileURL: fileURL,
-             byteCount: fileSize,
-             maximumByteCount: Self.maximumPreservedUploadBytes,
-             maximumPixelDimension: Self.preferredUploadPixelDimension
-           ),
-           let originalData = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
-           let previewImage = StoryImageTranscoder.previewImage(
-             fileURL: fileURL,
-             maxPixelDimension: Self.maximumPreviewPixelDimension
-           ) {
-            image = previewImage
-            data = originalData
-            fileName = Self.normalizedFileName(
-                fallbackFileName,
-                fileExtension: format.fileExtension
-            )
-            mimeType = format.mimeType
-            return
-        }
-
-        let preferredPixelDimension = format?.isDirectUploadCompatible == true
-            ? Self.preferredUploadPixelDimension
-            : Self.maximumTranscodedPixelDimension
-        let preferredQuality = format?.isDirectUploadCompatible == true
-            ? Self.preferredUploadJPEGQuality
-            : Self.transcodedJPEGQuality
-        guard var normalized = StoryImageTranscoder.normalizedJPEG(
+        guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
             fileURL: fileURL,
-            maxPixelDimension: preferredPixelDimension,
-            quality: preferredQuality
-        ) else {
+            width: Self.playbackCanvasWidth,
+            height: Self.playbackCanvasHeight,
+            quality: Self.preferredUploadJPEGQuality,
+            contentMode: .fill
+        ), normalized.data.count <= Self.maximumUploadBytes else {
             return nil
-        }
-        if normalized.data.count > Self.maximumUploadBytes {
-            guard let reduced = StoryImageTranscoder.normalizedJPEG(
-                fileURL: fileURL,
-                maxPixelDimension: min(
-                    preferredPixelDimension,
-                    Self.fallbackTranscodedPixelDimension
-                ),
-                quality: Self.fallbackJPEGQuality
-            ), reduced.data.count <= Self.maximumUploadBytes else {
-                return nil
-            }
-            normalized = reduced
         }
         guard let previewImage = StoryImageTranscoder.previewImage(
             data: normalized.data,
@@ -232,59 +143,6 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     }
 }
 
-private struct StoryImageFormat {
-    let fileExtension: String
-    let mimeType: String
-    let isDirectUploadCompatible: Bool
-
-    init?(data: Data) {
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
-            return nil
-        }
-
-        self.init(typeIdentifier: CGImageSourceGetType(source))
-    }
-
-    init?(fileURL: URL) {
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, options) else {
-            return nil
-        }
-
-        self.init(typeIdentifier: CGImageSourceGetType(source))
-    }
-
-    private init?(typeIdentifier: CFString?) {
-        guard let typeIdentifier else {
-            return nil
-        }
-
-        switch typeIdentifier as String {
-        case UTType.jpeg.identifier:
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
-            isDirectUploadCompatible = true
-        case UTType.png.identifier:
-            fileExtension = "png"
-            mimeType = "image/png"
-            isDirectUploadCompatible = true
-        case UTType.webP.identifier:
-            fileExtension = "webp"
-            mimeType = "image/webp"
-            isDirectUploadCompatible = true
-        case "public.avif":
-            fileExtension = "avif"
-            mimeType = "image/avif"
-            isDirectUploadCompatible = true
-        default:
-            fileExtension = "jpg"
-            mimeType = "image/jpeg"
-            isDirectUploadCompatible = false
-        }
-    }
-}
-
 struct StoryJPEGEncoding {
     let data: Data
     let width: Int
@@ -292,52 +150,6 @@ struct StoryJPEGEncoding {
 }
 
 enum StoryImageTranscoder {
-    static func shouldPreserveUploadSource(
-        data: Data,
-        maximumByteCount: Int,
-        maximumPixelDimension: Int
-    ) -> Bool {
-        guard data.count <= maximumByteCount else {
-            return false
-        }
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
-            return false
-        }
-        return sourceFitsUploadBounds(source, maximumPixelDimension: maximumPixelDimension)
-    }
-
-    static func shouldPreserveUploadSource(
-        fileURL: URL,
-        byteCount: Int,
-        maximumByteCount: Int,
-        maximumPixelDimension: Int
-    ) -> Bool {
-        guard byteCount <= maximumByteCount else {
-            return false
-        }
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, options) else {
-            return false
-        }
-        return sourceFitsUploadBounds(source, maximumPixelDimension: maximumPixelDimension)
-    }
-
-    private static func sourceFitsUploadBounds(
-        _ source: CGImageSource,
-        maximumPixelDimension: Int
-    ) -> Bool {
-        guard
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-                as? [CFString: Any],
-            let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
-            let height = properties[kCGImagePropertyPixelHeight] as? NSNumber
-        else {
-            return false
-        }
-        return max(width.intValue, height.intValue) <= maximumPixelDimension
-    }
-
     static func previewImage(
         data: Data,
         maxPixelDimension: Int
@@ -615,8 +427,6 @@ enum StoryImageTranscoder {
             width: fittedSize.width,
             height: fittedSize.height
         )
-        let sourceHasAlpha = imageHasAlpha(sourceImage)
-
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
                 data: nil,
@@ -625,158 +435,16 @@ enum StoryImageTranscoder {
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: colorSpace,
-                bitmapInfo: sourceHasAlpha
-                    ? CGImageAlphaInfo.premultipliedLast.rawValue
-                    : CGImageAlphaInfo.noneSkipLast.rawValue
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
               ) else {
             return nil
         }
 
         context.interpolationQuality = .high
-        if contentMode == .fit, !sourceHasAlpha {
-            if let background = blurredFitBackground(
-                sourceImage,
-                width: width,
-                height: height
-            ) {
-                context.draw(background, in: CGRect(origin: .zero, size: targetSize))
-            } else {
-                let coverScale = max(widthScale, heightScale)
-                let coverSize = CGSize(
-                    width: sourceSize.width * coverScale,
-                    height: sourceSize.height * coverScale
-                )
-                context.draw(
-                    sourceImage,
-                    in: CGRect(
-                        x: (targetSize.width - coverSize.width) / 2,
-                        y: (targetSize.height - coverSize.height) / 2,
-                        width: coverSize.width,
-                        height: coverSize.height
-                    )
-                )
-            }
-            context.setFillColor(CGColor(gray: 0, alpha: 0.30))
-            context.fill(CGRect(origin: .zero, size: targetSize))
-        } else if contentMode == .fit {
-            context.clear(CGRect(origin: .zero, size: targetSize))
-        } else {
-            context.setFillColor(CGColor(gray: 0, alpha: 1))
-            context.fill(CGRect(origin: .zero, size: targetSize))
-        }
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: targetSize))
         context.draw(sourceImage, in: fittedRect)
         return context.makeImage()
-    }
-
-    private static func imageHasAlpha(_ image: CGImage) -> Bool {
-        switch image.alphaInfo {
-        case .first, .last, .premultipliedFirst, .premultipliedLast, .alphaOnly:
-            true
-        case .none, .noneSkipFirst, .noneSkipLast:
-            false
-        @unknown default:
-            true
-        }
-    }
-
-    private static func blurredFitBackground(
-        _ sourceImage: CGImage,
-        width: Int,
-        height: Int
-    ) -> CGImage? {
-        let backgroundWidth = max(32, width / 8)
-        let backgroundHeight = max(32, height / 8)
-        let bytesPerRow = backgroundWidth * 4
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        var sourcePixels = Data(count: bytesPerRow * backgroundHeight)
-        let rendered = sourcePixels.withUnsafeMutableBytes { pixels in
-            guard let baseAddress = pixels.baseAddress,
-                  let context = CGContext(
-                    data: baseAddress,
-                    width: backgroundWidth,
-                    height: backgroundHeight,
-                    bitsPerComponent: 8,
-                    bytesPerRow: bytesPerRow,
-                    space: colorSpace,
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  ) else {
-                return false
-            }
-            let targetSize = CGSize(width: backgroundWidth, height: backgroundHeight)
-            let scale = max(
-                targetSize.width / CGFloat(sourceImage.width),
-                targetSize.height / CGFloat(sourceImage.height)
-            ) * 1.08
-            let coverSize = CGSize(
-                width: CGFloat(sourceImage.width) * scale,
-                height: CGFloat(sourceImage.height) * scale
-            )
-            context.interpolationQuality = .medium
-            context.draw(
-                sourceImage,
-                in: CGRect(
-                    x: (targetSize.width - coverSize.width) / 2,
-                    y: (targetSize.height - coverSize.height) / 2,
-                    width: coverSize.width,
-                    height: coverSize.height
-                )
-            )
-            return true
-        }
-        guard rendered else {
-            return nil
-        }
-        var blurredPixels = Data(count: sourcePixels.count)
-        let blurError = sourcePixels.withUnsafeMutableBytes { sourceBuffer in
-            blurredPixels.withUnsafeMutableBytes { destinationBuffer in
-                guard let sourceAddress = sourceBuffer.baseAddress,
-                      let destinationAddress = destinationBuffer.baseAddress else {
-                    return kvImageNullPointerArgument
-                }
-                var source = vImage_Buffer(
-                    data: sourceAddress,
-                    height: vImagePixelCount(backgroundHeight),
-                    width: vImagePixelCount(backgroundWidth),
-                    rowBytes: bytesPerRow
-                )
-                var destination = vImage_Buffer(
-                    data: destinationAddress,
-                    height: vImagePixelCount(backgroundHeight),
-                    width: vImagePixelCount(backgroundWidth),
-                    rowBytes: bytesPerRow
-                )
-                return vImageBoxConvolve_ARGB8888(
-                    &source,
-                    &destination,
-                    nil,
-                    0,
-                    0,
-                    9,
-                    9,
-                    nil,
-                    vImage_Flags(kvImageEdgeExtend)
-                )
-            }
-        }
-        guard blurError == kvImageNoError,
-              let provider = CGDataProvider(data: blurredPixels as CFData) else {
-            return nil
-        }
-        return CGImage(
-            width: backgroundWidth,
-            height: backgroundHeight,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGBitmapInfo(
-                rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
-            ),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: true,
-            intent: .defaultIntent
-        )
     }
 
     private static func downsampledImage(
@@ -1200,7 +868,7 @@ final class StoryComposerStore: ObservableObject {
                 uploadStatus = "Posting"
                 let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
-                    contentMode: .fit,
+                    contentMode: .fill,
                     draft: pendingUploadDraft,
                     textOverlays: pendingTextOverlays
                 )
@@ -1351,7 +1019,7 @@ final class StoryComposerStore: ObservableObject {
             }
             return try pendingUploads.createImageUpload(
                 upload: upload,
-                contentMode: .fit,
+                contentMode: .fill,
                 draft: pendingUploadDraft,
                 textOverlays: pendingTextOverlays,
                 batchId: batchId,
