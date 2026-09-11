@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
+import { blobMediaUnavailableResponse, isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import {
   createMediaUploadSession,
   getReusableMediaUploadSession,
@@ -117,6 +118,10 @@ export async function POST(request: Request) {
 
   if (!parsed.success) {
     return NextResponse.json({ error: "Could not prepare the upload." }, { status: 400 })
+  }
+
+  if (parsed.data.assetKind === "image" && isVercelBlobAccessDisabled()) {
+    return blobMediaUnavailableResponse()
   }
 
   if (process.env.STORY_STORAGE_PROVIDER !== "vercel-blob") {

@@ -7,6 +7,10 @@ import { getCompleteMobileSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories } from "@/lib/db/schema"
 import {
+  blobMediaUnavailableResponse,
+  isVercelBlobAccessDisabled,
+} from "@/lib/media-availability"
+import {
   claimMediaUploadSessionForCompletion,
   cloudflareDetailsFromUploadSession,
   isCloudflareStreamFullyReady,
@@ -196,7 +200,14 @@ export async function POST(request: Request) {
       10,
     )
     const useAsyncCompletion = isAsyncMediaCompletionEnabled(clientBuild)
+    const blobAccessDisabled = isVercelBlobAccessDisabled()
+    if (blobAccessDisabled && parsed.data.uid.startsWith("media-originals/")) {
+      return blobMediaUnavailableResponse(
+        "This private video upload cannot be completed until media service access recovers. Please start a new video upload.",
+      )
+    }
     if (
+      !blobAccessDisabled &&
       Number.isFinite(clientBuild) &&
       clientBuild >= minimumRequiredVideoPosterBuild &&
       !parsed.data.poster
@@ -293,7 +304,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const posterUrl = parsed.data.poster
+    const posterUrl = !blobAccessDisabled && parsed.data.poster
       ? await createDirectBlobStoryVideoPosterUrl({
           uid: parsed.data.uid,
           poster: parsed.data.poster,

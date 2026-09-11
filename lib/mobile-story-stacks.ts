@@ -1,4 +1,8 @@
 import { getCreatorStats } from "@/lib/creator-stats"
+import {
+  isVercelBlobAccessDisabled,
+  isVercelBlobMediaReference,
+} from "@/lib/media-availability"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import {
   getMyStoryStack,
@@ -77,6 +81,33 @@ function absoluteMediaUrl(value: string | null, request: Request) {
   }
 
   return new URL(value, request.url).toString()
+}
+
+function storyItemAvailable(item: {
+  mediaUrl: string
+  thumbnailUrl: string | null
+  placeholderUrl?: string | null
+  renditions?: {
+    playback: {
+      mediaUrl: string
+      storageProvider?: string | null
+    }
+  }
+}) {
+  if (!isVercelBlobAccessDisabled()) {
+    return true
+  }
+
+  if (item.renditions?.playback.storageProvider === "cloudflare-stream") {
+    return true
+  }
+
+  return ![
+    item.mediaUrl,
+    item.thumbnailUrl,
+    item.placeholderUrl,
+    item.renditions?.playback.mediaUrl,
+  ].some(isVercelBlobMediaReference)
 }
 
 function versionMediaUrl(value: string | null, version: string | null | undefined) {
@@ -200,7 +231,9 @@ async function getMobileMyStoryStack(userId: string): Promise<MobileStoryStack |
     creatorStats.stories.map((story) => [story.id, story]),
   )
 
-  if (myStory.items.length === 0) {
+  const availableItems = myStory.items.filter(storyItemAvailable)
+
+  if (availableItems.length === 0) {
     return null
   }
 
@@ -210,7 +243,7 @@ async function getMobileMyStoryStack(userId: string): Promise<MobileStoryStack |
     creator: "My Story",
     handle: `@${myStory.owner.handle}`,
     avatarUrl: myStory.owner.imageUrl,
-    items: myStory.items.map((item) => ({
+    items: availableItems.map((item) => ({
       id: item.id,
       assetKind: item.assetKind,
       mediaUrl: item.mediaUrl,
@@ -257,17 +290,27 @@ export async function getMobileStoryStackResponse(
   }
 
   const storyItems = await Promise.all(
-    story.items.map(async (item) => {
+    story.items.filter(storyItemAvailable).map(async (item) => {
+      const cloudflareUid =
+        item.renditions?.playback.storageProvider === "cloudflare-stream"
+          ? item.renditions.playback.storageKey
+          : null
+      const cloudflareThumbnailUrl =
+        cloudflareUid && /^[a-f0-9]{32}$/i.test(cloudflareUid)
+          ? await createCloudflareStreamThumbnailUrl(cloudflareUid)
+          : null
       const mediaUrl = versionMediaUrl(
         await mobileStoryMediaUrl(item.mediaUrl, request),
         item.id,
       ) ?? item.mediaUrl
       const thumbnailUrl = versionMediaUrl(
-        await mobileStoryMediaUrl(item.thumbnailUrl, request),
+        cloudflareThumbnailUrl ??
+          (await mobileStoryMediaUrl(item.thumbnailUrl, request)),
         item.id,
       )
       const placeholderUrl = versionMediaUrl(
-        await mobileStoryMediaUrl(item.placeholderUrl, request),
+        cloudflareThumbnailUrl ??
+          (await mobileStoryMediaUrl(item.placeholderUrl, request)),
         item.id,
       )
 
@@ -286,6 +329,10 @@ export async function getMobileStoryStackResponse(
       }
     }),
   )
+
+  if (storyItems.length === 0) {
+    return null
+  }
 
   return {
     ok: true,

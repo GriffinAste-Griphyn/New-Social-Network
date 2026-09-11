@@ -4,6 +4,12 @@ import { z } from "zod"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
+  createCloudflareR2OriginalUpload,
+  isCloudflareR2StoryImageStorageEnabled,
+  minimumCloudflareR2ImageBuild,
+} from "@/lib/cloudflare-r2"
+import { blobMediaUnavailableResponse, isVercelBlobAccessDisabled } from "@/lib/media-availability"
+import {
   directStoryImageDisplayPathname,
   directStoryImagePathname,
   directStoryImageSourcePathname,
@@ -30,7 +36,6 @@ const imageUploadSchema = z.object({
 
 const minimumDerivativeOnlyBuild = 285
 const minimumServerEncodedImageBuild = 357
-
 type ImageUploadPartAccess = "private"
 
 function blobApiUploadUrl(pathname: string) {
@@ -67,6 +72,30 @@ async function createImageUploadPart(input: {
     contentType: input.contentType,
     maxSizeBytes: input.maxSizeBytes,
     access: input.access,
+    provider: "vercel-blob" as const,
+  }
+}
+
+async function createCloudflareR2ImageUploadPart(input: {
+  pathname: string
+  contentType: string
+  maxSizeBytes: number
+  byteSize: number
+}) {
+  const upload = await createCloudflareR2OriginalUpload({
+    key: input.pathname,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+  })
+
+  return {
+    pathname: input.pathname,
+    uploadUrl: upload.uploadUrl,
+    clientToken: "",
+    contentType: input.contentType,
+    maxSizeBytes: input.maxSizeBytes,
+    access: "private" as const,
+    provider: "cloudflare-r2" as const,
   }
 }
 
@@ -81,6 +110,11 @@ export async function POST(request: Request) {
     )
   }
 
+  const useCloudflareR2 = isCloudflareR2StoryImageStorageEnabled()
+  if (isVercelBlobAccessDisabled() && !useCloudflareR2) {
+    return blobMediaUnavailableResponse()
+  }
+
   const clientBuild = Number.parseInt(
     request.headers.get("x-ubeye-app-build") ?? "",
     10,
@@ -89,6 +123,12 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Update UBEYE to post image stories." },
       { status: 426, headers: { Upgrade: "UBEYE/285" } },
+    )
+  }
+  if (useCloudflareR2 && clientBuild < minimumCloudflareR2ImageBuild) {
+    return NextResponse.json(
+      { error: "Update UBEYE to post photo stories." },
+      { status: 426, headers: { Upgrade: `UBEYE/${minimumCloudflareR2ImageBuild}` } },
     )
   }
 
@@ -120,10 +160,10 @@ export async function POST(request: Request) {
     )
   }
 
-  if (
+  if (!useCloudflareR2 && (
     process.env.STORY_STORAGE_PROVIDER !== "vercel-blob" ||
     !process.env.BLOB_READ_WRITE_TOKEN
-  ) {
+  )) {
     return NextResponse.json(
       { error: "Direct image uploads are not configured." },
       { status: 503 },
@@ -135,17 +175,25 @@ export async function POST(request: Request) {
     parsed.data.fileName,
     uploadStartedAt,
   )
-  const source = await createImageUploadPart({
-    pathname: directStoryImageSourcePathname(
-      basePathname,
-      parsed.data.contentType,
-    ),
-    contentType: parsed.data.contentType,
-    maxSizeBytes: maxStoryImageUploadBytes,
-    access: "private",
-  })
+  const sourcePathname = directStoryImageSourcePathname(
+    basePathname,
+    parsed.data.contentType,
+  )
+  const source = useCloudflareR2
+    ? await createCloudflareR2ImageUploadPart({
+        pathname: sourcePathname,
+        contentType: parsed.data.contentType,
+        maxSizeBytes: maxStoryImageUploadBytes,
+        byteSize: parsed.data.byteSize,
+      })
+    : await createImageUploadPart({
+        pathname: sourcePathname,
+        contentType: parsed.data.contentType,
+        maxSizeBytes: maxStoryImageUploadBytes,
+        access: "private",
+      })
   const [display, thumbnail] =
-    clientBuild < minimumServerEncodedImageBuild
+    !useCloudflareR2 && clientBuild < minimumServerEncodedImageBuild
       ? await Promise.all([
           createImageUploadPart({
             pathname: directStoryImageDisplayPathname(
@@ -167,6 +215,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
+    storageProvider: useCloudflareR2 ? "cloudflare-r2" : "vercel-blob",
     basePathname,
     source,
     display,

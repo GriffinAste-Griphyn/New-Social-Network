@@ -6,10 +6,24 @@ const originalEnv = { ...process.env }
 
 const mediaConfigEnvironmentNames = [
   "MOBILE_MEDIA_CONFIG_VERSION",
+  "VERCEL_BLOB_SUSPENDED_MODE",
+  "STORY_IMAGE_STORAGE_PROVIDER",
+  "CLOUDFLARE_R2_ACCOUNT_ID",
+  "CLOUDFLARE_R2_ACCESS_KEY_ID",
+  "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+  "CLOUDFLARE_R2_ORIGINALS_BUCKET",
+  "CLOUDFLARE_R2_DELIVERY_BUCKET",
+  "CLOUDFLARE_R2_PUBLIC_BASE_URL",
   "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
   "MOBILE_MEDIA_PREHEAT_CANARY_PERCENT",
   "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
   "MOBILE_UPLOAD_CHUNK_BYTES",
+  "MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_CONSTRAINED",
+  "MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_STANDARD",
+  "MOBILE_BLOB_MULTIPART_PART_BYTES_CONSTRAINED",
+  "MOBILE_BLOB_MULTIPART_PART_BYTES_STANDARD",
+  "MOBILE_BLOB_MULTIPART_CONCURRENCY_CONSTRAINED",
+  "MOBILE_BLOB_MULTIPART_CONCURRENCY_STANDARD",
   "MOBILE_IMAGE_PREHEAT_LIMIT_CONSTRAINED",
   "MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD",
   "MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED",
@@ -50,10 +64,21 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-08-26.1",
+      version: "2026-09-10.1",
       rolloutProfile: "preheat-canary",
+      blobUploadsAvailable: true,
+      storyImageUploadsAvailable: true,
       imageDerivativeUploadEnabled: true,
       uploadChunkBytes: 5 * 1024 * 1024,
+      blobMultipartThresholdBytes: {
+        constrained: 32 * 1024 * 1024,
+        standard: 64 * 1024 * 1024,
+      },
+      blobMultipartPartBytes: {
+        constrained: 8 * 1024 * 1024,
+        standard: 16 * 1024 * 1024,
+      },
+      blobMultipartConcurrency: { constrained: 2, standard: 4 },
       imagePreheatLimit: { constrained: 2, standard: 4 },
       stackPreheatLimit: { constrained: 2, standard: 4 },
       preparedPlayerLimit: { constrained: 0, standard: 0 },
@@ -79,8 +104,40 @@ describe("mobile media runtime config", () => {
     })
   })
 
+  it("publishes the reversible Blob upload availability switch", () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+
+    expect(getMobileMediaConfig()).toMatchObject({
+      blobUploadsAvailable: false,
+      storyImageUploadsAvailable: false,
+    })
+  })
+
+  it("keeps story photo uploads available through Cloudflare R2 while Blob is paused", () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    process.env.STORY_IMAGE_STORAGE_PROVIDER = "cloudflare-r2"
+    process.env.CLOUDFLARE_R2_ACCOUNT_ID = "account"
+    process.env.CLOUDFLARE_R2_ACCESS_KEY_ID = "access"
+    process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY = "secret"
+    process.env.CLOUDFLARE_R2_ORIGINALS_BUCKET = "originals"
+    process.env.CLOUDFLARE_R2_DELIVERY_BUCKET = "delivery"
+    process.env.CLOUDFLARE_R2_PUBLIC_BASE_URL = "https://media.example.com"
+
+    expect(getMobileMediaConfig({ clientBuild: 399 })).toMatchObject({
+      blobUploadsAvailable: false,
+      storyImageUploadsAvailable: false,
+    })
+    expect(getMobileMediaConfig({ clientBuild: 400 })).toMatchObject({
+      blobUploadsAvailable: false,
+      storyImageUploadsAvailable: true,
+    })
+  })
+
   it("clamps remotely configured limits to safe bounds", () => {
     process.env.MOBILE_IMAGE_PREHEAT_LIMIT_STANDARD = "999"
+    process.env.MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_CONSTRAINED = "1"
+    process.env.MOBILE_BLOB_MULTIPART_PART_BYTES_STANDARD = "999999999"
+    process.env.MOBILE_BLOB_MULTIPART_CONCURRENCY_CONSTRAINED = "99"
     process.env.MOBILE_STACK_PREHEAT_LIMIT_CONSTRAINED = "0"
     process.env.MOBILE_PREPARED_PLAYER_LIMIT_CONSTRAINED = "99"
     process.env.MOBILE_PREPARED_PLAYER_LIMIT_STANDARD = "99"
@@ -93,6 +150,9 @@ describe("mobile media runtime config", () => {
     process.env.MOBILE_PREPARED_MAX_HEIGHT_STANDARD = "1"
 
     expect(getMobileMediaConfig()).toMatchObject({
+      blobMultipartThresholdBytes: { constrained: 8 * 1024 * 1024 },
+      blobMultipartPartBytes: { standard: 64 * 1024 * 1024 },
+      blobMultipartConcurrency: { constrained: 4 },
       imagePreheatLimit: { standard: 8 },
       stackPreheatLimit: { constrained: 1 },
       preparedPlayerLimit: { standard: 0 },

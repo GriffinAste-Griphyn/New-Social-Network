@@ -77,6 +77,47 @@ final class UXPolishTests: XCTestCase {
         )
     }
 
+    func testStoryUploadActivityUsesTruthfulRecoveryStates() {
+        let recovering = StoryUploadActivityPolicy.presentation(
+            state: .recovering,
+            assetKind: .video,
+            progress: 0.42,
+            errorMessage: nil
+        )
+        XCTAssertEqual(recovering.title, "Resuming upload…")
+        XCTAssertTrue(recovering.showsIndeterminateProgress)
+        XCTAssertFalse(recovering.needsAttention)
+
+        let paused = StoryUploadActivityPolicy.presentation(
+            state: .paused,
+            assetKind: .video,
+            progress: 0.42,
+            errorMessage: "Waiting for a connection"
+        )
+        XCTAssertEqual(paused.title, "Upload paused")
+        XCTAssertEqual(paused.message, "Waiting for a connection")
+        XCTAssertTrue(paused.needsAttention)
+    }
+
+    func testStoryUploadActivityClampsProgress() {
+        let presentation = StoryUploadActivityPolicy.presentation(
+            state: .uploading,
+            assetKind: .image,
+            progress: 1.7,
+            errorMessage: nil
+        )
+
+        XCTAssertEqual(presentation.title, "Uploading · 100%")
+        XCTAssertEqual(presentation.progress, 1)
+    }
+
+    func testStoryUploadRecoveryStatesRoundTripThroughPersistence() throws {
+        for state in [PendingStoryUploadState.recovering, .paused] {
+            let encoded = try JSONEncoder().encode(state)
+            XCTAssertEqual(try JSONDecoder().decode(PendingStoryUploadState.self, from: encoded), state)
+        }
+    }
+
     func testStoryDismissUsesDistanceThreshold() {
         XCTAssertTrue(
             StoryDismissGesturePolicy.shouldDismiss(

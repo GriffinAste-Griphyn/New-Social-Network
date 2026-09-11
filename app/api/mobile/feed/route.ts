@@ -3,10 +3,17 @@ import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { readFeedCacheBatch } from "@/lib/feed-snapshot-store"
+import {
+  isVercelBlobAccessDisabled,
+  isVercelBlobMediaReference,
+} from "@/lib/media-availability"
 import { getMobileInitialStoryStacks } from "@/lib/mobile-story-stacks"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import { getFeedData } from "@/lib/story-store"
-import { publicStoryMediaUrl } from "@/lib/story-storage"
+import {
+  createCloudflareStreamThumbnailMediaUrl,
+  publicStoryMediaUrl,
+} from "@/lib/story-storage"
 
 export const runtime = "nodejs"
 const initialStoryStackLimit = 4
@@ -94,6 +101,8 @@ function absoluteStoryCardMedia<T extends {
       mediaUrl: string
       thumbnailUrl: string | null
       placeholderUrl?: string | null
+      storageProvider?: string | null
+      storageKey?: string | null
     }
     original: {
       mediaUrl: string
@@ -102,13 +111,21 @@ function absoluteStoryCardMedia<T extends {
     } | null
   }
 }>(story: T, request: Request) {
+  const cloudflareUid =
+    story.renditions?.playback.storageProvider === "cloudflare-stream"
+      ? story.renditions.playback.storageKey
+      : null
+  const cloudflareThumbnailUrl =
+    cloudflareUid && /^[a-f0-9]{32}$/i.test(cloudflareUid)
+      ? createCloudflareStreamThumbnailMediaUrl(cloudflareUid)
+      : null
   const mediaUrl =
     publicStoryMediaUrl(story.mediaUrl, request, { signed: true }) ??
     story.mediaUrl
-  const thumbnailUrl = publicStoryMediaUrl(story.thumbnailUrl, request, {
+  const thumbnailUrl = publicStoryMediaUrl(cloudflareThumbnailUrl ?? story.thumbnailUrl, request, {
     signed: true,
   })
-  const placeholderUrl = publicStoryMediaUrl(story.placeholderUrl ?? null, request, {
+  const placeholderUrl = publicStoryMediaUrl(cloudflareThumbnailUrl ?? story.placeholderUrl ?? null, request, {
     signed: true,
   })
 
@@ -160,6 +177,33 @@ function absoluteStoryCardMedia<T extends {
         }
       : undefined,
   }
+}
+
+function storyCardAvailable(story: {
+  mediaUrl: string
+  thumbnailUrl: string | null
+  placeholderUrl?: string | null
+  renditions?: {
+    playback: {
+      mediaUrl: string
+      storageProvider?: string | null
+    }
+  }
+}) {
+  if (!isVercelBlobAccessDisabled()) {
+    return true
+  }
+
+  if (story.renditions?.playback.storageProvider === "cloudflare-stream") {
+    return true
+  }
+
+  return ![
+    story.mediaUrl,
+    story.thumbnailUrl,
+    story.placeholderUrl,
+    story.renditions?.playback.mediaUrl,
+  ].some(isVercelBlobMediaReference)
 }
 
 function collapseStoryCardsByCreator<T extends { handle: string }>(stories: T[]) {
@@ -291,12 +335,14 @@ async function feedResponse(
     useSnapshot: !validCursor,
   })
   const followingStories = collapseStoryCardsByCreator(
-    feed.followingStories.map((story) => absoluteStoryCardMedia(story, request)),
+    feed.followingStories
+      .filter(storyCardAvailable)
+      .map((story) => absoluteStoryCardMedia(story, request)),
   )
   const completeFollowingTimeline = collapseStoryCardsByCreator(
-    feed.followingTimelineStories.map((story) =>
-      absoluteStoryCardMedia(story, request),
-    ),
+    feed.followingTimelineStories
+      .filter(storyCardAvailable)
+      .map((story) => absoluteStoryCardMedia(story, request)),
   )
   const hasMoreTimelineStories = completeFollowingTimeline.length > pageRequest.limit
   const followingTimelineStories = completeFollowingTimeline.slice(0, pageRequest.limit)
@@ -308,11 +354,13 @@ async function feedResponse(
     followingStories.map((story) => story.creator.toLowerCase()),
   )
   const discoverStories = collapseStoryCardsByCreator(
-    feed.discoverStories.map((story) => absoluteStoryCardMedia(story, request)),
+    feed.discoverStories
+      .filter(storyCardAvailable)
+      .map((story) => absoluteStoryCardMedia(story, request)),
   ).filter((story) => !followedCreatorNames.has(story.creator.toLowerCase()))
   const initialStoryStacks = await getMobileInitialStoryStacks({
     storyIds: initialStoryStackIds({
-      hasActiveMyStory: feed.myStory.hasActiveStory,
+      hasActiveMyStory: feed.myStory.items.some(storyCardAvailable),
       followingStories,
       followingTimelineStories,
       discoverStories,
@@ -321,14 +369,17 @@ async function feedResponse(
     request,
     limit: initialStoryStackLimit,
   })
+  const availableMyStoryItems = feed.myStory.items.filter(storyCardAvailable)
   const latestMyStoryItem =
-    feed.myStory.items.length > 0
-      ? feed.myStory.items[feed.myStory.items.length - 1]
+    availableMyStoryItems.length > 0
+      ? availableMyStoryItems[availableMyStoryItems.length - 1]
       : null
   const latestMyStoryThumbnailUrl = versionMediaUrl(
-    publicStoryMediaUrl(feed.myStory.latestThumbnailUrl, request, {
-      signed: true,
-    }),
+    isVercelBlobAccessDisabled() && latestMyStoryItem
+      ? absoluteStoryCardMedia(latestMyStoryItem, request).thumbnailUrl
+      : publicStoryMediaUrl(feed.myStory.latestThumbnailUrl, request, {
+          signed: true,
+        }),
     latestMyStoryItem?.id,
   )
 
@@ -364,6 +415,13 @@ async function feedResponse(
       })),
       myStory: {
         ...feed.myStory,
+        hasActiveStory: availableMyStoryItems.length > 0,
+        liveCount: availableMyStoryItems.length,
+        latestAssetKind: latestMyStoryItem?.assetKind ?? null,
+        expiresSoonLabel:
+          availableMyStoryItems.length > 0
+            ? feed.myStory.expiresSoonLabel
+            : null,
         owner: {
           ...feed.myStory.owner,
           imageUrl:
@@ -372,7 +430,7 @@ async function feedResponse(
         },
         latestThumbnailUrl: latestMyStoryThumbnailUrl,
         latestTextOverlays: latestMyStoryItem?.textOverlays ?? [],
-        items: feed.myStory.items.map((story) =>
+        items: availableMyStoryItems.map((story) =>
           absoluteStoryCardMedia(story, request),
         ),
       },

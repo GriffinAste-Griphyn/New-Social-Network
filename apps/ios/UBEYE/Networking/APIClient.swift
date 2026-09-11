@@ -179,6 +179,7 @@ private struct BlobMultipartPart: Codable, Hashable {
 private struct BlobMultipartUploadState: Codable {
     let pathname: String
     let sourceByteSize: Int64
+    let partByteSize: Int64?
     let uploadId: String
     let key: String
     var completedParts: [BlobMultipartPart]
@@ -223,11 +224,11 @@ final class APIClient: ObservableObject {
     private static let vercelBlobApiVersion = "12"
     private static let mediaPipelineVersion = "hls-v4"
     private static let largeVideoUploadTimeout: TimeInterval = 10 * 60
-    private static let blobMultipartThresholdBytes: Int64 = 8 * 1024 * 1024
-    private static let blobMultipartPartBytes: Int64 = 5 * 1024 * 1024
-    private static let blobMultipartConcurrency = 4
+    private let blobMultipartThresholdOverride: Int64?
+    private let blobMultipartPartSizeOverride: Int64?
+    private let blobMultipartConcurrencyOverride: Int?
     private let session: URLSession
-    private let tusChunkUploader: TusChunkUploader
+    private let tusChunkUploader: TusChunkUploader?
     private let foregroundBlobFileUploader: TusChunkUploader
     private let foregroundBlobDataUploader: BlobDataUploader
     private let decoder: JSONDecoder
@@ -244,17 +245,17 @@ final class APIClient: ObservableObject {
 
     init(
         session: URLSession = .shared,
-        tusChunkUploader: TusChunkUploader? = nil
+        tusChunkUploader: TusChunkUploader? = nil,
+        blobMultipartThresholdBytes: Int64? = nil,
+        blobMultipartPartBytes: Int64? = nil,
+        blobMultipartConcurrency: Int? = nil
     ) {
         MediaPreheater.configureURLCache()
         self.session = session
-        let backgroundUploader: TusChunkUploader = tusChunkUploader ?? { request, bodyFileURL in
-            try await BackgroundTusUploadTransport.shared.upload(
-                request: request,
-                bodyFileURL: bodyFileURL
-            )
-        }
-        self.tusChunkUploader = backgroundUploader
+        blobMultipartThresholdOverride = blobMultipartThresholdBytes
+        blobMultipartPartSizeOverride = blobMultipartPartBytes
+        blobMultipartConcurrencyOverride = blobMultipartConcurrency
+        self.tusChunkUploader = tusChunkUploader
         if let tusChunkUploader {
             // Tests and specialized callers can keep injecting a deterministic
             // transport. Production Blob uploads use the foreground session below.
@@ -275,17 +276,35 @@ final class APIClient: ObservableObject {
                 return try await tusChunkUploader(request, stagedURL)
             }
         } else {
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.waitsForConnectivity = true
-            configuration.timeoutIntervalForRequest = Self.largeVideoUploadTimeout
-            configuration.timeoutIntervalForResource = Self.largeVideoUploadTimeout
-            configuration.httpMaximumConnectionsPerHost = 6
-            let blobSession = URLSession(configuration: configuration)
             self.foregroundBlobFileUploader = { request, bodyFileURL in
-                try await blobSession.upload(for: request, fromFile: bodyFileURL)
+                let stagedURL = try await Self.stageBlobUploadFile(bodyFileURL)
+                do {
+                    return try await BackgroundTusUploadTransport.shared.upload(
+                        request: request,
+                        bodyFileURL: stagedURL
+                    )
+                } catch {
+                    try? FileManager.default.removeItem(at: stagedURL)
+                    throw error
+                }
             }
             self.foregroundBlobDataUploader = { request, data in
-                try await blobSession.upload(for: request, from: data)
+                let stagedURL = try await Self.stageTusChunk(
+                    data,
+                    uploadURL: request.url ?? URL(fileURLWithPath: "/"),
+                    offset: Int64(
+                        request.value(forHTTPHeaderField: "x-mpu-part-number") ?? "0"
+                    ) ?? 0
+                )
+                do {
+                    return try await BackgroundTusUploadTransport.shared.upload(
+                        request: request,
+                        bodyFileURL: stagedURL
+                    )
+                } catch {
+                    try? FileManager.default.removeItem(at: stagedURL)
+                    throw error
+                }
             }
         }
         #if DEBUG
@@ -769,6 +788,30 @@ final class APIClient: ObservableObject {
     func uploadImageData(_ data: Data, part: ImageUploadPart) async throws -> BlobUploadResult {
         var request = URLRequest(url: part.uploadUrl)
         request.httpMethod = "PUT"
+        if part.provider == "cloudflare-r2" {
+            request.setValue(part.contentType, forHTTPHeaderField: "Content-Type")
+            request.setValue(String(data.count), forHTTPHeaderField: "Content-Length")
+            let (responseData, response) = try await session.upload(for: request, from: data)
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let detail = String(data: responseData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                throw APIClientError.server(
+                    detail?.isEmpty == false ? detail! : "Cloudflare image upload failed.",
+                    statusCode
+                )
+            }
+
+            return BlobUploadResult(
+                url: part.uploadUrl,
+                downloadUrl: nil,
+                pathname: part.pathname,
+                contentType: part.contentType,
+                contentDisposition: nil,
+                etag: http.value(forHTTPHeaderField: "ETag")
+            )
+        }
+
         request.setValue("Bearer \(part.clientToken)", forHTTPHeaderField: "Authorization")
         request.setValue(part.access ?? "private", forHTTPHeaderField: "x-vercel-blob-access")
         request.setValue(part.contentType, forHTTPHeaderField: "x-content-type")
@@ -785,6 +828,65 @@ final class APIClient: ObservableObject {
             throw APIClientError.server(detail ?? "Image derivative upload failed.", statusCode)
         }
 
+        return try decoder.decode(BlobUploadResult.self, from: responseData)
+    }
+
+    @discardableResult
+    func uploadImageFile(
+        _ fileURL: URL,
+        byteSize: Int64,
+        part: ImageUploadPart
+    ) async throws -> BlobUploadResult {
+        guard byteSize > 0, byteSize <= part.maxSizeBytes else {
+            throw APIClientError.invalidResponse
+        }
+
+        var request = URLRequest(url: part.uploadUrl)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = Self.largeVideoUploadTimeout
+        if part.provider == "cloudflare-r2" {
+            request.setValue(part.contentType, forHTTPHeaderField: "Content-Type")
+            request.setValue(String(byteSize), forHTTPHeaderField: "Content-Length")
+            let (responseData, response) = try await session.upload(
+                for: request,
+                fromFile: fileURL
+            )
+            guard let http = response as? HTTPURLResponse,
+                  200..<300 ~= http.statusCode else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let detail = String(data: responseData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                throw APIClientError.server(
+                    detail?.isEmpty == false ? detail! : "Cloudflare image upload failed.",
+                    statusCode
+                )
+            }
+            return BlobUploadResult(
+                url: part.uploadUrl,
+                downloadUrl: nil,
+                pathname: part.pathname,
+                contentType: part.contentType,
+                contentDisposition: nil,
+                etag: http.value(forHTTPHeaderField: "ETag")
+            )
+        }
+
+        request.setValue("Bearer \(part.clientToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(part.access ?? "private", forHTTPHeaderField: "x-vercel-blob-access")
+        request.setValue(part.contentType, forHTTPHeaderField: "x-content-type")
+        request.setValue(Self.vercelBlobApiVersion, forHTTPHeaderField: "x-api-version")
+        request.setValue(blobRequestId(clientToken: part.clientToken), forHTTPHeaderField: "x-api-blob-request-id")
+        request.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
+        request.setValue(String(byteSize), forHTTPHeaderField: "x-content-length")
+
+        let (responseData, response) = try await session.upload(for: request, fromFile: fileURL)
+        guard let http = response as? HTTPURLResponse,
+              200..<300 ~= http.statusCode else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let envelope = try? decoder.decode(BlobUploadErrorEnvelope.self, from: responseData)
+            let detail = envelope?.error?.message ?? envelope?.error?.code
+            throw APIClientError.server(detail ?? "Image source upload failed.", statusCode)
+        }
         return try decoder.decode(BlobUploadResult.self, from: responseData)
     }
 
@@ -807,6 +909,7 @@ final class APIClient: ObservableObject {
     ) async throws -> StoryUploadResponse {
         struct Body: Encodable {
             let basePathname: String
+            let storageProvider: String
             let sourceUpload: PreparedImageDerivativeUpload
             let contentMode: StoryImageContentMode
             let caption: String
@@ -828,6 +931,7 @@ final class APIClient: ObservableObject {
             "/api/mobile/stories/image-complete",
             body: Body(
                 basePathname: upload.basePathname,
+                storageProvider: upload.storageProvider ?? "vercel-blob",
                 sourceUpload: sourceUpload,
                 contentMode: contentMode,
                 caption: caption,
@@ -1041,11 +1145,29 @@ final class APIClient: ObservableObject {
             throw APIClientError.server("The prepared video does not match the upload target.", 0)
         }
 
-        if byteSize >= Self.blobMultipartThresholdBytes {
+        let isLimitedPath = NetworkQualityMonitor.shared.isLimitedPath
+        let multipartThreshold = blobMultipartThresholdOverride ?? Int64(
+            MediaControlConfig.shared.blobMultipartThresholdBytes(
+                isLimited: isLimitedPath
+            )
+        )
+        let multipartPartSize = blobMultipartPartSizeOverride ?? Int64(
+            MediaControlConfig.shared.blobMultipartPartBytes(
+                isLimited: isLimitedPath
+            )
+        )
+        let multipartConcurrency = blobMultipartConcurrencyOverride ??
+            MediaControlConfig.shared.blobMultipartConcurrency(
+                isLimited: isLimitedPath
+            )
+
+        if byteSize >= multipartThreshold {
             return try await uploadBlobVideoFileMultipart(
                 fileURL: fileURL,
                 byteSize: byteSize,
                 source: source,
+                partByteSize: multipartPartSize,
+                concurrency: multipartConcurrency,
                 onRetry: onRetry,
                 onProgress: onProgress
             )
@@ -1092,32 +1214,37 @@ final class APIClient: ObservableObject {
         fileURL: URL,
         byteSize: Int64,
         source: ImageUploadPart,
+        partByteSize: Int64,
+        concurrency: Int,
         onRetry: ((String) -> Void)?,
         onProgress: ((Double) -> Void)?
     ) async throws -> String {
         var state: BlobMultipartUploadState
         if let persistedState = try await Self.loadBlobMultipartState(
             pathname: source.pathname,
-            sourceByteSize: byteSize
+            sourceByteSize: byteSize,
+            partByteSize: partByteSize
         ) {
             state = persistedState
         } else {
             state = try await createBlobMultipartUploadState(
                 pathname: source.pathname,
                 sourceByteSize: byteSize,
+                partByteSize: partByteSize,
                 source: source
             )
         }
         try await Self.saveBlobMultipartState(state)
 
-        let partCount = Int((byteSize + Self.blobMultipartPartBytes - 1) / Self.blobMultipartPartBytes)
+        let partCount = Int((byteSize + partByteSize - 1) / partByteSize)
         var completedParts = Dictionary(
             uniqueKeysWithValues: state.completedParts.map { ($0.partNumber, $0) }
         )
         let completedByteCount = completedParts.keys.reduce(Int64(0)) { total, partNumber in
             total + Self.blobMultipartByteCount(
                 partNumber: partNumber,
-                totalByteSize: byteSize
+                totalByteSize: byteSize,
+                partByteSize: partByteSize
             )
         }
         var uploadedBytes = completedByteCount
@@ -1130,13 +1257,13 @@ final class APIClient: ObservableObject {
         for batchStart in stride(
             from: 0,
             to: missingPartNumbers.count,
-            by: Self.blobMultipartConcurrency
+            by: concurrency
         ) {
             try Task.checkCancellation()
             let batch = Array(
                 missingPartNumbers[
                     batchStart..<min(
-                        batchStart + Self.blobMultipartConcurrency,
+                        batchStart + concurrency,
                         missingPartNumbers.count
                     )
                 ]
@@ -1153,6 +1280,7 @@ final class APIClient: ObservableObject {
                             source: source,
                             state: batchState,
                             partNumber: partNumber,
+                            partByteSize: partByteSize,
                             onRetry: onRetry
                         )
                     }
@@ -1165,7 +1293,8 @@ final class APIClient: ObservableObject {
                         completedParts[part.partNumber] = part
                         uploadedBytes += Self.blobMultipartByteCount(
                             partNumber: part.partNumber,
-                            totalByteSize: byteSize
+                            totalByteSize: byteSize,
+                            partByteSize: partByteSize
                         )
                         // Drain the whole batch even after one sibling fails so
                         // every acknowledged part reaches the durable checkpoint.
@@ -1208,6 +1337,7 @@ final class APIClient: ObservableObject {
     private func createBlobMultipartUploadState(
         pathname: String,
         sourceByteSize: Int64,
+        partByteSize: Int64,
         source: ImageUploadPart
     ) async throws -> BlobMultipartUploadState {
         var lastError: Error?
@@ -1225,6 +1355,7 @@ final class APIClient: ObservableObject {
                 return BlobMultipartUploadState(
                     pathname: pathname,
                     sourceByteSize: sourceByteSize,
+                    partByteSize: partByteSize,
                     uploadId: response.uploadId,
                     key: response.key,
                     completedParts: []
@@ -1248,10 +1379,11 @@ final class APIClient: ObservableObject {
         source: ImageUploadPart,
         state: BlobMultipartUploadState,
         partNumber: Int,
+        partByteSize: Int64,
         onRetry: ((String) -> Void)?
     ) async throws -> BlobMultipartPart {
-        let partOffset = Int64(partNumber - 1) * Self.blobMultipartPartBytes
-        let partByteCount = min(Self.blobMultipartPartBytes, byteSize - partOffset)
+        let partOffset = Int64(partNumber - 1) * partByteSize
+        let partByteCount = min(partByteSize, byteSize - partOffset)
         let partData = try await Task.detached(priority: .utility) {
             try Self.fileChunkData(
                 fileURL: fileURL,
@@ -1377,10 +1509,11 @@ final class APIClient: ObservableObject {
 
     private static func blobMultipartByteCount(
         partNumber: Int,
-        totalByteSize: Int64
+        totalByteSize: Int64,
+        partByteSize: Int64
     ) -> Int64 {
-        let offset = Int64(partNumber - 1) * blobMultipartPartBytes
-        return max(0, min(blobMultipartPartBytes, totalByteSize - offset))
+        let offset = Int64(partNumber - 1) * partByteSize
+        return max(0, min(partByteSize, totalByteSize - offset))
     }
 
     nonisolated private static func encodeURIComponent(_ value: String) -> String {
@@ -1402,14 +1535,16 @@ final class APIClient: ObservableObject {
 
     private static func loadBlobMultipartState(
         pathname: String,
-        sourceByteSize: Int64
+        sourceByteSize: Int64,
+        partByteSize: Int64
     ) async throws -> BlobMultipartUploadState? {
         await Task.detached(priority: .utility) {
             let url = blobMultipartStateURL(pathname: pathname)
             guard let data = try? Data(contentsOf: url),
                   let state = try? JSONDecoder().decode(BlobMultipartUploadState.self, from: data),
                   state.pathname == pathname,
-                  state.sourceByteSize == sourceByteSize else {
+                  state.sourceByteSize == sourceByteSize,
+                  state.partByteSize == partByteSize else {
                 try? FileManager.default.removeItem(at: url)
                 return nil
             }
@@ -1486,7 +1621,9 @@ final class APIClient: ObservableObject {
 
         var lastError: Error?
         let maxAttempts = 4
-        let resolvedMaxChunkBytes = max(5 * 1024 * 1024, maxChunkBytes)
+        let stagingBufferBytes = Int(
+            min(max(maxChunkBytes, 256 * 1024), 4 * 1024 * 1024)
+        )
         onProgress?(Double(offset) / Double(totalBytes))
         if offset > 0 {
             onRetry?("resume_offset_\(offset)")
@@ -1511,39 +1648,55 @@ final class APIClient: ObservableObject {
                     onRetry?("offset_\(offset)")
                 }
 
-                let chunkBytes = min(resolvedMaxChunkBytes, totalBytes - offset)
+                // Give the background session the entire remaining body. If the
+                // app is suspended, iOS can finish this transfer without waiting
+                // for foreground code to enqueue another small TUS chunk.
+                let chunkBytes = totalBytes - offset
                 let chunkOffset = offset
-                let chunkData = try await Task.detached(priority: .utility) {
-                    try Self.fileChunkData(
-                        fileURL: fileURL,
-                        offset: chunkOffset,
-                        length: chunkBytes
-                    )
-                }.value
+                let chunkFileURL = try await Self.stageTusUploadBody(
+                    fileURL: fileURL,
+                    uploadURL: uploadURL,
+                    offset: chunkOffset,
+                    length: chunkBytes,
+                    bufferBytes: stagingBufferBytes
+                )
+                let usesInjectedTransport = tusChunkUploader != nil
+                defer {
+                    if usesInjectedTransport {
+                        try? FileManager.default.removeItem(at: chunkFileURL)
+                    }
+                }
 
                 do {
                     var request = URLRequest(url: uploadURL)
                     request.httpMethod = "PATCH"
-                    request.timeoutInterval = Self.largeVideoUploadTimeout
+                    request.timeoutInterval = BackgroundTusUploadTransport.uploadTimeout
                     request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
                     request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
                     request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
 
-                    let chunkFileURL = try await Self.stageTusChunk(
-                        chunkData,
-                        uploadURL: uploadURL,
-                        offset: offset
-                    )
-                    let (data, response) = try await tusChunkUploader(
-                        request,
-                        chunkFileURL
-                    )
+                    let data: Data
+                    let response: URLResponse
+                    if let tusChunkUploader {
+                        (data, response) = try await tusChunkUploader(request, chunkFileURL)
+                    } else {
+                        let startingOffset = offset
+                        (data, response) = try await BackgroundTusUploadTransport.shared.upload(
+                            request: request,
+                            bodyFileURL: chunkFileURL,
+                            onProgress: { progress in
+                                let uploadedBytes = Double(startingOffset) +
+                                    (Double(chunkBytes) * progress)
+                                onProgress?(uploadedBytes / Double(totalBytes))
+                            }
+                        )
+                    }
 
                     guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                         throw uploadError(data: data, response: response)
                     }
 
-                    let expectedOffset = offset + Int64(chunkData.count)
+                    let expectedOffset = offset + chunkBytes
                     guard let nextOffset = Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? ""),
                           nextOffset == expectedOffset,
                           nextOffset <= totalBytes else {
@@ -1563,6 +1716,67 @@ final class APIClient: ObservableObject {
             }
         }
         onProgress?(1)
+    }
+
+    private static func stageTusUploadBody(
+        fileURL: URL,
+        uploadURL: URL,
+        offset: Int64,
+        length: Int64,
+        bufferBytes: Int
+    ) async throws -> URL {
+        try await Task.detached(priority: .utility) {
+            let rootURL = FileManager.default
+                .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("UBEYE", isDirectory: true)
+                .appendingPathComponent("background-tus", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: rootURL,
+                withIntermediateDirectories: true
+            )
+            let uploadKey = SHA256.hash(data: Data(uploadURL.absoluteString.utf8))
+                .prefix(8)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let stagedURL = rootURL.appendingPathComponent(
+                "\(uploadKey)-\(offset)-\(UUID().uuidString.lowercased()).upload"
+            )
+
+            if offset == 0 {
+                do {
+                    try FileManager.default.linkItem(at: fileURL, to: stagedURL)
+                    return stagedURL
+                } catch {
+                    // Use a streamed copy when the source volume cannot be linked.
+                }
+            }
+
+            FileManager.default.createFile(atPath: stagedURL.path, contents: nil)
+            let input = try FileHandle(forReadingFrom: fileURL)
+            let output = try FileHandle(forWritingTo: stagedURL)
+            do {
+                try input.seek(toOffset: UInt64(offset))
+                var remaining = length
+                while remaining > 0 {
+                    let requestedBytes = Int(min(Int64(bufferBytes), remaining))
+                    guard let data = try input.read(upToCount: requestedBytes),
+                          !data.isEmpty else {
+                        throw APIClientError.invalidResponse
+                    }
+                    try output.write(contentsOf: data)
+                    remaining -= Int64(data.count)
+                }
+                try output.synchronize()
+                try input.close()
+                try output.close()
+                return stagedURL
+            } catch {
+                try? input.close()
+                try? output.close()
+                try? FileManager.default.removeItem(at: stagedURL)
+                throw error
+            }
+        }.value
     }
 
     private func tusUploadOffsetWithRetry(
@@ -1679,7 +1893,7 @@ final class APIClient: ObservableObject {
         fileURL: URL,
         checksum: String,
         uploadId: String?,
-        poster: PreparedImageDerivativeUpload,
+        poster: PreparedImageDerivativeUpload?,
         caption: String,
         brandTags: String,
         textOverlay: String,
@@ -1702,7 +1916,7 @@ final class APIClient: ObservableObject {
             let checksum: String
             let uploadId: String?
             let durationMs: Int?
-            let poster: PreparedImageDerivativeUpload
+            let poster: PreparedImageDerivativeUpload?
             let caption: String
             let brandTags: String
             let stickers: String
@@ -2008,11 +2222,12 @@ private struct DiskCacheEnvelope<Value: Codable>: Codable {
 final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
     static let sessionIdentifier = "com.griffinaste.ubeye.story-upload.tus"
     static let shared = BackgroundTusUploadTransport()
-    private static let uploadTimeout: TimeInterval = 10 * 60
+    static let uploadTimeout: TimeInterval = 6 * 60 * 60
 
     private struct PendingUpload {
         var data = Data()
         let bodyFileURL: URL
+        let onProgress: ((Double) -> Void)?
         let continuation: CheckedContinuation<(Data, URLResponse), Error>
     }
 
@@ -2040,7 +2255,11 @@ final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLS
         removeAbandonedChunkFiles()
     }
 
-    func upload(request: URLRequest, bodyFileURL: URL) async throws -> (Data, URLResponse) {
+    func upload(
+        request: URLRequest,
+        bodyFileURL: URL,
+        onProgress: ((Double) -> Void)? = nil
+    ) async throws -> (Data, URLResponse) {
         try await withCheckedThrowingContinuation { continuation in
             let task = session.uploadTask(with: request, fromFile: bodyFileURL)
             task.taskDescription = bodyFileURL.path
@@ -2048,10 +2267,34 @@ final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLS
             lock.lock()
             pendingUploads[task.taskIdentifier] = PendingUpload(
                 bodyFileURL: bodyFileURL,
+                onProgress: onProgress,
                 continuation: continuation
             )
             lock.unlock()
             task.resume()
+        }
+    }
+
+    func prepareForRecovery() async {
+        let trackedTaskIds: Set<Int> = {
+            lock.lock()
+            defer { lock.unlock() }
+            return Set(pendingUploads.keys)
+        }()
+        let orphanedTasks = await allTasks().filter {
+            !trackedTaskIds.contains($0.taskIdentifier)
+        }
+        guard !orphanedTasks.isEmpty else {
+            return
+        }
+
+        orphanedTasks.forEach { $0.cancel() }
+        for _ in 0..<50 {
+            let remainingIds = Set(await allTasks().map(\.taskIdentifier))
+            if orphanedTasks.allSatisfy({ !remainingIds.contains($0.taskIdentifier) }) {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
@@ -2082,6 +2325,24 @@ final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLS
         lock.lock()
         pendingUploads[dataTask.taskIdentifier]?.data.append(data)
         lock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else {
+            return
+        }
+        lock.lock()
+        let onProgress = pendingUploads[task.taskIdentifier]?.onProgress
+        lock.unlock()
+        onProgress?(
+            min(max(Double(totalBytesSent) / Double(totalBytesExpectedToSend), 0), 1)
+        )
     }
 
     func urlSession(
@@ -2119,6 +2380,14 @@ final class BackgroundTusUploadTransport: NSObject, URLSessionDataDelegate, URLS
 
         DispatchQueue.main.async {
             completionHandler?()
+        }
+    }
+
+    private func allTasks() async -> [URLSessionTask] {
+        await withCheckedContinuation { continuation in
+            session.getAllTasks { tasks in
+                continuation.resume(returning: tasks)
+            }
         }
     }
 

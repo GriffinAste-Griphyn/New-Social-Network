@@ -89,6 +89,7 @@ describe("mobile video poster upload preparation", () => {
     process.env.STORY_STORAGE_PROVIDER = "vercel-blob"
     process.env.STORY_VIDEO_PROCESSOR = "cloudflare-stream"
     process.env.MEDIA_PIPELINE_ENABLED = "false"
+    delete process.env.VERCEL_BLOB_SUSPENDED_MODE
     process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_test"
     vi.mocked(getCompleteMobileSession).mockResolvedValue({ id: "creator-1" } as never)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
@@ -142,6 +143,23 @@ describe("mobile video poster upload preparation", () => {
 
     expect(response.status).toBe(503)
     expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+  })
+
+  it("keeps Cloudflare video uploads working without a Blob poster in recovery mode", async () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    delete process.env.BLOB_READ_WRITE_TOKEN
+
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    const response = await POST(uploadRequest({ build: 399, pipeline: "hls-v4" }))
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.poster).toBeNull()
+    expect(payload.uploadProtocol).toBe("tus")
+    expect(generateClientTokenFromReadWriteToken).not.toHaveBeenCalled()
+    expect(createCloudflareStreamTusUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ allowLegacyClientFallback: false }),
+    )
   })
 
   it("issues an owner-bound private Blob source when the custom pipeline is enabled", async () => {

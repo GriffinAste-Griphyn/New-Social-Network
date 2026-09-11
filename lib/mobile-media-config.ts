@@ -1,9 +1,28 @@
+import {
+  isCloudflareR2StoryImageStorageEnabled,
+  minimumCloudflareR2ImageBuild,
+} from "@/lib/cloudflare-r2"
+
 export type RuntimeMediaConfig = {
   version: string
   rolloutProfile: "baseline" | "preheat-canary"
+  blobUploadsAvailable: boolean
+  storyImageUploadsAvailable: boolean
   imageDerivativeUploadEnabled: boolean
   qoeAccessLogSampleRate: number
   uploadChunkBytes: number
+  blobMultipartThresholdBytes: {
+    constrained: number
+    standard: number
+  }
+  blobMultipartPartBytes: {
+    constrained: number
+    standard: number
+  }
+  blobMultipartConcurrency: {
+    constrained: number
+    standard: number
+  }
   mediaFileCacheMaxBytes: number
   imagePreheatLimit: {
     constrained: number
@@ -97,14 +116,22 @@ export function getMobileMediaConfig(input: {
 } = {}): RuntimeMediaConfig {
   const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 255
   const supportsOfflineHLSCaching = (input.clientBuild ?? 0) >= 320
+  const supportsCloudflareR2ImageUploads =
+    (input.clientBuild ?? 0) >= minimumCloudflareR2ImageBuild
   const aggressiveConfigEnabled = booleanEnv(
     "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
     true,
   )
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-08-26.1",
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-09-10.1",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
+    blobUploadsAvailable:
+      process.env.VERCEL_BLOB_SUSPENDED_MODE?.trim().toLowerCase() !== "true",
+    storyImageUploadsAvailable:
+      process.env.VERCEL_BLOB_SUSPENDED_MODE?.trim().toLowerCase() !== "true" ||
+      (supportsCloudflareR2ImageUploads &&
+        isCloudflareR2StoryImageStorageEnabled()),
     imageDerivativeUploadEnabled: booleanEnv(
       "MOBILE_IMAGE_DERIVATIVE_UPLOAD_ENABLED",
       true,
@@ -117,6 +144,42 @@ export function getMobileMediaConfig(input: {
       min: 256 * 1024,
       max: 32 * 1024 * 1024,
     }),
+    blobMultipartThresholdBytes: {
+      constrained: integerEnv(
+        "MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_CONSTRAINED",
+        32 * 1024 * 1024,
+        { min: 8 * 1024 * 1024, max: 256 * 1024 * 1024 },
+      ),
+      standard: integerEnv(
+        "MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_STANDARD",
+        64 * 1024 * 1024,
+        { min: 8 * 1024 * 1024, max: 256 * 1024 * 1024 },
+      ),
+    },
+    blobMultipartPartBytes: {
+      constrained: integerEnv(
+        "MOBILE_BLOB_MULTIPART_PART_BYTES_CONSTRAINED",
+        8 * 1024 * 1024,
+        { min: 5 * 1024 * 1024, max: 64 * 1024 * 1024 },
+      ),
+      standard: integerEnv(
+        "MOBILE_BLOB_MULTIPART_PART_BYTES_STANDARD",
+        16 * 1024 * 1024,
+        { min: 5 * 1024 * 1024, max: 64 * 1024 * 1024 },
+      ),
+    },
+    blobMultipartConcurrency: {
+      constrained: integerEnv(
+        "MOBILE_BLOB_MULTIPART_CONCURRENCY_CONSTRAINED",
+        2,
+        { min: 1, max: 4 },
+      ),
+      standard: integerEnv(
+        "MOBILE_BLOB_MULTIPART_CONCURRENCY_STANDARD",
+        4,
+        { min: 1, max: 6 },
+      ),
+    },
     mediaFileCacheMaxBytes: integerEnv(
       "MOBILE_MEDIA_FILE_CACHE_MAX_BYTES",
       1024 * 1024 * 1024,

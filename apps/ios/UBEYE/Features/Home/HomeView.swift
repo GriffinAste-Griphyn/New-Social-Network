@@ -60,6 +60,8 @@ final class FeedStore: ObservableObject {
     private let deferredMediaPreparationTimeout: Duration = .seconds(20)
     private var loadGeneration = 0
     private var deferredFeedCommitTask: Task<Void, Never>?
+    private var activeRefreshTask: Task<Void, Never>?
+    private var activeRefreshToken: UUID?
 
     func load(
         api: APIClient,
@@ -217,7 +219,35 @@ final class FeedStore: ObservableObject {
             return
         }
 
-        await load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
+        await refresh(api: api, mediaEngine: mediaEngine)
+    }
+
+    func refresh(api: APIClient, mediaEngine: MediaEngine) async {
+        if let activeRefreshTask {
+            await activeRefreshTask.value
+            return
+        }
+
+        let token = UUID()
+        activeRefreshToken = token
+        let task = Task { @MainActor [weak self, api, mediaEngine] in
+            guard let self else {
+                return
+            }
+            await self.load(
+                api: api,
+                mediaEngine: mediaEngine,
+                showsLoading: false,
+                useDiskCache: false
+            )
+        }
+        activeRefreshTask = task
+        await task.value
+
+        if activeRefreshToken == token {
+            activeRefreshTask = nil
+            activeRefreshToken = nil
+        }
     }
 
     func loadNextPage(api: APIClient, mediaEngine: MediaEngine) async {
@@ -564,8 +594,6 @@ struct HomeView: View {
                     header
                         .id("home-feed-top")
 
-                    uploadNoticeBanner
-
                     if let refreshError = store.refreshError, store.feed != nil {
                         InlineNotice(message: "Couldn’t refresh. \(refreshError)", isError: true)
                     }
@@ -593,7 +621,7 @@ struct HomeView: View {
             }
             .scrollPosition(id: $homeScrollAnchor, anchor: .top)
             .refreshable {
-                await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
+                await store.refresh(api: api, mediaEngine: mediaEngine)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
@@ -623,7 +651,7 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
                 Task {
                     api.invalidateStoryStacks()
-                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
+                    await store.refresh(api: api, mediaEngine: mediaEngine)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidRegister)) { notification in
@@ -634,7 +662,7 @@ struct HomeView: View {
                 store.registerUploadedStory(response)
                 if response.processingStatus == "ready" {
                     Task {
-                        await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
+                        await store.refresh(api: api, mediaEngine: mediaEngine)
                     }
                 }
             }
@@ -645,7 +673,7 @@ struct HomeView: View {
 
                 Task {
                     api.invalidateStoryStacks(ids: ["my-story"])
-                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
+                    await store.refresh(api: api, mediaEngine: mediaEngine)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
@@ -657,7 +685,7 @@ struct HomeView: View {
                 Task {
                     api.invalidateMobileFeedCache()
                     api.invalidateStoryStacks(ids: ["my-story"] + [storyId].compactMap { $0 })
-                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
+                    await store.refresh(api: api, mediaEngine: mediaEngine)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
@@ -671,12 +699,7 @@ struct HomeView: View {
                     scrollProxy.scrollTo("home-feed-top", anchor: .top)
                 }
                 Task {
-                    await store.load(
-                        api: api,
-                        mediaEngine: mediaEngine,
-                        showsLoading: false,
-                        useDiskCache: false
-                    )
+                    await store.refresh(api: api, mediaEngine: mediaEngine)
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -764,56 +787,6 @@ struct HomeView: View {
             }
         }
         .padding(.bottom, 2)
-    }
-
-    @ViewBuilder
-    private var uploadNoticeBanner: some View {
-        if let batchSummary = pendingStoryUploads.latestBatchSummary {
-            StoryBatchUploadProgressCard(
-                summary: batchSummary,
-                onFailedUploadTapped: { upload in
-                    selectedFailedUpload = upload
-                }
-            )
-            .transition(.move(edge: .top).combined(with: .opacity))
-        } else if storyUploadNotice.state != nil {
-            StoryUploadNoticeBanner(
-                title: uploadNoticeTitle,
-                message: storyUploadNotice.message,
-                systemImage: storyUploadNotice.systemImage,
-                progress: uploadNoticeProgress,
-                showsIndeterminateProgress: storyUploadNotice.state == .processing
-            )
-            .transition(.move(edge: .top).combined(with: .opacity))
-            .animation(.snappy(duration: 0.3), value: storyUploadNotice.state)
-        }
-    }
-
-    private var uploadNoticeTitle: String {
-        guard storyUploadNotice.state == .posting else {
-            return storyUploadNotice.title
-        }
-
-        guard let upload = pendingStoryUploads.latestVisibleUpload else {
-            return storyUploadNotice.title
-        }
-
-        if upload.state == .completing {
-            return "Finishing upload…"
-        }
-
-        return "Uploading · \(Int((upload.displayProgress * 100).rounded()))%"
-    }
-
-    private var uploadNoticeProgress: Double? {
-        switch storyUploadNotice.state {
-        case .posting:
-            pendingStoryUploads.latestVisibleUpload?.displayProgress ?? 0
-        case .posted:
-            1
-        case .processing, .delayed, .review, .failed, nil:
-            nil
-        }
     }
 
     private func followingStoriesSection(_ feed: MobileFeedResponse) -> some View {
@@ -1229,151 +1202,6 @@ struct MyStoryHomeCard: View {
         )
     }
 
-}
-
-private struct StoryBatchUploadProgressCard: View {
-    let summary: PendingStoryUploadBatchSummary
-    let onFailedUploadTapped: (PendingStoryUpload) -> Void
-
-    private var headerTitle: String {
-        if summary.failedCount > 0 {
-            return "\(summary.failedCount) of \(summary.totalCount) need attention"
-        }
-        return "Posting \(summary.totalCount) stories"
-    }
-
-    private var headerMessage: String {
-        if summary.completedCount > 0 {
-            return "\(summary.completedCount) posted · Uploads continue in background"
-        }
-        return "Uploads continue in background"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Color.ubeyeRed, in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(headerTitle)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.ubeyeInk)
-                        .contentTransition(.numericText())
-                    Text(headerMessage)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.ubeyeMuted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Text("\(Int((summary.progress * 100).rounded()))%")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.ubeyeInk)
-                    .contentTransition(.numericText())
-            }
-
-            ProgressView(value: summary.progress, total: 1)
-                .progressViewStyle(.linear)
-                .tint(Color.ubeyeRed)
-
-            HStack(spacing: 5) {
-                ForEach(0..<max(summary.totalCount, 0), id: \.self) { offset in
-                    let upload = upload(at: offset + 1)
-                    ProgressView(value: upload?.displayProgress ?? 1, total: 1)
-                        .progressViewStyle(.linear)
-                        .tint(upload?.isFailed == true ? Color.ubeyeRed.opacity(0.45) : Color.ubeyeRed)
-                        .accessibilityLabel("Story \(offset + 1)")
-                        .accessibilityValue(upload?.statusLabel ?? "Posted")
-                }
-            }
-
-            if let failedUpload = summary.uploads.first(where: \.isFailed) {
-                Button {
-                    onFailedUploadTapped(failedUpload)
-                } label: {
-                    Label("Retry failed story", systemImage: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.ubeyeRed)
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens retry options")
-            }
-        }
-        .padding(12)
-        .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.ubeyeBorder, lineWidth: 1)
-        )
-        .animation(.easeInOut(duration: 0.25), value: summary.progress)
-        .accessibilityElement(children: .contain)
-    }
-
-    private func upload(at position: Int) -> PendingStoryUpload? {
-        summary.uploads.first { $0.batchPosition == position }
-    }
-}
-
-private struct StoryUploadNoticeBanner: View {
-    let title: String
-    let message: String
-    let systemImage: String
-    let progress: Double?
-    let showsIndeterminateProgress: Bool
-
-    private var showsProgress: Bool {
-        progress != nil || showsIndeterminateProgress
-    }
-
-    var body: some View {
-        VStack(spacing: 9) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(Color.ubeyeRed, in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.ubeyeInk)
-                        .contentTransition(.numericText())
-                    Text(message)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.ubeyeMuted)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 8)
-            }
-
-            if showsProgress {
-                Group {
-                    if showsIndeterminateProgress {
-                        ProgressView()
-                    } else {
-                        ProgressView(value: progress ?? 0, total: 1)
-                    }
-                }
-                .progressViewStyle(.linear)
-                .tint(Color.ubeyeRed)
-                .animation(.easeInOut(duration: 0.25), value: progress)
-            }
-        }
-        .padding(12)
-        .background(Color.ubeyeSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.ubeyeBorder, lineWidth: 1)
-        )
-        .accessibilityElement(children: .combine)
-    }
 }
 
 private struct MyStoryCardSkeleton: View {

@@ -22,9 +22,17 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: optionalString(),
   STRIPE_WEBHOOK_SECRET: optionalString(),
   BLOB_READ_WRITE_TOKEN: optionalString(),
+  VERCEL_BLOB_SUSPENDED_MODE: z.preprocess(
+    blankToUndefined,
+    z.enum(["true", "false"]).default("false"),
+  ),
   STORY_STORAGE_PROVIDER: z.preprocess(
     blankToUndefined,
     z.enum(["local", "vercel-blob"]).optional(),
+  ),
+  STORY_IMAGE_STORAGE_PROVIDER: z.preprocess(
+    blankToUndefined,
+    z.enum(["vercel-blob", "cloudflare-r2"]).optional(),
   ),
   STORY_VIDEO_PROCESSOR: z.preprocess(
     blankToUndefined,
@@ -50,6 +58,12 @@ const envSchema = z.object({
     blankToUndefined,
     z.string().regex(/^[a-f0-9]{32}$/i).optional(),
   ),
+  CLOUDFLARE_R2_ACCOUNT_ID: optionalString(),
+  CLOUDFLARE_R2_ACCESS_KEY_ID: optionalString(),
+  CLOUDFLARE_R2_SECRET_ACCESS_KEY: optionalString(),
+  CLOUDFLARE_R2_ORIGINALS_BUCKET: optionalString(),
+  CLOUDFLARE_R2_DELIVERY_BUCKET: optionalString(),
+  CLOUDFLARE_R2_PUBLIC_BASE_URL: optionalUrl,
   UPSTASH_REDIS_REST_URL: optionalUrl,
   UPSTASH_REDIS_REST_TOKEN: optionalString(),
   CRON_SECRET: optionalString(16),
@@ -104,6 +118,21 @@ export function assertProductionEnvironment() {
 
   if (parsed.STORY_STORAGE_PROVIDER !== "vercel-blob") {
     missing.push("STORY_STORAGE_PROVIDER")
+  }
+  if (parsed.STORY_IMAGE_STORAGE_PROVIDER === "cloudflare-r2") {
+    const r2Required: Array<keyof Env> = [
+      "CLOUDFLARE_R2_ACCESS_KEY_ID",
+      "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+      "CLOUDFLARE_R2_ORIGINALS_BUCKET",
+      "CLOUDFLARE_R2_DELIVERY_BUCKET",
+      "CLOUDFLARE_R2_PUBLIC_BASE_URL",
+    ]
+    missing.push(...r2Required.filter((name) => !parsed[name]))
+    if (!parsed.CLOUDFLARE_R2_ACCOUNT_ID && !parsed.CLOUDFLARE_STREAM_ACCOUNT_ID) {
+      missing.push("CLOUDFLARE_R2_ACCOUNT_ID")
+    }
+  } else if (parsed.VERCEL_BLOB_SUSPENDED_MODE === "true") {
+    missing.push("STORY_IMAGE_STORAGE_PROVIDER=cloudflare-r2")
   }
   if (parsed.STORY_VIDEO_PROCESSOR === "vercel-hls") {
     if (parsed.MEDIA_PIPELINE_ENABLED !== "true") {

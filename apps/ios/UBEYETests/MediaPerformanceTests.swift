@@ -8,6 +8,61 @@ import XCTest
 
 final class MediaPerformanceTests: XCTestCase {
     @MainActor
+    func testUploadNoticeUsesPhotoCopyForImageProcessing() {
+        let notice = StoryUploadNoticeStore()
+
+        notice.showProcessing(assetKind: .image)
+
+        XCTAssertEqual(notice.title, "Processing photo…")
+        XCTAssertEqual(
+            notice.message,
+            "Preparing optimized versions now. Your photo will finish in the background."
+        )
+        XCTAssertEqual(notice.systemImage, "photo.fill")
+
+        notice.showDelayed(assetKind: .image)
+
+        XCTAssertEqual(notice.title, "Photo processing delayed")
+        XCTAssertEqual(
+            notice.message,
+            "Your photo is safe. We’ll keep trying to prepare it in the background."
+        )
+    }
+
+    @MainActor
+    func testUploadNoticePreservesVideoCopyForVideoProcessing() {
+        let notice = StoryUploadNoticeStore()
+
+        notice.showProcessing(assetKind: .video)
+
+        XCTAssertEqual(notice.title, "Processing video…")
+        XCTAssertEqual(
+            notice.message,
+            "Preparing a streamable version now. Higher quality will continue in the background."
+        )
+        XCTAssertEqual(notice.systemImage, "video.fill")
+    }
+
+    @MainActor
+    func testProgressiveImageLoaderDecodesVersionedThumbHashPlaceholder() async throws {
+        let loader = ProgressiveImageLoader()
+        let url = try XCTUnwrap(
+            URL(
+                string: "thumbhash:F0kGFAQ2pHtZh_llpcUImoWgSQ?v=story-version"
+            )
+        )
+
+        await loader.load(
+            placeholderURL: url,
+            thumbnailURL: nil,
+            fullURL: nil
+        )
+
+        XCTAssertEqual(loader.stage, .placeholder)
+        XCTAssertNotNil(loader.image)
+    }
+
+    @MainActor
     func testPerformanceReporterCoalescesRepeatedImmediateFlushRequests() async {
         let recorder = PerformanceUploadRecorder()
         let reporter = MobilePerformanceReporter(
@@ -350,7 +405,7 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
     }
 
-    func testStoryImageUploadPreservesCompatibleOriginalAndBuildsBoundedPreview() throws {
+    func testStoryImageUploadNormalizesOversizedCompatibleOriginal() throws {
         let sourceData = makeTestImageData(width: 2_400, height: 3_200)
 
         let upload = try XCTUnwrap(
@@ -360,12 +415,21 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(upload.fileName, "IMG_1234.png")
-        XCTAssertEqual(upload.mimeType, "image/png")
-        XCTAssertEqual(upload.data, sourceData)
+        XCTAssertEqual(upload.fileName, "IMG_1234.jpg")
+        XCTAssertEqual(upload.mimeType, "image/jpeg")
+        XCTAssertNotEqual(upload.data, sourceData)
 
         let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(upload.data as CFData, nil))
-        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.png.identifier)
+        XCTAssertEqual(CGImageSourceGetType(imageSource) as String?, UTType.jpeg.identifier)
+        let properties = try XCTUnwrap(
+            CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any]
+        )
+        let width = try XCTUnwrap(properties[kCGImagePropertyPixelWidth] as? NSNumber)
+        let height = try XCTUnwrap(properties[kCGImagePropertyPixelHeight] as? NSNumber)
+        XCTAssertLessThanOrEqual(
+            max(width.intValue, height.intValue),
+            StoryImageUpload.preferredUploadPixelDimension
+        )
         XCTAssertLessThanOrEqual(
             max(upload.image.cgImage?.width ?? 0, upload.image.cgImage?.height ?? 0),
             StoryImageUpload.maximumPreviewPixelDimension
@@ -1096,6 +1160,21 @@ final class MediaPerformanceTests: XCTestCase {
         )
     }
 
+    func testStoryMediaBufferUsesStableSourceOrderAcrossAdjacentMoves() {
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.stableIndices(activeIndex: 0, itemCount: 4),
+            [0, 1]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.stableIndices(activeIndex: 1, itemCount: 4),
+            [0, 1, 2]
+        )
+        XCTAssertEqual(
+            StoryMediaBufferPolicy.stableIndices(activeIndex: 2, itemCount: 4),
+            [1, 2, 3]
+        )
+    }
+
     func testVideoQualityRampRecognizesPortraitAndLandscape1080p() {
         XCTAssertTrue(
             VideoQualityRampPolicy.hasReached1080p(
@@ -1177,11 +1256,15 @@ final class MediaPerformanceTests: XCTestCase {
     func testNormalizedVideoEnvelopeDoesNotDependOnNetworkConditions() {
         XCTAssertEqual(
             StoryVideoUploadNormalizer.normalizedTargetBitsPerSecond,
-            8_000_000
+            6_500_000
         )
         XCTAssertEqual(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 10),
-            10_000_000
+            8_125_000
+        )
+        XCTAssertEqual(
+            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond,
+            8_000_000
         )
         XCTAssertNil(
             StoryVideoUploadNormalizer.normalizedFileLengthLimit(durationSeconds: 0)
@@ -1243,6 +1326,33 @@ final class MediaPerformanceTests: XCTestCase {
 
         policy.sceneIsActive = true
         XCTAssertFalse(policy.shouldPausePlayback)
+    }
+
+    func testStoryProgressPausesForImagePressAndDismissGestureHandoff() {
+        XCTAssertTrue(
+            StoryProgressPausePolicy.shouldPause(
+                playbackIsPaused: false,
+                isPressingMedia: true,
+                isDismissTransitionActive: false,
+                isWaitingForVideo: false
+            )
+        )
+        XCTAssertTrue(
+            StoryProgressPausePolicy.shouldPause(
+                playbackIsPaused: false,
+                isPressingMedia: false,
+                isDismissTransitionActive: true,
+                isWaitingForVideo: false
+            )
+        )
+        XCTAssertFalse(
+            StoryProgressPausePolicy.shouldPause(
+                playbackIsPaused: false,
+                isPressingMedia: false,
+                isDismissTransitionActive: false,
+                isWaitingForVideo: false
+            )
+        )
     }
 
     @MainActor

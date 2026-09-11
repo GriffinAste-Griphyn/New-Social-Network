@@ -52,6 +52,7 @@ export const mediaStorageProvider = pgEnum("media_storage_provider", [
   "local",
   "vercel-blob",
   "cloudflare-stream",
+  "cloudflare-r2",
 ])
 export const storyStatus = pgEnum("story_status", [
   "processing",

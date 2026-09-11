@@ -11,6 +11,27 @@ vi.mock("@vercel/blob", () => ({
   put: vi.fn(),
 }))
 
+vi.mock("@/lib/cloudflare-r2", () => ({
+  cloudflareR2DeliveryKeyFromUrl: vi.fn((value: string) => {
+    try {
+      const url = new URL(value)
+      return url.hostname === "media.example.com"
+        ? decodeURIComponent(url.pathname.replace(/^\/+/, ""))
+        : null
+    } catch {
+      return null
+    }
+  }),
+  isCloudflareR2StoryImageStorageEnabled: vi.fn(
+    () => process.env.STORY_IMAGE_STORAGE_PROVIDER === "cloudflare-r2",
+  ),
+  putCloudflareR2DeliveryObject: vi.fn(),
+  putCloudflareR2OriginalObject: vi.fn(),
+  readCloudflareR2Original: vi.fn(),
+  removeCloudflareR2DeliveryObject: vi.fn(),
+  removeCloudflareR2Original: vi.fn(),
+}))
+
 vi.mock("sharp", () => ({
   default: vi.fn(() => ({
     rotate() {
@@ -37,8 +58,54 @@ const pngHeader = new Uint8Array([
 describe("profile avatar storage", () => {
   beforeEach(() => {
     process.env.STORY_STORAGE_PROVIDER = "vercel-blob"
+    delete process.env.STORY_IMAGE_STORAGE_PROVIDER
+    delete process.env.VERCEL_BLOB_SUSPENDED_MODE
+    vi.clearAllMocks()
     sharpToBuffer.mockReset()
     sharpToBuffer.mockResolvedValue(normalizedAvatarBuffer)
+  })
+
+  it("stores avatar sources privately and delivery images publicly in R2", async () => {
+    const {
+      putCloudflareR2DeliveryObject,
+      putCloudflareR2OriginalObject,
+    } = await import("@/lib/cloudflare-r2")
+    const { saveProfileAvatar } = await import("@/lib/profile-avatar-storage")
+    process.env.STORY_IMAGE_STORAGE_PROVIDER = "cloudflare-r2"
+    sharpToBuffer
+      .mockResolvedValueOnce(normalizedSourceBuffer)
+      .mockResolvedValueOnce(normalizedAvatarBuffer)
+    vi.mocked(putCloudflareR2OriginalObject).mockImplementation(async (input) => ({
+      key: input.key,
+    }))
+    vi.mocked(putCloudflareR2DeliveryObject).mockImplementation(async (input) => ({
+      key: input.key,
+      url: `https://media.example.com/${input.key}`,
+    }))
+
+    const avatar = await saveProfileAvatar(
+      new File([pngHeader], "avatar.png", { type: "image/png" }),
+    )
+
+    expect(putCloudflareR2OriginalObject).toHaveBeenCalledWith({
+      key: expect.stringMatching(/^avatars\/source\/.+\.jpg$/),
+      body: normalizedSourceBuffer,
+      contentType: "image/jpeg",
+    })
+    expect(putCloudflareR2DeliveryObject).toHaveBeenCalledWith({
+      key: expect.stringMatching(/^avatars\/.+\.jpg$/),
+      body: normalizedAvatarBuffer,
+      contentType: "image/jpeg",
+    })
+    expect(avatar).toMatchObject({
+      avatarUrl: expect.stringMatching(
+        /^https:\/\/media\.example\.com\/avatars\/.+\.jpg$/,
+      ),
+      sourceUrl: expect.stringMatching(
+        /^\/api\/profile-avatar-media\/cloudflare-r2\/avatars\/source\/.+\.jpg$/,
+      ),
+      storageProvider: "cloudflare-r2",
+    })
   })
 
   it("stores Vercel Blob avatars privately and returns an app media route", async () => {
@@ -110,6 +177,66 @@ describe("profile avatar storage", () => {
         request,
       ),
     ).toBe("https://app.example.com/api/profile-avatar-media/avatars/avatar.jpg")
+  })
+
+  it("rewrites private R2 avatar sources to absolute app media URLs", async () => {
+    const { publicProfileAvatarUrl } = await import("@/lib/profile-avatar-storage")
+    const request = new Request("https://app.example.com/api/mobile/account/avatar/source")
+
+    expect(
+      publicProfileAvatarUrl(
+        "/api/profile-avatar-media/cloudflare-r2/avatars/source/avatar.jpg",
+        request,
+      ),
+    ).toBe(
+      "https://app.example.com/api/profile-avatar-media/cloudflare-r2/avatars/source/avatar.jpg",
+    )
+  })
+
+  it("serves private R2 avatar sources through the app media route", async () => {
+    const { readCloudflareR2Original } = await import("@/lib/cloudflare-r2")
+    const { GET } = await import("@/app/api/profile-avatar-media/[...pathname]/route")
+    vi.mocked(readCloudflareR2Original).mockResolvedValue(
+      Buffer.from("r2-avatar-source"),
+    )
+
+    const response = await GET(new Request("https://app.example.com/avatar"), {
+      params: Promise.resolve({
+        pathname: [
+          "cloudflare-r2",
+          "avatars",
+          "source",
+          "avatar.jpg",
+        ],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("image/jpeg")
+    await expect(response.text()).resolves.toBe("r2-avatar-source")
+  })
+
+  it("keeps the legacy media URL for an initials fallback and refuses Blob writes in recovery mode", async () => {
+    const { put } = await import("@vercel/blob")
+    const {
+      publicProfileAvatarUrl,
+      saveProfileAvatar,
+    } = await import("@/lib/profile-avatar-storage")
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    const request = new Request("https://app.example.com/api/mobile/feed")
+
+    expect(
+      publicProfileAvatarUrl(
+        "/api/profile-avatar-media/avatars/avatar.jpg",
+        request,
+      ),
+    ).toBe("https://app.example.com/api/profile-avatar-media/avatars/avatar.jpg")
+    await expect(
+      saveProfileAvatar(
+        new File([pngHeader], "avatar.png", { type: "image/png" }),
+      ),
+    ).rejects.toThrow("temporarily unavailable")
+    expect(put).not.toHaveBeenCalled()
   })
 
   it("returns 404 when a private avatar blob is missing", async () => {

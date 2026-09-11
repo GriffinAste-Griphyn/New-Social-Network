@@ -43,6 +43,25 @@ struct StoryVideoInspection {
         hasStreamSupportedContainer && hasStreamSupportedCodecs
     }
 
+    var estimatedBitsPerSecond: Int? {
+        guard let durationMs, durationMs > 0, byteSize > 0 else {
+            return nil
+        }
+
+        return Int(
+            (Double(byteSize) * 8 * 1_000 / Double(durationMs)).rounded()
+        )
+    }
+
+    var needsUploadSizeOptimization: Bool {
+        guard let estimatedBitsPerSecond else {
+            return false
+        }
+
+        return estimatedBitsPerSecond >
+            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond
+    }
+
     private var hasStreamSupportedCodecs: Bool {
         guard !codecTypes.isEmpty else {
             return false
@@ -60,9 +79,11 @@ struct StoryVideoInspection {
             naturalSize.map { "natural=\(Int($0.width))x\(Int($0.height))" },
             preferredTransform.map { "transform=\(Self.transformSummary($0))" },
             codecTypes.isEmpty ? "codecs=none" : "codecs=\(codecTypes.joined(separator: "."))",
+            estimatedBitsPerSecond.map { "estimatedBitrate=\($0)" },
             "fastStart=\(hasFastStart)",
             "streamContainer=\(hasStreamSupportedContainer)",
             "streamCompatible=\(isStreamCompatibleInput)",
+            "sizeOptimized=\(!needsUploadSizeOptimization)",
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -82,7 +103,7 @@ struct StoryVideoInspection {
     }
 }
 
-enum StoryVideoUploadPhase: String, CaseIterable {
+enum StoryVideoUploadPhase: String, CaseIterable, Hashable {
     case inspect
     case prepare
     case thumbnailGenerate
@@ -124,17 +145,25 @@ struct StoryVideoUploadAttempt {
     var durationMs: Int?
     var strategy: StoryVideoUploadStrategy?
     var source: StoryVideoUpload.Source?
+    var uploadProtocol: String?
+    var uploadProvider: String?
     var retries = 0
     var lastError: String?
+    private var hasActivePhase = false
+    private var phaseDurationsMs: [StoryVideoUploadPhase: Int] = [:]
 
     mutating func begin(_ nextPhase: StoryVideoUploadPhase) {
+        finishActivePhase()
         phase = nextPhase
         phaseStartedAt = Date()
+        hasActivePhase = true
         MediaPerformance.mark("video_upload_phase attempt=\(id) phase=\(nextPhase.rawValue)")
     }
 
     mutating func attach(upload: VideoUploadResponse) {
         uploadUid = upload.uid
+        uploadProtocol = upload.uploadProtocol
+        uploadProvider = upload.source?.provider ?? upload.uploadProtocol
     }
 
     mutating func attach(video: PreparedStoryVideo) {
@@ -152,18 +181,26 @@ struct StoryVideoUploadAttempt {
     }
 
     mutating func recordSuccess(processingStatus: String?) {
+        finishActivePhase()
+        let videoUploadDurationMs = phaseDurationsMs[.videoUpload]
+        let effectiveMbps = videoUploadDurationMs.flatMap { durationMs in
+            byteSize.map { bytes in
+                Double(bytes) * 8 / Double(max(durationMs, 1)) / 1_000
+            }
+        }
         MediaPerformance.measure(
-            "video_upload_succeeded attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") strategy=\(strategy?.rawValue ?? "unknown") retries=\(retries)",
+            "video_upload_succeeded attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") strategy=\(strategy?.rawValue ?? "unknown") retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") effective_mbps=\(effectiveMbps.map { String(format: "%.2f", $0) } ?? "unknown")",
             since: startedAt
         )
         MediaPerformance.flushUploadEvents()
     }
 
     mutating func recordFailure(_ error: Error) {
+        finishActivePhase()
         let message = error.localizedDescription
         lastError = message
         MediaPerformance.measure(
-            "video_upload_failed attempt=\(id) phase=\(phase.rawValue) retries=\(retries) reason=\(Self.sanitize(message))",
+            "video_upload_failed attempt=\(id) phase=\(phase.rawValue) retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") reason=\(Self.sanitize(message))",
             since: startedAt
         )
         MediaPerformance.flushUploadEvents()
@@ -175,6 +212,8 @@ struct StoryVideoUploadAttempt {
             "phase=\(phase.rawValue)",
             source.map { "source=\($0.diagnosticName)" },
             strategy.map { "strategy=\($0.rawValue)" },
+            uploadProtocol.map { "protocol=\($0)" },
+            uploadProvider.map { "provider=\($0)" },
             uploadUid.map { "uid=\($0)" },
             byteSize.map { "bytes=\($0)" },
             durationMs.map { "durationMs=\($0)" },
@@ -189,6 +228,19 @@ struct StoryVideoUploadAttempt {
         sanitize(value)
     }
 
+    private mutating func finishActivePhase() {
+        guard hasActivePhase else {
+            return
+        }
+        let elapsedMs = max(Int(Date().timeIntervalSince(phaseStartedAt) * 1_000), 0)
+        phaseDurationsMs[phase, default: 0] += elapsedMs
+        MediaPerformance.measure(
+            "video_upload_phase attempt=\(id) phase=\(phase.rawValue) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown")",
+            since: phaseStartedAt
+        )
+        hasActivePhase = false
+    }
+
     private static func sanitize(_ value: String) -> String {
         let allowed = value.map { character -> Character in
             character.isLetter || character.isNumber || "-_./:".contains(character)
@@ -201,7 +253,11 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
-    static let normalizedTargetBitsPerSecond = 8_000_000
+    // Cloudflare's final 1080p rendition does not benefit from a much larger
+    // upload master. This envelope includes room for high-quality audio and
+    // container overhead while keeping the visible 1080p/30 fps ceiling.
+    static let normalizedTargetBitsPerSecond = 6_500_000
+    static let passthroughMaximumBitsPerSecond = 8_000_000
 
     static func normalizedFileLengthLimit(durationSeconds: TimeInterval) -> Int64? {
         guard durationSeconds.isFinite, durationSeconds > 0 else {
@@ -228,7 +284,8 @@ enum StoryVideoUploadNormalizer {
         }
 
         if inspection.byteSize <= maxUploadBytes,
-           inspection.isStreamCompatibleInput {
+           inspection.isStreamCompatibleInput,
+           !inspection.needsUploadSizeOptimization {
             MediaPerformance.mark("video_upload_strategy stream_passthrough \(inspection.diagnosticSummary)")
             return PreparedStoryVideo(
                 url: url,
@@ -241,6 +298,7 @@ enum StoryVideoUploadNormalizer {
 
         if inspection.byteSize <= maxUploadBytes,
            inspection.canRemuxForStream,
+           !inspection.needsUploadSizeOptimization,
            let remuxedURL = await fastStartRemuxedVideoURL(for: url) {
             do {
                 let byteSize = try await StoryUploadFileIO.fileSize(at: remuxedURL)
@@ -268,7 +326,9 @@ enum StoryVideoUploadNormalizer {
         }
 
         let reason: String
-        if inspection.byteSize > maxUploadBytes {
+        if inspection.needsUploadSizeOptimization {
+            reason = "high_bitrate"
+        } else if inspection.byteSize > maxUploadBytes {
             reason = "large_input"
         } else if !inspection.hasFastStart {
             reason = "moov_after_media"
@@ -513,6 +573,7 @@ enum StoryVideoUploadNormalizer {
 
     private static func compatibleExportPresets(for asset: AVAsset) async -> [String] {
         let candidates = [
+            AVAssetExportPresetHEVC1920x1080,
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
         ]

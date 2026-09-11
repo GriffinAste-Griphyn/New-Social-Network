@@ -90,6 +90,7 @@ export async function processImageAssetStep(jobId: string) {
       contentType: mediaAssets.originalContentType,
       byteSize: mediaAssets.originalByteSize,
       checksum: mediaAssets.originalChecksum,
+      storageProvider: mediaAssets.originalStorageProvider,
     })
     .from(mediaAssets)
     .where(eq(mediaAssets.id, job.mediaAssetId))
@@ -108,6 +109,10 @@ export async function processImageAssetStep(jobId: string) {
     basePathname: job.basePathname,
     ownerUserId: asset.ownerUserId,
     contentMode: job.contentMode as StoryImageContentMode,
+    storageProvider:
+      asset.storageProvider === "cloudflare-r2"
+        ? "cloudflare-r2"
+        : "vercel-blob",
     source: {
       pathname: asset.sourcePathname,
       contentType: asset.contentType,

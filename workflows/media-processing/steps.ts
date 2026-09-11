@@ -17,6 +17,7 @@ import {
   stories,
 } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import {
   maximumMediaProcessingAttempts,
   mediaAudioProfile,
@@ -194,6 +195,10 @@ export async function claimMediaProcessingWorkflowStep(
   workflowRunId: string,
 ) {
   "use step"
+
+  if (isVercelBlobAccessDisabled()) {
+    return null
+  }
 
   const job = await readJob(jobId)
   const isStaleActiveJob =

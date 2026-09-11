@@ -11,12 +11,15 @@ struct UBEYEApp: App {
     @StateObject private var push: PushNotificationStore
 
     init() {
+        AppReliabilityMonitor.shared.start()
         let api = APIClient()
+        let auth = AuthStore()
+        let pendingStoryUploads = PendingStoryUploadStore()
         let push = PushNotificationStore()
         _api = StateObject(wrappedValue: api)
-        _auth = StateObject(wrappedValue: AuthStore())
+        _auth = StateObject(wrappedValue: auth)
         _mediaEngine = StateObject(wrappedValue: MediaEngine())
-        _pendingStoryUploads = StateObject(wrappedValue: PendingStoryUploadStore())
+        _pendingStoryUploads = StateObject(wrappedValue: pendingStoryUploads)
         _push = StateObject(wrappedValue: push)
 
         AppDelegate.onDeviceToken = { deviceToken in
@@ -34,6 +37,14 @@ struct UBEYEApp: App {
                 let result = await push.handleBackgroundNotification(userInfo, api: api)
                 completion(result)
             }
+        }
+        AppDelegate.onStoryBackgroundTransferEvents = {
+            await auth.restoreSession(api: api)
+            guard auth.account != nil else {
+                return
+            }
+            await pendingStoryUploads.waitForActiveUploadsToSettle()
+            _ = await pendingStoryUploads.resumeInterruptedUploads(api: api)
         }
     }
 

@@ -35,6 +35,7 @@ private struct SessionRestoreView: View {
 struct MainTabView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var network = NetworkQualityMonitor.shared
     @ObservedObject private var resourceMonitor = UBEYEResourceMonitor.shared
@@ -49,6 +50,7 @@ struct MainTabView: View {
     @State private var hasObservedOfflineState = false
     @State private var showsReconnectedBanner = false
     @State private var reconnectBannerTask: Task<Void, Never>?
+    @State private var selectedUploadNeedingAttention: PendingStoryUpload?
 
     var body: some View {
         ZStack {
@@ -78,6 +80,17 @@ struct MainTabView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             AppBottomBar(selectedTab: selectedTab, select: selectTab)
         }
+        .overlay(alignment: .bottom) {
+            GlobalStoryUploadActivitySurface(
+                pendingUploads: pendingStoryUploads,
+                notice: storyUploadNotice,
+                onNeedsAttention: { upload in
+                    selectedUploadNeedingAttention = upload
+                }
+            )
+            .padding(.horizontal, UBEYEMetrics.screenInset)
+            .padding(.bottom, UBEYEMetrics.bottomBarHeight + 12)
+        }
         .ignoresSafeArea(
             selectedTab == .post ? .keyboard : [],
             edges: .bottom
@@ -91,6 +104,21 @@ struct MainTabView: View {
         }
         .sheet(isPresented: $isShowingProfile) {
             ProfileView()
+        }
+        .alert(item: $selectedUploadNeedingAttention) { upload in
+            Alert(
+                title: Text("Story upload needs attention"),
+                message: Text(upload.displayErrorMessage),
+                primaryButton: .default(Text("Retry")) {
+                    retryPendingUpload(upload)
+                },
+                secondaryButton: .destructive(Text("Remove")) {
+                    pendingStoryUploads.remove(id: upload.id)
+                    if pendingStoryUploads.latestVisibleUpload == nil {
+                        storyUploadNotice.state = nil
+                    }
+                }
+            )
         }
         .onAppear {
             #if DEBUG
@@ -113,16 +141,21 @@ struct MainTabView: View {
         .onChange(of: network.isConnected) { wasConnected, isConnected in
             handleConnectivityChange(wasConnected: wasConnected, isConnected: isConnected)
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else {
+                return
+            }
+            Task {
+                await resumeInterruptedStoryUploads()
+                presentRecoveredStoryUploads()
+                storyUploadNotice.didBecomeActive()
+            }
+        }
         .task {
             await PendingSocialActionQueue.shared.flush(api: api)
-            let resumed = await pendingStoryUploads.resumeInterruptedUploads(api: api)
-            for response in resumed {
-                storyUploadCoordinator.register(
-                    response,
-                    api: api,
-                    notice: storyUploadNotice,
-                    pendingUploads: pendingStoryUploads
-                )
+            await resumeInterruptedStoryUploads()
+            if scenePhase == .active {
+                presentRecoveredStoryUploads()
             }
         }
     }
@@ -205,6 +238,38 @@ struct MainTabView: View {
         }
     }
 
+    private func resumeInterruptedStoryUploads() async {
+        _ = await pendingStoryUploads.resumeInterruptedUploads(api: api)
+    }
+
+    private func presentRecoveredStoryUploads() {
+        for response in pendingStoryUploads.takeRecoveredCompletions() {
+            storyUploadCoordinator.register(
+                response,
+                api: api,
+                notice: storyUploadNotice,
+                pendingUploads: pendingStoryUploads
+            )
+        }
+    }
+
+    private func retryPendingUpload(_ upload: PendingStoryUpload) {
+        storyUploadNotice.showPosting()
+        Task {
+            do {
+                let response = try await pendingStoryUploads.retry(id: upload.id, api: api)
+                storyUploadCoordinator.register(
+                    response,
+                    api: api,
+                    notice: storyUploadNotice,
+                    pendingUploads: pendingStoryUploads
+                )
+            } catch {
+                storyUploadNotice.showFailed(message: error.localizedDescription)
+            }
+        }
+    }
+
     private func handleConnectivityChange(wasConnected: Bool, isConnected: Bool) {
         reconnectBannerTask?.cancel()
 
@@ -222,6 +287,10 @@ struct MainTabView: View {
         showsReconnectedBanner = true
         Task {
             await PendingSocialActionQueue.shared.flush(api: api)
+            await resumeInterruptedStoryUploads()
+            if scenePhase == .active {
+                presentRecoveredStoryUploads()
+            }
         }
         reconnectBannerTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
@@ -232,6 +301,251 @@ struct MainTabView: View {
                 showsReconnectedBanner = false
             }
         }
+    }
+}
+
+struct StoryUploadActivityPresentation: Equatable {
+    let title: String
+    let message: String
+    let systemImage: String
+    let progress: Double?
+    let showsIndeterminateProgress: Bool
+    let needsAttention: Bool
+}
+
+enum StoryUploadActivityPolicy {
+    static func presentation(
+        state: PendingStoryUploadState,
+        assetKind: SocialAssetKind,
+        progress: Double,
+        errorMessage: String?
+    ) -> StoryUploadActivityPresentation {
+        let clampedProgress = min(max(progress, 0), 1)
+        switch state {
+        case .queued:
+            return StoryUploadActivityPresentation(
+                title: "Story queued",
+                message: "Your story is saved and will upload in the background.",
+                systemImage: "clock.arrow.circlepath",
+                progress: clampedProgress,
+                showsIndeterminateProgress: false,
+                needsAttention: false
+            )
+        case .recovering:
+            return StoryUploadActivityPresentation(
+                title: "Resuming upload…",
+                message: "Your story is safe. Uploading will continue automatically.",
+                systemImage: "arrow.clockwise.circle.fill",
+                progress: clampedProgress,
+                showsIndeterminateProgress: true,
+                needsAttention: false
+            )
+        case .uploading:
+            return StoryUploadActivityPresentation(
+                title: "Uploading · \(Int((clampedProgress * 100).rounded()))%",
+                message: "You can keep using UBEYE or leave the app.",
+                systemImage: "arrow.up.circle.fill",
+                progress: clampedProgress,
+                showsIndeterminateProgress: false,
+                needsAttention: false
+            )
+        case .completing:
+            return StoryUploadActivityPresentation(
+                title: assetKind == .video ? "Processing video…" : "Processing photo…",
+                message: "Your story is safe and finishing in the background.",
+                systemImage: assetKind == .video ? "video.fill" : "photo.fill",
+                progress: nil,
+                showsIndeterminateProgress: true,
+                needsAttention: false
+            )
+        case .paused:
+            return StoryUploadActivityPresentation(
+                title: "Upload paused",
+                message: errorMessage ?? "We’ll retry automatically when the app reconnects.",
+                systemImage: "pause.circle.fill",
+                progress: nil,
+                showsIndeterminateProgress: false,
+                needsAttention: true
+            )
+        case .failed:
+            return StoryUploadActivityPresentation(
+                title: "Upload needs attention",
+                message: errorMessage ?? "Tap to retry without losing your story.",
+                systemImage: "exclamationmark.circle.fill",
+                progress: nil,
+                showsIndeterminateProgress: false,
+                needsAttention: true
+            )
+        }
+    }
+}
+
+private struct GlobalStoryUploadActivitySurface: View {
+    @ObservedObject var pendingUploads: PendingStoryUploadStore
+    @ObservedObject var notice: StoryUploadNoticeStore
+    let onNeedsAttention: (PendingStoryUpload) -> Void
+
+    var body: some View {
+        Group {
+            if showsDebugFixture {
+                GlobalStoryUploadActivityCard(
+                    title: "Uploading · 43%",
+                    message: "You can keep using UBEYE or leave the app.",
+                    systemImage: "arrow.up.circle.fill",
+                    progress: 0.43,
+                    showsIndeterminateProgress: false,
+                    needsAttention: false,
+                    action: nil
+                )
+            } else if let batch = pendingUploads.latestBatchSummary {
+                let failedUpload = batch.uploads.first(where: \.isFailed)
+                GlobalStoryUploadActivityCard(
+                    title: batchTitle(batch),
+                    message: batchMessage(batch),
+                    systemImage: failedUpload == nil ? "arrow.up.circle.fill" : "exclamationmark.circle.fill",
+                    progress: failedUpload == nil ? batch.progress : nil,
+                    showsIndeterminateProgress: false,
+                    needsAttention: failedUpload != nil,
+                    action: failedUpload.map { upload in
+                        { onNeedsAttention(upload) }
+                    }
+                )
+            } else if let upload = pendingUploads.latestVisibleUpload {
+                let presentation = StoryUploadActivityPolicy.presentation(
+                    state: upload.state,
+                    assetKind: upload.assetKind,
+                    progress: upload.displayProgress,
+                    errorMessage: upload.errorMessage
+                )
+                GlobalStoryUploadActivityCard(
+                    title: presentation.title,
+                    message: presentation.message,
+                    systemImage: presentation.systemImage,
+                    progress: presentation.progress,
+                    showsIndeterminateProgress: presentation.showsIndeterminateProgress,
+                    needsAttention: presentation.needsAttention,
+                    action: presentation.needsAttention ? { onNeedsAttention(upload) } : nil
+                )
+            } else if notice.state != nil {
+                GlobalStoryUploadActivityCard(
+                    title: notice.title,
+                    message: notice.message,
+                    systemImage: notice.systemImage,
+                    progress: notice.state == .posted ? 1 : nil,
+                    showsIndeterminateProgress: notice.isProcessing,
+                    needsAttention: notice.isFailure,
+                    action: nil
+                )
+            }
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.snappy(duration: 0.24), value: activityIdentity)
+    }
+
+    private var activityIdentity: String {
+        if showsDebugFixture {
+            return "debug-fixture"
+        }
+        if let upload = pendingUploads.latestVisibleUpload {
+            return "\(upload.id)|\(upload.state.rawValue)|\(Int(upload.displayProgress * 100))"
+        }
+        return String(describing: notice.state)
+    }
+
+    private var showsDebugFixture: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-story-upload-activity-fixture")
+        #else
+        false
+        #endif
+    }
+
+    private func batchTitle(_ batch: PendingStoryUploadBatchSummary) -> String {
+        if batch.failedCount > 0 {
+            return "\(batch.failedCount) stor\(batch.failedCount == 1 ? "y" : "ies") need attention"
+        }
+        return "Posting \(batch.completedCount + 1) of \(batch.totalCount)"
+    }
+
+    private func batchMessage(_ batch: PendingStoryUploadBatchSummary) -> String {
+        batch.failedCount > 0
+            ? "Tap to retry. Your original media is still safe."
+            : "You can keep using UBEYE or leave the app."
+    }
+}
+
+private struct GlobalStoryUploadActivityCard: View {
+    let title: String
+    let message: String
+    let systemImage: String
+    let progress: Double?
+    let showsIndeterminateProgress: Bool
+    let needsAttention: Bool
+    let action: (() -> Void)?
+
+    var body: some View {
+        Group {
+            if let action {
+                Button(action: action) {
+                    content
+                }
+                .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.985, pressedOpacity: 0.9))
+            } else {
+                content
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(needsAttention ? "Double tap for upload options" : "")
+    }
+
+    private var content: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(needsAttention ? Color.orange : Color.ubeyeRed, in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.ubeyeInk)
+                        .contentTransition(.numericText())
+                    Text(message)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+
+                if needsAttention {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.ubeyeMuted)
+                }
+            }
+
+            if progress != nil || showsIndeterminateProgress {
+                Group {
+                    if showsIndeterminateProgress {
+                        ProgressView()
+                    } else {
+                        ProgressView(value: progress ?? 0, total: 1)
+                    }
+                }
+                .progressViewStyle(.linear)
+                .tint(Color.ubeyeRed)
+            }
+        }
+        .padding(12)
+        .background(.white.opacity(0.98), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.ubeyeBorder, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
     }
 }
 
@@ -262,8 +576,8 @@ private struct ConnectivityBanner: View {
 final class StoryUploadNoticeStore: ObservableObject {
     enum State: Equatable {
         case posting
-        case processing
-        case delayed
+        case processing(SocialAssetKind)
+        case delayed(SocialAssetKind)
         case posted
         case review(String?)
         case failed(String)
@@ -272,14 +586,28 @@ final class StoryUploadNoticeStore: ObservableObject {
     @Published var state: State?
     private var dismissTask: Task<Void, Never>?
 
+    var isProcessing: Bool {
+        if case .processing = state {
+            return true
+        }
+        return false
+    }
+
+    var isFailure: Bool {
+        if case .failed = state {
+            return true
+        }
+        return false
+    }
+
     var title: String {
         switch state {
         case .posting:
             "Uploading story…"
-        case .processing:
-            "Processing video…"
-        case .delayed:
-            "Video processing delayed"
+        case .processing(let assetKind):
+            assetKind == .image ? "Processing photo…" : "Processing video…"
+        case .delayed(let assetKind):
+            assetKind == .image ? "Photo processing delayed" : "Video processing delayed"
         case .posted:
             "Added to your story"
         case .review:
@@ -294,11 +622,15 @@ final class StoryUploadNoticeStore: ObservableObject {
     var message: String {
         switch state {
         case .posting:
-            "Your story is visible in My Story while it uploads."
-        case .processing:
-            "Preparing a streamable version now. Higher quality will continue in the background."
-        case .delayed:
-            "Your upload is safe. We’ll keep trying to prepare it in the background."
+            "You can leave the app while your story uploads."
+        case .processing(let assetKind):
+            assetKind == .image
+                ? "Preparing optimized versions now. Your photo will finish in the background."
+                : "Preparing a streamable version now. Higher quality will continue in the background."
+        case .delayed(let assetKind):
+            assetKind == .image
+                ? "Your photo is safe. We’ll keep trying to prepare it in the background."
+                : "Your video is safe. We’ll keep trying to prepare it in the background."
         case .posted:
             "Your story is ready to play."
         case .review(let reason):
@@ -314,8 +646,8 @@ final class StoryUploadNoticeStore: ObservableObject {
         switch state {
         case .posting:
             "arrow.up.circle.fill"
-        case .processing:
-            "video.fill"
+        case .processing(let assetKind):
+            assetKind == .image ? "photo.fill" : "video.fill"
         case .delayed:
             "clock.badge.exclamationmark.fill"
         case .posted:
@@ -334,21 +666,42 @@ final class StoryUploadNoticeStore: ObservableObject {
         state = .posting
     }
 
-    func showProcessing() {
+    func showProcessing(assetKind: SocialAssetKind) {
         dismissTask?.cancel()
-        state = .processing
+        state = .processing(assetKind)
     }
 
-    func showDelayed() {
+    func showDelayed(assetKind: SocialAssetKind) {
         dismissTask?.cancel()
-        state = .delayed
+        state = .delayed(assetKind)
     }
 
     func showPosted() {
         dismissTask?.cancel()
         state = .posted
+        if UIApplication.shared.applicationState == .active {
+            UBEYEFeedback.success()
+        }
+        schedulePostedDismissalIfActive()
+    }
+
+    func didBecomeActive() {
+        guard state == .posted else {
+            return
+        }
+        schedulePostedDismissalIfActive()
+    }
+
+    private func schedulePostedDismissalIfActive() {
+        guard UIApplication.shared.applicationState == .active else {
+            return
+        }
+        dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else {
+                return
+            }
             await MainActor.run {
                 self?.state = nil
             }
@@ -363,6 +716,9 @@ final class StoryUploadNoticeStore: ObservableObject {
     func showFailed(message: String) {
         dismissTask?.cancel()
         state = .failed(message)
+        if UIApplication.shared.applicationState == .active {
+            UBEYEFeedback.error()
+        }
     }
 }
 
@@ -460,7 +816,7 @@ struct AppBottomBar: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 52)
+                    .frame(height: UBEYEMetrics.bottomBarItemHeight)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.92, pressedOpacity: 0.74))
@@ -470,8 +826,8 @@ struct AppBottomBar: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 7)
+        .padding(.top, UBEYEMetrics.bottomBarTopPadding)
+        .padding(.bottom, UBEYEMetrics.bottomBarBottomPadding)
         .background(.white.opacity(0.98))
         .overlay(alignment: .top) {
             Rectangle()

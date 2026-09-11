@@ -6,6 +6,10 @@ import { isAdminSession } from "@/lib/admin-auth"
 import { getMobileSession, getSession } from "@/lib/auth"
 import { getDb } from "@/lib/db"
 import { stories, storyInteractions } from "@/lib/db/schema"
+import {
+  blobMediaUnavailableResponse,
+  isVercelBlobAccessDisabled,
+} from "@/lib/media-availability"
 import { forwardCloudflarePlaybackOptions } from "@/lib/story-media/access"
 import {
   getStoryMediaCacheControl,
@@ -269,6 +273,12 @@ export async function GET(
     )
 
     return response
+  }
+
+  if (isVercelBlobAccessDisabled()) {
+    return blobMediaUnavailableResponse(
+      "This story media is temporarily unavailable while media service access recovers.",
+    )
   }
 
   const blobPathname = mediaPathname

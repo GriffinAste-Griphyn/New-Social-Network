@@ -29,6 +29,9 @@ struct StoryVideoUpload {
 
 struct StoryImageUpload: Equatable, @unchecked Sendable {
     static let maximumUploadBytes = StoryMediaContract.maximumImageUploadBytes
+    static let maximumPreservedUploadBytes = 6 * 1024 * 1024
+    static let preferredUploadPixelDimension = 2_160
+    static let preferredUploadJPEGQuality: CGFloat = 0.90
     static let maximumTranscodedPixelDimension = 4_096
     static let maximumPreviewPixelDimension = 2_560
     static let transcodedJPEGQuality: CGFloat = 0.95
@@ -76,9 +79,15 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         fallbackFileName: String = "story-photo",
         displayImage: UIImage? = nil
     ) {
-        if let format = StoryImageFormat(data: data),
+        let format = StoryImageFormat(data: data)
+        if let format,
            format.isDirectUploadCompatible,
            data.count <= Self.maximumUploadBytes,
+           StoryImageTranscoder.shouldPreserveUploadSource(
+             data: data,
+             maximumByteCount: Self.maximumPreservedUploadBytes,
+             maximumPixelDimension: Self.preferredUploadPixelDimension
+           ),
            let previewImage = StoryImageTranscoder.previewImage(
              data: data,
              maxPixelDimension: Self.maximumPreviewPixelDimension
@@ -93,17 +102,26 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
             return
         }
 
+        let preferredPixelDimension = format?.isDirectUploadCompatible == true
+            ? Self.preferredUploadPixelDimension
+            : Self.maximumTranscodedPixelDimension
+        let preferredQuality = format?.isDirectUploadCompatible == true
+            ? Self.preferredUploadJPEGQuality
+            : Self.transcodedJPEGQuality
         guard var normalized = StoryImageTranscoder.normalizedJPEG(
             data: data,
-            maxPixelDimension: Self.maximumTranscodedPixelDimension,
-            quality: Self.transcodedJPEGQuality
+            maxPixelDimension: preferredPixelDimension,
+            quality: preferredQuality
         ) else {
             return nil
         }
         if normalized.data.count > Self.maximumUploadBytes {
             guard let reduced = StoryImageTranscoder.normalizedJPEG(
                 data: data,
-                maxPixelDimension: Self.fallbackTranscodedPixelDimension,
+                maxPixelDimension: min(
+                    preferredPixelDimension,
+                    Self.fallbackTranscodedPixelDimension
+                ),
                 quality: Self.fallbackJPEGQuality
             ), reduced.data.count <= Self.maximumUploadBytes else {
                 return nil
@@ -128,10 +146,17 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         fallbackFileName: String = "story-photo"
     ) {
         let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        if let format = StoryImageFormat(fileURL: fileURL),
+        let format = StoryImageFormat(fileURL: fileURL)
+        if let format,
            format.isDirectUploadCompatible,
            fileSize > 0,
            fileSize <= Self.maximumUploadBytes,
+           StoryImageTranscoder.shouldPreserveUploadSource(
+             fileURL: fileURL,
+             byteCount: fileSize,
+             maximumByteCount: Self.maximumPreservedUploadBytes,
+             maximumPixelDimension: Self.preferredUploadPixelDimension
+           ),
            let originalData = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
            let previewImage = StoryImageTranscoder.previewImage(
              fileURL: fileURL,
@@ -147,17 +172,26 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
             return
         }
 
+        let preferredPixelDimension = format?.isDirectUploadCompatible == true
+            ? Self.preferredUploadPixelDimension
+            : Self.maximumTranscodedPixelDimension
+        let preferredQuality = format?.isDirectUploadCompatible == true
+            ? Self.preferredUploadJPEGQuality
+            : Self.transcodedJPEGQuality
         guard var normalized = StoryImageTranscoder.normalizedJPEG(
             fileURL: fileURL,
-            maxPixelDimension: Self.maximumTranscodedPixelDimension,
-            quality: Self.transcodedJPEGQuality
+            maxPixelDimension: preferredPixelDimension,
+            quality: preferredQuality
         ) else {
             return nil
         }
         if normalized.data.count > Self.maximumUploadBytes {
             guard let reduced = StoryImageTranscoder.normalizedJPEG(
                 fileURL: fileURL,
-                maxPixelDimension: Self.fallbackTranscodedPixelDimension,
+                maxPixelDimension: min(
+                    preferredPixelDimension,
+                    Self.fallbackTranscodedPixelDimension
+                ),
                 quality: Self.fallbackJPEGQuality
             ), reduced.data.count <= Self.maximumUploadBytes else {
                 return nil
@@ -253,6 +287,52 @@ struct StoryJPEGEncoding {
 }
 
 enum StoryImageTranscoder {
+    static func shouldPreserveUploadSource(
+        data: Data,
+        maximumByteCount: Int,
+        maximumPixelDimension: Int
+    ) -> Bool {
+        guard data.count <= maximumByteCount else {
+            return false
+        }
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+            return false
+        }
+        return sourceFitsUploadBounds(source, maximumPixelDimension: maximumPixelDimension)
+    }
+
+    static func shouldPreserveUploadSource(
+        fileURL: URL,
+        byteCount: Int,
+        maximumByteCount: Int,
+        maximumPixelDimension: Int
+    ) -> Bool {
+        guard byteCount <= maximumByteCount else {
+            return false
+        }
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, options) else {
+            return false
+        }
+        return sourceFitsUploadBounds(source, maximumPixelDimension: maximumPixelDimension)
+    }
+
+    private static func sourceFitsUploadBounds(
+        _ source: CGImageSource,
+        maximumPixelDimension: Int
+    ) -> Bool {
+        guard
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+            let height = properties[kCGImagePropertyPixelHeight] as? NSNumber
+        else {
+            return false
+        }
+        return max(width.intValue, height.intValue) <= maximumPixelDimension
+    }
+
     static func previewImage(
         data: Data,
         maxPixelDimension: Int
@@ -967,6 +1047,12 @@ final class StoryComposerStore: ObservableObject {
         do {
             switch selectedMedia {
             case .image(let upload):
+                guard MediaControlConfig.shared.storyImageUploadsAvailable else {
+                    throw APIClientError.server(
+                        "Photo uploads are temporarily unavailable. Video stories still work.",
+                        503
+                    )
+                }
                 uploadStatus = "Posting"
                 let pendingUpload = try pendingUploads.createImageUpload(
                     upload: upload,
@@ -1060,7 +1146,9 @@ final class StoryComposerStore: ObservableObject {
         guard !stagedUploads.isEmpty else {
             isUploading = false
             uploadStatus = nil
-            error = "Could not prepare those stories. Try different photos or videos."
+            error = MediaControlConfig.shared.storyImageUploadsAvailable
+                ? "Could not prepare those stories. Try different photos or videos."
+                : "Photo uploads are temporarily unavailable. Video stories still work."
             return false
         }
 
@@ -1111,6 +1199,12 @@ final class StoryComposerStore: ObservableObject {
     ) async throws -> PendingStoryUpload {
         switch media {
         case .image(let upload):
+            guard MediaControlConfig.shared.storyImageUploadsAvailable else {
+                throw APIClientError.server(
+                    "Photo uploads are temporarily unavailable. Video stories still work.",
+                    503
+                )
+            }
             return try pendingUploads.createImageUpload(
                 upload: upload,
                 contentMode: .fit,
@@ -1185,11 +1279,18 @@ final class StoryComposerStore: ObservableObject {
 
             let response = try await pendingUploads.performUpload(
                 id: pendingUpload.id,
-                api: api
-            ) { phase in
-                attempt.begin(phase)
-                self.uploadStatus = phase.statusLabel
-            }
+                api: api,
+                onVideoUploadPrepared: { upload in
+                    attempt.attach(upload: upload)
+                },
+                onVideoRetry: { reason in
+                    attempt.recordRetry(reason)
+                },
+                onVideoPhase: { phase in
+                    attempt.begin(phase)
+                    self.uploadStatus = phase.statusLabel
+                }
+            )
 
             attempt.begin(.processing)
             attempt.recordSuccess(processingStatus: response.processingStatus)

@@ -99,6 +99,20 @@ struct StoryMediaBufferPolicy {
             mode: mode
         )
     }
+
+    static func stableIndices(
+        activeIndex: Int,
+        itemCount: Int,
+        mode: UBEYEAdaptiveMode = .standard
+    ) -> [Int] {
+        Set(
+            indices(
+                activeIndex: activeIndex,
+                itemCount: itemCount,
+                mode: mode
+            )
+        ).sorted()
+    }
 }
 
 private struct BufferedStoryMedia: Identifiable {
@@ -191,6 +205,11 @@ final class StoryStackStore: ObservableObject {
 
     private var impressionStartedAt = Date()
     private var lastImpressionStoryId: String?
+    private struct ImpressionReport: Equatable {
+        let viewedMs: Int
+        let completed: Bool
+    }
+    private var impressionReports: [String: ImpressionReport] = [:]
     private var activeReplyDraftStoryId: String?
     private var isRestoringReplyDraft = false
     private let replyDraftDefaults = UserDefaults.standard
@@ -286,7 +305,32 @@ final class StoryStackStore: ObservableObject {
         }
 
         let viewedMs = max(0, Int(Date().timeIntervalSince(impressionStartedAt) * 1000))
-        try? await api.recordStoryImpression(storyId: item.id, viewedMs: viewedMs, completed: completed)
+        let previous = impressionReports[item.id]
+        if previous?.completed == true {
+            return
+        }
+        if !completed {
+            guard viewedMs >= 1_000 else {
+                return
+            }
+            if let previous, viewedMs - previous.viewedMs < 5_000 {
+                return
+            }
+        }
+
+        let report = ImpressionReport(viewedMs: viewedMs, completed: completed)
+        impressionReports[item.id] = report
+        do {
+            try await api.recordStoryImpression(
+                storyId: item.id,
+                viewedMs: viewedMs,
+                completed: completed
+            )
+        } catch {
+            if impressionReports[item.id] == report {
+                impressionReports[item.id] = previous
+            }
+        }
     }
 
     func sendReply(item: StoryStackItem, api: APIClient) async {
@@ -629,6 +673,20 @@ struct StoryViewerPausePolicy {
     }
 }
 
+enum StoryProgressPausePolicy {
+    static func shouldPause(
+        playbackIsPaused: Bool,
+        isPressingMedia: Bool,
+        isDismissTransitionActive: Bool,
+        isWaitingForVideo: Bool
+    ) -> Bool {
+        playbackIsPaused ||
+            isPressingMedia ||
+            isDismissTransitionActive ||
+            isWaitingForVideo
+    }
+}
+
 struct StoryStackViewer: View {
     let route: StoryRoute
     @EnvironmentObject private var api: APIClient
@@ -646,7 +704,7 @@ struct StoryStackViewer: View {
     @State private var index = 0
     @State private var timedStoryId: String?
     @State private var videoReadyItemId: String?
-    @State private var pendingFinishedVideoItemId: String?
+    @State private var pendingFinishedItemId: String?
     @State private var didFinishCurrentItem = false
     @State private var deleteConfirmationItem: StoryStackItem?
     @State private var isDeleteConfirmationPresented = false
@@ -667,12 +725,11 @@ struct StoryStackViewer: View {
     @State private var pendingDeletion: PendingStoryDeletion?
     @State private var deletionCommitTask: Task<Void, Never>?
     @State private var gestureAxis: GestureAxisIntent = .undecided
+    @State private var isDismissTransitionActive = false
     @State private var crossedDismissThreshold = false
     @State private var showsGestureHint = false
     @State private var gestureHintDismissTask: Task<Void, Never>?
     @State private var keyboardRequestStartedAt: Date?
-    @State private var bufferedStoryItemIDs = Set<String>()
-    @State private var mediaBufferRefreshTask: Task<Void, Never>?
     @AppStorage("ubeye.story-playback-muted") private var isStoryPlaybackMuted = false
     @GestureState private var isPressingStoryMedia = false
     @FocusState private var isReplyFieldFocused: Bool
@@ -879,9 +936,6 @@ struct StoryStackViewer: View {
             if let item = store.stack?.items[safe: index] {
                 startStoryTimerIfNeeded(for: item)
             }
-            if let stack = store.stack {
-                commitStoryMediaBuffer(stack: stack, around: index)
-            }
             presentGestureHintIfNeeded()
         }
         .onReceive(pendingStoryUploads.$uploads) { _ in
@@ -896,20 +950,6 @@ struct StoryStackViewer: View {
                 around: index
             )
             index = min(index, max((store.stack?.items.count ?? 1) - 1, 0))
-            if let stack = store.stack {
-                commitStoryMediaBuffer(stack: stack, around: index)
-            }
-        }
-        .onChange(of: shouldPauseVideoPlayback) { _, isPaused in
-            guard !isPaused,
-                  let pendingFinishedVideoItemId,
-                  let item = store.stack?.items[safe: index],
-                  item.id == pendingFinishedVideoItemId else {
-                return
-            }
-
-            self.pendingFinishedVideoItemId = nil
-            finishCurrentItem(item)
         }
         .onChange(of: store.replyConfirmation) { _, confirmation in
             scheduleConfirmationDismiss(for: confirmation)
@@ -919,6 +959,15 @@ struct StoryStackViewer: View {
         }
         .onChange(of: shouldPauseStoryProgress) { _, isPaused in
             storyTimerState.setPaused(isPaused)
+            guard !isPaused,
+                  let pendingFinishedItemId,
+                  let item = store.stack?.items[safe: index],
+                  item.id == pendingFinishedItemId else {
+                return
+            }
+
+            self.pendingFinishedItemId = nil
+            finishCurrentItem(item)
         }
         .onChange(of: isReplyFieldFocused) { _, isFocused in
             if isFocused {
@@ -940,7 +989,6 @@ struct StoryStackViewer: View {
             completionDismissTask?.cancel()
             reactionBurstTask?.cancel()
             gestureHintDismissTask?.cancel()
-            mediaBufferRefreshTask?.cancel()
             storyTimerState.stop()
             mediaEngine.storyViewerDidDisappear()
             InteractionFrameMonitor.shared.stop(surface: "story_viewer")
@@ -973,10 +1021,10 @@ struct StoryStackViewer: View {
     }
 
     private func storyMediaBuffer(stack: StoryStack, activeIndex: Int) -> some View {
-        let bufferedMedia = storyMediaBufferIndices(
-            stack: stack,
+        let bufferedMedia = StoryMediaBufferPolicy.stableIndices(
             activeIndex: activeIndex,
-            retainedItemIDs: bufferedStoryItemIDs
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
         ).compactMap { itemIndex -> BufferedStoryMedia? in
             guard let item = stack.items[safe: itemIndex] else {
                 return nil
@@ -1003,58 +1051,6 @@ struct StoryStackViewer: View {
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
-        }
-    }
-
-    private func storyMediaBufferIndices(
-        stack: StoryStack,
-        activeIndex: Int,
-        retainedItemIDs: Set<String>
-    ) -> [Int] {
-        let policyIndices = StoryMediaBufferPolicy.indices(
-            activeIndex: activeIndex,
-            itemCount: stack.items.count,
-            mode: resourceMonitor.mode
-        )
-        guard !retainedItemIDs.isEmpty else {
-            return policyIndices
-        }
-
-        // Preserve source order while the active flag moves. Reordering the
-        // ForEach collection around the active item makes SwiftUI perform move
-        // bookkeeping during the exact frame whose opacity is changing.
-        return stack.items.indices.filter {
-            $0 == activeIndex || retainedItemIDs.contains(stack.items[$0].id)
-        }
-    }
-
-    private func commitStoryMediaBuffer(stack: StoryStack, around activeIndex: Int) {
-        let indices = StoryMediaBufferPolicy.indices(
-            activeIndex: activeIndex,
-            itemCount: stack.items.count,
-            mode: resourceMonitor.mode
-        )
-        bufferedStoryItemIDs = Set(indices.compactMap { stack.items[safe: $0]?.id })
-    }
-
-    private func scheduleStoryMediaBufferRefresh(
-        stack: StoryStack,
-        around activeIndex: Int,
-        activeItemID: String
-    ) {
-        mediaBufferRefreshTask?.cancel()
-        mediaBufferRefreshTask = Task { @MainActor in
-            // The next story's pixels are already warmed. Rotate the retained
-            // SwiftUI/AVPlayer window after the visible commit so mounting the
-            // following story cannot steal that transition frame.
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled,
-                  index == activeIndex,
-                  store.stack?.items[safe: activeIndex]?.id == activeItemID else {
-                return
-            }
-            commitStoryMediaBuffer(stack: stack, around: activeIndex)
-            mediaBufferRefreshTask = nil
         }
     }
 
@@ -2160,6 +2156,10 @@ struct StoryStackViewer: View {
             predictedTranslation: value.predictedEndTranslation.height,
             viewportHeight: viewportHeight
         ) {
+            isDismissTransitionActive = true
+            pendingFinishedItemId = nil
+            completionDismissTask?.cancel()
+            storyTimerState.stop()
             UBEYEFeedback.boundary()
             MediaPerformance.mark("gesture_outcome surface=story axis=vertical direction=down outcome=dismissed")
             withAnimation(UBEYEMotion.interactive(reduceMotion: reduceMotion, mode: resourceMonitor.mode)) {
@@ -2189,6 +2189,9 @@ struct StoryStackViewer: View {
     }
 
     private func dismissStoryFromSwipe(item: StoryStackItem) {
+        pendingFinishedItemId = nil
+        completionDismissTask?.cancel()
+        storyTimerState.stop()
         Task { await store.recordImpression(item: item, completed: false, api: api) }
         dismiss()
     }
@@ -2225,10 +2228,10 @@ struct StoryStackViewer: View {
 
         UBEYEFeedback.selection()
 
-        let targetWasBuffered = storyMediaBufferIndices(
-            stack: stack,
+        let targetWasBuffered = StoryMediaBufferPolicy.indices(
             activeIndex: index,
-            retainedItemIDs: bufferedStoryItemIDs
+            itemCount: stack.items.count,
+            mode: resourceMonitor.mode
         ).contains(nextIndex)
         pendingTransitionMeasurement = StoryTransitionMeasurement(
             destinationItemId: next.id,
@@ -2239,9 +2242,6 @@ struct StoryStackViewer: View {
         )
         Task { await store.recordImpression(item: item, completed: delta > 0, api: api) }
         ownerSheet = nil
-        if !targetWasBuffered {
-            bufferedStoryItemIDs.insert(next.id)
-        }
         index = nextIndex
         store.markActiveItem(next)
         resetStoryTimer(for: next)
@@ -2250,11 +2250,6 @@ struct StoryStackViewer: View {
             targetIndex: nextIndex,
             targetItem: next,
             targetWasBuffered: targetWasBuffered
-        )
-        scheduleStoryMediaBufferRefresh(
-            stack: stack,
-            around: nextIndex,
-            activeItemID: next.id
         )
     }
 
@@ -2387,7 +2382,7 @@ struct StoryStackViewer: View {
             }
         }
         didFinishCurrentItem = false
-        pendingFinishedVideoItemId = nil
+        pendingFinishedItemId = nil
     }
 
     private func updateVideoStoryProgress(_ progress: Double, item: StoryStackItem) {
@@ -2411,12 +2406,12 @@ struct StoryStackViewer: View {
             return
         }
 
-        guard !shouldPauseVideoPlayback else {
-            pendingFinishedVideoItemId = item.id
+        guard !shouldPauseStoryProgress else {
+            pendingFinishedItemId = item.id
             return
         }
 
-        pendingFinishedVideoItemId = nil
+        pendingFinishedItemId = nil
         finishCurrentItem(item)
     }
 
@@ -2425,6 +2420,12 @@ struct StoryStackViewer: View {
             return
         }
 
+        guard !shouldPauseStoryProgress else {
+            pendingFinishedItemId = item.id
+            return
+        }
+
+        pendingFinishedItemId = nil
         didFinishCurrentItem = true
 
         if index < stack.items.count - 1 {
@@ -2532,8 +2533,12 @@ struct StoryStackViewer: View {
     }
 
     private var shouldPauseStoryProgress: Bool {
-        shouldPauseVideoPlayback ||
-            isWaitingForCurrentVideo
+        StoryProgressPausePolicy.shouldPause(
+            playbackIsPaused: shouldPauseVideoPlayback,
+            isPressingMedia: isPressingStoryMedia,
+            isDismissTransitionActive: isDismissTransitionActive,
+            isWaitingForVideo: isWaitingForCurrentVideo
+        )
     }
 
     private var storyDismissProgress: CGFloat {

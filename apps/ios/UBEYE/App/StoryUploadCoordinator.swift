@@ -60,7 +60,7 @@ final class StoryUploadCoordinator: ObservableObject {
             if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
                 notice.showPosting()
             } else {
-                notice.showProcessing()
+                notice.showProcessing(assetKind: response.asset.assetKind)
             }
         } else if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
             notice.showPosting()
@@ -133,7 +133,7 @@ final class StoryUploadCoordinator: ObservableObject {
                     if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
                         notice.showPosting()
                     } else {
-                        notice.showDelayed()
+                        notice.showDelayed(assetKind: response.asset.assetKind)
                     }
                     StoryUploadDiagnostics.mark("readiness_poll_timeout", response: response)
                 }
@@ -159,8 +159,10 @@ final class StoryUploadCoordinator: ObservableObject {
 
 enum PendingStoryUploadState: String, Codable, Hashable {
     case queued
+    case recovering
     case uploading
     case completing
+    case paused
     case failed
 }
 
@@ -213,17 +215,25 @@ struct PendingStoryUpload: Codable, Hashable, Identifiable {
     }
 
     var isFailed: Bool {
-        state == .failed
+        state == .failed || state == .paused
+    }
+
+    var isRecovering: Bool {
+        state == .recovering
     }
 
     var statusLabel: String {
         switch state {
         case .queued:
             "Posting"
+        case .recovering:
+            "Resuming"
         case .uploading:
             "Posting \(Int((displayProgress * 100).rounded()))%"
         case .completing:
             "Finishing"
+        case .paused:
+            "Paused"
         case .failed:
             "Failed"
         }
@@ -242,6 +252,11 @@ struct PendingStoryUploadBatchSummary: Equatable {
     let failedCount: Int
     let progress: Double
     let uploads: [PendingStoryUpload]
+}
+
+private struct RecoveredStoryUploadReceipt: Codable {
+    let response: StoryUploadResponse
+    let completedAt: Date
 }
 
 struct LocalImageDerivative {
@@ -364,6 +379,35 @@ enum StoryUploadFileIO {
     static func imagePixelSize(of data: Data) async -> StoryImagePixelSize? {
         await Task.detached(priority: .utility) {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+                  let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+                  width.intValue > 0,
+                  height.intValue > 0 else {
+                return nil
+            }
+
+            let rawOrientation = properties[kCGImagePropertyOrientation] as? NSNumber
+            let orientation = rawOrientation
+                .flatMap { CGImagePropertyOrientation(rawValue: $0.uint32Value) }
+                ?? .up
+            let swapsPixelAxes = switch orientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                true
+            default:
+                false
+            }
+
+            return StoryImagePixelSize(
+                width: swapsPixelAxes ? height.intValue : width.intValue,
+                height: swapsPixelAxes ? width.intValue : height.intValue
+            )
+        }.value
+    }
+
+    static func imagePixelSize(at url: URL) async -> StoryImagePixelSize? {
+        await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                   let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
                   let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
@@ -651,6 +695,7 @@ final class PendingStoryUploadStore: ObservableObject {
     private let rootURL: URL
     private let filesURL: URL
     private let manifestURL: URL
+    private let recoveredReceiptsURL: URL
     private let maxVideoDurationSeconds = 120
     private var automaticallyResumedUploadIds = Set<String>()
 
@@ -662,6 +707,7 @@ final class PendingStoryUploadStore: ObservableObject {
             .appendingPathComponent("pending-story-uploads", isDirectory: true)
         filesURL = rootURL.appendingPathComponent("files", isDirectory: true)
         manifestURL = rootURL.appendingPathComponent("uploads.json")
+        recoveredReceiptsURL = rootURL.appendingPathComponent("recovered-completions.json")
         loadPersistedUploads()
     }
 
@@ -799,6 +845,8 @@ final class PendingStoryUploadStore: ObservableObject {
     func performUpload(
         id: String,
         api: APIClient,
+        onVideoUploadPrepared: ((VideoUploadResponse) -> Void)? = nil,
+        onVideoRetry: ((String) -> Void)? = nil,
         onVideoPhase: ((StoryVideoUploadPhase) -> Void)? = nil
     ) async throws -> StoryUploadResponse {
         guard let upload = uploads.first(where: { $0.id == id }) else {
@@ -821,6 +869,8 @@ final class PendingStoryUploadStore: ObservableObject {
                 response = try await uploadVideo(
                     upload,
                     api: api,
+                    onPrepared: onVideoUploadPrepared,
+                    onRetry: onVideoRetry,
                     onPhase: onVideoPhase
                 )
             }
@@ -840,23 +890,62 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     func resumeInterruptedUploads(api: APIClient) async -> [StoryUploadResponse] {
+        await BackgroundTusUploadTransport.shared.prepareForRecovery()
         let interrupted = uploads.filter {
-            $0.isFailed &&
-            ($0.errorMessage?.hasPrefix("Upload interrupted.") == true) &&
+            ($0.state == .recovering ||
+                $0.state == .paused ||
+                ($0.state == .failed && $0.errorMessage?.hasPrefix("Upload interrupted.") == true)) &&
             !$0.mediaFileURL.path.isEmpty &&
             automaticallyResumedUploadIds.insert($0.id).inserted
         }
         var responses: [StoryUploadResponse] = []
 
         for upload in interrupted {
+            update(
+                id: upload.id,
+                state: .recovering,
+                progress: upload.displayProgress,
+                errorMessage: nil,
+                incrementsRetry: true
+            )
             do {
-                responses.append(try await retry(id: upload.id, api: api))
+                let response = try await performUpload(id: upload.id, api: api)
+                responses.append(response)
+                recordRecoveredCompletion(response)
             } catch {
+                automaticallyResumedUploadIds.remove(upload.id)
+                update(
+                    id: upload.id,
+                    state: .paused,
+                    progress: uploads.first(where: { $0.id == upload.id })?.displayProgress ?? 0,
+                    errorMessage: "Upload paused. We’ll retry automatically when the app reconnects."
+                )
                 MediaPerformance.mark("background_upload_resume id=\(upload.id) result=failed")
             }
         }
 
         return responses
+    }
+
+    func waitForActiveUploadsToSettle() async {
+        for _ in 0..<100 {
+            let hasActiveUpload = uploads.contains {
+                $0.state == .recovering || $0.state == .uploading || $0.state == .completing
+            }
+            guard hasActiveUpload else {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    func takeRecoveredCompletions() -> [StoryUploadResponse] {
+        let receipts = loadRecoveredCompletionReceipts()
+        guard !receipts.isEmpty else {
+            return []
+        }
+        try? fileManager.removeItem(at: recoveredReceiptsURL)
+        return receipts.map(\.response)
     }
 
     func remove(id: String) {
@@ -994,58 +1083,109 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     private func uploadDirectImage(_ upload: PendingStoryUpload, api: APIClient) async throws -> StoryUploadResponse {
-        update(id: upload.id, state: .uploading, progress: 0.12)
-        let byteSize = try fileSize(upload.mediaFileURL)
-        let preparedUpload = try await api.prepareImageStoryUpload(
-            fileName: upload.fileName.isEmpty ? "story-photo.jpg" : upload.fileName,
-            contentType: upload.mimeType ?? "image/jpeg",
-            byteSize: byteSize,
-            displayContentType: "image/avif"
-        )
-        guard let sourcePart = preparedUpload.source,
-              let sourceData = await StoryUploadFileIO.data(at: upload.mediaFileURL),
-              !sourceData.isEmpty,
-              Int64(sourceData.count) <= sourcePart.maxSizeBytes else {
-            throw APIClientError.invalidResponse
+        let startedAt = Date()
+        var phase = "prepare"
+        do {
+            update(id: upload.id, state: .uploading, progress: 0.12)
+            let byteSize = try fileSize(upload.mediaFileURL)
+            let prepareStartedAt = Date()
+            let preparedUpload = try await api.prepareImageStoryUpload(
+                fileName: upload.fileName.isEmpty ? "story-photo.jpg" : upload.fileName,
+                contentType: upload.mimeType ?? "image/jpeg",
+                byteSize: byteSize,
+                displayContentType: "image/avif"
+            )
+            let provider = preparedUpload.storageProvider ?? "vercel-blob"
+            MediaPerformance.measure(
+                "image_upload_phase phase=prepare bytes=\(byteSize) provider=\(provider)",
+                since: prepareStartedAt
+            )
+            guard let sourcePart = preparedUpload.source,
+                  byteSize <= sourcePart.maxSizeBytes else {
+                throw APIClientError.invalidResponse
+            }
+
+            phase = "source_upload"
+            update(id: upload.id, state: .uploading, progress: 0.30)
+            let transferStartedAt = Date()
+            async let uploadResult = api.uploadImageFile(
+                upload.mediaFileURL,
+                byteSize: byteSize,
+                part: sourcePart
+            )
+            async let checksum = StoryUploadFileIO.sha256Hex(at: upload.mediaFileURL)
+            async let pixelSize = StoryUploadFileIO.imagePixelSize(at: upload.mediaFileURL)
+            let (_, resolvedChecksum, resolvedPixelSize) = try await (
+                uploadResult,
+                checksum,
+                pixelSize
+            )
+            let transferDurationMs = max(
+                Int(Date().timeIntervalSince(transferStartedAt) * 1_000),
+                1
+            )
+            let effectiveMbps = Double(byteSize) * 8 / Double(transferDurationMs) / 1_000
+            let effectiveMbpsText = String(format: "%.2f", effectiveMbps)
+            MediaPerformance.measure(
+                "image_upload_phase phase=source_upload bytes=\(byteSize) provider=\(provider) effective_mbps=\(effectiveMbpsText)",
+                since: transferStartedAt
+            )
+            update(id: upload.id, state: .uploading, progress: 0.88)
+
+            let sourceUpload = PreparedImageDerivativeUpload(
+                pathname: sourcePart.pathname,
+                contentType: sourcePart.contentType,
+                byteSize: byteSize,
+                checksum: resolvedChecksum,
+                width: resolvedPixelSize?.width,
+                height: resolvedPixelSize?.height
+            )
+
+            phase = "complete"
+            let completionStartedAt = Date()
+            let response = try await api.completeImageStory(
+                upload: preparedUpload,
+                sourceUpload: sourceUpload,
+                contentMode: .fit,
+                caption: upload.draft.caption,
+                brandTags: upload.draft.brandTags,
+                textOverlay: upload.draft.textOverlay,
+                textOverlayPositionX: upload.draft.textOverlayPositionX,
+                textOverlayPositionY: upload.draft.textOverlayPositionY,
+                linkLabel: upload.draft.linkLabel,
+                linkUrl: upload.draft.linkUrl,
+                linkOverlayPositionX: upload.draft.linkOverlayPositionX,
+                linkOverlayPositionY: upload.draft.linkOverlayPositionY,
+                quoteReplyId: upload.draft.quoteReplyId,
+                quoteReplyPositionX: upload.draft.quoteReplyPositionX,
+                quoteReplyPositionY: upload.draft.quoteReplyPositionY
+            )
+            MediaPerformance.measure(
+                "image_upload_phase phase=complete bytes=\(byteSize) provider=\(provider)",
+                since: completionStartedAt
+            )
+            MediaPerformance.measure(
+                "image_upload_succeeded bytes=\(byteSize) provider=\(provider) effective_mbps=\(effectiveMbpsText)",
+                since: startedAt
+            )
+            MediaPerformance.flushUploadEvents()
+            update(id: upload.id, state: .completing, progress: 1)
+            return response
+        } catch {
+            MediaPerformance.measure(
+                "image_upload_failed phase=\(phase) reason=\(StoryVideoUploadAttempt.sanitizedDiagnostic(error.localizedDescription))",
+                since: startedAt
+            )
+            MediaPerformance.flushUploadEvents()
+            throw error
         }
-        update(id: upload.id, state: .uploading, progress: 0.30)
-        _ = try await api.uploadImageData(sourceData, part: sourcePart)
-        update(id: upload.id, state: .uploading, progress: 0.88)
-
-        let pixelSize = await StoryUploadFileIO.imagePixelSize(of: sourceData)
-        let sourceUpload = PreparedImageDerivativeUpload(
-            pathname: sourcePart.pathname,
-            contentType: sourcePart.contentType,
-            byteSize: Int64(sourceData.count),
-            checksum: await StoryUploadFileIO.sha256Hex(of: sourceData),
-            width: pixelSize?.width,
-            height: pixelSize?.height
-        )
-
-        let response = try await api.completeImageStory(
-            upload: preparedUpload,
-            sourceUpload: sourceUpload,
-            contentMode: .fit,
-            caption: upload.draft.caption,
-            brandTags: upload.draft.brandTags,
-            textOverlay: upload.draft.textOverlay,
-            textOverlayPositionX: upload.draft.textOverlayPositionX,
-            textOverlayPositionY: upload.draft.textOverlayPositionY,
-            linkLabel: upload.draft.linkLabel,
-            linkUrl: upload.draft.linkUrl,
-            linkOverlayPositionX: upload.draft.linkOverlayPositionX,
-            linkOverlayPositionY: upload.draft.linkOverlayPositionY,
-            quoteReplyId: upload.draft.quoteReplyId,
-            quoteReplyPositionX: upload.draft.quoteReplyPositionX,
-            quoteReplyPositionY: upload.draft.quoteReplyPositionY
-        )
-        update(id: upload.id, state: .completing, progress: 1)
-        return response
     }
 
     private func uploadVideo(
         _ upload: PendingStoryUpload,
         api: APIClient,
+        onPrepared: ((VideoUploadResponse) -> Void)? = nil,
+        onRetry: ((String) -> Void)? = nil,
         onPhase: ((StoryVideoUploadPhase) -> Void)? = nil
     ) async throws -> StoryUploadResponse {
         update(id: upload.id, state: .uploading, progress: 0.12)
@@ -1075,38 +1215,25 @@ final class PendingStoryUploadStore: ObservableObject {
                 api: api
             )
         }
+        onPrepared?(preparedUpload)
 
         for leaseAttempt in 0..<2 {
             do {
-                guard let posterPart = preparedUpload.poster,
-                      let posterURL = upload.thumbnailFileURL,
-                      let posterData = await StoryUploadFileIO.data(at: posterURL),
-                      let posterPixelSize = await StoryUploadFileIO.imagePixelSize(of: posterData),
-                      !posterData.isEmpty,
-                      Int64(posterData.count) <= posterPart.maxSizeBytes else {
-                    throw APIClientError.server(
-                        "Could not prepare the video poster. Try a different video.",
-                        400
-                    )
+                if preparedUpload.poster != nil {
+                    onPhase?(.thumbnailUpload)
+                    update(id: upload.id, state: .uploading, progress: 0.18)
                 }
 
-                onPhase?(.thumbnailUpload)
-                update(id: upload.id, state: .uploading, progress: 0.18)
-                MediaPerformance.mark("pending_video_poster_upload_started uid=\(preparedUpload.uid)")
-                let uploadedPoster = PreparedImageDerivativeUpload(
-                    pathname: posterPart.pathname,
-                    contentType: posterPart.contentType,
-                    byteSize: Int64(posterData.count),
-                    checksum: await StoryUploadFileIO.sha256Hex(of: posterData),
-                    width: posterPixelSize.width,
-                    height: posterPixelSize.height
-                )
                 onPhase?(.videoUpload)
                 update(id: upload.id, state: .uploading, progress: 0.22)
                 let uploadTarget = preparedUpload
-                async let posterUpload = api.uploadImageData(
-                    posterData,
-                    part: posterPart
+                let posterPart = uploadTarget.poster
+                let uploadUid = uploadTarget.uid
+                async let uploadedPoster = uploadVideoPoster(
+                    fileURL: upload.thumbnailFileURL,
+                    part: posterPart,
+                    uploadUid: uploadUid,
+                    api: api
                 )
                 async let sourceChecksum = StoryUploadFileIO.sha256Hex(
                     at: upload.mediaFileURL
@@ -1117,6 +1244,7 @@ final class PendingStoryUploadStore: ObservableObject {
                     onRetry: { reason in
                         _ = Task { @MainActor [weak self] in
                             self?.recordRetry(id: upload.id, reason: reason)
+                            onRetry?(reason)
                         }
                     },
                     maxChunkBytes: videoUploadChunkBytes(),
@@ -1130,12 +1258,11 @@ final class PendingStoryUploadStore: ObservableObject {
                         }
                     }
                 )
-                let (_, blobUploadId, checksum) = try await (
-                    posterUpload,
+                let (blobUploadId, checksum, poster) = try await (
                     videoUpload,
-                    sourceChecksum
+                    sourceChecksum,
+                    uploadedPoster
                 )
-                MediaPerformance.mark("pending_video_poster_upload_succeeded uid=\(preparedUpload.uid)")
 
                 onPhase?(.completeStory)
                 update(id: upload.id, state: .completing, progress: 0.94)
@@ -1144,7 +1271,7 @@ final class PendingStoryUploadStore: ObservableObject {
                     fileURL: upload.mediaFileURL,
                     checksum: checksum,
                     uploadId: blobUploadId,
-                    poster: uploadedPoster,
+                    poster: poster,
                     caption: upload.draft.caption,
                     brandTags: upload.draft.brandTags,
                     textOverlay: upload.draft.textOverlay,
@@ -1173,6 +1300,7 @@ final class PendingStoryUploadStore: ObservableObject {
 
                 let failedSessionId = preparedUpload.uploadSessionId
                 recordRetry(id: upload.id, reason: "replace_upload_session")
+                onRetry?("replace_upload_session")
                 setPreparedVideoUpload(id: upload.id, preparedUpload: nil)
                 preparedUpload = try await prepareVideoUpload(
                     upload,
@@ -1180,10 +1308,62 @@ final class PendingStoryUploadStore: ObservableObject {
                     replacing: failedSessionId,
                     api: api
                 )
+                onPrepared?(preparedUpload)
             }
         }
 
         throw APIClientError.server("Could not resume this video upload.", 0)
+    }
+
+    private func uploadVideoPoster(
+        fileURL: URL?,
+        part: ImageUploadPart?,
+        uploadUid: String,
+        api: APIClient
+    ) async throws -> PreparedImageDerivativeUpload? {
+        guard let part else {
+            return nil
+        }
+        guard let fileURL,
+              let data = await StoryUploadFileIO.data(at: fileURL),
+              !data.isEmpty,
+              Int64(data.count) <= part.maxSizeBytes else {
+            throw APIClientError.server(
+                "Could not prepare the video poster. Try a different video.",
+                400
+            )
+        }
+
+        let startedAt = Date()
+        MediaPerformance.mark("pending_video_poster_upload_started uid=\(uploadUid)")
+        async let pixelSize = StoryUploadFileIO.imagePixelSize(of: data)
+        async let checksum = StoryUploadFileIO.sha256Hex(of: data)
+        async let uploadResult = api.uploadImageData(data, part: part)
+        let (resolvedPixelSize, resolvedChecksum, _) = try await (
+            pixelSize,
+            checksum,
+            uploadResult
+        )
+        guard let resolvedPixelSize else {
+            throw APIClientError.server(
+                "Could not read the video poster dimensions.",
+                400
+            )
+        }
+        let provider = part.provider ?? "vercel-blob"
+        MediaPerformance.measure(
+            "video_upload_phase phase=poster_upload uid=\(uploadUid) bytes=\(data.count) provider=\(provider)",
+            since: startedAt
+        )
+        MediaPerformance.mark("pending_video_poster_upload_succeeded uid=\(uploadUid)")
+        return PreparedImageDerivativeUpload(
+            pathname: part.pathname,
+            contentType: part.contentType,
+            byteSize: Int64(data.count),
+            checksum: resolvedChecksum,
+            width: resolvedPixelSize.width,
+            height: resolvedPixelSize.height
+        )
     }
 
     private func videoUploadChunkBytes() -> Int64 {
@@ -1386,9 +1566,9 @@ final class PendingStoryUploadStore: ObservableObject {
             }
 
             var restoredUpload = upload
-            if restoredUpload.state != .failed {
-                restoredUpload.state = .failed
-                restoredUpload.errorMessage = "Upload interrupted. Retrying automatically."
+            if restoredUpload.state != .failed && restoredUpload.state != .paused {
+                restoredUpload.state = .recovering
+                restoredUpload.errorMessage = nil
                 restoredUpload.updatedAt = Date()
                 let prepared = restoredUpload.preparedVideoUpload == nil ? "false" : "true"
                 MediaPerformance.mark(
@@ -1408,6 +1588,34 @@ final class PendingStoryUploadStore: ObservableObject {
         } catch {
             MediaPerformance.mark("pending_story_upload_persist_failed")
         }
+    }
+
+    private func recordRecoveredCompletion(_ response: StoryUploadResponse) {
+        var receipts = loadRecoveredCompletionReceipts()
+        receipts.removeAll { $0.response.storyId == response.storyId }
+        receipts.append(
+            RecoveredStoryUploadReceipt(response: response, completedAt: Date())
+        )
+        receipts = Array(receipts.suffix(12))
+        do {
+            try ensureDirectories()
+            let data = try JSONEncoder().encode(receipts)
+            try data.write(to: recoveredReceiptsURL, options: .atomic)
+        } catch {
+            MediaPerformance.mark("recovered_story_upload_persist_failed")
+        }
+    }
+
+    private func loadRecoveredCompletionReceipts() -> [RecoveredStoryUploadReceipt] {
+        guard let data = try? Data(contentsOf: recoveredReceiptsURL),
+              let receipts = try? JSONDecoder().decode(
+                [RecoveredStoryUploadReceipt].self,
+                from: data
+              ) else {
+            return []
+        }
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        return receipts.filter { $0.completedAt >= cutoff }
     }
 
     private func ensureDirectories() throws {

@@ -2,6 +2,8 @@ import { revalidatePath } from "next/cache"
 import { NextResponse } from "next/server"
 
 import { getSession, isProfileComplete } from "@/lib/auth"
+import { isCloudflareR2StoryImageStorageEnabled } from "@/lib/cloudflare-r2"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { createStory } from "@/lib/story-store"
 import {
   publicStoryMediaUrl,
@@ -88,6 +90,17 @@ export async function POST(request: Request) {
     if (!(mediaEntry instanceof File)) {
       return redirectToApp(request, {
         error: "Choose an image or video before posting.",
+      })
+    }
+
+
+    if (
+      mediaEntry.type.startsWith("image/") &&
+      isVercelBlobAccessDisabled() &&
+      !isCloudflareR2StoryImageStorageEnabled()
+    ) {
+      return redirectToApp(request, {
+        error: "Photo uploads are temporarily unavailable. Video stories still work.",
       })
     }
 

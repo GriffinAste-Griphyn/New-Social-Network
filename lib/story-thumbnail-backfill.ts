@@ -4,6 +4,7 @@ import sharp from "sharp"
 
 import { getDb } from "@/lib/db"
 import { stories } from "@/lib/db/schema"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { highestQualityImageWithinBudget } from "@/lib/story-image-encoding"
 import { buildStoryMediaRoute } from "@/lib/story-media/access"
 import { storyMediaContract } from "@/lib/story-media-contract"
@@ -56,6 +57,16 @@ async function encodeFitThumbnail(sourceBody: Buffer) {
 export async function backfillActiveStoryFitThumbnails(
   input: { limit?: number } = {},
 ) {
+  if (isVercelBlobAccessDisabled()) {
+    return {
+      scanned: 0,
+      updated: 0,
+      failed: 0,
+      failures: [],
+      paused: true,
+    }
+  }
+
   const limit = Math.min(Math.max(input.limit ?? 25, 1), 50)
   const db = getDb()
   const candidates = await db

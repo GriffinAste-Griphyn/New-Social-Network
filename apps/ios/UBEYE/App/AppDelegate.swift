@@ -4,6 +4,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static var onDeviceToken: ((Data) -> Void)?
     static var onRegistrationError: ((Error) -> Void)?
     static var onBackgroundNotification: (([AnyHashable: Any], @escaping (UIBackgroundFetchResult) -> Void) -> Void)?
+    static var onStoryBackgroundTransferEvents: (() async -> Void)?
 
     func application(
         _ application: UIApplication,
@@ -51,6 +52,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
-        BackgroundTusUploadTransport.shared.attachSystemCompletionHandler(completionHandler)
+        BackgroundTusUploadTransport.shared.attachSystemCompletionHandler {
+            Task { @MainActor in
+                await Self.onStoryBackgroundTransferEvents?()
+                completionHandler()
+            }
+        }
     }
 }

@@ -18,8 +18,10 @@ private func applyVideoRotationAngle(_ angle: CGFloat, to connection: AVCaptureC
 }
 
 enum StoryCaptureQuality {
-    static let hevcVideoBitrate = 8_000_000
-    static let h264VideoBitrate = 10_000_000
+    // These bitrates retain the 1080p/30 fps capture envelope while avoiding
+    // upload bytes that the final 1080p streaming rendition cannot preserve.
+    static let hevcVideoBitrate = 6_000_000
+    static let h264VideoBitrate = 7_500_000
     static let videoFrameRate = 30
     static let videoKeyFrameInterval = 30
 

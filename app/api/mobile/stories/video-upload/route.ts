@@ -36,6 +36,7 @@ import {
   mutationRateLimits,
   requestIpSubject,
 } from "@/lib/request-security"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 
 export const runtime = "nodejs"
 
@@ -108,6 +109,10 @@ function assertVideoPosterUploadsConfigured() {
 }
 
 async function createVideoPosterUploadPart(uid: string) {
+  if (isVercelBlobAccessDisabled()) {
+    return null
+  }
+
   assertVideoPosterUploadsConfigured()
 
   const pathname = directStoryVideoPosterPathname(uid)
@@ -174,9 +179,14 @@ async function createVideoOriginalUploadPart(input: {
 }
 
 async function removeAbandonedVideoUpload(uid: string) {
-  const removals: Promise<unknown>[] = [removeDirectBlobStoryVideoPoster(uid)]
+  const removals: Promise<unknown>[] = []
+  if (!isVercelBlobAccessDisabled()) {
+    removals.push(removeDirectBlobStoryVideoPoster(uid))
+  }
   if (uid.startsWith("media-originals/")) {
-    removals.push(del(uid))
+    if (!isVercelBlobAccessDisabled()) {
+      removals.push(del(uid))
+    }
   } else {
     removals.push(removeCloudflareStreamVideoByUid(uid))
   }
@@ -224,13 +234,17 @@ export async function POST(request: Request) {
   }
 
   try {
-    assertVideoPosterUploadsConfigured()
+    const blobAccessDisabled = isVercelBlobAccessDisabled()
+    if (!blobAccessDisabled) {
+      assertVideoPosterUploadsConfigured()
+    }
     const vercelHlsEnabled = isVercelHlsPipelineEnabled()
     const clientBuild = Number.parseInt(
       request.headers.get("x-ubeye-app-build") ?? "",
       10,
     )
     const useVercelHls =
+      !blobAccessDisabled &&
       vercelHlsEnabled &&
       parsed.data.byteSize <= mediaPipelineLimits.maximumSourceBytes &&
       supportsVercelHlsUpload(
@@ -372,7 +386,8 @@ export async function POST(request: Request) {
       fileName: parsed.data.fileName,
       uploadLengthBytes: parsed.data.byteSize,
       maxDurationSeconds: parsed.data.maxDurationSeconds,
-      allowLegacyClientFallback: vercelHlsEnabled && !useVercelHls,
+      allowLegacyClientFallback:
+        !blobAccessDisabled && vercelHlsEnabled && !useVercelHls,
     })
 
     let uploadSession

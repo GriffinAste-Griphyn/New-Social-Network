@@ -129,6 +129,7 @@ function completionRequest(input: {
 describe("mobile video poster completion", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    delete process.env.VERCEL_BLOB_SUSPENDED_MODE
     vi.mocked(getCompleteMobileSession).mockResolvedValue({ id: "creator-1" } as never)
     vi.mocked(enforceRequestRateLimits).mockResolvedValue(null)
     vi.mocked(claimMediaUploadSessionForCompletion).mockResolvedValue({
@@ -224,6 +225,36 @@ describe("mobile video poster completion", () => {
     expect(createCloudflareStreamStoredVideoAsset).toHaveBeenCalledWith(
       expect.objectContaining({ thumbnailUrl: null }),
     )
+  })
+
+  it("uses the Cloudflare thumbnail when Blob poster access is paused", async () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      completionRequest({ build: 399, includePoster: false }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createDirectBlobStoryVideoPosterUrl).not.toHaveBeenCalled()
+    expect(createCloudflareStreamStoredVideoAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ thumbnailUrl: null }),
+    )
+  })
+
+  it("does not probe a suspended private original", async () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+    const customUid =
+      "media-originals/creator-1/57fd8bc6-296a-499c-8f47-42fbd122403c/source.mp4"
+
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(
+      completionRequest({ build: 399, includePoster: false, uid: customUid }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(head).not.toHaveBeenCalled()
+    expect(claimMediaUploadSessionForCompletion).not.toHaveBeenCalled()
   })
 
   it("verifies a private original and dispatches custom processing", async () => {

@@ -221,19 +221,19 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     func testCaptureQualityPreservesHighQualityBeforeAdaptiveTranscode() {
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .hevc, is4K: false),
-            8_000_000
+            6_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .h264, is4K: false),
-            10_000_000
+            7_500_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .hevc, is4K: true),
-            8_000_000
+            6_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .h264, is4K: true),
-            10_000_000
+            7_500_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.preferredCodec(from: [.h264, .hevc]),
@@ -267,7 +267,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         XCTAssertEqual(StoryVideoThumbnailGenerator.requestedTime, .zero)
     }
 
-    func testHighBitrateCompatibleSourceUsesLosslessRemux() async throws {
+    func testHighBitrateCompatibleSourceIsOptimizedForUpload() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("high-bitrate-source-\(UUID().uuidString).mp4")
         try await writeVideoWithDistinctFirstFrame(
@@ -275,8 +275,8 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             firstFrame: (red: 60, green: 80, blue: 180),
             laterFrame: (red: 80, green: 100, blue: 200)
         )
-        // Inflate the fixture without changing its streams. Compatible sources
-        // should keep their original audio/video and only be remuxed for fast start.
+        // Inflate the fixture without changing its streams. A high-bandwidth
+        // source should still be reduced to the app's visible delivery ceiling.
         try appendFreeAtom(byteCount: 5 * 1024 * 1024, to: sourceURL)
         var preparedURL: URL?
         defer {
@@ -299,9 +299,45 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             at: prepared.url
         )
 
-        XCTAssertEqual(prepared.strategy, .streamRemux)
+        XCTAssertEqual(prepared.strategy, .normalized)
         XCTAssertLessThan(prepared.byteSize, try XCTUnwrap(sourceBytes).int64Value)
         XCTAssertTrue(hasFastStart)
+    }
+
+    func testEfficientCompatibleSourceDoesNotRequireReencoding() {
+        let inspection = StoryVideoInspection(
+            source: .library,
+            originalURL: URL(fileURLWithPath: "/tmp/efficient.mp4"),
+            byteSize: 15_000_000,
+            durationMs: 20_000,
+            naturalSize: CGSize(width: 1_080, height: 1_920),
+            preferredTransform: .identity,
+            codecTypes: ["hvc1"],
+            hasFastStart: true
+        )
+
+        XCTAssertEqual(inspection.estimatedBitsPerSecond, 6_000_000)
+        XCTAssertFalse(inspection.needsUploadSizeOptimization)
+        XCTAssertTrue(inspection.isStreamCompatibleInput)
+    }
+
+    func testOversizedBitrateIsSelectedForQualityPreservingOptimization() throws {
+        let inspection = StoryVideoInspection(
+            source: .library,
+            originalURL: URL(fileURLWithPath: "/tmp/high-bitrate.mp4"),
+            byteSize: 31_835_252,
+            durationMs: 19_967,
+            naturalSize: CGSize(width: 1_080, height: 1_920),
+            preferredTransform: .identity,
+            codecTypes: ["avc1"],
+            hasFastStart: true
+        )
+
+        XCTAssertGreaterThan(
+            try XCTUnwrap(inspection.estimatedBitsPerSecond),
+            StoryVideoUploadNormalizer.passthroughMaximumBitsPerSecond
+        )
+        XCTAssertTrue(inspection.needsUploadSizeOptimization)
     }
 
     func testVideoUploadResponsePersistsOwnerBoundSession() throws {
@@ -442,6 +478,48 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
     }
 
     @MainActor
+    func testCloudflareImageUploadUsesSignedPutWithoutBlobCredentials() async throws {
+        let recorder = UploadRequestRecorder()
+        let session = makeSession { request in
+            recorder.append(request)
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["ETag": "r2-etag"]
+            )!
+            return (response, Data())
+        }
+        defer { session.invalidateAndCancel() }
+
+        let api = APIClient(session: session)
+        let uploadUrl = try XCTUnwrap(
+            URL(string: "https://example.r2.cloudflarestorage.com/source.jpg?X-Amz-Signature=test")
+        )
+        let part = ImageUploadPart(
+            pathname: "stories/web-direct/creator/session-source.jpg",
+            uploadUrl: uploadUrl,
+            clientToken: "",
+            contentType: "image/jpeg",
+            maxSizeBytes: 1_024,
+            access: nil,
+            provider: "cloudflare-r2"
+        )
+        let body = Data([0xFF, 0xD8, 0xFF, 0xD9])
+
+        let result = try await api.uploadImageData(body, part: part)
+
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "image/jpeg")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Length"), "4")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-vercel-blob-access"))
+        XCTAssertEqual(result.pathname, part.pathname)
+        XCTAssertEqual(result.etag, "r2-etag")
+    }
+
+    @MainActor
     func testTusUploadResumesFromServerOffsetBeforeFirstPatch() async throws {
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("tus-resume-\(UUID().uuidString).mp4")
@@ -466,7 +544,12 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         let api = APIClient(
             session: session,
             tusChunkUploader: { request, bodyFileURL in
-                try await session.upload(for: request, fromFile: bodyFileURL)
+                XCTAssertEqual(
+                    try Data(contentsOf: bodyFileURL),
+                    Data("456789".utf8),
+                    "The background task should receive the complete remaining upload body."
+                )
+                return try await session.upload(for: request, fromFile: bodyFileURL)
             }
         )
         let upload = VideoUploadResponse(
@@ -652,7 +735,10 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
                     headerFields: ["Content-Type": "application/json"]
                 )!
                 return (Data("{\"etag\":\"etag-\(partNumber)\"}".utf8), response)
-            }
+            },
+            blobMultipartThresholdBytes: 8 * 1024 * 1024,
+            blobMultipartPartBytes: 5 * 1024 * 1024,
+            blobMultipartConcurrency: 4
         )
         let pathname = "media-originals/creator/\(UUID().uuidString)/source.mp4"
         var upload = VideoUploadResponse(
@@ -753,7 +839,10 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
                         : Data("{\"etag\":\"etag-\(partNumber)\"}".utf8),
                     response
                 )
-            }
+            },
+            blobMultipartThresholdBytes: 8 * 1024 * 1024,
+            blobMultipartPartBytes: 5 * 1024 * 1024,
+            blobMultipartConcurrency: 4
         )
         let pathname = "media-originals/creator/\(UUID().uuidString)/resume.mp4"
         var upload = VideoUploadResponse(

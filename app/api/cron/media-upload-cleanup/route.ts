@@ -11,6 +11,7 @@ import {
   removeExpiredStoryMediaFromStorage,
   type ExpiredStoryMediaCleanupCandidate,
 } from "@/lib/expired-story-media"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import {
   removeCloudflareStreamVideoByUid,
   removeDirectBlobStoryVideoPoster,
@@ -23,6 +24,13 @@ const cleanupConcurrency = 5
 const expiredMediaCleanupLimit = 50
 
 async function cleanupCandidate(candidate: MediaUploadSessionCleanupCandidate) {
+  if (
+    isVercelBlobAccessDisabled() &&
+    candidate.storageProvider === "vercel-blob"
+  ) {
+    return false
+  }
+
   const isAbandonedProviderUpload =
     candidate.status !== "completed" &&
     candidate.storageProvider === "cloudflare-stream"
@@ -51,6 +59,13 @@ async function cleanupCandidate(candidate: MediaUploadSessionCleanupCandidate) {
 async function cleanupExpiredMediaCandidate(
   candidate: ExpiredStoryMediaCleanupCandidate,
 ) {
+  if (
+    isVercelBlobAccessDisabled() &&
+    candidate.storageProvider === "vercel-blob"
+  ) {
+    return false
+  }
+
   await removeExpiredStoryMediaFromStorage(candidate)
   return markExpiredStoryMediaDeleted(candidate)
 }

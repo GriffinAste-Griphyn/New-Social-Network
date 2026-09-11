@@ -23,7 +23,8 @@ UBEYE is a story-first social network prototype with:
 Recommended production integrations for the first serious build:
 
 - Neon for Postgres
-- Vercel Blob for private originals and immutable adaptive media delivery
+- Cloudflare R2 for story-photo originals and immutable image delivery
+- Vercel Blob for legacy private media and the optional adaptive-video pipeline
 - Vercel Workflow plus bundled FFmpeg for story-video processing
 - Stripe Connect for payouts
 
@@ -34,6 +35,24 @@ under `public/uploads/stories`.
 
 Production uploads fail closed unless story media is configured for private
 storage:
+
+Story photos use separate R2 buckets so unprocessed originals stay private
+while normalized derivatives are delivered directly from Cloudflare. Apply
+`0055_cloudflare_r2_media_provider.sql` before enabling this provider.
+
+```bash
+STORY_IMAGE_STORAGE_PROVIDER=cloudflare-r2
+CLOUDFLARE_R2_ACCOUNT_ID=...
+CLOUDFLARE_R2_ACCESS_KEY_ID=...
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=...
+CLOUDFLARE_R2_ORIGINALS_BUCKET=ubeye-media-originals
+CLOUDFLARE_R2_DELIVERY_BUCKET=ubeye-media-delivery
+CLOUDFLARE_R2_PUBLIC_BASE_URL=https://media.ubeye.ai
+```
+
+Attach the delivery bucket to the `media.ubeye.ai` custom domain and enable
+Cloudflare caching for the immutable derivative paths. Production rejects
+Cloudflare's rate-limited `r2.dev` development hostname.
 
 The custom Vercel HLS path uses two Blob stores. `BLOB_READ_WRITE_TOKEN` must
 belong to a private store for originals. `MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN`
@@ -78,10 +97,12 @@ CLOUDFLARE_STREAM_SIGNING_KEY_JWK=...
 CLOUDFLARE_STREAM_HEALTHCHECK_UID=0123456789abcdef0123456789abcdef
 ```
 
-Private original Blob media is served through `/api/story-media/...`, which
+Legacy private original Blob media is served through `/api/story-media/...`, which
 requires an authenticated session or a short-lived signed media URL issued by
-the mobile API. Direct image uploads publish normalized display/poster
-derivatives as private Blob assets and send a tiny inline placeholder.
+the mobile API. New direct image uploads place originals in private R2, publish
+normalized AVIF/WebP derivatives to the delivery bucket, and send a tiny inline
+placeholder. The originals bucket should have a one-day lifecycle rule as a
+safety net for abandoned uploads.
 
 Production also requires durable feed/publication infrastructure:
 
@@ -93,10 +114,19 @@ UPSTASH_REDIS_REST_TOKEN=...
 CRON_SECRET=...
 # 0 keeps the stronger iOS preheat profile disabled; raise gradually.
 MOBILE_MEDIA_PREHEAT_CANARY_PERCENT=0
+# Direct Blob video upload tuning. Constrained paths use smaller parts and
+# fewer simultaneous transfers; standard paths favor throughput.
+MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_CONSTRAINED=33554432
+MOBILE_BLOB_MULTIPART_THRESHOLD_BYTES_STANDARD=67108864
+MOBILE_BLOB_MULTIPART_PART_BYTES_CONSTRAINED=8388608
+MOBILE_BLOB_MULTIPART_PART_BYTES_STANDARD=16777216
+MOBILE_BLOB_MULTIPART_CONCURRENCY_CONSTRAINED=2
+MOBILE_BLOB_MULTIPART_CONCURRENCY_STANDARD=4
 ```
 
 Install the Vercel Workflow integration before deployment. Vercel invokes the
-publication and custom-media reconciliation routes using `CRON_SECRET`.
+publication and custom-media reconciliation routes using `CRON_SECRET`. Image
+and video processing reconciliation run every ten minutes.
 
 ## Admin setup
 

@@ -4,10 +4,24 @@ import path from "node:path"
 import { del, get, put } from "@vercel/blob"
 import sharp from "sharp"
 
+import {
+  cloudflareR2DeliveryKeyFromUrl,
+  isCloudflareR2StoryImageStorageEnabled,
+  putCloudflareR2DeliveryObject,
+  putCloudflareR2OriginalObject,
+  readCloudflareR2Original,
+  removeCloudflareR2DeliveryObject,
+  removeCloudflareR2Original,
+} from "@/lib/cloudflare-r2"
+import {
+  isVercelBlobAccessDisabled,
+} from "@/lib/media-availability"
+
 const maxAvatarUploadBytes = 8 * 1024 * 1024
 const avatarUploadDirectory = path.join(process.cwd(), "public", "uploads", "avatars")
 const localAvatarUrlPrefix = "/uploads/avatars"
 const profileAvatarMediaRoutePrefix = "/api/profile-avatar-media"
+const cloudflareR2AvatarRouteSegment = "cloudflare-r2"
 
 type ResolvedAvatarUploadType = {
   extension: string
@@ -19,7 +33,7 @@ export class ProfileAvatarUploadError extends Error {}
 export type StoredProfileAvatar = {
   avatarUrl: string
   sourceUrl: string
-  storageProvider: "local" | "vercel-blob"
+  storageProvider: "local" | "vercel-blob" | "cloudflare-r2"
   storageKey: string
   sourceStorageKey: string
   sourceContentType: string
@@ -55,6 +69,37 @@ function encodeProfileAvatarPathname(pathname: string) {
 
 function buildProfileAvatarMediaRoute(pathname: string) {
   return `${profileAvatarMediaRoutePrefix}/${encodeProfileAvatarPathname(pathname)}`
+}
+
+function buildCloudflareR2AvatarSourceRoute(pathname: string) {
+  return buildProfileAvatarMediaRoute(
+    `${cloudflareR2AvatarRouteSegment}/${pathname}`,
+  )
+}
+
+export function getCloudflareR2AvatarSourceKey(mediaUrl: string) {
+  try {
+    const pathname = /^https?:\/\//i.test(mediaUrl)
+      ? new URL(mediaUrl).pathname
+      : mediaUrl.split("?")[0]
+    const prefix = `${profileAvatarMediaRoutePrefix}/${cloudflareR2AvatarRouteSegment}/`
+
+    if (!pathname.startsWith(prefix)) {
+      return null
+    }
+
+    const key = pathname
+      .slice(prefix.length)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/")
+
+    return key.startsWith("avatars/source/") && !key.includes("..")
+      ? key
+      : null
+  } catch {
+    return null
+  }
 }
 
 function buildLocalAvatarPathname(fileName: string) {
@@ -159,6 +204,14 @@ export function publicProfileAvatarUrl(value: string | null, request?: Request) 
     return null
   }
 
+  const cloudflareR2SourceKey = getCloudflareR2AvatarSourceKey(value)
+  if (cloudflareR2SourceKey) {
+    const sourceRoute = buildCloudflareR2AvatarSourceRoute(
+      cloudflareR2SourceKey,
+    )
+    return request ? new URL(sourceRoute, request.url).toString() : sourceRoute
+  }
+
   const blobPathname = getPrivateVercelBlobPathname(value)
   const avatarUrl = blobPathname ? buildProfileAvatarMediaRoute(blobPathname) : value
 
@@ -234,7 +287,41 @@ async function storeAvatarBuffer(input: {
   storageKey: string
   contentType: string
 }) {
+  if (isCloudflareR2StoryImageStorageEnabled()) {
+    if (input.storageKey.startsWith("avatars/source/")) {
+      const stored = await putCloudflareR2OriginalObject({
+        key: input.storageKey,
+        body: input.buffer,
+        contentType: input.contentType,
+      })
+
+      return {
+        url: buildCloudflareR2AvatarSourceRoute(stored.key),
+        storageKey: stored.key,
+        storageProvider: "cloudflare-r2" as const,
+      }
+    }
+
+    const stored = await putCloudflareR2DeliveryObject({
+      key: input.storageKey,
+      body: input.buffer,
+      contentType: input.contentType,
+    })
+
+    return {
+      url: stored.url,
+      storageKey: stored.key,
+      storageProvider: "cloudflare-r2" as const,
+    }
+  }
+
   if (process.env.STORY_STORAGE_PROVIDER === "vercel-blob") {
+    if (isVercelBlobAccessDisabled()) {
+      throw new ProfileAvatarUploadError(
+        "Profile photo changes are temporarily unavailable while media service access recovers.",
+      )
+    }
+
     const blob = await put(input.storageKey, input.buffer, {
       access: "private",
       contentType: input.contentType,
@@ -266,9 +353,21 @@ async function storeAvatarBuffer(input: {
 }
 
 async function readStoredAvatarBuffer(sourceUrl: string) {
+  const cloudflareR2SourceKey = getCloudflareR2AvatarSourceKey(sourceUrl)
+
+  if (cloudflareR2SourceKey) {
+    return readCloudflareR2Original(cloudflareR2SourceKey)
+  }
+
   const privateBlobPathname = getPrivateVercelBlobPathname(sourceUrl)
 
   if (privateBlobPathname) {
+    if (isVercelBlobAccessDisabled()) {
+      throw new ProfileAvatarUploadError(
+        "Profile photo changes are temporarily unavailable while media service access recovers.",
+      )
+    }
+
     const result = await get(privateBlobPathname, { access: "private" })
 
     if (!result) {
@@ -396,14 +495,32 @@ export async function removeProfileAvatar(avatarUrl: string | null) {
     return
   }
 
+  const cloudflareR2SourceKey = getCloudflareR2AvatarSourceKey(avatarUrl)
+  if (cloudflareR2SourceKey) {
+    await removeCloudflareR2Original(cloudflareR2SourceKey)
+    return
+  }
+
+  const cloudflareR2DeliveryKey = cloudflareR2DeliveryKeyFromUrl(avatarUrl)
+  if (cloudflareR2DeliveryKey?.startsWith("avatars/")) {
+    await removeCloudflareR2DeliveryObject(cloudflareR2DeliveryKey)
+    return
+  }
+
   const privateBlobPathname = getPrivateVercelBlobPathname(avatarUrl)
 
   if (privateBlobPathname) {
+    if (isVercelBlobAccessDisabled()) {
+      return
+    }
     await del(privateBlobPathname)
     return
   }
 
   if (isVercelBlobUrl(avatarUrl)) {
+    if (isVercelBlobAccessDisabled()) {
+      return
+    }
     await del(avatarUrl)
     return
   }

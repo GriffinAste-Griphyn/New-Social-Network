@@ -4,7 +4,15 @@ import { del, get, put } from "@vercel/blob"
 import sharp from "sharp"
 import { rgbaToThumbHash } from "thumbhash"
 
+import {
+  headCloudflareR2Original,
+  putCloudflareR2DeliveryObject,
+  readCloudflareR2Original,
+  removeCloudflareR2DeliveryObject,
+  removeCloudflareR2Original,
+} from "@/lib/cloudflare-r2"
 import { highestQualityImageWithinBudget } from "@/lib/story-image-encoding"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { buildStoryMediaRoute } from "@/lib/story-media/access"
 import { storyMediaContract } from "@/lib/story-media-contract"
 import {
@@ -74,7 +82,8 @@ export async function storyImageDisplayDimensions(sourceBody: Buffer) {
   }
 }
 
-export function createVercelImageProcessingStoredAsset(input: {
+export function createImageProcessingStoredAsset(input: {
+  storageProvider: "vercel-blob" | "cloudflare-r2"
   source: DirectStoryImageSourceInput
   width?: number | null
   height?: number | null
@@ -85,10 +94,10 @@ export function createVercelImageProcessingStoredAsset(input: {
     mediaUrl: sourceUrl,
     thumbnailUrl: null,
     placeholderUrl: null,
-    storageProvider: "vercel-blob",
+    storageProvider: input.storageProvider,
     storageKey: input.source.pathname,
     originalMediaUrl: sourceUrl,
-    originalStorageProvider: "vercel-blob",
+    originalStorageProvider: input.storageProvider,
     originalStorageKey: input.source.pathname,
     originalContentType: input.source.contentType,
     originalByteSize: input.source.byteSize,
@@ -131,9 +140,17 @@ export async function createServerEncodedStoryImageAsset(input: {
   basePathname: string
   ownerUserId: string
   contentMode: StoryImageContentMode
+  storageProvider?: "vercel-blob" | "cloudflare-r2"
   source: DirectStoryImageSourceInput
   deleteSourceAfterProcessing?: boolean
 }): Promise<StoredStoryAsset> {
+  const storageProvider = input.storageProvider ?? "vercel-blob"
+  if (storageProvider === "vercel-blob" && isVercelBlobAccessDisabled()) {
+    throw new StoryUploadError(
+      "Image processing is paused while media service access recovers.",
+    )
+  }
+
   const safeOwner = input.ownerUserId.replace(/[^a-zA-Z0-9_-]/g, "_")
   const expectedPrefix = `stories/web-direct/${safeOwner}/`
   const expectedSource = directStoryImageSourcePathname(
@@ -151,15 +168,36 @@ export async function createServerEncodedStoryImageAsset(input: {
     throw new StoryUploadError("Could not verify the uploaded story image.")
   }
 
-  const sourceBlob = await get(input.source.pathname, {
-    access: "private",
-    token: privateBlobToken(),
-    useCache: false,
-  })
-  if (!sourceBlob || sourceBlob.statusCode !== 200 || !sourceBlob.stream) {
-    throw new StoryUploadError("The uploaded image is still being verified.")
+  if (storageProvider === "cloudflare-r2") {
+    const sourceMetadata = await headCloudflareR2Original(
+      input.source.pathname,
+    ).catch(() => null)
+    if (
+      !sourceMetadata ||
+      sourceMetadata.ContentLength !== input.source.byteSize ||
+      sourceMetadata.ContentType?.toLowerCase() !==
+        input.source.contentType.toLowerCase()
+    ) {
+      throw new StoryUploadError("The uploaded image failed its metadata check.")
+    }
   }
-  const sourceBody = Buffer.from(await new Response(sourceBlob.stream).arrayBuffer())
+
+  const sourceBody =
+    storageProvider === "cloudflare-r2"
+      ? await readCloudflareR2Original(input.source.pathname).catch(() => {
+          throw new StoryUploadError("The uploaded image is still being verified.")
+        })
+      : await (async () => {
+          const sourceBlob = await get(input.source.pathname, {
+            access: "private",
+            token: privateBlobToken(),
+            useCache: false,
+          })
+          if (!sourceBlob || sourceBlob.statusCode !== 200 || !sourceBlob.stream) {
+            throw new StoryUploadError("The uploaded image is still being verified.")
+          }
+          return Buffer.from(await new Response(sourceBlob.stream).arrayBuffer())
+        })()
   if (
     sourceBody.byteLength !== input.source.byteSize ||
     createHash("sha256").update(sourceBody).digest("hex") !==
@@ -233,36 +271,62 @@ export async function createServerEncodedStoryImageAsset(input: {
   const thumbnailPathname = directStoryImageThumbnailPathname(input.basePathname)
   const outputPathnames = [displayPathname, thumbnailPathname]
   try {
-    const [displayBlob, thumbnailBlob] = await Promise.all([
-      put(displayPathname, display.body, {
-        access: "private",
-        token: privateBlobToken(),
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: displayContentType,
-      }),
-      put(thumbnailPathname, thumbnail.body, {
-        access: "private",
-        token: privateBlobToken(),
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        cacheControlMaxAge: 31_536_000,
-        contentType: "image/webp",
-      }),
-    ])
+    const [displayStored, thumbnailStored] =
+      storageProvider === "cloudflare-r2"
+        ? await Promise.all([
+            putCloudflareR2DeliveryObject({
+              key: displayPathname,
+              body: display.body,
+              contentType: displayContentType,
+            }),
+            putCloudflareR2DeliveryObject({
+              key: thumbnailPathname,
+              body: thumbnail.body,
+              contentType: "image/webp",
+            }),
+          ])
+        : await Promise.all([
+            put(displayPathname, display.body, {
+              access: "private",
+              token: privateBlobToken(),
+              addRandomSuffix: false,
+              allowOverwrite: true,
+              cacheControlMaxAge: 31_536_000,
+              contentType: displayContentType,
+            }).then((blob) => ({
+              key: blob.pathname,
+              url: buildStoryMediaRoute(blob.pathname),
+            })),
+            put(thumbnailPathname, thumbnail.body, {
+              access: "private",
+              token: privateBlobToken(),
+              addRandomSuffix: false,
+              allowOverwrite: true,
+              cacheControlMaxAge: 31_536_000,
+              contentType: "image/webp",
+            }).then((blob) => ({
+              key: blob.pathname,
+              url: buildStoryMediaRoute(blob.pathname),
+            })),
+          ])
     if (input.deleteSourceAfterProcessing !== false) {
-      await del(input.source.pathname, { token: privateBlobToken() }).catch(
-        () => undefined,
-      )
+      if (storageProvider === "cloudflare-r2") {
+        await removeCloudflareR2Original(input.source.pathname).catch(
+          () => undefined,
+        )
+      } else {
+        await del(input.source.pathname, { token: privateBlobToken() }).catch(
+          () => undefined,
+        )
+      }
     }
     return {
       assetKind: "image",
-      mediaUrl: buildStoryMediaRoute(displayBlob.pathname),
-      thumbnailUrl: buildStoryMediaRoute(thumbnailBlob.pathname),
+      mediaUrl: displayStored.url,
+      thumbnailUrl: thumbnailStored.url,
       placeholderUrl: `thumbhash:${thumbHash}`,
-      storageProvider: "vercel-blob",
-      storageKey: displayBlob.pathname,
+      storageProvider,
+      storageKey: displayStored.key,
       contentType: displayContentType,
       byteSize: display.body.byteLength,
       checksum: createHash("sha256").update(display.body).digest("hex"),
@@ -274,7 +338,17 @@ export async function createServerEncodedStoryImageAsset(input: {
       processingStatus: "ready",
     }
   } catch (error) {
-    await del(outputPathnames, { token: privateBlobToken() }).catch(() => undefined)
+    if (storageProvider === "cloudflare-r2") {
+      await Promise.allSettled(
+        outputPathnames.map((pathname) =>
+          removeCloudflareR2DeliveryObject(pathname),
+        ),
+      )
+    } else {
+      await del(outputPathnames, { token: privateBlobToken() }).catch(
+        () => undefined,
+      )
+    }
     throw error
   }
 }

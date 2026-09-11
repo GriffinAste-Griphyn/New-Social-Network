@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import {
   mediaAssets,
   stories,
@@ -157,6 +158,13 @@ export async function removeExpiredStoryMediaFromStorage(
     return
   }
 
+  if (
+    candidate.storageProvider === "vercel-blob" &&
+    isVercelBlobAccessDisabled()
+  ) {
+    return
+  }
+
   if (candidate.storageProvider === "cloudflare-stream") {
     await Promise.all([
       removeCloudflareStreamVideoByUid(candidate.storageKey),
@@ -205,6 +213,10 @@ export async function removeExpiredStoryMediaFromStorage(
 async function removeVercelHlsPackage(
   candidate: ExpiredStoryMediaCleanupCandidate,
 ) {
+  if (isVercelBlobAccessDisabled()) {
+    return
+  }
+
   const deliveryToken = process.env.MEDIA_DELIVERY_BLOB_READ_WRITE_TOKEN
   const privateToken = process.env.BLOB_READ_WRITE_TOKEN
   if (!deliveryToken || !privateToken) {

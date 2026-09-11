@@ -7,6 +7,14 @@ import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { del, head, put } from "@vercel/blob"
 
+import {
+  cloudflareR2DeliveryKeyFromUrl,
+  isCloudflareR2StoryImageStorageEnabled,
+  putCloudflareR2OriginalObject,
+  removeCloudflareR2DeliveryUrl,
+  removeCloudflareR2Original,
+} from "@/lib/cloudflare-r2"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { isVercelHlsPipelineEnabled } from "@/lib/media-pipeline/contracts"
 import {
   buildCloudflareStreamPathname,
@@ -66,11 +74,20 @@ export type StoredStoryAsset = {
   mediaUrl: string
   thumbnailUrl: string | null
   placeholderUrl?: string | null
-  storageProvider: "local" | "vercel-blob" | "cloudflare-stream"
+  storageProvider:
+    | "local"
+    | "vercel-blob"
+    | "cloudflare-stream"
+    | "cloudflare-r2"
   storageKey: string
   originalMediaUrl?: string | null
   originalThumbnailUrl?: string | null
-  originalStorageProvider?: "local" | "vercel-blob" | "cloudflare-stream" | null
+  originalStorageProvider?:
+    | "local"
+    | "vercel-blob"
+    | "cloudflare-stream"
+    | "cloudflare-r2"
+    | null
   originalStorageKey?: string | null
   originalContentType?: string | null
   originalByteSize?: number | null
@@ -110,6 +127,12 @@ export function createCloudflareStreamThumbnailMediaUrl(uid: string) {
 
 const vercelBlobStoryStorageProvider: StoryStorageProvider = {
   async save(fileName, buffer, assetKind, contentType, checksum, metadata) {
+    if (isVercelBlobAccessDisabled()) {
+      throw new StoryUploadError(
+        "Photo uploads are temporarily unavailable while media service access recovers. Video stories still work.",
+      )
+    }
+
     const blob = await put(`stories/${fileName}`, buffer, {
       access: "private",
       contentType,
@@ -130,6 +153,10 @@ const vercelBlobStoryStorageProvider: StoryStorageProvider = {
     }
   },
   async remove(mediaUrl) {
+    if (isVercelBlobAccessDisabled()) {
+      return
+    }
+
     const blobPathname = getPrivateVercelBlobPathname(mediaUrl)
 
     if (blobPathname) {
@@ -558,6 +585,12 @@ export async function createDirectBlobStoryVideoPosterUrl(input: {
   uid: string
   poster: DirectStoryVideoPosterInput
 }) {
+  if (isVercelBlobAccessDisabled()) {
+    throw new StoryUploadError(
+      "Video poster storage is temporarily unavailable.",
+    )
+  }
+
   const expectedPathname = directStoryVideoPosterPathname(input.uid)
   const poster = input.poster
   if (
@@ -593,6 +626,9 @@ export async function createDirectBlobStoryVideoPosterUrl(input: {
 }
 
 export async function removeDirectBlobStoryVideoPoster(uid: string) {
+  if (isVercelBlobAccessDisabled()) {
+    return
+  }
   await del(directStoryVideoPosterPathname(uid)).catch(() => undefined)
 }
 
@@ -1167,6 +1203,12 @@ export async function removeCloudflareStreamVideoByUid(uid: string) {
 }
 
 function getStoryStorageProvider() {
+  if (isVercelBlobAccessDisabled()) {
+    throw new StoryUploadError(
+      "Photo uploads are temporarily unavailable while media service access recovers. Video stories still work.",
+    )
+  }
+
   if (
     process.env.STORY_STORAGE_PROVIDER !== "vercel-blob" ||
     !process.env.BLOB_READ_WRITE_TOKEN
@@ -1179,6 +1221,10 @@ function getStoryStorageProvider() {
 }
 
 async function removeDirectStoryImageDerivatives(mediaUrl: string) {
+  if (isVercelBlobAccessDisabled()) {
+    return
+  }
+
   const pathname = getPrivateVercelBlobPathname(mediaUrl)
 
   if (!pathname?.startsWith("stories/web-direct/")) {
@@ -1635,7 +1681,8 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
   const { assetKind } = uploadType
   let storedBuffer: Buffer = buffer
   let storedUploadType = uploadType
-  const useVercelHlsPipeline = isVercelHlsPipelineEnabled()
+  const useVercelHlsPipeline =
+    !isVercelBlobAccessDisabled() && isVercelHlsPipelineEnabled()
 
   if (
     assetKind !== "image" &&
@@ -1682,6 +1729,40 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
     })
   }
 
+  if (assetKind === "image" && isCloudflareR2StoryImageStorageEnabled()) {
+    const basePathname = directStoryImagePathname("server", fileName)
+    const sourcePathname = directStoryImageSourcePathname(
+      basePathname,
+      contentType,
+    )
+    await putCloudflareR2OriginalObject({
+      key: sourcePathname,
+      body: storedBuffer,
+      contentType,
+    })
+
+    try {
+      const { createServerEncodedStoryImageAsset } = await import(
+        "@/lib/story-image-processing"
+      )
+      return await createServerEncodedStoryImageAsset({
+        basePathname,
+        ownerUserId: "server",
+        contentMode: "fit",
+        storageProvider: "cloudflare-r2",
+        source: {
+          pathname: sourcePathname,
+          contentType,
+          byteSize: storedBuffer.byteLength,
+          checksum,
+        },
+      })
+    } catch (error) {
+      await removeCloudflareR2Original(sourcePathname).catch(() => undefined)
+      throw error
+    }
+  }
+
   return getStoryStorageProvider().save(
     fileName,
     storedBuffer,
@@ -1693,12 +1774,19 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
 }
 
 export async function removeStoryAsset(mediaUrl: string) {
+  if (cloudflareR2DeliveryKeyFromUrl(mediaUrl)) {
+    await removeCloudflareR2DeliveryUrl(mediaUrl)
+    return
+  }
+
   if (process.env.STORY_VIDEO_PROCESSOR === "cloudflare-stream") {
     await removeCloudflareStreamVideo(mediaUrl)
   }
 
-  await removeDirectStoryImageDerivatives(mediaUrl)
-  await getStoryStorageProvider().remove(mediaUrl)
+  if (!isVercelBlobAccessDisabled()) {
+    await removeDirectStoryImageDerivatives(mediaUrl)
+    await getStoryStorageProvider().remove(mediaUrl)
+  }
 }
 
 export async function removeStoredStoryAsset(
@@ -1709,6 +1797,8 @@ export async function removeStoredStoryAsset(
     | "placeholderUrl"
     | "originalMediaUrl"
     | "originalThumbnailUrl"
+    | "originalStorageProvider"
+    | "originalStorageKey"
   >,
 ) {
   const mediaUrls = Array.from(
@@ -1723,5 +1813,15 @@ export async function removeStoredStoryAsset(
     ),
   )
 
-  await Promise.allSettled(mediaUrls.map((mediaUrl) => removeStoryAsset(mediaUrl)))
+  const removals: Promise<unknown>[] = mediaUrls.map((mediaUrl) =>
+    removeStoryAsset(mediaUrl),
+  )
+  if (
+    asset.originalStorageProvider === "cloudflare-r2" &&
+    asset.originalStorageKey
+  ) {
+    removals.push(removeCloudflareR2Original(asset.originalStorageKey))
+  }
+
+  await Promise.allSettled(removals)
 }

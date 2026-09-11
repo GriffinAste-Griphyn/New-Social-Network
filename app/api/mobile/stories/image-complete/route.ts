@@ -3,8 +3,13 @@ import { z } from "zod"
 import { eq } from "drizzle-orm"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import {
+  headCloudflareR2Original,
+  isCloudflareR2StoryImageStorageEnabled,
+} from "@/lib/cloudflare-r2"
 import { getDb } from "@/lib/db"
 import { mediaAssets, stories } from "@/lib/db/schema"
+import { blobMediaUnavailableResponse, isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { enqueueImageProcessing } from "@/lib/image-processing-jobs"
 import { isAsyncMediaCompletionEnabled } from "@/lib/media-pipeline/features"
 import {
@@ -15,7 +20,7 @@ import {
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
   createServerEncodedStoryImageAsset,
-  createVercelImageProcessingStoredAsset,
+  createImageProcessingStoredAsset,
   type DirectStoryImageSourceInput,
 } from "@/lib/story-image-processing"
 import {
@@ -52,6 +57,7 @@ const clientDerivativeSchema = z.object({
 
 const completeImageSchema = z.object({
   basePathname: z.string().trim().min(1).max(500),
+  storageProvider: z.enum(["vercel-blob", "cloudflare-r2"]).default("vercel-blob"),
   sourceUpload: clientDerivativeSchema.optional(),
   displayDerivative: clientDerivativeSchema.optional(),
   thumbnailDerivative: clientDerivativeSchema.optional(),
@@ -212,6 +218,11 @@ export async function POST(request: Request) {
       )
     }
 
+    const cloudflareR2Enabled = isCloudflareR2StoryImageStorageEnabled()
+    if (isVercelBlobAccessDisabled() && !cloudflareR2Enabled) {
+      return blobMediaUnavailableResponse()
+    }
+
     const rateLimitResponse = await enforceRequestRateLimits(request, [
       {
         bucket: "mobile:story-image-complete:user",
@@ -258,10 +269,37 @@ export async function POST(request: Request) {
       Boolean(parsed.data.sourceUpload) &&
       isAsyncMediaCompletionEnabled(clientBuild)
 
+    if (
+      parsed.data.storageProvider === "cloudflare-r2" &&
+      !cloudflareR2Enabled
+    ) {
+      return NextResponse.json(
+        { error: "Cloudflare photo storage is not configured." },
+        { status: 503 },
+      )
+    }
+
     stage = "verify-variants"
+    if (
+      parsed.data.storageProvider === "cloudflare-r2" &&
+      parsed.data.sourceUpload
+    ) {
+      const sourceMetadata = await headCloudflareR2Original(
+        parsed.data.sourceUpload.pathname,
+      ).catch(() => null)
+      if (
+        !sourceMetadata ||
+        sourceMetadata.ContentLength !== parsed.data.sourceUpload.byteSize ||
+        sourceMetadata.ContentType?.toLowerCase() !==
+          parsed.data.sourceUpload.contentType.toLowerCase()
+      ) {
+        throw new StoryUploadError("The uploaded image failed its metadata check.")
+      }
+    }
     storedAsset = parsed.data.sourceUpload
       ? useAsyncCompletion
-        ? createVercelImageProcessingStoredAsset({
+        ? createImageProcessingStoredAsset({
+            storageProvider: parsed.data.storageProvider,
             source: toClientDerivative(
               parsed.data.sourceUpload,
             ) as DirectStoryImageSourceInput,
@@ -272,6 +310,7 @@ export async function POST(request: Request) {
           basePathname: parsed.data.basePathname,
           ownerUserId: session.id,
           contentMode: "fit",
+          storageProvider: parsed.data.storageProvider,
           source: toClientDerivative(
             parsed.data.sourceUpload,
           ) as DirectStoryImageSourceInput,

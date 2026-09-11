@@ -776,10 +776,30 @@ struct ImageUploadPart: Codable, Hashable {
     let contentType: String
     let maxSizeBytes: Int64
     let access: String?
+    let provider: String?
+
+    init(
+        pathname: String,
+        uploadUrl: URL,
+        clientToken: String,
+        contentType: String,
+        maxSizeBytes: Int64,
+        access: String?,
+        provider: String? = nil
+    ) {
+        self.pathname = pathname
+        self.uploadUrl = uploadUrl
+        self.clientToken = clientToken
+        self.contentType = contentType
+        self.maxSizeBytes = maxSizeBytes
+        self.access = access
+        self.provider = provider
+    }
 }
 
 struct ImageUploadResponse: Codable {
     let ok: Bool
+    let storageProvider: String?
     let basePathname: String
     let source: ImageUploadPart?
     let display: ImageUploadPart?
@@ -828,9 +848,14 @@ struct MobileMediaConfigResponse: Codable {
 
         let version: String
         let rolloutProfile: String?
+        let blobUploadsAvailable: Bool?
+        let storyImageUploadsAvailable: Bool?
         let imageDerivativeUploadEnabled: Bool
         let qoeAccessLogSampleRate: Double
         let uploadChunkBytes: Int
+        let blobMultipartThresholdBytes: LimitPair?
+        let blobMultipartPartBytes: LimitPair?
+        let blobMultipartConcurrency: LimitPair?
         let mediaFileCacheMaxBytes: Int
         let imagePreheatLimit: LimitPair
         let stackPreheatLimit: LimitPair

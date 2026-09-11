@@ -32,8 +32,9 @@ https://www.ubeye.ai
 - Story stack viewer with image/video playback, replies, reactions, impressions,
   report, block, and owner delete actions
 - Camera/photo-library story composer with still photo capture and video recording
-- Image multipart upload to `/api/mobile/stories`
-- Cloudflare Stream form and TUS video upload handoff through
+- Direct image source upload with on-device size/dimension normalization and
+  asynchronous server derivative processing
+- Resumable Vercel Blob or Cloudflare Stream video upload handoff through
   `/api/mobile/stories/video-upload` and `/api/mobile/stories/video-complete`
 - Profile photo upload and account deletion
 - App icon, camera/microphone/photo usage strings, portrait-only iPhone config,
@@ -63,7 +64,7 @@ npm run ios:build:release
 6. Confirm production backend integrations are configured:
    - `NEXT_PUBLIC_APP_URL=https://www.ubeye.ai`
    - production database migrations applied
-   - Vercel Blob story image storage
+   - Cloudflare R2 story image storage and direct delivery
    - Cloudflare Stream video upload and webhook processing
    - Stripe webhook delivery for payout status
    - seeded reviewer demo account with visible story content

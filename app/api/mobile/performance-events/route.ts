@@ -29,7 +29,7 @@ const performanceEventSchema = z.object({
 })
 
 const performanceEventsSchema = z.object({
-  events: z.array(performanceEventSchema).min(1).max(50),
+  events: z.array(performanceEventSchema).min(1).max(100),
 })
 
 function trimMetadata(

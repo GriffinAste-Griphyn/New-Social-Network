@@ -2,6 +2,7 @@ import AVFoundation
 import CryptoKit
 import Foundation
 import ImageIO
+import MetricKit
 import Network
 import os
 import SwiftUI
@@ -25,6 +26,12 @@ enum UBEYEMetrics {
     static let topAvatar: CGFloat = 42
     static let topAvatarTopInset: CGFloat = 14
     static let compactTopAvatar: CGFloat = 38
+    static let bottomBarItemHeight: CGFloat = 52
+    static let bottomBarTopPadding: CGFloat = 8
+    static let bottomBarBottomPadding: CGFloat = 7
+    static var bottomBarHeight: CGFloat {
+        bottomBarItemHeight + bottomBarTopPadding + bottomBarBottomPadding
+    }
 }
 
 @MainActor
@@ -418,8 +425,13 @@ enum MediaPerformance {
         "image_derivatives_prepared",
         "image_derivative_upload_failed",
         "image_ready",
+        "image_upload_failed",
+        "image_upload_phase",
+        "image_upload_succeeded",
         "interaction_latency",
         "keyboard_latency",
+        "metric_kit_diagnostic",
+        "metric_kit_payload",
         "gesture_outcome",
         "frame_hitch",
         "prefetch_intent",
@@ -646,6 +658,46 @@ enum MediaPerformance {
     }
 }
 
+final class AppReliabilityMonitor: NSObject, MXMetricManagerSubscriber {
+    static let shared = AppReliabilityMonitor()
+
+    private var hasStarted = false
+
+    private override init() {
+        super.init()
+    }
+
+    func start() {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            return
+        }
+        guard !hasStarted else {
+            return
+        }
+        hasStarted = true
+        MXMetricManager.shared.add(self)
+        MediaPerformance.mark("metric_kit_payload event=subscribed")
+    }
+
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        MediaPerformance.mark("metric_kit_payload event=received count=\(payloads.count)")
+        MediaPerformance.flushUploadEvents()
+    }
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            let crashCount = payload.crashDiagnostics?.count ?? 0
+            let hangCount = payload.hangDiagnostics?.count ?? 0
+            let cpuExceptionCount = payload.cpuExceptionDiagnostics?.count ?? 0
+            let diskWriteExceptionCount = payload.diskWriteExceptionDiagnostics?.count ?? 0
+            MediaPerformance.mark(
+                "metric_kit_diagnostic crashes=\(crashCount) hangs=\(hangCount) cpu=\(cpuExceptionCount) disk=\(diskWriteExceptionCount)"
+            )
+        }
+        MediaPerformance.flushUploadEvents()
+    }
+}
+
 @MainActor
 final class MobilePerformanceReporter {
     static let shared = MobilePerformanceReporter()
@@ -664,10 +716,10 @@ final class MobilePerformanceReporter {
     private let dateFormatter = ISO8601DateFormatter()
 
     init(
-        batchSize: Int = 50,
-        maxBufferSize: Int = 200,
-        flushDelaySeconds: TimeInterval = 30,
-        minimumRequestSpacingSeconds: TimeInterval = 15,
+        batchSize: Int = 100,
+        maxBufferSize: Int = 400,
+        flushDelaySeconds: TimeInterval = 60,
+        minimumRequestSpacingSeconds: TimeInterval = 30,
         retryDelaySeconds: TimeInterval = 60
     ) {
         self.batchSize = max(1, batchSize)
@@ -877,12 +929,46 @@ final class MediaControlConfig {
         read { $0?.imageDerivativeUploadEnabled ?? true }
     }
 
+    var blobUploadsAvailable: Bool {
+        read { $0?.blobUploadsAvailable ?? true }
+    }
+
+    var storyImageUploadsAvailable: Bool {
+        read { config in
+            config?.storyImageUploadsAvailable ?? config?.blobUploadsAvailable ?? true
+        }
+    }
+
     var qoeAccessLogSampleRate: Double {
         read { min(max($0?.qoeAccessLogSampleRate ?? 0.1, 0), 1) }
     }
 
     var uploadChunkBytes: Int {
         read { $0?.uploadChunkBytes ?? 5 * 1024 * 1024 }
+    }
+
+    func blobMultipartThresholdBytes(isLimited: Bool) -> Int {
+        readOptionalLimit(
+            \.blobMultipartThresholdBytes,
+            isLimited: isLimited,
+            fallback: isLimited ? 32 * 1024 * 1024 : 64 * 1024 * 1024
+        )
+    }
+
+    func blobMultipartPartBytes(isLimited: Bool) -> Int {
+        readOptionalLimit(
+            \.blobMultipartPartBytes,
+            isLimited: isLimited,
+            fallback: isLimited ? 8 * 1024 * 1024 : 16 * 1024 * 1024
+        )
+    }
+
+    func blobMultipartConcurrency(isLimited: Bool) -> Int {
+        readOptionalLimit(
+            \.blobMultipartConcurrency,
+            isLimited: isLimited,
+            fallback: isLimited ? 2 : 4
+        )
     }
 
     var mediaFileCacheMaxBytes: Int {
@@ -1009,6 +1095,19 @@ final class MediaControlConfig {
                 return fallback
             }
 
+            return isLimited ? pair.constrained : pair.standard
+        }
+    }
+
+    private func readOptionalLimit(
+        _ keyPath: KeyPath<MobileMediaConfigResponse.Media, MobileMediaConfigResponse.Media.LimitPair?>,
+        isLimited: Bool,
+        fallback: Int
+    ) -> Int {
+        read {
+            guard let pair = $0?[keyPath: keyPath] else {
+                return fallback
+            }
             return isLimited ? pair.constrained : pair.standard
         }
     }
@@ -1708,7 +1807,8 @@ final class MediaImageCache {
     }
 
     private static func image(fromThumbHashURL url: URL) -> UIImage? {
-        var encoded = String(url.absoluteString.dropFirst("thumbhash:".count))
+        let resource = url.absoluteString.dropFirst("thumbhash:".count)
+        var encoded = String(resource.split(separator: "?", maxSplits: 1)[0])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         while encoded.count.isMultiple(of: 4) == false {

@@ -113,6 +113,7 @@ struct ProfileView: View {
 
     private var profileHeader: some View {
         let account = auth.account
+        let photoChangesAvailable = MediaControlConfig.shared.blobUploadsAvailable
 
         return VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
@@ -132,7 +133,7 @@ struct ProfileView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Adjust profile photo")
-                .disabled(isUploadingAvatar)
+                .disabled(isUploadingAvatar || !photoChangesAvailable)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account?.displayName ?? DesignFixtures.accountName)
@@ -155,7 +156,7 @@ struct ProfileView: View {
                     .foregroundStyle(Color.ubeyeInk)
                     .background(Color.ubeyeSubtle, in: Capsule())
             }
-            .disabled(isUploadingAvatar)
+            .disabled(isUploadingAvatar || !photoChangesAvailable)
 
             Button {
                 activeSheet = .adjustAvatar
@@ -168,7 +169,13 @@ struct ProfileView: View {
                     .background(Color.ubeyeSubtle, in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(isUploadingAvatar)
+            .disabled(isUploadingAvatar || !photoChangesAvailable)
+
+            if !photoChangesAvailable {
+                InlineNotice(
+                    message: "Profile photo changes are temporarily unavailable while media service access recovers."
+                )
+            }
         }
         .padding(16)
         .ubeyeCard()

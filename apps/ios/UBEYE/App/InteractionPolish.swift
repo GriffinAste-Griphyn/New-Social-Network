@@ -390,6 +390,20 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
         return "\(urls)|correct-padding:\(correctsAsymmetricTransparentPadding)"
     }
 
+    private var cachedPresentation: (image: UIImage, stage: ProgressiveImageStage)? {
+        for (url, stage) in [
+            (fullURL, ProgressiveImageStage.full),
+            (thumbnailURL, .thumbnail),
+            (placeholderURL, .placeholder),
+        ] {
+            if let image = MediaImageCache.shared.cachedImage(for: url) {
+                return (image, stage)
+            }
+        }
+
+        return nil
+    }
+
     var body: some View {
         ZStack {
             placeholder()
@@ -398,6 +412,16 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
                     Image(uiImage: image),
                     loader.stage,
                     loader.verticalContentOffsetFraction
+                )
+            } else if let cachedPresentation {
+                content(
+                    Image(uiImage: cachedPresentation.image),
+                    cachedPresentation.stage,
+                    correctsAsymmetricTransparentPadding
+                        ? StoryImageVerticalAlignmentPolicy.correctionFraction(
+                            for: cachedPresentation.image
+                        )
+                        : 0
                 )
             }
         }

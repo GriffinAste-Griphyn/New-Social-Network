@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto"
 import { get, head } from "@vercel/blob"
 import { NextResponse } from "next/server"
+
+import { readCloudflareR2Original } from "@/lib/cloudflare-r2"
+import {
+  isVercelBlobAccessDisabled,
+} from "@/lib/media-availability"
 
 export const runtime = "nodejs"
 
@@ -24,6 +30,51 @@ function isBlobNotFoundError(error: unknown) {
   )
 }
 
+function isR2NotFoundError(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.name === "NoSuchKey" ||
+      error.name === "NotFound" ||
+      ("$metadata" in error &&
+        (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+          ?.httpStatusCode === 404))
+  )
+}
+
+async function cloudflareR2AvatarSourceResponse(
+  request: Request,
+  pathname: string[],
+) {
+  const key = pathname.join("/")
+  if (!isSafeAvatarBlobPathname(key) || !key.startsWith("avatars/source/")) {
+    return notFound()
+  }
+
+  let body: Buffer
+  try {
+    body = await readCloudflareR2Original(key)
+  } catch (error) {
+    if (isR2NotFoundError(error)) {
+      return notFound()
+    }
+    throw error
+  }
+
+  const etag = `"${createHash("sha256").update(body).digest("hex")}"`
+  const headers = new Headers({
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Content-Type": "image/jpeg",
+    "Content-Length": body.byteLength.toString(),
+    ETag: etag,
+  })
+
+  if (request.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers })
+  }
+
+  return new Response(new Uint8Array(body), { headers })
+}
+
 async function getBlobMetadata(blobPathname: string) {
   try {
     return await head(blobPathname)
@@ -41,10 +92,21 @@ export async function GET(
   context: { params: Promise<{ pathname: string[] }> },
 ) {
   const { pathname } = await context.params
+
+  if (pathname[0] === "cloudflare-r2") {
+    return cloudflareR2AvatarSourceResponse(request, pathname.slice(1))
+  }
+
   const blobPathname = pathname.join("/")
 
   if (!isSafeAvatarBlobPathname(blobPathname)) {
     return notFound()
+  }
+
+  if (isVercelBlobAccessDisabled()) {
+    const response = notFound()
+    response.headers.set("Cache-Control", "private, no-store")
+    return response
   }
 
   const blobMetadata = await getBlobMetadata(blobPathname)

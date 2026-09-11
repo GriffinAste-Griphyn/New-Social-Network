@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 
 import { getDb } from "@/lib/db"
 import { mediaProcessingJobs, mediaRenditions } from "@/lib/db/schema"
+import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import {
   checkCloudflareStreamPlayback,
   checkVercelHlsPlayback,
@@ -199,6 +200,7 @@ export async function GET() {
       ok: requiredOk,
       service: "ubeye-video",
       processor,
+      blobAccessMode: isVercelBlobAccessDisabled() ? "paused" : "enabled",
       checks,
       processingJobs,
       playbackProbe,

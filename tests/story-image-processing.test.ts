@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import sharp from "sharp"
 
 import {
+  createImageProcessingStoredAsset,
   createStoryCanvasImage,
   storyImageDisplayDimensions,
   storyImageResizeOptions,
@@ -9,6 +10,29 @@ import {
 } from "@/lib/story-image-processing"
 
 describe("story image processing", () => {
+  it("preserves the original storage provider for queued R2 work", () => {
+    const source = {
+      pathname: "stories/web-direct/creator/source.jpg",
+      contentType: "image/jpeg",
+      byteSize: 2_048,
+      checksum: "a".repeat(64),
+    }
+
+    expect(
+      createImageProcessingStoredAsset({
+        storageProvider: "cloudflare-r2",
+        source,
+        width: 1_200,
+        height: 2_000,
+      }),
+    ).toMatchObject({
+      storageProvider: "cloudflare-r2",
+      originalStorageProvider: "cloudflare-r2",
+      originalStorageKey: source.pathname,
+      processingStatus: "processing",
+    })
+  })
+
   it("reports display-oriented dimensions for camera JPEG metadata", async () => {
     const source = await sharp({
       create: {

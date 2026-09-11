@@ -19,9 +19,12 @@
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate-database.mjs",
+    "media:migrate:avatars": "node scripts/migrate-profile-avatars-to-r2.mjs",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "@aws-sdk/s3-request-presigner": "^3.1121.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@neondatabase/serverless": "^1.1.0",
     "@ubeye/shared": "file:packages/shared",
