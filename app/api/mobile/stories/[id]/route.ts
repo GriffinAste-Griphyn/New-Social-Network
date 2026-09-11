@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
+import { recoverImageProcessingForStory } from "@/lib/image-processing-jobs"
 import { getMobileStoryStackResponse } from "@/lib/mobile-story-stacks"
 import {
   enforceRequestRateLimits,
@@ -11,6 +12,7 @@ import { removeStoryForOwner } from "@/lib/story-store"
 import { removeStoryAsset } from "@/lib/story-storage"
 
 export const runtime = "nodejs"
+export const maxDuration = 300
 
 export async function GET(
   request: Request,
@@ -27,6 +29,22 @@ export async function GET(
 
   if (!response) {
     return NextResponse.json({ error: "Story not found." }, { status: 404 })
+  }
+
+  if (response.story.creatorId === session.id) {
+    await Promise.allSettled(
+      response.story.items
+        .filter(
+          (item) =>
+            item.assetKind === "image" && item.processingStatus !== "ready",
+        )
+        .map((item) =>
+          recoverImageProcessingForStory({
+            storyId: item.id,
+            ownerUserId: session.id,
+          }),
+        ),
+    )
   }
 
   return NextResponse.json(response)

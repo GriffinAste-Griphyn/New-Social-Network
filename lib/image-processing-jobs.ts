@@ -5,7 +5,7 @@ import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
-import { imageProcessingJobs, mediaAssets } from "@/lib/db/schema"
+import { imageProcessingJobs, mediaAssets, stories } from "@/lib/db/schema"
 import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import type { StoryImageContentMode } from "@/lib/story-image-processing"
 import { processImageWorkflow } from "@/workflows/image-processing"
@@ -159,6 +159,36 @@ export async function recoverImageProcessingForAsset(mediaAssetId: string) {
     contentMode: asset.providerStatus?.endsWith(":fill") ? "fill" : "fit",
     source: "story_status_poll",
   })
+}
+
+export async function recoverImageProcessingForStory(input: {
+  storyId: string
+  ownerUserId: string
+}) {
+  const [story] = await getDb()
+    .select({
+      mediaAssetId: stories.mediaAssetId,
+      assetKind: stories.assetKind,
+      processingStatus: stories.processingStatus,
+    })
+    .from(stories)
+    .where(
+      and(
+        eq(stories.id, input.storyId),
+        eq(stories.creatorId, input.ownerUserId),
+      ),
+    )
+    .limit(1)
+
+  if (
+    !story ||
+    story.assetKind !== "image" ||
+    story.processingStatus === "ready"
+  ) {
+    return null
+  }
+
+  return recoverImageProcessingForAsset(story.mediaAssetId)
 }
 
 export async function reconcileImageProcessingJobs(

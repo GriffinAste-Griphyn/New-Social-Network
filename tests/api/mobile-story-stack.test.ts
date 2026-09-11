@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getCompleteMobileSession } from "@/lib/auth"
 import { getCreatorStats } from "@/lib/creator-stats"
+import { recoverImageProcessingForStory } from "@/lib/image-processing-jobs"
 import { getMyStoryStack } from "@/lib/story-store"
 
 vi.mock("@/lib/auth", () => ({
@@ -10,6 +11,10 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/creator-stats", () => ({
   getCreatorStats: vi.fn(),
+}))
+
+vi.mock("@/lib/image-processing-jobs", () => ({
+  recoverImageProcessingForStory: vi.fn(),
 }))
 
 vi.mock("@/lib/story-store", () => ({
@@ -61,7 +66,9 @@ async function responseJson(response: Response) {
 
 describe("mobile my story stack API", () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.mocked(getCompleteMobileSession).mockResolvedValue(session)
+    vi.mocked(recoverImageProcessingForStory).mockResolvedValue(null)
     vi.mocked(getCreatorStats).mockResolvedValue({
       followerCount: 0,
       followingCount: 0,
@@ -152,6 +159,57 @@ describe("mobile my story stack API", () => {
           },
         ],
       },
+    })
+    expect(recoverImageProcessingForStory).not.toHaveBeenCalled()
+  })
+
+  it("recovers an owner processing image when My Story is reopened", async () => {
+    vi.mocked(getMyStoryStack).mockResolvedValue({
+      owner: {
+        id: "creator_123",
+        name: "Creator",
+        handle: "creator",
+        imageUrl: null,
+      },
+      hasActiveStory: true,
+      liveCount: 1,
+      latestThumbnailUrl: "/api/story-media/stories/photo-source.jpg",
+      latestAssetKind: "image",
+      expiresSoonLabel: "24h left",
+      items: [
+        {
+          id: "story_processing_image",
+          creator: "Creator",
+          handle: "@creator",
+          assetKind: "image",
+          mediaUrl: "/api/story-media/stories/photo-source.jpg",
+          thumbnailUrl: "/api/story-media/stories/photo-source.jpg",
+          processingStatus: "processing",
+          title: "Photo processing",
+          caption: "Photo processing",
+          textOverlays: [],
+          lastUploadedAt: "2026-09-11T18:00:00.000Z",
+          progressPercent: 0,
+          timelineSegmentCount: 1,
+          createdAt: "2026-09-11T18:00:00.000Z",
+          expiresAt: "2026-09-12T18:00:00.000Z",
+          minutesRemaining: 1440,
+          brandTags: [],
+          elements: [],
+        },
+      ],
+    })
+
+    const { GET } = await import("@/app/api/mobile/stories/[id]/route")
+    const response = await GET(
+      new Request("https://app.example.com/api/mobile/stories/my-story"),
+      { params: Promise.resolve({ id: "my-story" }) } as never,
+    )
+
+    expect(response.status).toBe(200)
+    expect(recoverImageProcessingForStory).toHaveBeenCalledWith({
+      storyId: "story_processing_image",
+      ownerUserId: session.id,
     })
   })
 })
