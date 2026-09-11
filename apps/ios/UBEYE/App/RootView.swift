@@ -580,6 +580,7 @@ final class StoryUploadNoticeStore: ObservableObject {
         case delayed(SocialAssetKind)
         case posted
         case review(String?)
+        case rejected(String?)
         case failed(String)
     }
 
@@ -597,6 +598,9 @@ final class StoryUploadNoticeStore: ObservableObject {
         if case .failed = state {
             return true
         }
+        if case .rejected = state {
+            return true
+        }
         return false
     }
 
@@ -612,6 +616,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "Added to your story"
         case .review:
             "Story is under review"
+        case .rejected:
+            "Story could not be posted"
         case .failed:
             "Story upload failed"
         case nil:
@@ -635,6 +641,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "Your story is ready to play."
         case .review(let reason):
             reason ?? "It will appear if it passes safety review."
+        case .rejected(let reason):
+            reason ?? "This story did not pass safety review."
         case .failed(let message):
             message
         case nil:
@@ -654,6 +662,8 @@ final class StoryUploadNoticeStore: ObservableObject {
             "checkmark.circle.fill"
         case .review:
             "shield.lefthalf.filled"
+        case .rejected:
+            "exclamationmark.shield.fill"
         case .failed:
             "exclamationmark.circle.fill"
         case nil:
@@ -711,6 +721,14 @@ final class StoryUploadNoticeStore: ObservableObject {
     func showReview(reason: String?) {
         dismissTask?.cancel()
         state = .review(reason)
+    }
+
+    func showRejected(reason: String?) {
+        dismissTask?.cancel()
+        state = .rejected(reason)
+        if UIApplication.shared.applicationState == .active {
+            UBEYEFeedback.error()
+        }
     }
 
     func showFailed(message: String) {

@@ -75,4 +75,19 @@ describe("private story media cache policy", () => {
       /^https:\/\/app\.example\.com\/api\/story-media\/media-originals\/creator\/upload\/source\.mp4\?token=/,
     )
   })
+
+  it("builds a reviewable absolute URL from the canonical app origin", async () => {
+    process.env.AUTH_SECRET = "story-media-cache-test-secret-value"
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.ubeye.ai/"
+    delete process.env.STORY_STORAGE_PUBLIC_BASE_URL
+    const { reviewableStoryMediaUrl } = await import("@/lib/story-media/access")
+
+    const mediaUrl = reviewableStoryMediaUrl(
+      "/api/story-media/stories/web-direct/creator/story-display.jpg",
+    )
+
+    expect(mediaUrl).toMatch(
+      /^https:\/\/www\.ubeye\.ai\/api\/story-media\/stories\/web-direct\/creator\/story-display\.jpg\?token=/,
+    )
+  })
 })

@@ -120,7 +120,8 @@ final class StoryUploadCoordinator: ObservableObject {
             guard result == .live else {
                 api.invalidateStoryStacks(ids: ["my-story", response.storyId])
                 api.prefetchStoryStacks(ids: ["my-story", response.storyId], refresh: true, limit: 2)
-                if result == .failed {
+                switch result {
+                case .processingFailed:
                     if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
                         notice.showPosting()
                     } else {
@@ -129,13 +130,29 @@ final class StoryUploadCoordinator: ObservableObject {
                         )
                     }
                     StoryUploadDiagnostics.mark("readiness_poll_failed", response: response)
-                } else {
+                case .underReview(let reason):
+                    if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                        notice.showPosting()
+                    } else {
+                        notice.showReview(reason: reason)
+                    }
+                    StoryUploadDiagnostics.mark("readiness_poll_under_review", response: response)
+                case .rejected(let reason):
+                    if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
+                        notice.showPosting()
+                    } else {
+                        notice.showRejected(reason: reason)
+                    }
+                    StoryUploadDiagnostics.mark("readiness_poll_rejected", response: response)
+                case .timedOut:
                     if pendingUploads?.visibleUploads.contains(where: { !$0.isFailed }) == true {
                         notice.showPosting()
                     } else {
                         notice.showDelayed(assetKind: response.asset.assetKind)
                     }
                     StoryUploadDiagnostics.mark("readiness_poll_timeout", response: response)
+                case .live:
+                    break
                 }
                 return
             }

@@ -1,10 +1,11 @@
-import { and, asc, eq, gt } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, or } from "drizzle-orm"
 import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories } from "@/lib/db/schema"
 import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
+import { retryableStoryModerationReasons } from "@/lib/safety/moderation-retry"
 import { moderatePendingStory } from "@/lib/story-moderation-core"
 import { moderateStoryWorkflow } from "@/workflows/story-moderation"
 
@@ -38,7 +39,16 @@ export async function reconcilePendingStoryModeration(
     .from(stories)
     .where(
       and(
-        eq(stories.moderationStatus, "pending"),
+        or(
+          eq(stories.moderationStatus, "pending"),
+          and(
+            eq(stories.moderationStatus, "flagged"),
+            inArray(
+              stories.moderationReason,
+              [...retryableStoryModerationReasons],
+            ),
+          ),
+        ),
         gt(stories.expiresAt, new Date()),
       ),
     )

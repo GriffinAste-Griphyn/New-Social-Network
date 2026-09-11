@@ -300,11 +300,32 @@ final class MediaPerformanceTests: XCTestCase {
             moderationStatus: "rejected",
             moderationReason: "Content did not pass review."
         )
+        let underReview = StoryStatusResponse.Story(
+            id: "story-1",
+            status: "processing",
+            processingStatus: "ready",
+            hasOriginalRendition: true,
+            providerStatus: "ready",
+            providerPctComplete: 100,
+            fullQualityReady: true,
+            providerError: nil,
+            isLive: false,
+            pollAfterMs: nil,
+            moderationStatus: "flagged",
+            moderationReason: "This story needs a safety review before it can go live."
+        )
 
         XCTAssertNil(StoryReadinessPolicy.terminalResult(for: pending))
-        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: failed), .failed)
+        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: failed), .processingFailed)
         XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: live), .live)
-        XCTAssertEqual(StoryReadinessPolicy.terminalResult(for: rejected), .failed)
+        XCTAssertEqual(
+            StoryReadinessPolicy.terminalResult(for: rejected),
+            .rejected("Content did not pass review.")
+        )
+        XCTAssertEqual(
+            StoryReadinessPolicy.terminalResult(for: underReview),
+            .underReview("This story needs a safety review before it can go live.")
+        )
     }
 
     func testVideoUploadResponseDecodesPrivatePosterTarget() throws {

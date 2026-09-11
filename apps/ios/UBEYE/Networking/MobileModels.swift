@@ -916,7 +916,9 @@ struct StoryStatusResponse: Codable {
 
 enum StoryReadinessResult: Equatable {
     case live
-    case failed
+    case processingFailed
+    case underReview(String?)
+    case rejected(String?)
     case timedOut
 }
 
@@ -926,10 +928,13 @@ enum StoryReadinessPolicy {
             return .live
         }
         if story.processingStatus == "error" || story.providerStatus == "error" {
-            return .failed
+            return .processingFailed
         }
-        if story.moderationStatus == "rejected" || story.moderationStatus == "flagged" {
-            return .failed
+        if story.moderationStatus == "rejected" {
+            return .rejected(story.moderationReason)
+        }
+        if story.moderationStatus == "flagged" {
+            return .underReview(story.moderationReason)
         }
         return nil
     }

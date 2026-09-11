@@ -11,6 +11,7 @@ import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-sto
 import { applyMediaModerationResult } from "@/lib/media-assets"
 import { moderateUserContent } from "@/lib/safety/moderate-content"
 import { recordModerationCheck } from "@/lib/safety/moderation-checks"
+import { isRetryableStoryModeration } from "@/lib/safety/moderation-retry"
 import type { ContentModerationResult } from "@/lib/safety/policy"
 import { reviewableStoryMediaUrl } from "@/lib/story-media/access"
 import { enqueueStoryPublication } from "@/lib/story-publication"
@@ -41,6 +42,7 @@ export async function moderatePendingStory(storyId: string) {
       status: stories.status,
       processingStatus: stories.processingStatus,
       moderationStatus: stories.moderationStatus,
+      moderationReason: stories.moderationReason,
       expiresAt: stories.expiresAt,
       scanStatus: mediaAssets.scanStatus,
       scanReason: mediaAssets.scanReason,
@@ -50,11 +52,24 @@ export async function moderatePendingStory(storyId: string) {
     .where(eq(stories.id, storyId))
     .limit(1)
 
-  if (!story || story.moderationStatus !== "pending") {
+  if (
+    !story ||
+    !isRetryableStoryModeration({
+      moderationStatus: story.moderationStatus,
+      moderationReason: story.moderationReason,
+    })
+  ) {
     return { status: "skipped" as const }
   }
   if (story.expiresAt.getTime() <= Date.now() || story.status === "removed") {
     return { status: "expired" as const }
+  }
+  // Image uploads initially point at the private source object. Wait for the
+  // image worker to publish the verified display rendition before asking the
+  // moderation provider to retrieve it. The image completion step re-enters
+  // moderation as soon as that rendition is ready.
+  if (story.assetKind === "image" && story.processingStatus !== "ready") {
+    return { status: "waiting_for_media" as const }
   }
 
   const [elements, mentions] = await Promise.all([
@@ -88,9 +103,16 @@ export async function moderatePendingStory(storyId: string) {
     },
   })
 
+  const retryingInfrastructureHold =
+    story.moderationStatus === "flagged" &&
+    isRetryableStoryModeration({
+      moderationStatus: story.moderationStatus,
+      moderationReason: story.moderationReason,
+    })
   if (
     (story.scanStatus === "flagged" || story.scanStatus === "failed") &&
-    result.action === "approve"
+    result.action === "approve" &&
+    !retryingInfrastructureHold
   ) {
     result = {
       ...result,
@@ -120,7 +142,7 @@ export async function moderatePendingStory(storyId: string) {
     .where(
       and(
         eq(stories.id, story.id),
-        eq(stories.moderationStatus, "pending"),
+        eq(stories.moderationStatus, story.moderationStatus),
         gt(stories.expiresAt, now),
       ),
     )

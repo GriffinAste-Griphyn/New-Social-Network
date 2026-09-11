@@ -7,6 +7,7 @@ import {
   stories,
 } from "@/lib/db/schema"
 import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
+import { moderatePendingStory } from "@/lib/story-moderation-core"
 import {
   createServerEncodedStoryImageAsset,
   type StoryImageContentMode,
@@ -216,6 +217,25 @@ export async function completeImageProcessingStep(
       updatedAt: now,
     })
     .where(eq(imageProcessingJobs.id, job.id))
+
+  // Moderation is deliberately deferred until the verified display image is
+  // available. Keep moderation failures separate from image-processing state:
+  // the durable pending moderation row can be retried by the status endpoint
+  // and reconciler without falsely reporting that the upload itself failed.
+  const pendingModerationStories = linkedStories.filter(
+    (story) => story.moderationStatus === "pending",
+  )
+  const moderationResults = await Promise.allSettled(
+    pendingModerationStories.map((story) => moderatePendingStory(story.id)),
+  )
+  moderationResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error("story_moderation_after_image_processing_failed", {
+        storyId: pendingModerationStories[index]?.id,
+        error: result.reason,
+      })
+    }
+  })
 
   return { status: "completed" as const, storyCount: linkedStories.length }
 }

@@ -1735,7 +1735,10 @@ export async function createStory(input: CreateStoryInput) {
     )
   }
 
-  if (!moderation) {
+  if (
+    !moderation &&
+    (input.storedAsset.assetKind !== "image" || isMediaReady)
+  ) {
     await enqueueStoryModeration(storyId).catch((error) => {
       console.error("story_moderation_dispatch_deferred", { storyId, error })
     })

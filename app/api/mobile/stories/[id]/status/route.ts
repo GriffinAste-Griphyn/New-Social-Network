@@ -5,6 +5,7 @@ import { enqueueMediaProcessing } from "@/lib/media-pipeline/jobs"
 import { recoverImageProcessingForAsset } from "@/lib/image-processing-jobs"
 import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
+import { isRetryableStoryModeration } from "@/lib/safety/moderation-retry"
 import { enqueueStoryModeration } from "@/lib/story-moderation"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
 
@@ -70,7 +71,12 @@ export async function GET(
       })
     })
   }
-  if (publicStoryStatus.moderationStatus === "pending") {
+  if (
+    isRetryableStoryModeration({
+      moderationStatus: publicStoryStatus.moderationStatus,
+      moderationReason: publicStoryStatus.moderationReason,
+    })
+  ) {
     await enqueueStoryModeration(id).catch((error) => {
       console.error("story_moderation_status_recovery_failed", {
         storyId: id,

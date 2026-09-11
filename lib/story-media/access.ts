@@ -260,7 +260,15 @@ export function reviewableStoryMediaUrl(value: string | null) {
     getPrivateVercelBlobPathname(value) ?? getCloudflareStreamPathname(value)
   if (!pathname) return null
 
-  const baseUrl = process.env.STORY_STORAGE_PUBLIC_BASE_URL?.replace(/\/+$/, "")
+  // Deferred moderation runs after the upload request has completed, so it no
+  // longer has a Request object from which to recover the public origin. The
+  // app URL is the canonical fallback for the signed media proxy when a
+  // dedicated story-media origin has not been configured.
+  const baseUrl = (
+    process.env.STORY_STORAGE_PUBLIC_BASE_URL ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    env.NEXT_PUBLIC_APP_URL
+  ).replace(/\/+$/, "")
   if (!baseUrl) return null
 
   const url = new URL(buildStoryMediaRoute(pathname), baseUrl)
