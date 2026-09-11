@@ -866,7 +866,7 @@ final class StoryComposerStore: ObservableObject {
                     )
                 }
                 uploadStatus = "Posting"
-                let pendingUpload = try pendingUploads.createImageUpload(
+                let pendingUpload = try await pendingUploads.createImageUpload(
                     upload: upload,
                     contentMode: .fill,
                     draft: pendingUploadDraft,
@@ -1017,7 +1017,7 @@ final class StoryComposerStore: ObservableObject {
                     503
                 )
             }
-            return try pendingUploads.createImageUpload(
+            return try await pendingUploads.createImageUpload(
                 upload: upload,
                 contentMode: .fill,
                 draft: pendingUploadDraft,

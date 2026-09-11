@@ -246,7 +246,7 @@ export async function createServerEncodedStoryImageAsset(input: {
     encode: (quality) =>
       image
         .clone()
-        .avif({ quality, effort: 6, chromaSubsampling: "4:2:0", bitdepth: 8 })
+        .avif({ quality, effort: 4, chromaSubsampling: "4:2:0", bitdepth: 8 })
         .toBuffer(),
   }).catch(() => null)
   const displayWebp = displayAvif
@@ -257,7 +257,7 @@ export async function createServerEncodedStoryImageAsset(input: {
         ),
         maxByteSize: maxStoryImageDisplayDerivativeBytes,
         encode: (quality) =>
-          image.clone().webp({ quality, effort: 6, smartSubsample: true }).toBuffer(),
+          image.clone().webp({ quality, effort: 4, smartSubsample: true }).toBuffer(),
       })
   const display = displayAvif ?? displayWebp
   if (!display) {
@@ -277,7 +277,7 @@ export async function createServerEncodedStoryImageAsset(input: {
     encode: (quality) =>
       thumbnailImage
         .clone()
-        .webp({ quality, effort: 6, smartSubsample: true })
+        .webp({ quality, effort: 4, smartSubsample: true })
         .toBuffer(),
   })
   if (!thumbnail) {

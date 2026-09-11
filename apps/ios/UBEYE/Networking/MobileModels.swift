@@ -940,6 +940,24 @@ enum StoryReadinessPolicy {
     }
 }
 
+enum StoryReadinessPollingPolicy {
+    static func delayMilliseconds(
+        requestedMilliseconds: Int?,
+        attempt: Int
+    ) -> Int {
+        let fallbackMilliseconds: Int
+        switch attempt {
+        case 0..<6:
+            fallbackMilliseconds = 750
+        case 6..<16:
+            fallbackMilliseconds = 1_500
+        default:
+            fallbackMilliseconds = 3_000
+        }
+        return min(max(requestedMilliseconds ?? fallbackMilliseconds, 500), 10_000)
+    }
+}
+
 struct APIErrorEnvelope: Decodable {
     let error: String?
 

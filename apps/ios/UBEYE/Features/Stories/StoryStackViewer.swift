@@ -44,6 +44,44 @@ enum StoryNavigationPolicy {
     }
 }
 
+enum StoryCompletionTrigger: Equatable {
+    case automaticPlayback
+    case explicitNavigation
+}
+
+enum StoryCompletionPolicy {
+    static func shouldDefer(
+        trigger: StoryCompletionTrigger,
+        progressIsPaused: Bool
+    ) -> Bool {
+        trigger == .automaticPlayback && progressIsPaused
+    }
+}
+
+enum StoryStackRefreshPolicy {
+    static func resolvedIndex(
+        activeItemID: String?,
+        previousIndex: Int,
+        itemIDs: [String]
+    ) -> Int? {
+        guard !itemIDs.isEmpty else {
+            return nil
+        }
+        if let activeItemID,
+           let preservedIndex = itemIDs.firstIndex(of: activeItemID) {
+            return preservedIndex
+        }
+        return min(max(previousIndex, 0), itemIDs.count - 1)
+    }
+
+    static func mediaTopologyChanged(
+        previousIdentities: [String],
+        nextIdentities: [String]
+    ) -> Bool {
+        previousIdentities != nextIdentities
+    }
+}
+
 enum StoryDismissGesturePolicy {
     static func distanceThreshold(viewportHeight: CGFloat) -> CGFloat {
         min(max(viewportHeight * 0.14, 72), 132)
@@ -274,12 +312,19 @@ final class StoryStackStore: ObservableObject {
             return
         }
 
+        let previousMediaIdentities = stack?.items.map(\.playbackIdentity) ?? []
+        let nextMediaIdentities = mergedStack.items.map(\.playbackIdentity)
         stack = mergedStack
         if lastImpressionStoryId == nil {
             lastImpressionStoryId = mergedStack.items.first?.id
             impressionStartedAt = Date()
         }
-        mediaEngine.prepare(stack: mergedStack, around: index, activeIdentity: nil)
+        if StoryStackRefreshPolicy.mediaTopologyChanged(
+            previousIdentities: previousMediaIdentities,
+            nextIdentities: nextMediaIdentities
+        ) {
+            mediaEngine.prepare(stack: mergedStack, around: index, activeIdentity: nil)
+        }
     }
 
     func loadFollows(api: APIClient) async {
@@ -776,7 +821,6 @@ struct StoryStackViewer: View {
                             for: stack,
                             safeAreaBottom: safeAreaInsets.bottom
                         ),
-                        fillsAvailableHeight: canvasVerticalPlacement == .top,
                         verticalPlacement: canvasVerticalPlacement
                     )
 
@@ -943,13 +987,53 @@ struct StoryStackViewer: View {
                 return
             }
 
+            let activeItemID = store.stack?.items[safe: index]?.id
             store.applyPendingUploads(
                 pendingUploads: pendingStoryUploads,
                 account: auth.account,
                 mediaEngine: mediaEngine,
                 around: index
             )
-            index = min(index, max((store.stack?.items.count ?? 1) - 1, 0))
+            guard let resolvedIndex = StoryStackRefreshPolicy.resolvedIndex(
+                activeItemID: activeItemID,
+                previousIndex: index,
+                itemIDs: store.stack?.items.map(\.id) ?? []
+            ), let refreshedItem = store.stack?.items[safe: resolvedIndex] else {
+                storyTimerState.stop()
+                return
+            }
+
+            index = resolvedIndex
+            if timedStoryId != refreshedItem.id {
+                store.markActiveItem(refreshedItem)
+                resetStoryTimer(for: refreshedItem)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidRegister)) { _ in
+            guard route.id == "my-story" else {
+                return
+            }
+
+            let previousIndex = index
+            Task { @MainActor in
+                await store.load(
+                    storyId: route.id,
+                    api: api,
+                    mediaEngine: mediaEngine,
+                    pendingUploads: pendingStoryUploads,
+                    account: auth.account
+                )
+                guard let resolvedIndex = StoryStackRefreshPolicy.resolvedIndex(
+                    activeItemID: nil,
+                    previousIndex: previousIndex,
+                    itemIDs: store.stack?.items.map(\.id) ?? []
+                ), let refreshedItem = store.stack?.items[safe: resolvedIndex] else {
+                    return
+                }
+                index = resolvedIndex
+                store.markActiveItem(refreshedItem)
+                resetStoryTimer(for: refreshedItem)
+            }
         }
         .onChange(of: store.replyConfirmation) { _, confirmation in
             scheduleConfirmationDismiss(for: confirmation)
@@ -1145,13 +1229,9 @@ struct StoryStackViewer: View {
                 ProgressiveCachedImage(
                     placeholderURL: item.playbackPlaceholderUrl,
                     thumbnailURL: item.playbackThumbnailUrl,
-                    fullURL: item.playbackMediaUrl,
-                    correctsAsymmetricTransparentPadding: true
-                ) { image, _, verticalContentOffsetFraction in
-                    StoryCanvasImage(
-                        image: image,
-                        verticalContentOffsetFraction: verticalContentOffsetFraction
-                    )
+                    fullURL: item.playbackMediaUrl
+                ) { image, _, _ in
+                    StoryCanvasImage(image: image)
                 } placeholder: {
                     StoryCanvasBackground()
                 } onReady: { _ in
@@ -2214,7 +2294,7 @@ struct StoryStackViewer: View {
         guard case let .move(to: nextIndex) = action else {
             if action == .finish {
                 UBEYEFeedback.boundary()
-                finishCurrentItem(item)
+                finishCurrentItem(item, trigger: .explicitNavigation)
             } else if action == .stay {
                 UBEYEFeedback.boundary()
             }
@@ -2415,12 +2495,18 @@ struct StoryStackViewer: View {
         finishCurrentItem(item)
     }
 
-    private func finishCurrentItem(_ item: StoryStackItem) {
+    private func finishCurrentItem(
+        _ item: StoryStackItem,
+        trigger: StoryCompletionTrigger = .automaticPlayback
+    ) {
         guard let stack = store.stack, !didFinishCurrentItem else {
             return
         }
 
-        guard !shouldPauseStoryProgress else {
+        guard !StoryCompletionPolicy.shouldDefer(
+            trigger: trigger,
+            progressIsPaused: shouldPauseStoryProgress
+        ) else {
             pendingFinishedItemId = item.id
             return
         }

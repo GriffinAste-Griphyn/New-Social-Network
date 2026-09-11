@@ -660,28 +660,22 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryCanvasLayoutFillsPortraitMediaFromAbsoluteTopToBottomChrome() {
+    func testStoryCanvasLayoutFitsTopAlignedPortraitMediaWithoutHorizontalCrop() {
         let screenSize = CGSize(width: 393, height: 852)
         let reservedBottomHeight = CGFloat(90)
         let layout = StoryCanvasLayout(
             containerSize: screenSize,
             reservedBottomHeight: reservedBottomHeight,
-            fillsAvailableHeight: true,
             verticalPlacement: .top
         )
 
         XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
-        XCTAssertEqual(
+        XCTAssertEqual(layout.frame.minX, 0, accuracy: 0.000_1)
+        XCTAssertEqual(layout.frame.maxX, screenSize.width, accuracy: 0.000_1)
+        XCTAssertLessThanOrEqual(
             layout.frame.maxY,
-            screenSize.height - reservedBottomHeight,
-            accuracy: 0.000_1
+            screenSize.height - reservedBottomHeight + 0.000_1
         )
-        XCTAssertEqual(
-            layout.frame.height,
-            screenSize.height - reservedBottomHeight,
-            accuracy: 0.000_1
-        )
-        XCTAssertGreaterThan(layout.frame.width, screenSize.width)
         XCTAssertEqual(
             layout.frame.width / layout.frame.height,
             StoryCanvasLayout.aspectRatio,
@@ -877,7 +871,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoryCanvasImageFillsTheCanvasWithoutVerticalBands() throws {
+    func testStoryCanvasImageFitsWithoutCroppingNonCanonicalMedia() throws {
         let sourceImage = try XCTUnwrap(
             UIImage(data: makeTestImageData(width: 400, height: 400))
         )
@@ -899,10 +893,16 @@ final class MediaPerformanceTests: XCTestCase {
             )
         )
 
-        XCTAssertGreaterThan(topPixel[2], topPixel[0])
-        XCTAssertGreaterThan(topPixel[2], topPixel[1])
-        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[0])
-        XCTAssertGreaterThan(bottomPixel[2], bottomPixel[1])
+        for component in 0..<3 {
+            XCTAssertLessThan(topPixel[component], 10)
+            XCTAssertLessThan(bottomPixel[component], 10)
+        }
+
+        let centerPixel = try XCTUnwrap(
+            rgbaPixel(in: renderedImage, x: renderedImage.width / 2, y: renderedImage.height / 2)
+        )
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[0])
+        XCTAssertGreaterThan(centerPixel[2], centerPixel[1])
     }
 
     @MainActor
@@ -976,7 +976,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoryCanvasImageFillsEveryColorScheme() throws {
+    func testStoryCanvasImageUsesStableBlackLetterboxInEveryColorScheme() throws {
         let sourceImage = try XCTUnwrap(
             UIImage(data: makeTestImageData(width: 400, height: 400))
         )
@@ -1001,6 +1001,28 @@ final class MediaPerformanceTests: XCTestCase {
         let darkBottomPixel = try XCTUnwrap(rgbaPixel(in: darkImage, x: 180, y: 637))
 
         for pixel in [lightTopPixel, lightBottomPixel, darkTopPixel, darkBottomPixel] {
+            for component in 0..<3 {
+                XCTAssertLessThan(pixel[component], 10)
+            }
+        }
+    }
+
+    @MainActor
+    func testCanonicalStoryCanvasImageStillFillsEveryEdge() throws {
+        let sourceImage = try XCTUnwrap(
+            UIImage(data: makeTestImageData(width: 360, height: 640))
+        )
+        let renderer = ImageRenderer(
+            content: StoryCanvasImage(image: Image(uiImage: sourceImage))
+                .frame(width: 360, height: 640)
+        )
+        renderer.scale = 1
+
+        let renderedImage = try XCTUnwrap(renderer.uiImage?.cgImage)
+        for y in [2, renderedImage.height / 2, renderedImage.height - 3] {
+            let pixel = try XCTUnwrap(
+                rgbaPixel(in: renderedImage, x: renderedImage.width / 2, y: y)
+            )
             XCTAssertGreaterThan(pixel[2], pixel[0])
             XCTAssertGreaterThan(pixel[2], pixel[1])
         }
@@ -1190,6 +1212,97 @@ final class MediaPerformanceTests: XCTestCase {
         XCTAssertEqual(
             StoryNavigationPolicy.action(currentIndex: 0, itemCount: 0, delta: 1),
             .stay
+        )
+    }
+
+    func testExplicitStoryNavigationDoesNotWaitForPressPauseToEnd() {
+        XCTAssertFalse(
+            StoryCompletionPolicy.shouldDefer(
+                trigger: .explicitNavigation,
+                progressIsPaused: true
+            )
+        )
+        XCTAssertTrue(
+            StoryCompletionPolicy.shouldDefer(
+                trigger: .automaticPlayback,
+                progressIsPaused: true
+            )
+        )
+    }
+
+    func testStoryStackRefreshPreservesActiveIdentityAndClampsRemovedPendingItem() {
+        XCTAssertEqual(
+            StoryStackRefreshPolicy.resolvedIndex(
+                activeItemID: "active",
+                previousIndex: 2,
+                itemIDs: ["first", "active", "last"]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            StoryStackRefreshPolicy.resolvedIndex(
+                activeItemID: "pending-story-finished",
+                previousIndex: 2,
+                itemIDs: ["first", "last"]
+            ),
+            1
+        )
+        XCTAssertNil(
+            StoryStackRefreshPolicy.resolvedIndex(
+                activeItemID: "pending-story-finished",
+                previousIndex: 0,
+                itemIDs: []
+            )
+        )
+    }
+
+    func testPendingStoryMergeDropsCompletedLocalPlaceholders() {
+        XCTAssertEqual(
+            PendingStoryMergePolicy.merge(
+                base: ["server-story", "pending-story-completed"],
+                pending: ["pending-story-active"],
+                id: { $0 }
+            ),
+            ["server-story", "pending-story-active"]
+        )
+    }
+
+    func testPendingProgressUpdatesDoNotReprepareUnchangedMediaTopology() {
+        XCTAssertFalse(
+            StoryStackRefreshPolicy.mediaTopologyChanged(
+                previousIdentities: ["server", "pending"],
+                nextIdentities: ["server", "pending"]
+            )
+        )
+        XCTAssertTrue(
+            StoryStackRefreshPolicy.mediaTopologyChanged(
+                previousIdentities: ["server", "pending"],
+                nextIdentities: ["server", "published"]
+            )
+        )
+    }
+
+    func testStoryReadinessPollingUsesFastInitialCadenceWithinBounds() {
+        XCTAssertEqual(
+            StoryReadinessPollingPolicy.delayMilliseconds(
+                requestedMilliseconds: nil,
+                attempt: 0
+            ),
+            750
+        )
+        XCTAssertEqual(
+            StoryReadinessPollingPolicy.delayMilliseconds(
+                requestedMilliseconds: 250,
+                attempt: 0
+            ),
+            500
+        )
+        XCTAssertEqual(
+            StoryReadinessPollingPolicy.delayMilliseconds(
+                requestedMilliseconds: 12_000,
+                attempt: 0
+            ),
+            10_000
         )
     }
 

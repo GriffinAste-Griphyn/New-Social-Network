@@ -101,11 +101,13 @@ describe("mobile story processing status", () => {
       new Request("https://app.example/api/mobile/stories/story-1/status"),
       { params: Promise.resolve({ id: "story-1" }) },
     )
+    const payload = await response.json()
 
     expect(response.status).toBe(200)
     expect(recoverImageProcessingForAsset).toHaveBeenCalledWith("media-1")
     expect(enqueueMediaProcessing).not.toHaveBeenCalled()
     expect(scheduleMediaProcessing).not.toHaveBeenCalled()
+    expect(payload.story.pollAfterMs).toBe(650)
   })
 
   it("does not reschedule a ready video", async () => {

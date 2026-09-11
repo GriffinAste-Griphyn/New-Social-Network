@@ -93,9 +93,13 @@ export async function GET(
         pollAfterMs:
           publicStoryStatus.processingStatus === "ready"
             ? null
-            : publicStoryStatus.providerStatus === "queued"
-              ? 1_500
-              : 3_000,
+            : assetKind === "image"
+              ? publicStoryStatus.providerStatus?.startsWith("queued:")
+                ? 650
+                : 1_000
+              : publicStoryStatus.providerStatus === "queued"
+                ? 1_500
+                : 3_000,
         moderationReason: userFacingModerationReason({
           moderationStatus: publicStoryStatus.moderationStatus,
           moderationReason: publicStoryStatus.moderationReason,

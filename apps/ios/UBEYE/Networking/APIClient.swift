@@ -2011,17 +2011,10 @@ final class APIClient: ObservableObject {
                 return result
             }
 
-            let fallbackMilliseconds: Int
-            switch attempt {
-            case 0..<4:
-                fallbackMilliseconds = 1_500
-            case 4..<12:
-                fallbackMilliseconds = 3_000
-            default:
-                fallbackMilliseconds = 5_000
-            }
-            let requestedMilliseconds = status?.story.pollAfterMs ?? fallbackMilliseconds
-            let boundedMilliseconds = min(max(requestedMilliseconds, 1_000), 10_000)
+            let boundedMilliseconds = StoryReadinessPollingPolicy.delayMilliseconds(
+                requestedMilliseconds: status?.story.pollAfterMs,
+                attempt: attempt
+            )
             let jitter = Int.random(in: 0...max(1, boundedMilliseconds / 5))
             let delay: Duration = .milliseconds(boundedMilliseconds + jitter)
             try? await Task.sleep(for: delay)

@@ -32,7 +32,6 @@ struct StoryCanvasLayout: Equatable {
         containerSize: CGSize,
         reservedTopHeight: CGFloat = 0,
         reservedBottomHeight: CGFloat = 0,
-        fillsAvailableHeight: Bool = false,
         verticalPlacement: StoryCanvasVerticalPlacement = .center
     ) {
         let containerWidth = max(containerSize.width, 0)
@@ -42,21 +41,17 @@ struct StoryCanvasLayout: Equatable {
             containerHeight - topHeight - max(reservedBottomHeight, 0),
             0
         )
-        let canvasWidth: CGFloat
-        let canvasHeight: CGFloat
-
-        if fillsAvailableHeight {
-            canvasHeight = availableHeight
-            canvasWidth = canvasHeight * Self.aspectRatio
-        } else {
-            canvasWidth = min(
-                containerWidth,
-                availableHeight * Self.aspectRatio
-            )
-            canvasHeight = canvasWidth > 0
-                ? canvasWidth / Self.aspectRatio
-                : 0
-        }
+        // A story canvas must fit both axes. Deriving its width from the full
+        // available height can make it wider than the device and silently crop
+        // the left and right edges, which presents as a small zoom on tall
+        // screens.
+        let canvasWidth = min(
+            containerWidth,
+            availableHeight * Self.aspectRatio
+        )
+        let canvasHeight = canvasWidth > 0
+            ? canvasWidth / Self.aspectRatio
+            : 0
 
         let canvasOriginY = switch verticalPlacement {
         case .top:
@@ -154,8 +149,15 @@ struct StoryCanvasForegroundImage: View {
         GeometryReader { proxy in
             image
                 .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                // Uploaded story images are normalized to the 9:16 canvas.
+                // Fit is deliberately used here so the viewer never applies a
+                // second crop if a legacy or transient rendition differs.
+                .scaledToFit()
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .center
+                )
                 .offset(y: proxy.size.height * verticalContentOffsetFraction)
         }
     }

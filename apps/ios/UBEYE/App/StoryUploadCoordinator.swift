@@ -14,6 +14,27 @@ enum StoryUploadVisibilityPolicy {
     }
 }
 
+enum PendingStoryUploadIDPolicy {
+    static func isPending(_ id: String) -> Bool {
+        id.hasPrefix("pending-story-")
+    }
+}
+
+enum PendingStoryMergePolicy {
+    static func merge<Item>(
+        base: [Item],
+        pending: [Item],
+        id: (Item) -> String
+    ) -> [Item] {
+        let pendingIDs = Set(pending.map(id))
+        return base.filter { item in
+            let itemID = id(item)
+            return !PendingStoryUploadIDPolicy.isPending(itemID) &&
+                !pendingIDs.contains(itemID)
+        } + pending
+    }
+}
+
 @MainActor
 final class StoryUploadCoordinator: ObservableObject {
     @Published private(set) var registrations: [StoryUploadResponse] = []
@@ -771,14 +792,14 @@ final class PendingStoryUploadStore: ObservableObject {
         batchId: String? = nil,
         batchPosition: Int? = nil,
         batchCount: Int? = nil
-    ) throws -> PendingStoryUpload {
+    ) async throws -> PendingStoryUpload {
         try ensureDirectories()
         let id = Self.makePendingId()
         let fileExtension = (upload.fileName as NSString).pathExtension.isEmpty
             ? "jpg"
             : (upload.fileName as NSString).pathExtension
         let mediaURL = filesURL.appendingPathComponent("\(id).\(fileExtension)")
-        try upload.data.write(to: mediaURL, options: .atomic)
+        try await StoryUploadFileIO.write(upload.data, to: mediaURL)
 
         let pending = PendingStoryUpload(
             id: id,
@@ -1004,9 +1025,11 @@ final class PendingStoryUploadStore: ObservableObject {
             return feed
         }
 
-        let mergedItems = feed.myStory.items.filter { item in
-            !pendingCards.contains { $0.id == item.id }
-        } + pendingCards
+        let mergedItems = PendingStoryMergePolicy.merge(
+            base: feed.myStory.items,
+            pending: pendingCards,
+            id: \StoryCard.id
+        )
         let latestItem = mergedItems.last
         let latestThumbnailUrl = latestItem?.cardThumbnailUrl
         let myStory = MyStorySummary(
@@ -1051,9 +1074,11 @@ final class PendingStoryUploadStore: ObservableObject {
             items: []
         )
         let pendingItems = visibleUploads.map(stackItem(for:))
-        let mergedItems = base.items.filter { item in
-            !pendingItems.contains { $0.id == item.id }
-        } + pendingItems
+        let mergedItems = PendingStoryMergePolicy.merge(
+            base: base.items,
+            pending: pendingItems,
+            id: \StoryStackItem.id
+        )
 
         return StoryStack(
             id: base.id,
@@ -1066,7 +1091,7 @@ final class PendingStoryUploadStore: ObservableObject {
     }
 
     static func isPendingStoryId(_ id: String) -> Bool {
-        id.hasPrefix("pending-story-")
+        PendingStoryUploadIDPolicy.isPending(id)
     }
 
     private func uploadImage(_ upload: PendingStoryUpload, api: APIClient) async throws -> StoryUploadResponse {
