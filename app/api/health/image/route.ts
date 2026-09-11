@@ -5,7 +5,10 @@ import {
   probeCloudflareR2Buckets,
 } from "@/lib/cloudflare-r2"
 import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
-import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import {
+  areDurableMediaWorkersEnabled,
+  isWorkflowDispatchEnabled,
+} from "@/lib/media-pipeline/features"
 
 export const runtime = "nodejs"
 
@@ -29,6 +32,7 @@ export async function GET() {
     cloudflareR2Configured,
     cloudflareR2ApiProbe,
     durableMediaWorkers: areDurableMediaWorkersEnabled(),
+    workflowDispatch: isWorkflowDispatchEnabled(),
     publicDeliveryUrl: Boolean(
       process.env.CLOUDFLARE_R2_PUBLIC_BASE_URL?.trim(),
     ),

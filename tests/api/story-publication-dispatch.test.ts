@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getDb } from "@/lib/db"
 import { start } from "workflow/api"
@@ -9,6 +9,8 @@ vi.mock("workflow/api", () => ({ start: vi.fn() }))
 vi.mock("@/workflows/story-publication", () => ({
   publishStoryWorkflow: vi.fn(),
 }))
+
+const originalWorkflowDispatch = process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED
 
 function publicationDb(
   dispatch: {
@@ -39,6 +41,18 @@ function publicationDb(
 }
 
 describe("story publication dispatch", () => {
+  beforeAll(() => {
+    process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED = "true"
+  })
+
+  afterAll(() => {
+    if (originalWorkflowDispatch === undefined) {
+      delete process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED
+    } else {
+      process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED = originalWorkflowDispatch
+    }
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getDb).mockReturnValue(publicationDb() as never)

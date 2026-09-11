@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
 
 import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm"
+import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { imageProcessingJobs, mediaAssets } from "@/lib/db/schema"
-import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import type { StoryImageContentMode } from "@/lib/story-image-processing"
 import { processImageWorkflow } from "@/workflows/image-processing"
 import {
@@ -52,22 +53,40 @@ export async function createImageProcessingJob(input: {
   return existing
 }
 
-export async function scheduleImageProcessing(jobId: string, source: string) {
-  if (!areDurableMediaWorkersEnabled()) {
-    const runId = `direct-${randomUUID()}`
-    const claimed = await claimImageProcessingStep(jobId, runId)
-    if (!claimed) return { jobId, runId: null }
+const staleImageProcessingLeaseMs = 5 * 60 * 1_000
+const failedImageProcessingRetryDelayMs = 60 * 1_000
 
-    try {
-      const output = await processImageAssetStep(jobId)
-      const result = await completeImageProcessingStep(jobId, output)
-      console.info("image_processing_direct_finished", { jobId, source, result })
-      return { jobId, runId }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      await failImageProcessingStep(jobId, message)
-      throw error
-    }
+async function processImageDirect(jobId: string, source: string) {
+  const runId = `direct-${randomUUID()}`
+  const claimed = await claimImageProcessingStep(jobId, runId)
+  if (!claimed) return { jobId, runId: null }
+
+  try {
+    const output = await processImageAssetStep(jobId)
+    const result = await completeImageProcessingStep(jobId, output)
+    console.info("image_processing_direct_finished", { jobId, source, result })
+    return { jobId, runId }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await failImageProcessingStep(jobId, message)
+    throw error
+  }
+}
+
+export async function scheduleImageProcessing(jobId: string, source: string) {
+  if (!isWorkflowDispatchEnabled()) {
+    after(async () => {
+      try {
+        await processImageDirect(jobId, source)
+      } catch (error) {
+        console.error("image_processing_direct_failed", {
+          jobId,
+          source,
+          error,
+        })
+      }
+    })
+    return { jobId, runId: null }
   }
 
   const run = await start(processImageWorkflow, [jobId])
@@ -86,7 +105,38 @@ export async function enqueueImageProcessing(input: {
   source: string
 }) {
   const job = await createImageProcessingJob(input)
-  if (job.status === "ready" || job.status === "processing") {
+  if (job.status === "ready") {
+    return { jobId: job.id, runId: job.workflowRunId }
+  }
+  if (job.status === "processing") {
+    const leaseExpired =
+      job.updatedAt.getTime() <= Date.now() - staleImageProcessingLeaseMs
+    if (!leaseExpired) {
+      return { jobId: job.id, runId: job.workflowRunId }
+    }
+
+    const [released] = await getDb()
+      .update(imageProcessingJobs)
+      .set({
+        status: "error",
+        workflowRunId: null,
+        lastError: "The previous image worker lease expired; retrying.",
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(imageProcessingJobs.id, job.id),
+          eq(imageProcessingJobs.status, "processing"),
+          eq(imageProcessingJobs.updatedAt, job.updatedAt),
+        ),
+      )
+      .returning({ id: imageProcessingJobs.id })
+    if (!released) return { jobId: job.id, runId: job.workflowRunId }
+  }
+  if (
+    job.status === "error" &&
+    job.updatedAt.getTime() > Date.now() - failedImageProcessingRetryDelayMs
+  ) {
     return { jobId: job.id, runId: job.workflowRunId }
   }
   return scheduleImageProcessing(job.id, input.source)
@@ -114,6 +164,24 @@ export async function recoverImageProcessingForAsset(mediaAssetId: string) {
 export async function reconcileImageProcessingJobs(
   input: { limit?: number } = {},
 ) {
+  const staleBefore = new Date(Date.now() - staleImageProcessingLeaseMs)
+  const releasedLeases = await getDb()
+    .update(imageProcessingJobs)
+    .set({
+      status: "error",
+      workflowRunId: null,
+      lastError: "The previous image worker lease expired; retrying.",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(imageProcessingJobs.status, "processing"),
+        lt(imageProcessingJobs.updatedAt, staleBefore),
+        lt(imageProcessingJobs.attempts, 6),
+      ),
+    )
+    .returning({ id: imageProcessingJobs.id })
+
   const orphanedAssets = await getDb()
     .select({
       id: mediaAssets.id,
@@ -157,11 +225,14 @@ export async function reconcileImageProcessingJobs(
     .orderBy(asc(imageProcessingJobs.updatedAt))
     .limit(Math.min(Math.max(input.limit ?? 10, 1), 25))
 
+  const jobIds = [
+    ...new Set([...releasedLeases, ...rows].map(({ id }) => id)),
+  ]
   const results = await Promise.allSettled(
-    rows.map(({ id }) => scheduleImageProcessing(id, "scheduled_reconciliation")),
+    jobIds.map((id) => scheduleImageProcessing(id, "scheduled_reconciliation")),
   )
   return {
-    scanned: rows.length,
+    scanned: jobIds.length,
     scheduled: results.filter(({ status }) => status === "fulfilled").length,
     failed: results.filter(({ status }) => status === "rejected").length,
   }

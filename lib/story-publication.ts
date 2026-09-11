@@ -1,9 +1,10 @@
 import { and, desc, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories, storyPublishJobs } from "@/lib/db/schema"
-import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import {
   completeStoryPublicationStep,
   failStoryPublicationStep,
@@ -143,9 +144,15 @@ export async function enqueueStoryPublication(
     if (!claim) return null
     claimedAttempt = claim.attempts
 
-    if (!areDurableMediaWorkersEnabled()) {
-      const completed = await processStoryPublicationDirect(storyId)
-      return completed ? storyId : null
+    if (!isWorkflowDispatchEnabled()) {
+      after(async () => {
+        try {
+          await processStoryPublicationDirect(storyId)
+        } catch (error) {
+          console.error("story_publication_direct_failed", { storyId, error })
+        }
+      })
+      return storyId
     }
 
     const run = await start(publishStoryWorkflow, [storyId])

@@ -1,7 +1,7 @@
 import { after } from "next/server"
 import { start } from "workflow/api"
 
-import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import { processMediaWorkflow } from "@/workflows/media-processing"
 import { processMediaJobRun } from "./direct-processing"
 
@@ -14,7 +14,7 @@ type MediaProcessingDispatch = {
 export async function dispatchMediaProcessing(
   payload: MediaProcessingDispatch,
 ) {
-  if (!areDurableMediaWorkersEnabled()) {
+  if (!isWorkflowDispatchEnabled()) {
     return processMediaJobRun(payload.jobId)
   }
 
@@ -23,7 +23,7 @@ export async function dispatchMediaProcessing(
 }
 
 export async function scheduleMediaProcessing(jobId: string, source: string) {
-  if (!areDurableMediaWorkersEnabled()) {
+  if (!isWorkflowDispatchEnabled()) {
     after(async () => {
       try {
         const result = await dispatchMediaProcessing({ jobId, source })

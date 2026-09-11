@@ -20,6 +20,13 @@ export function areDurableMediaWorkersEnabled() {
   return process.env.MEDIA_ASYNC_COMPLETION_ENABLED !== "false"
 }
 
+// Workflow is an optional dispatch transport, not the feature flag for
+// asynchronous media completion. Keep it opt-in so exhausting a Workflow plan
+// cannot strand otherwise durable database-backed jobs.
+export function isWorkflowDispatchEnabled() {
+  return process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED === "true"
+}
+
 export function isAsyncMediaCompletionEnabled(clientBuild: number) {
   return (
     Number.isFinite(clientBuild) &&

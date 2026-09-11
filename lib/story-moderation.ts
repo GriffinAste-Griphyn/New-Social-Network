@@ -1,17 +1,24 @@
 import { and, asc, eq, gt } from "drizzle-orm"
+import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories } from "@/lib/db/schema"
-import { areDurableMediaWorkersEnabled } from "@/lib/media-pipeline/features"
+import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import { moderatePendingStory } from "@/lib/story-moderation-core"
 import { moderateStoryWorkflow } from "@/workflows/story-moderation"
 
 export async function enqueueStoryModeration(storyId: string) {
-  if (!areDurableMediaWorkersEnabled()) {
-    const result = await moderatePendingStory(storyId)
-    console.info("story_moderation_direct_finished", { storyId, result })
-    return { storyId, runId: null, result }
+  if (!isWorkflowDispatchEnabled()) {
+    after(async () => {
+      try {
+        const result = await moderatePendingStory(storyId)
+        console.info("story_moderation_direct_finished", { storyId, result })
+      } catch (error) {
+        console.error("story_moderation_direct_failed", { storyId, error })
+      }
+    })
+    return { storyId, runId: null }
   }
 
   const run = await start(moderateStoryWorkflow, [storyId])

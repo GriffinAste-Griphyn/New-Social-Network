@@ -4,6 +4,7 @@ import {
   areDurableMediaWorkersEnabled,
   isAsyncMediaCompletionEnabled,
   isDirectMediaDeliveryEnabled,
+  isWorkflowDispatchEnabled,
   mediaDeliveryAccess,
   minimumAsyncMediaCompletionBuild,
   minimumVercelHlsUploadBuild,
@@ -12,6 +13,7 @@ import {
 
 const originalAsyncCompletion = process.env.MEDIA_ASYNC_COMPLETION_ENABLED
 const originalDeliveryAccess = process.env.MEDIA_DELIVERY_ACCESS
+const originalWorkflowDispatch = process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED
 
 afterEach(() => {
   if (originalAsyncCompletion === undefined) {
@@ -23,6 +25,11 @@ afterEach(() => {
     delete process.env.MEDIA_DELIVERY_ACCESS
   } else {
     process.env.MEDIA_DELIVERY_ACCESS = originalDeliveryAccess
+  }
+  if (originalWorkflowDispatch === undefined) {
+    delete process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED
+  } else {
+    process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED = originalWorkflowDispatch
   }
 })
 
@@ -46,6 +53,13 @@ describe("media pipeline rollout features", () => {
     process.env.MEDIA_DELIVERY_ACCESS = "public"
     expect(mediaDeliveryAccess()).toBe("public")
     expect(isDirectMediaDeliveryEnabled()).toBe(true)
+  })
+
+  it("keeps quota-bound Workflow dispatch opt-in", () => {
+    delete process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED
+    expect(isWorkflowDispatchEnabled()).toBe(false)
+    process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED = "true"
+    expect(isWorkflowDispatchEnabled()).toBe(true)
   })
 
   it("only assigns Vercel uploads to clients that advertise the protocol", () => {

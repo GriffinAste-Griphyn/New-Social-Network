@@ -44,7 +44,7 @@ import {
 } from "@/lib/story-validators"
 
 export const runtime = "nodejs"
-export const maxDuration = 60
+export const maxDuration = 300
 
 const clientDerivativeSchema = z.object({
   pathname: z.string().trim().min(1).max(500),
