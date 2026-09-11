@@ -268,10 +268,10 @@ export async function POST(request: Request) {
     const useAsyncCompletion =
       Boolean(parsed.data.sourceUpload) &&
       isAsyncMediaCompletionEnabled(clientBuild)
-    // All new story photos use an edge-to-edge 9:16 crop. Continue accepting
-    // the legacy `fit` value so older clients remain compatible, but never
-    // reintroduce blurred or letterboxed delivery canvases.
-    const contentMode = "fill" as const
+    // Preserve the composition selected by the client. The schema default keeps
+    // older clients on their original fill behavior, while current clients use
+    // fit so landscape and square photos are never irreversibly cropped.
+    const contentMode = parsed.data.contentMode
 
     if (
       parsed.data.storageProvider === "cloudflare-r2" &&

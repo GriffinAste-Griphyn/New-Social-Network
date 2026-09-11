@@ -464,6 +464,7 @@ final class MediaPerformanceTests: XCTestCase {
 
         XCTAssertEqual(upload.fileName, "story-photo.jpg")
         XCTAssertEqual(upload.mimeType, "image/jpeg")
+        XCTAssertEqual(upload.contentMode, .fit)
         XCTAssertNotEqual(upload.data, sourceData)
 
         let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(upload.data as CFData, nil))
@@ -478,6 +479,33 @@ final class MediaPerformanceTests: XCTestCase {
             (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
             StoryImageUpload.playbackCanvasHeight
         )
+    }
+
+    func testStoryImageUploadPreservesWidePhotoCompositionByDefault() throws {
+        let sourceImage = makeHorizontalEdgeMarkerImage(width: 1_600, height: 1_200)
+        let sourceData = try XCTUnwrap(sourceImage.pngData())
+        let upload = try XCTUnwrap(StoryImageUpload(data: sourceData))
+        let imageSource = try XCTUnwrap(
+            CGImageSourceCreateWithData(upload.data as CFData, nil)
+        )
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(imageSource, 0, nil))
+        let middleY = image.height / 2
+        let leftPixel = try XCTUnwrap(rgbaPixel(in: image, x: 5, y: middleY))
+        let rightPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width - 6, y: middleY)
+        )
+        let topPixel = try XCTUnwrap(
+            rgbaPixel(in: image, x: image.width / 2, y: 5)
+        )
+
+        XCTAssertEqual(upload.contentMode, .fit)
+        XCTAssertGreaterThan(leftPixel[0], leftPixel[1])
+        XCTAssertGreaterThan(leftPixel[0], leftPixel[2])
+        XCTAssertGreaterThan(rightPixel[1], rightPixel[0])
+        XCTAssertGreaterThan(rightPixel[1], rightPixel[2])
+        for component in 0..<3 {
+            XCTAssertLessThan(topPixel[component], 10)
+        }
     }
 
     func testStoryImageTranscoderHonorsOrientationFromFileURL() throws {
@@ -830,6 +858,7 @@ final class MediaPerformanceTests: XCTestCase {
     }
 
     func testStoryImageDerivativeBuilderProducesCanonicalBoundedVariants() async throws {
+        XCTAssertEqual(StoryImageDerivativeBuilder.displayContentMode, .fit)
         XCTAssertEqual(StoryImageDerivativeBuilder.thumbnailContentMode, .fill)
 
         let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)

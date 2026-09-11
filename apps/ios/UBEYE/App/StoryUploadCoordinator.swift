@@ -556,7 +556,8 @@ enum StoryUploadFileIO {
 }
 
 enum StoryImageDerivativeBuilder {
-    // Story cards mirror the edge-to-edge playback crop.
+    static let displayContentMode = StoryImageContentMode.fit
+    // Compact cards may crop; full-size playback must preserve the composition.
     static let thumbnailContentMode = StoryImageContentMode.fill
 
     static func build(fileURL: URL) async throws -> LocalImageDerivativeSet {
@@ -565,7 +566,7 @@ enum StoryImageDerivativeBuilder {
                 fileURL: fileURL,
                 width: StoryImageUpload.playbackCanvasWidth,
                 height: StoryImageUpload.playbackCanvasHeight,
-                contentMode: .fill
+                contentMode: displayContentMode
             ),
             let thumbnailImage = StoryImageTranscoder.storyCanvasImage(
                 fileURL: fileURL,

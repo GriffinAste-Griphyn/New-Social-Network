@@ -270,6 +270,7 @@ describe("mobile image completion", () => {
       completionRequest({
         storageProvider: "cloudflare-r2",
         sourceUpload,
+        contentMode: "fit",
       }, 400),
     )
 
@@ -284,12 +285,12 @@ describe("mobile image completion", () => {
     expect(enqueueImageProcessing).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaAssetId: "media-image-1",
-        contentMode: "fill",
+        contentMode: "fit",
       }),
     )
   })
 
-  it("overrides legacy fit requests with fill-only server encoding", async () => {
+  it("preserves fit requests during server encoding", async () => {
     vi.mocked(createStory).mockResolvedValue(
       "22222222-2222-4222-8222-222222222222",
     )
@@ -311,7 +312,7 @@ describe("mobile image completion", () => {
 
     expect(response.status).toBe(200)
     expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith(
-      expect.objectContaining({ contentMode: "fill" }),
+      expect.objectContaining({ contentMode: "fit" }),
     )
   })
 })

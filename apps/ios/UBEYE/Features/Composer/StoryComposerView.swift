@@ -43,29 +43,34 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     let data: Data
     let fileName: String
     let mimeType: String
+    let contentMode: StoryImageContentMode
 
     static func prepare(
         data: Data,
         fallbackFileName: String = "story-photo",
-        displayImage: UIImage? = nil
+        displayImage: UIImage? = nil,
+        contentMode: StoryImageContentMode = .fit
     ) async -> StoryImageUpload? {
         await Task.detached(priority: .userInitiated) {
             StoryImageUpload(
                 data: data,
                 fallbackFileName: fallbackFileName,
-                displayImage: displayImage
+                displayImage: displayImage,
+                contentMode: contentMode
             )
         }.value
     }
 
     static func prepare(
         fileURL: URL,
-        fallbackFileName: String = "story-photo"
+        fallbackFileName: String = "story-photo",
+        contentMode: StoryImageContentMode = .fit
     ) async -> StoryImageUpload? {
         await Task.detached(priority: .userInitiated) {
             StoryImageUpload(
                 fileURL: fileURL,
-                fallbackFileName: fallbackFileName
+                fallbackFileName: fallbackFileName,
+                contentMode: contentMode
             )
         }.value
     }
@@ -73,14 +78,15 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     init?(
         data: Data,
         fallbackFileName: String = "story-photo",
-        displayImage: UIImage? = nil
+        displayImage: UIImage? = nil,
+        contentMode: StoryImageContentMode = .fit
     ) {
         guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
             data: data,
             width: Self.playbackCanvasWidth,
             height: Self.playbackCanvasHeight,
             quality: Self.preferredUploadJPEGQuality,
-            contentMode: .fill
+            contentMode: contentMode
         ), normalized.data.count <= Self.maximumUploadBytes else {
             return nil
         }
@@ -95,18 +101,20 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         self.data = normalized.data
         fileName = Self.normalizedFileName(fallbackFileName, fileExtension: "jpg")
         mimeType = "image/jpeg"
+        self.contentMode = contentMode
     }
 
     init?(
         fileURL: URL,
-        fallbackFileName: String = "story-photo"
+        fallbackFileName: String = "story-photo",
+        contentMode: StoryImageContentMode = .fit
     ) {
         guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
             fileURL: fileURL,
             width: Self.playbackCanvasWidth,
             height: Self.playbackCanvasHeight,
             quality: Self.preferredUploadJPEGQuality,
-            contentMode: .fill
+            contentMode: contentMode
         ), normalized.data.count <= Self.maximumUploadBytes else {
             return nil
         }
@@ -121,6 +129,7 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         data = normalized.data
         fileName = Self.normalizedFileName(fallbackFileName, fileExtension: "jpg")
         mimeType = "image/jpeg"
+        self.contentMode = contentMode
     }
 
     private static func normalizedFileName(_ value: String, fileExtension: String) -> String {
@@ -139,7 +148,8 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     static func == (lhs: StoryImageUpload, rhs: StoryImageUpload) -> Bool {
         lhs.data == rhs.data &&
             lhs.fileName == rhs.fileName &&
-            lhs.mimeType == rhs.mimeType
+            lhs.mimeType == rhs.mimeType &&
+            lhs.contentMode == rhs.contentMode
     }
 }
 
@@ -868,7 +878,7 @@ final class StoryComposerStore: ObservableObject {
                 uploadStatus = "Posting"
                 let pendingUpload = try await pendingUploads.createImageUpload(
                     upload: upload,
-                    contentMode: .fill,
+                    contentMode: upload.contentMode,
                     draft: pendingUploadDraft,
                     textOverlays: pendingTextOverlays
                 )
@@ -1019,7 +1029,7 @@ final class StoryComposerStore: ObservableObject {
             }
             return try await pendingUploads.createImageUpload(
                 upload: upload,
-                contentMode: .fill,
+                contentMode: upload.contentMode,
                 draft: pendingUploadDraft,
                 textOverlays: pendingTextOverlays,
                 batchId: batchId,
