@@ -61,7 +61,7 @@ const completeImageSchema = z.object({
   sourceUpload: clientDerivativeSchema.optional(),
   displayDerivative: clientDerivativeSchema.optional(),
   thumbnailDerivative: clientDerivativeSchema.optional(),
-  contentMode: z.enum(["fit", "fill"]).default("fill"),
+  contentMode: z.enum(["fit", "fill"]).default("fit"),
   thumbHash: z
     .string()
     .trim()

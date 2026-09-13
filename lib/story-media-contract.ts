@@ -8,6 +8,10 @@ export const storyMediaContract = {
     width: 360,
     height: 640,
   },
+  imageFraming: {
+    defaultContentMode: "fit",
+    paddingColor: "#000000",
+  },
   upload: {
     maxImageBytes: 25 * 1024 * 1024,
     maxVideoBytes: 512 * 1024 * 1024,
@@ -39,6 +43,8 @@ export const storyMediaContract = {
   ],
   imageDeliveryContentTypes: ["image/avif", "image/webp"],
 } as const
+
+export type StoryImageContentMode = "fit" | "fill"
 
 export const storyMediaInputAccept = [
   ...storyMediaContract.imageInputContentTypes,

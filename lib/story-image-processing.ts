@@ -14,7 +14,7 @@ import {
 import { highestQualityImageWithinBudget } from "@/lib/story-image-encoding"
 import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 import { buildStoryMediaRoute } from "@/lib/story-media/access"
-import { storyMediaContract } from "@/lib/story-media-contract"
+import { storyMediaContract, type StoryImageContentMode } from "@/lib/story-media-contract"
 import {
   directStoryImageDisplayPathname,
   directStoryImageSourcePathname,
@@ -32,7 +32,7 @@ export type DirectStoryImageSourceInput = {
   checksum: string
 }
 
-export type StoryImageContentMode = "fit" | "fill"
+export type { StoryImageContentMode } from "@/lib/story-media-contract"
 
 export function storyImageResizeOptions(contentMode: StoryImageContentMode) {
   return {
@@ -45,7 +45,7 @@ export function storyImageResizeOptions(contentMode: StoryImageContentMode) {
 
 export async function createStoryCanvasImage(
   sourceBody: Buffer,
-  contentMode: StoryImageContentMode = "fill",
+  contentMode: StoryImageContentMode = storyMediaContract.imageFraming.defaultContentMode,
 ) {
   const sourceOptions = {
     autoOrient: true,

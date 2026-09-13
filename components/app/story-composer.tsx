@@ -1,6 +1,8 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import Image from "next/image"
+import { StoryFramingControl } from "@/components/app/story-framing-control"
 import { put } from "@vercel/blob/client"
 import { Camera, Clapperboard, Coins, Loader2 } from "lucide-react"
 import { rgbaToThumbHash } from "thumbhash"
@@ -22,6 +24,7 @@ import {
   isSupportedStoryVideoInputContentType,
   storyMediaContract,
   storyMediaInputAccept,
+  type StoryImageContentMode,
 } from "@/lib/story-media-contract"
 
 type StoryComposerProps = {
@@ -178,36 +181,31 @@ async function highestQualityCanvasBlobWithinBudget(
   })
 }
 
-function storyCanvas(image: ImageBitmap, width: number, height: number) {
+function storyCanvas(
+  image: ImageBitmap,
+  width: number,
+  height: number,
+  contentMode: StoryImageContentMode,
+) {
   const canvas = document.createElement("canvas")
   canvas.width = width
   canvas.height = height
   const context = canvas.getContext("2d", { alpha: false })
   if (!context) throw new Error("Could not prepare this image.")
 
-  const containScale = Math.min(width / image.width, height / image.height)
-  const containWidth = image.width * containScale
-  const containHeight = image.height * containScale
-  const coverScale = Math.max(width / image.width, height / image.height) * 1.08
-  const coverWidth = image.width * coverScale
-  const coverHeight = image.height * coverScale
-
-  context.save()
-  context.filter = `blur(${Math.max(width, height) * 0.025}px) brightness(70%) saturate(85%)`
+  const scale = contentMode === "fill"
+    ? Math.max(width / image.width, height / image.height)
+    : Math.min(width / image.width, height / image.height)
+  const fittedWidth = image.width * scale
+  const fittedHeight = image.height * scale
+  context.fillStyle = storyMediaContract.imageFraming.paddingColor
+  context.fillRect(0, 0, width, height)
   context.drawImage(
     image,
-    (width - coverWidth) / 2,
-    (height - coverHeight) / 2,
-    coverWidth,
-    coverHeight,
-  )
-  context.restore()
-  context.drawImage(
-    image,
-    (width - containWidth) / 2,
-    (height - containHeight) / 2,
-    containWidth,
-    containHeight,
+    (width - fittedWidth) / 2,
+    (height - fittedHeight) / 2,
+    fittedWidth,
+    fittedHeight,
   )
   return canvas
 }
@@ -223,19 +221,21 @@ function base64Url(bytes: Uint8Array) {
     .replace(/=+$/, "")
 }
 
-async function buildBrowserImageDerivatives(file: File) {
+async function buildBrowserImageDerivatives(file: File, contentMode: StoryImageContentMode) {
   const image = await createImageBitmap(file, { imageOrientation: "from-image" })
   try {
     const displayCanvas = storyCanvas(
       image,
       storyMediaContract.canvas.width,
       storyMediaContract.canvas.height,
+      contentMode,
     )
-    const thumbnailCanvas = storyCanvas(
-      image,
-      storyMediaContract.thumbnail.width,
-      storyMediaContract.thumbnail.height,
-    )
+    const thumbnailCanvas = document.createElement("canvas")
+    thumbnailCanvas.width = storyMediaContract.thumbnail.width
+    thumbnailCanvas.height = storyMediaContract.thumbnail.height
+    const thumbnailContext = thumbnailCanvas.getContext("2d", { alpha: false })
+    if (!thumbnailContext) throw new Error("Could not prepare this image.")
+    thumbnailContext.drawImage(displayCanvas, 0, 0, thumbnailCanvas.width, thumbnailCanvas.height)
     const avifDisplay = await highestQualityCanvasBlobWithinBudget(
       displayCanvas,
       "image/avif",
@@ -829,18 +829,32 @@ async function uploadTusFile(input: {
 }
 
 export function StoryComposer({ handle }: StoryComposerProps) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [imageContentMode, setImageContentMode] = useState<StoryImageContentMode>(storyMediaContract.imageFraming.defaultContentMode)
   const [isUploading, setIsUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [statusText, setStatusText] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const previewUrlRef = useRef<string | null>(null)
   const uploadAbortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(
     () => () => {
       uploadAbortControllerRef.current?.abort()
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     },
     [],
   )
+
+  function handleMediaChange(file: File | null) {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    const url = file ? URL.createObjectURL(file) : null
+    previewUrlRef.current = url
+    setSelectedFile(file)
+    setPreviewUrl(url)
+    setImageContentMode(storyMediaContract.imageFraming.defaultContentMode)
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -915,7 +929,7 @@ export function StoryComposer({ handle }: StoryComposerProps) {
 
       const imageDerivatives =
         assetKind === "image"
-          ? await buildBrowserImageDerivatives(mediaEntry)
+          ? await buildBrowserImageDerivatives(mediaEntry, imageContentMode)
           : null
       const videoChecksum =
         assetKind === "video" ? await sha256Hex(mediaEntry) : null
@@ -1163,6 +1177,9 @@ export function StoryComposer({ handle }: StoryComposerProps) {
               name="media"
               type="file"
               accept={storyMediaInputAccept}
+              onChange={(event) => {
+                handleMediaChange(event.currentTarget.files?.[0] ?? null)
+              }}
               disabled={isUploading}
               required
             />
@@ -1171,6 +1188,22 @@ export function StoryComposer({ handle }: StoryComposerProps) {
               videos may be up to 512 MB and 2 minutes.
             </p>
           </div>
+
+          <input type="hidden" name="imageContentMode" value={imageContentMode} />
+          {selectedFile && previewUrl ? (
+            <div className="space-y-3">
+              <div className="relative mx-auto aspect-[9/16] w-full max-w-[320px] overflow-hidden rounded-[8px] bg-black">
+                {fileAssetKind(selectedFile) === "video" ? (
+                  <video src={previewUrl} aria-label="Selected story preview" controls playsInline className="h-full w-full object-contain" />
+                ) : (
+                  <Image src={previewUrl} alt="Selected story preview" fill unoptimized sizes="320px" className={imageContentMode === "fill" ? "object-cover" : "object-contain"} />
+                )}
+              </div>
+              {fileAssetKind(selectedFile) === "image" ? (
+                <StoryFramingControl value={imageContentMode} onChange={setImageContentMode} disabled={isUploading} />
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="space-y-1.5">
             <label htmlFor="caption" className="text-sm font-medium text-foreground">

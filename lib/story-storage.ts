@@ -28,6 +28,7 @@ import {
 import {
   isSupportedStoryImageInputContentType,
   storyMediaContract,
+  type StoryImageContentMode,
 } from "@/lib/story-media-contract"
 export {
   createStoryMediaAccessToken,
@@ -1669,7 +1670,10 @@ async function normalizeVideoForLocalPlayback(buffer: Buffer): Promise<Buffer> {
   }
 }
 
-export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
+export async function saveStoryAsset(
+  file: File,
+  imageContentMode: StoryImageContentMode = storyMediaContract.imageFraming.defaultContentMode,
+): Promise<StoredStoryAsset> {
   if (!(file instanceof File) || file.size === 0) {
     throw new StoryUploadError("Choose an image or video before posting.")
   }
@@ -1750,7 +1754,7 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
       return await createServerEncodedStoryImageAsset({
         basePathname,
         ownerUserId: "server",
-        contentMode: "fill",
+        contentMode: imageContentMode,
         storageProvider: "cloudflare-r2",
         source: {
           pathname: sourcePathname,
@@ -1763,6 +1767,20 @@ export async function saveStoryAsset(file: File): Promise<StoredStoryAsset> {
       await removeCloudflareR2Original(sourcePathname).catch(() => undefined)
       throw error
     }
+  }
+
+  if (assetKind === "image") {
+    const { createStoryCanvasImage } = await import("@/lib/story-image-processing")
+    const canvas = await createStoryCanvasImage(storedBuffer, imageContentMode)
+    const normalizedBuffer = await canvas.flatten({ background: "#000000" }).jpeg({ quality: 85 }).toBuffer()
+    return getStoryStorageProvider().save(
+      `${randomUUID()}.jpg`,
+      normalizedBuffer,
+      "image",
+      "image/jpeg",
+      createHash("sha256").update(normalizedBuffer).digest("hex"),
+      { ...metadata, width: directStoryImageDisplayWidth, height: directStoryImageDisplayHeight },
+    )
   }
 
   return getStoryStorageProvider().save(

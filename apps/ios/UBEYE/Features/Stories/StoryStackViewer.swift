@@ -814,14 +814,12 @@ struct StoryStackViewer: View {
                     EmptyStateView(title: "Story unavailable", message: error, systemImage: "exclamationmark.triangle")
                         .padding()
                 } else if let stack = store.stack, let item = stack.items[safe: index] {
-                    let canvasVerticalPlacement = storyCanvasVerticalPlacement(for: item)
                     let canvasLayout = StoryCanvasLayout(
                         containerSize: proxy.size,
                         reservedBottomHeight: storyCanvasReservedBottomHeight(
                             for: stack,
                             safeAreaBottom: safeAreaInsets.bottom
-                        ),
-                        verticalPlacement: canvasVerticalPlacement
+                        )
                     )
 
                     Group {
@@ -832,9 +830,7 @@ struct StoryStackViewer: View {
                     }
                         .storyCanvasFrame(
                             canvasLayout,
-                            cornerRadius: canvasVerticalPlacement == .top
-                                ? 0
-                                : storyCanvasCornerRadius
+                            cornerRadius: storyCanvasCornerRadius
                         )
                         .onAppear {
                             store.markActiveItem(item)
@@ -1572,19 +1568,6 @@ struct StoryStackViewer: View {
 
         let restingBottomPadding = max(safeAreaBottom + 10, bottomChromeScreenGap)
         return chromeHeight + restingBottomPadding
-    }
-
-    private func storyCanvasVerticalPlacement(
-        for item: StoryStackItem
-    ) -> StoryCanvasVerticalPlacement {
-        // Source orientation distinguishes full-height portrait media from
-        // letterboxed landscape media even though image playback derivatives
-        // share a canonical 9:16 canvas. Missing legacy image metadata uses the
-        // portrait-safe fallback so full-height stories never slide downward.
-        StoryCanvasVerticalPlacement.forRenditions(
-            item.renditions,
-            missingDimensionsFallback: item.assetKind == .image ? .top : .center
-        )
     }
 
     private func replyConfirmationBottomInset(for stack: StoryStack, safeAreaBottom: CGFloat) -> CGFloat {

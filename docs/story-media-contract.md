@@ -7,16 +7,18 @@ This contract defines how story media is accepted, normalized, positioned, and d
 - Aspect ratio: `9:16`
 - Playback derivative: `1080 × 1920`
 - Thumbnail derivative: `360 × 640`
-- The canvas is centered horizontally and anchored to the top of the usable viewer region.
-- A vertical `9:16` asset fills that canvas from its top edge; it must not be pushed down to center the canvas vertically.
-- Viewer chrome may reserve space below the canvas, but it must not change the canvas aspect ratio.
+- The iOS viewer canvas is centered horizontally and vertically on the full screen, regardless of source orientation or missing legacy dimensions. Web story frames remain `9:16` within their page layouts.
+- Portrait, square, and landscape assets use the same canvas placement.
+- Viewer chrome may reduce the canvas size to fit, but it must not change its aspect ratio or screen-centered placement.
 - Text, link, and quote overlays use percentage coordinates relative to this canvas, not the device screen.
 
 ## Framing
 
-- Photo playback is always aspect-fit and preserves the entire source asset.
-- Space not occupied by fitted media is transparent in photo derivatives and always rendered black by iOS.
-- Photo playback never uses a cover-scaled, blurred, or center-cropped background layer.
+- Photo upload defaults to Fit: preserve the entire source with centered black padding.
+- Creators may explicitly choose Fill to center-crop a photo to the same `9:16` canvas. The preview and exported photo use the same framing.
+- iOS retains an orientation-normalized source during editing so switching from Fill back to Fit restores the whole photo, including for batch uploads.
+- Space not occupied by fitted media is rendered black on both iOS and web. Transparency in source photos may be preserved, with black behind the playback canvas.
+- Photo playback never adds a blurred background or applies an additional crop after export.
 - Feed, discovery, and profile thumbnails may still use a separate cover crop; that crop is never used as story playback media.
 - Video normalization and playback are always aspect-fit with centered black padding, preserving the full source. Its generated poster is used only while the first video frame is loading.
 
@@ -35,7 +37,7 @@ budget. Thumbnail derivatives use the highest configured WebP quality that fits 
 
 ## Derived surfaces
 
-- Full story viewers and composers use the canonical canvas.
+- Full story viewers and composers use the canonical canvas. Video remains Fit with centered black padding; Fill is a photo-only editing choice.
 - Feed, discovery, and profile tiles use their own cover crops from the story thumbnail.
 - A tile crop never changes the canonical story asset or its overlay coordinates.
 

@@ -108,7 +108,11 @@ export async function POST(request: Request) {
     const explicitBrandTags = parseBrandTags(formData.get("brandTags"))
     const elements = parseStoryElements(formData)
 
-    storedAsset = await saveStoryAsset(mediaEntry)
+    const imageContentMode = formData.get("imageContentMode") ?? "fit"
+    if (imageContentMode !== "fit" && imageContentMode !== "fill") {
+      throw new StoryUploadError("Choose Fit or Fill for your photo.")
+    }
+    storedAsset = await saveStoryAsset(mediaEntry, imageContentMode)
     const moderationMediaUrl =
       publicStoryMediaUrl(storedAsset.mediaUrl, request, { signed: true }) ??
       storedAsset.mediaUrl

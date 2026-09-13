@@ -508,6 +508,34 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
+    func testStoryPhotoFramingRestoresSourceAfterCropping() async throws {
+        let sourceData = makeCropTestImageData(width: 1_600, height: 1_200)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photo-framing-\(UUID().uuidString).png")
+        try sourceData.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let uploads = [
+            try XCTUnwrap(StoryImageUpload(data: sourceData)),
+            try XCTUnwrap(StoryImageUpload(fileURL: fileURL))
+        ]
+        for original in uploads {
+            let fillResult = await original.reframed(to: .fill)
+            let filled = try XCTUnwrap(fillResult)
+            let filledImage = try XCTUnwrap(filled.image.cgImage)
+            let filledTop = try XCTUnwrap(rgbaPixel(in: filledImage, x: filledImage.width / 2, y: 5))
+            XCTAssertEqual(filled.contentMode, .fill)
+            XCTAssertGreaterThan(Int(filledTop[0]) + Int(filledTop[1]) + Int(filledTop[2]), 30)
+            XCTAssertEqual(filledImage.width, 1_080)
+            XCTAssertEqual(filledImage.height, 1_920)
+
+            let fitResult = await filled.reframed(to: .fit)
+            let restored = try XCTUnwrap(fitResult)
+            XCTAssertEqual(restored.contentMode, .fit)
+            XCTAssertEqual(restored.data, original.data)
+        }
+    }
+
     func testStoryImageTranscoderHonorsOrientationFromFileURL() throws {
         let sourceData = try makeOrientedJPEGData(width: 1_200, height: 800)
         let fileURL = FileManager.default.temporaryDirectory
@@ -688,100 +716,25 @@ final class MediaPerformanceTests: XCTestCase {
         }
     }
 
-    func testStoryCanvasLayoutFitsTopAlignedPortraitMediaWithoutHorizontalCrop() {
+    func testStoryCanvasLayoutCentersPortraitMediaWithoutHorizontalCrop() {
         let screenSize = CGSize(width: 393, height: 852)
         let reservedBottomHeight = CGFloat(90)
         let layout = StoryCanvasLayout(
             containerSize: screenSize,
-            reservedBottomHeight: reservedBottomHeight,
-            verticalPlacement: .top
+            reservedBottomHeight: reservedBottomHeight
         )
 
-        XCTAssertEqual(layout.frame.minY, 0, accuracy: 0.000_1)
+        XCTAssertEqual(layout.frame.midY, screenSize.height / 2, accuracy: 0.000_1)
         XCTAssertEqual(layout.frame.minX, 0, accuracy: 0.000_1)
         XCTAssertEqual(layout.frame.maxX, screenSize.width, accuracy: 0.000_1)
         XCTAssertLessThanOrEqual(
             layout.frame.maxY,
-            screenSize.height - reservedBottomHeight + 0.000_1
+            screenSize.height + 0.000_1
         )
         XCTAssertEqual(
             layout.frame.width / layout.frame.height,
             StoryCanvasLayout.aspectRatio,
             accuracy: 0.000_1
-        )
-    }
-
-    func testStoryCanvasPlacementUsesSourceOrientation() {
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_080, height: 1_920),
-            .top
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_920, height: 1_080),
-            .center
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(width: 1_080, height: 1_080),
-            .center
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forMediaDimensions(width: nil, height: nil),
-            .center
-        )
-    }
-
-    func testStoryCanvasPlacementKeepsLandscapeSourcesCenteredInsideCanonicalImageCanvas() {
-        let playback = StoryMediaRendition(
-            mediaUrl: URL(string: "https://example.com/story.avif")!,
-            thumbnailUrl: URL(string: "https://example.com/story-thumb.webp")!,
-            placeholderUrl: nil,
-            storageProvider: "vercel-blob",
-            storageKey: "stories/playback.avif",
-            contentType: "image/avif",
-            byteSize: 100,
-            checksum: nil,
-            width: 1_080,
-            height: 1_920,
-            durationMs: nil,
-            processingStatus: "ready"
-        )
-        let landscapeOriginal = StoryMediaRendition(
-            mediaUrl: URL(string: "https://example.com/original.jpg")!,
-            thumbnailUrl: nil,
-            placeholderUrl: nil,
-            storageProvider: "vercel-blob",
-            storageKey: "stories/original.jpg",
-            contentType: "image/jpeg",
-            byteSize: 1_000,
-            checksum: nil,
-            width: 4_032,
-            height: 2_268,
-            durationMs: nil,
-            processingStatus: "ready"
-        )
-        let renditions = StoryMediaRenditions(
-            playback: playback,
-            original: landscapeOriginal
-        )
-
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forRenditions(
-                renditions,
-                prefersPlaybackDimensions: true
-            ),
-            .top
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forRenditions(renditions),
-            .center
-        )
-        XCTAssertEqual(
-            StoryCanvasVerticalPlacement.forRenditions(
-                nil,
-                prefersPlaybackDimensions: true,
-                missingDimensionsFallback: .top
-            ),
-            .top
         )
     }
 

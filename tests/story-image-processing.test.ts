@@ -95,7 +95,7 @@ describe("story image processing", () => {
     })
       .png()
       .toBuffer()
-    const { data, info } = await (await createStoryCanvasImage(source))
+    const { data, info } = await (await createStoryCanvasImage(source, "fill"))
       .raw()
       .toBuffer({ resolveWithObject: true })
     const pixel = (x: number, y: number) => {
@@ -107,6 +107,18 @@ describe("story image processing", () => {
     expect(pixel(540, 20)).toEqual([220, 30, 30])
     expect(pixel(540, 960)).toEqual([220, 30, 30])
     expect(pixel(540, 1900)).toEqual([220, 30, 30])
+  })
+
+  it("preserves the whole photo with centered black padding by default", async () => {
+    const source = await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 220, g: 30, b: 30 } } }).png().toBuffer()
+    const { data, info } = await (await createStoryCanvasImage(source)).raw().toBuffer({ resolveWithObject: true })
+    const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3))
+    expect(info).toMatchObject({ width: 1080, height: 1920, channels: 3 })
+    expect(pixel(540, 20)).toEqual([0, 0, 0])
+    expect(pixel(540, 960)).toEqual([220, 30, 30])
+    expect(pixel(540, 1900)).toEqual([0, 0, 0])
+    expect(pixel(5, 960)).toEqual([220, 30, 30])
+    expect(pixel(1075, 960)).toEqual([220, 30, 30])
   })
 
   it("does not add an alpha channel to opaque production AVIF output", async () => {

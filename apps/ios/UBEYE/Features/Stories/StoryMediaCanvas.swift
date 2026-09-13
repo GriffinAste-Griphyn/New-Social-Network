@@ -1,6 +1,12 @@
 import SwiftUI
 
+enum StoryImageContentMode: String, Codable, Hashable {
+    case fit
+    case fill
+}
+
 enum StoryMediaContract {
+    static let defaultImageContentMode: StoryImageContentMode = .fit
     static let aspectRatio: CGFloat = 9 / 16
     static let playbackPixelSize = CGSize(width: 1_080, height: 1_920)
     static let thumbnailPixelSize = CGSize(width: 360, height: 640)
@@ -26,13 +32,11 @@ struct StoryCanvasLayout: Equatable {
     static let thumbnailPixelSize = StoryMediaContract.thumbnailPixelSize
 
     let frame: CGRect
-    let verticalPlacement: StoryCanvasVerticalPlacement
 
     init(
         containerSize: CGSize,
         reservedTopHeight: CGFloat = 0,
-        reservedBottomHeight: CGFloat = 0,
-        verticalPlacement: StoryCanvasVerticalPlacement = .center
+        reservedBottomHeight: CGFloat = 0
     ) {
         let containerWidth = max(containerSize.width, 0)
         let containerHeight = max(containerSize.height, 0)
@@ -53,54 +57,13 @@ struct StoryCanvasLayout: Equatable {
             ? canvasWidth / Self.aspectRatio
             : 0
 
-        let canvasOriginY = switch verticalPlacement {
-        case .top:
-            topHeight
-        case .center:
-            (containerHeight - canvasHeight) / 2
-        }
-
-        self.verticalPlacement = verticalPlacement
         frame = CGRect(
             x: (containerWidth - canvasWidth) / 2,
-            y: canvasOriginY,
+            // Center on the screen regardless of source orientation or chrome.
+            y: (containerHeight - canvasHeight) / 2,
             width: canvasWidth,
             height: canvasHeight
         )
-    }
-}
-
-enum StoryCanvasVerticalPlacement: Equatable {
-    case top
-    case center
-
-    static func forRenditions(
-        _ renditions: StoryMediaRenditions?,
-        prefersPlaybackDimensions: Bool = false,
-        missingDimensionsFallback: Self = .center
-    ) -> Self {
-        let sourceRendition = prefersPlaybackDimensions
-            ? renditions?.playback
-            : renditions?.original ?? renditions?.playback
-        guard let width = sourceRendition?.width,
-              let height = sourceRendition?.height,
-              width > 0,
-              height > 0 else {
-            return missingDimensionsFallback
-        }
-
-        return forMediaDimensions(width: width, height: height)
-    }
-
-    static func forMediaDimensions(width: Int?, height: Int?) -> Self {
-        guard let width,
-              let height,
-              width > 0,
-              height > 0 else {
-            return .center
-        }
-
-        return width < height ? .top : .center
     }
 }
 

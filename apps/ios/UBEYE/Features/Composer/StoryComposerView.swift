@@ -11,11 +11,6 @@ enum PickedStoryMedia {
     case video(StoryVideoUpload)
 }
 
-enum StoryImageContentMode: String, Codable, Hashable {
-    case fit
-    case fill
-}
-
 struct StoryVideoUpload {
     enum Source {
         case cameraFront
@@ -44,12 +39,13 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     let fileName: String
     let mimeType: String
     let contentMode: StoryImageContentMode
+    private let sourceData: Data
 
     static func prepare(
         data: Data,
         fallbackFileName: String = "story-photo",
         displayImage: UIImage? = nil,
-        contentMode: StoryImageContentMode = .fit
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) async -> StoryImageUpload? {
         await Task.detached(priority: .userInitiated) {
             StoryImageUpload(
@@ -64,7 +60,7 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     static func prepare(
         fileURL: URL,
         fallbackFileName: String = "story-photo",
-        contentMode: StoryImageContentMode = .fit
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) async -> StoryImageUpload? {
         await Task.detached(priority: .userInitiated) {
             StoryImageUpload(
@@ -79,49 +75,59 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         data: Data,
         fallbackFileName: String = "story-photo",
         displayImage: UIImage? = nil,
-        contentMode: StoryImageContentMode = .fit
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) {
-        guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
+        guard let source = StoryImageTranscoder.normalizedJPEG(
             data: data,
-            width: Self.playbackCanvasWidth,
-            height: Self.playbackCanvasHeight,
-            quality: Self.preferredUploadJPEGQuality,
+            maxPixelDimension: Self.maximumTranscodedPixelDimension,
+            quality: Self.transcodedJPEGQuality
+        ) else {
+            return nil
+        }
+        self.init(
+            sourceData: source.data,
+            fallbackFileName: fallbackFileName,
+            displayImage: displayImage,
             contentMode: contentMode
-        ), normalized.data.count <= Self.maximumUploadBytes else {
-            return nil
-        }
-        guard let previewImage = StoryImageTranscoder.previewImage(
-            data: normalized.data,
-            maxPixelDimension: Self.maximumPreviewPixelDimension
-        ) ?? displayImage else {
-            return nil
-        }
-
-        image = previewImage
-        self.data = normalized.data
-        fileName = Self.normalizedFileName(fallbackFileName, fileExtension: "jpg")
-        mimeType = "image/jpeg"
-        self.contentMode = contentMode
+        )
     }
 
     init?(
         fileURL: URL,
         fallbackFileName: String = "story-photo",
-        contentMode: StoryImageContentMode = .fit
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
+    ) {
+        guard let source = StoryImageTranscoder.normalizedJPEG(
+            fileURL: fileURL,
+            maxPixelDimension: Self.maximumTranscodedPixelDimension,
+            quality: Self.transcodedJPEGQuality
+        ) else {
+            return nil
+        }
+        self.init(
+            sourceData: source.data,
+            fallbackFileName: fallbackFileName,
+            contentMode: contentMode
+        )
+    }
+
+    private init?(
+        sourceData: Data,
+        fallbackFileName: String,
+        displayImage: UIImage? = nil,
+        contentMode: StoryImageContentMode
     ) {
         guard let normalized = StoryImageTranscoder.storyCanvasJPEG(
-            fileURL: fileURL,
+            data: sourceData,
             width: Self.playbackCanvasWidth,
             height: Self.playbackCanvasHeight,
             quality: Self.preferredUploadJPEGQuality,
             contentMode: contentMode
-        ), normalized.data.count <= Self.maximumUploadBytes else {
-            return nil
-        }
-        guard let previewImage = StoryImageTranscoder.previewImage(
-            data: normalized.data,
-            maxPixelDimension: Self.maximumPreviewPixelDimension
-        ) else {
+        ), normalized.data.count <= Self.maximumUploadBytes,
+              let previewImage = StoryImageTranscoder.previewImage(
+                data: normalized.data,
+                maxPixelDimension: Self.maximumPreviewPixelDimension
+              ) ?? displayImage else {
             return nil
         }
 
@@ -130,6 +136,20 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
         fileName = Self.normalizedFileName(fallbackFileName, fileExtension: "jpg")
         mimeType = "image/jpeg"
         self.contentMode = contentMode
+        self.sourceData = sourceData
+    }
+
+    func reframed(to contentMode: StoryImageContentMode) async -> StoryImageUpload? {
+        if contentMode == self.contentMode {
+            return self
+        }
+        return await Task.detached(priority: .userInitiated) {
+            StoryImageUpload(
+                sourceData: sourceData,
+                fallbackFileName: fileName,
+                contentMode: contentMode
+            )
+        }.value
     }
 
     private static func normalizedFileName(_ value: String, fileExtension: String) -> String {
@@ -263,7 +283,7 @@ enum StoryImageTranscoder {
         width: Int,
         height: Int,
         quality: CGFloat,
-        contentMode: StoryImageContentMode = .fill
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) -> StoryJPEGEncoding? {
         autoreleasepool {
             let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -285,7 +305,7 @@ enum StoryImageTranscoder {
         fileURL: URL,
         width: Int,
         height: Int,
-        contentMode: StoryImageContentMode = .fill
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) -> CGImage? {
         autoreleasepool {
             let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -306,7 +326,7 @@ enum StoryImageTranscoder {
         width: Int,
         height: Int,
         quality: CGFloat,
-        contentMode: StoryImageContentMode = .fill
+        contentMode: StoryImageContentMode = StoryMediaContract.defaultImageContentMode
     ) -> StoryJPEGEncoding? {
         autoreleasepool {
             let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -1584,6 +1604,8 @@ struct StoryComposerView: View {
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
     @State private var stagedMedia: PickedStoryMedia?
+    @State private var isReframingPhotos = false
+    @State private var framingRequestID = UUID()
     @State private var composerKeyboardHeight: CGFloat = 0
     @State private var overlayFocusRequestAt: Date?
     @FocusState private var isOverlayInputFocused: Bool
@@ -1773,11 +1795,16 @@ struct StoryComposerView: View {
 
     @ViewBuilder
     private var composerFooter: some View {
-        Group {
-            if stagedMedia == nil {
-                captureFooter
-            } else {
-                selectedMediaFooter
+        VStack(spacing: 12) {
+            if hasSelectedPhotos {
+                photoFramingControls
+            }
+            Group {
+                if stagedMedia == nil {
+                    captureFooter
+                } else {
+                    selectedMediaFooter
+                }
             }
         }
         .frame(maxWidth: .infinity, minHeight: footerShutterSlotSize)
@@ -1848,6 +1875,91 @@ struct StoryComposerView: View {
         }
     }
 
+    private var framingMedia: [PickedStoryMedia] {
+        if !selectedBatchMedia.isEmpty {
+            return selectedBatchMedia
+        }
+        return (stagedMedia ?? store.selectedMedia).map { [$0] } ?? []
+    }
+
+    private var selectedPhotoContentMode: StoryImageContentMode? {
+        for media in framingMedia {
+            if case .image(let upload) = media {
+                return upload.contentMode
+            }
+        }
+        return nil
+    }
+
+    private var hasSelectedPhotos: Bool { selectedPhotoContentMode != nil }
+
+    private var photoFramingControls: some View {
+        VStack(spacing: 5) {
+            Picker("Photo framing", selection: Binding(
+                get: { selectedPhotoContentMode ?? .fit },
+                set: { reframePhotos(to: $0) }
+            )) {
+                Text("Fit").tag(StoryImageContentMode.fit)
+                Text("Fill").tag(StoryImageContentMode.fill)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+            .background(.black.opacity(0.5), in: Capsule())
+            .disabled(store.isUploading || isReframingPhotos)
+            .accessibilityIdentifier("story-composer-photo-framing")
+
+            Text(isReframingPhotos
+                ? "Preparing photos…"
+                : selectedPhotoContentMode == .fill
+                    ? "Crop photos to fill the story frame"
+                    : "Keep whole photos with black padding")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.76))
+        }
+    }
+
+    private func reframePhotos(to contentMode: StoryImageContentMode) {
+        guard !store.isUploading, !isReframingPhotos,
+              selectedPhotoContentMode != contentMode else {
+            return
+        }
+        let media = framingMedia
+        let requestID = UUID()
+        framingRequestID = requestID
+        isReframingPhotos = true
+        store.error = nil
+
+        Task { @MainActor in
+            defer {
+                if framingRequestID == requestID {
+                    isReframingPhotos = false
+                }
+            }
+            var reframedMedia: [PickedStoryMedia] = []
+            for item in media {
+                guard framingRequestID == requestID else { return }
+                switch item {
+                case .image(let upload):
+                    guard let reframed = await upload.reframed(to: contentMode) else {
+                        if framingRequestID == requestID {
+                            store.error = "Could not frame that photo. Try again."
+                        }
+                        return
+                    }
+                    reframedMedia.append(.image(reframed))
+                case .video:
+                    reframedMedia.append(item)
+                }
+            }
+            guard framingRequestID == requestID,
+                  let firstMedia = reframedMedia.first else { return }
+            stagedMedia = firstMedia
+            store.selectedMedia = firstMedia
+            selectedBatchMedia = reframedMedia.count > 1 ? reframedMedia : []
+            UBEYEFeedback.selection()
+        }
+    }
+
     private var hasSelectedMedia: Bool {
         (stagedMedia ?? store.selectedMedia) != nil
     }
@@ -1880,7 +1992,7 @@ struct StoryComposerView: View {
             .storyComposerPillChrome(backgroundOpacity: 0.42)
         }
         .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
-        .disabled(store.isUploading)
+        .disabled(store.isUploading || isReframingPhotos)
         .accessibilityLabel(
             selectedBatchMedia.count > 1
                 ? "Upload \(selectedBatchMedia.count) separate stories"
@@ -2407,7 +2519,7 @@ struct StoryComposerView: View {
     }
 
     private func uploadSelectedMedia() async {
-        guard !store.isUploading else {
+        guard !isReframingPhotos, !store.isUploading else {
             return
         }
 
@@ -2448,6 +2560,8 @@ struct StoryComposerView: View {
     }
 
     private func resetCapture(clearQuote: Bool = false) {
+        framingRequestID = UUID()
+        isReframingPhotos = false
         for media in selectedBatchMedia {
             if case .video(let video) = media {
                 try? FileManager.default.removeItem(at: video.url)
@@ -2477,6 +2591,8 @@ struct StoryComposerView: View {
     }
 
     private func enterComposer(with media: PickedStoryMedia) {
+        framingRequestID = UUID()
+        isReframingPhotos = false
         selectedBatchMedia = []
         store.error = nil
         store.uploadStatus = nil
