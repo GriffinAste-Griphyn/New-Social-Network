@@ -37,4 +37,15 @@ Checkpoint: `535980a` pushed before implementation.
 - Migration 0064 (decoding event and creator/latest-story index) passed on production-copy branch `codex-feed-performance-448` (`br-fancy-truth-anxu130s`) and then on production. The verification branch autosuspends after five minutes and is retained for reproduction.
 - Live Redis revision fencing is verified using disposable keys by the opt-in deployment-builder probe, because production Redis secrets cannot be exported locally.
 
-Release artifacts and final deployment/upload outcomes are recorded under `/Users/griffinaste/Library/Developer/UBEYE-Releases/448/` and appended below after completion.
+## Production release completed — September 14, 2026
+
+- Implementation commit `8bba579` was pushed to `origin/codex/branded-ios-skeleton-loading` before deployment and archiving.
+- Vercel deployment `dpl_AKrwhpGtPHvEzvgdaAdy4zVGUAHs` built successfully from that commit: https://new-social-network-ae0qdb8dr-griffin-astes-projects.vercel.app.
+- The deployment builder passed 407 backend tests, with 14 database-dependent skips. Five of those cases passed in the local PostgreSQL run, giving 412 verified backend cases across both environments; nine unrelated database cases remain skipped.
+- The live Redis probe passed: invalidation rejected an older rebuild and accepted the current revision. Disposable probe keys were removed.
+- Staged service, image, and video health checks returned HTTP 200 with `ok: true`. An unauthenticated mobile-feed request correctly returned HTTP 401.
+- The deployment was promoted to https://www.ubeye.ai. All three production health checks subsequently returned HTTP 200 with `ok: true`.
+- The signed Release archive passed code-signature verification and contained bundle `com.griffinaste.ubeye`, version **1.0.12**, build **448**. All 91 tracked native source files matched the recorded source manifest after archiving.
+- App Store Connect accepted build 448 at **20:06:49 America/Denver**. The upload log reported `Uploaded package is processing.`, `Upload succeeded.`, and `EXPORT SUCCEEDED`. Apple processing and tester availability have not yet been verified. Existing public App Store review submission 447 was left in place.
+
+The signed archive, upload log, deployment and promotion logs, health responses, migration logs, test output, source manifest, and benchmark report are preserved under `/Users/griffinaste/Library/Developer/UBEYE-Releases/448/`.
