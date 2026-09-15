@@ -33,6 +33,16 @@ struct ReplyThreadView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            if let quotable = visibleItems.last(where: { $0.quotedReply != nil }) {
+                Button { quote(quotable) } label: {
+                    Label("Quote latest reply in a story", systemImage: "quote.bubble")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(Color.ubeyeRed)
+                }
+                .buttonStyle(UBEYEPressButtonStyle())
+                .padding(.horizontal, 16)
+            }
             if let error = store.error { InlineNotice(message: error, isError: true).padding(.horizontal, 16) }
             ScrollView {
                 LazyVStack(spacing: 14) {
@@ -47,19 +57,13 @@ struct ReplyThreadView: View {
                     }
                 }
                 .padding(16)
+                .padding(.bottom, UBEYEMetrics.bottomBarHeight)
             }
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.hidden)
-            if let quotable = visibleItems.last(where: { $0.quotedReply != nil }) {
-                Button { quote(quotable) } label: {
-                    Label("Quote latest reply in a story", systemImage: "quote.bubble")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                }
-                .buttonStyle(UBEYEPressButtonStyle())
-                .padding(12)
-            }
+
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(Color.ubeyeInk)
         .background(Color.ubeyeBackground.ignoresSafeArea())
         .navigationBarBackButtonHidden()
