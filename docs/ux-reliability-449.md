@@ -17,4 +17,21 @@ No backend source, API contract, database migration, or production configuration
 
 ## Verification
 
-Build, native regression tests, simulator interaction checks, signed archive, and TestFlight upload outcomes are appended after completion. Simulator timings are regression evidence, not claims about physical-device smoothness or battery use.
+- Implementation commit `7c11c59` and visual follow-up `ac84065` were pushed to `origin/codex/branded-ios-skeleton-loading`.
+- Full native regression suite: **284 executed, 280 passed, four optional media-fixture skips, zero failures**. Eleven new reliability cases cover account ownership, in-flight queue edits, rate limits/restart, scoped drafts, autosave coalescing, hidden refreshes, callback release, grouping, and independent deletion rollback.
+- An older cancellation test initially failed because it guessed cleanup timing with a sleep. It now waits for the cancelled import task to finish; the full suite passed afterward.
+- Feed decode gate passed: 50 samples, 22,286-byte/50-creator fixture, p95 **0.89 ms** against a 50 ms ceiling.
+- The simulator check caught a clipped quote footer. The final layout moves the quote action into the visible thread header and adds bottom clearance to conversation content. That layout-only follow-up was rebuilt and visually checked after the full regression run.
+- Simulator checks passed for populated feed launch; grouped Replies; opening/back navigation; quoting into the composer; returning across tabs; immediate Discover search input/filtering; and selected-photo overlay focus/editing. Temporary search/editing input and the local image fixture were cleared without posting. Camera/microphone capture was not exercised.
+- Production service, image, and video health endpoints returned HTTP 200 with `ok: true`. No redeployment was needed.
+
+Simulator timings are regression evidence, not claims about physical-device smoothness or battery use.
+
+## Release completed — September 15, 2026
+
+- Signed Release archive succeeded from native source commit `ac84065`.
+- Code-signature verification passed. The archive contains `com.griffinaste.ubeye`, version **1.0.12**, build **449**.
+- All **106 tracked native files** matched the SHA-256 source manifest after archiving.
+- App Store Connect accepted the upload at **08:52:45 America/Denver**. Xcode reported `Uploaded package is processing.`, `Upload succeeded.`, and `EXPORT SUCCEEDED`.
+- Apple processing and tester availability have not yet been verified. The existing public App Store submission was not changed.
+- Release artifacts are preserved at `/Users/griffinaste/Library/Developer/UBEYE-Releases/449/`: signed archive, upload log, source manifest, test summary/log, benchmark report, production health responses, and simulator screenshot.
