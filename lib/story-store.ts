@@ -39,10 +39,13 @@ import {
 } from "@/lib/db/schema"
 import {
   invalidateMobileFeedSnapshotsForCreator,
-  readMobileFeedSnapshot,
-  readFreshMobileFeedSnapshot,
+  readFeedSnapshot,
+  readFeedSnapshotRevision,
+  usableFeedSnapshot,
+  type CachedFeedSnapshot,
   writeMobileFeedSnapshot,
 } from "@/lib/feed-snapshot-store"
+import { followingCreatorPageQuery } from "@/lib/feed-pagination"
 import { listFollowingProfiles } from "@/lib/follow-store"
 import { formatStoryPostedAt } from "@/lib/story-time"
 import { enqueueStoryPublication } from "@/lib/story-publication"
@@ -293,6 +296,7 @@ export type MyStorySummary = {
 }
 
 export type FeedData = {
+  snapshotExpiresAt?: string
   featuredStory: FeedStory | null
   myStory: MyStorySummary
   followingProfiles: Awaited<ReturnType<typeof listFollowingProfiles>>
@@ -350,9 +354,9 @@ export type MobileCreatorProfile = {
 type FeedDataOptions = {
   refreshProcessing?: boolean
   useSnapshot?: boolean
-  timelineStoryIds?: string[]
   timelineCursor?: { createdAt: Date; id: string } | null
   timelineLimit?: number
+  preloadedSnapshot?: CachedFeedSnapshot | null
 }
 
 type CreateStoryInput = {
@@ -968,7 +972,7 @@ async function getLiveStoryRows(
     .limit(
       Math.min(
         options.limit ?? (storyIds ? storyIds.length : 24),
-        50,
+        51,
       ),
     )
 
@@ -980,7 +984,7 @@ async function getLiveStoryRows(
 }
 
 async function getLiveStoryRowsForCreator(
-  creatorId: string,
+  creatorId: string | string[],
   options: { includeOwnerProcessing?: boolean } = {},
 ) {
   const db = getDb()
@@ -1035,7 +1039,7 @@ async function getLiveStoryRowsForCreator(
     .leftJoin(creatorScores, eq(creatorScores.creatorId, users.id))
     .where(
       and(
-        eq(stories.creatorId, creatorId),
+        Array.isArray(creatorId) ? inArray(stories.creatorId, creatorId) : eq(stories.creatorId, creatorId),
         statusFilter,
         moderationFilter,
         gt(stories.expiresAt, new Date()),
@@ -1195,58 +1199,66 @@ export async function getMyStoryStack(
   )
 }
 
-export async function getFeedData(
-  viewerId: string,
-  options: FeedDataOptions = {},
-): Promise<FeedData> {
-  if (options.useSnapshot !== false && !options.refreshProcessing) {
-    const snapshot = await readFreshMobileFeedSnapshot(viewerId).catch(
-      () => null,
-    )
+// In-flight entries live only until completion and are scoped by viewer, page
+// shape and cursor. Redis snapshots remain the cross-instance acceleration layer.
+const feedBuilds = new Map<string, Promise<FeedData>>()
 
-    if (snapshot) {
-      return snapshot
+export async function getFeedData(viewerId: string, options: FeedDataOptions = {}): Promise<FeedData> {
+  const limit = options.timelineLimit ?? 21
+  const useSnapshot = options.useSnapshot !== false && !options.refreshProcessing && !options.timelineCursor
+  const snapshot = useSnapshot
+    ? (options.preloadedSnapshot !== undefined ? options.preloadedSnapshot : await readFeedSnapshot(viewerId).catch(() => null))
+    : null
+  const fresh = usableFeedSnapshot(snapshot, limit)
+  if (fresh) return fresh
+  const revision = useSnapshot ? await readFeedSnapshotRevision(viewerId) : null
+  const startedAt = Date.now()
+  const key = JSON.stringify([viewerId, limit, options.timelineCursor, !!options.refreshProcessing, useSnapshot, revision])
+  const existing = feedBuilds.get(key)
+  if (existing) return existing
+  const build = (async () => {
+    try {
+      const feed = await buildLiveFeedData(viewerId, options)
+      if (useSnapshot && Date.now() - startedAt < 60_000) {
+        await writeMobileFeedSnapshot(viewerId, feed, limit, revision).catch(() => undefined)
+      }
+      return feed
+    } catch (error) {
+      const stale = usableFeedSnapshot(snapshot, limit, true)
+      if (stale) return stale
+      throw error
     }
-  }
+  })()
+  feedBuilds.set(key, build)
+  try { return await build } finally { if (feedBuilds.get(key) === build) feedBuilds.delete(key) }
+}
 
-  let feed: FeedData
-  try {
-    feed = await buildLiveFeedData(viewerId, options)
-  } catch (error) {
-    const staleSnapshot =
-      options.useSnapshot !== false
-        ? await readMobileFeedSnapshot(viewerId).catch(() => null)
-        : null
-    if (staleSnapshot) {
-      return staleSnapshot
-    }
-    throw error
-  }
+async function getFollowingCreatorRows(viewerId: string, blockedPeerIds: Set<string>, options: FeedDataOptions) {
+  const page = await followingCreatorPageQuery(viewerId, blockedPeerIds, options.timelineCursor, options.timelineLimit ?? 21)
+  if (!page.length) return []
+  return getLiveStoryRows(page.map(row => row.id), { limit: page.length })
+}
 
-  if (options.useSnapshot !== false && !options.refreshProcessing) {
-    await writeMobileFeedSnapshot(viewerId, feed).catch(() => undefined)
-  }
-
-  return feed
+export async function getFollowingTimelinePage(viewerId: string, options: FeedDataOptions) {
+  const blockedPeerIds = await getBlockedPeerIds(viewerId)
+  const rows = await getFollowingCreatorRows(viewerId, blockedPeerIds, options)
+  const ids = rows.map(row => row.id)
+  const [mentions, elements] = await Promise.all([getStoryMentions(ids), getStoryElements(ids)])
+  const mentionsByStory = groupMentions(mentions)
+  const elementsByStory = groupElements(elements)
+  return rows.map(row => buildFeedStoryCard(row, mentionsByStory.get(row.id) ?? [], elementsByStory.get(row.id) ?? []))
 }
 
 async function buildLiveFeedData(
   viewerId: string,
   options: FeedDataOptions = {},
 ): Promise<FeedData> {
-  const [recentStoryRows, timelineStoryRows, followingProfiles, myStory, blockedPeerIds] =
-    await Promise.all([
-      getLiveStoryRows(),
-      options.timelineStoryIds?.length
-        ? getLiveStoryRows(options.timelineStoryIds, {
-            cursor: options.timelineCursor,
-            limit: options.timelineLimit ?? 20,
-          })
-        : Promise.resolve([]),
-      listFollowingProfiles(viewerId),
-      getMyStoryStack(viewerId, options),
-      getBlockedPeerIds(viewerId),
-    ])
+  const blockedPeers = getBlockedPeerIds(viewerId)
+  const [recentStoryRows, timelineStoryRows, followingProfiles, myStory, blockedPeerIds] = await Promise.all([
+    getLiveStoryRows(),
+    blockedPeers.then(blocked => getFollowingCreatorRows(viewerId, blocked, options)),
+    listFollowingProfiles(viewerId), getMyStoryStack(viewerId, options), blockedPeers,
+  ])
   const rawStoryRows = [
     ...timelineStoryRows,
     ...recentStoryRows.filter(
@@ -1258,8 +1270,12 @@ async function buildLiveFeedData(
       story.creatorId === viewerId || !blockedPeerIds.has(story.creatorId),
   )
 
+  const expiryTimes = [...storyRows.map(row => row.expiresAt.getTime()),
+    ...myStory.items.map(item => Date.parse(item.expiresAt))].filter(Number.isFinite)
+  const snapshotExpiresAt = new Date(Math.min(Date.now() + 5 * 60_000, ...expiryTimes)).toISOString()
   if (storyRows.length === 0) {
     return {
+      snapshotExpiresAt,
       featuredStory: null,
       myStory,
       followingProfiles,
@@ -1285,20 +1301,9 @@ async function buildLiveFeedData(
   const followingRankedStories = rankedStories.filter((story) =>
     followedCreatorIds.has(story.creatorId),
   )
-  const timelineOrder = new Map(
-    (options.timelineStoryIds ?? []).map((storyId, index) => [storyId, index]),
-  )
-  const followingTimelineRows = storyRows
-    .filter((story) => followedCreatorIds.has(story.creatorId))
-    .sort((left, right) => {
-      const leftIndex = timelineOrder.get(left.id)
-      const rightIndex = timelineOrder.get(right.id)
-      if (leftIndex !== undefined || rightIndex !== undefined) {
-        return (leftIndex ?? Number.MAX_SAFE_INTEGER) -
-          (rightIndex ?? Number.MAX_SAFE_INTEGER)
-      }
-      return right.createdAt.getTime() - left.createdAt.getTime()
-    })
+  // Only the creator-keyset page belongs in the timeline. Global discovery
+  // candidates must not leak back into older pages or defeat the cursor.
+  const followingTimelineRows = timelineStoryRows
   const discoverRankedStories = rankedStories.filter(
     (story) =>
       story.creatorId !== viewerId && !followedCreatorIds.has(story.creatorId),
@@ -1394,6 +1399,7 @@ async function buildLiveFeedData(
     )
 
   return {
+    snapshotExpiresAt,
     featuredStory,
     myStory,
     followingProfiles,
@@ -1402,6 +1408,34 @@ async function buildLiveFeedData(
     suggestedAccounts,
     discoverStories,
   }
+}
+
+export async function getStoryStacksForStories(storyIds: string[], viewerId: string) {
+  if (!storyIds.length) return new Map<string, StoryStack>()
+  const [selected, blocked] = await Promise.all([
+    getDb().select({ id: stories.id, creatorId: stories.creatorId }).from(stories).where(and(
+      inArray(stories.id, storyIds), eq(stories.status, "live"),
+      eq(stories.moderationStatus, "approved"), gt(stories.expiresAt, new Date()),
+    )),
+    getBlockedPeerIds(viewerId),
+  ])
+  const visible = selected.filter(row => row.creatorId === viewerId || !blocked.has(row.creatorId))
+  const creatorIds = [...new Set(visible.map(row => row.creatorId))]
+  if (!creatorIds.length) return new Map<string, StoryStack>()
+  const rows = await getLiveStoryRowsForCreator(creatorIds)
+  const elements = groupElements(await getStoryElements(rows.map(row => row.id)))
+  const byCreator = new Map<string, FeedStoryRow[]>()
+  for (const row of rows) {
+    const group = byCreator.get(row.creatorId) ?? []
+    group.push(row)
+    byCreator.set(row.creatorId, group)
+  }
+  const stacks = new Map<string, StoryStack>()
+  for (const row of visible) {
+    const stack = buildStoryStack(byCreator.get(row.creatorId) ?? [], elements)
+    if (stack) stacks.set(row.id, stack)
+  }
+  return stacks
 }
 
 export async function getStoryStackForStory(storyId: string, viewerId?: string) {

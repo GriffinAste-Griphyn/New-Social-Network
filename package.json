@@ -24,7 +24,8 @@
     "media:benchmark": "tsx scripts/media-quality-benchmark.mjs",
     "media:benchmark:delivery": "tsx scripts/media-delivery-benchmark.mjs",
     "media:benchmark:encoding": "tsx scripts/media-encoding-experiments.mjs",
-    "media:regression": "bash scripts/media-regression.sh"
+    "media:regression": "bash scripts/media-regression.sh",
+    "performance:feed:gate": "node scripts/feed-performance-gate.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

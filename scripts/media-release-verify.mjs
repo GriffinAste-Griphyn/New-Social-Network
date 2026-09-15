@@ -9,6 +9,9 @@ const run = (command, args) => new Promise((resolve, reject) => {
   child.once('error', reject)
   child.once('close', code => code === 0 ? resolve() : reject(Error(`Release verification failed (${code})`)))
 })
+if (process.env.FEED_RELEASE_VERIFY === 'true') {
+  await run(process.execPath, ['--import', 'tsx', 'scripts/feed-cache-smoke.mjs'])
+}
 if (process.env.MEDIA_RELEASE_STORY_UID) {
   await run(process.execPath, ['--import', 'tsx', 'scripts/media-rendition-verify.mjs'])
 }

@@ -55,13 +55,19 @@ final class FeedStore: ObservableObject {
     private var lastNetworkLoadAt: Date?
     private var uploadedStoryOverrides: [StoryUploadResponse] = []
     private let foregroundRefreshCooldown: TimeInterval = 45
-    private let diskMediaPreparationTimeout: Duration = .milliseconds(700)
-    private let networkMediaPreparationTimeout: Duration = .milliseconds(1_200)
     private let deferredMediaPreparationTimeout: Duration = .seconds(20)
     private var loadGeneration = 0
     private var deferredFeedCommitTask: Task<Void, Never>?
     private var activeRefreshTask: Task<Void, Never>?
     private var activeRefreshToken: UUID?
+
+    private let readCachedFeed: @MainActor (APIClient) async -> MobileFeedResponse?
+
+    init(readCachedFeed: @escaping @MainActor (APIClient) async -> MobileFeedResponse? = { api in
+        await api.cachedMobileFeed(allowExpired: true)
+    }) {
+        self.readCachedFeed = readCachedFeed
+    }
 
     func load(
         api: APIClient,
@@ -80,55 +86,34 @@ final class FeedStore: ObservableObject {
         error = nil
         refreshError = nil
         authenticationFailed = false
-        var cachedFallback: MobileFeedResponse?
-
-        let restoreInterval = useDiskCache && feed == nil
-            ? MediaPerformance.beginInterval("feed_disk_restore source=disk")
-            : nil
-        if useDiskCache, feed == nil, let cached = await api.cachedMobileFeed(allowExpired: true) {
-            let candidate = feedApplyingUploadedStoryOverrides(to: cached)
-            cachedFallback = candidate
-            let preparation = await prepareForPresentation(
-                candidate,
-                source: "disk",
-                timeout: diskMediaPreparationTimeout
-            )
-            guard isCurrentLoad(generation) else {
+        let namespace = api.feedSessionIdentity
+        // Disk IO and the network race independently. A late disk result must
+        // never replace fresh data or cross an account/session transition.
+        let restoreTask = Task { @MainActor [weak self] in
+            guard let self, useDiskCache, feed == nil else { return }
+            let interval = MediaPerformance.beginInterval("feed_disk_restore source=disk")
+            guard let cached = await readCachedFeed(api),
+                  isCurrentLoad(generation), api.feedSessionIdentity == namespace,
+                  feed == nil else {
+                MediaPerformance.cancelInterval(interval, reason: "miss_or_superseded")
                 return
             }
-
-            let cachedStoryIds = storyStackPrefetchIds(from: candidate)
-            mediaEngine.prepareInitialStoryStacks(
-                ids: cachedStoryIds,
-                embeddedStacks: candidate.initialStoryStacks
-            )
-
-            if preparation.isComplete {
-                commitFeed(candidate, source: "disk", preparation: preparation)
-                if let restoreInterval {
-                    MediaPerformance.endInterval(restoreInterval, event: "feed_disk_restore source=disk")
-                }
-                mediaEngine.preheat(feed: candidate, priority: .visible)
-                let storyIds = storyStackPrefetchIds(from: candidate)
-                restoreInitialStoryStacks(ids: storyIds, api: api, mediaEngine: mediaEngine, refresh: false)
-            } else {
-                if let restoreInterval {
-                    MediaPerformance.cancelInterval(restoreInterval, reason: "media_not_ready")
-                }
-                MediaPerformance.mark(
-                    "feed_media_deferred source=disk ready=\(preparation.readyCount) requested=\(preparation.requestedCount)"
-                )
-            }
-        } else if let restoreInterval {
-            MediaPerformance.cancelInterval(restoreInterval, reason: "miss")
+            let candidate = feedApplyingUploadedStoryOverrides(to: cached)
+            commitFeedImmediately(candidate, source: "disk")
+            isLoading = false
+            MediaPerformance.endInterval(interval, event: "feed_disk_restore source=disk")
+            mediaEngine.preheat(feed: candidate, priority: .visible)
+            restoreInitialStoryStacks(ids: storyStackPrefetchIds(from: candidate),
+                api: api, mediaEngine: mediaEngine, refresh: false)
         }
-
+        defer { restoreTask.cancel() }
         let networkInterval = MediaPerformance.beginInterval("feed_load source=network")
         do {
             let response = try await api.mobileFeed()
-            guard isCurrentLoad(generation) else {
+            guard isCurrentLoad(generation), api.feedSessionIdentity == namespace else {
                 return
             }
+            restoreTask.cancel()
             lastNetworkLoadAt = Date()
             let candidate = feedApplyingUploadedStoryOverrides(to: response)
             let responseStoryIds = storyStackPrefetchIds(from: candidate)
@@ -137,30 +122,13 @@ final class FeedStore: ObservableObject {
                 embeddedStacks: candidate.initialStoryStacks
             )
 
-            let preparation = await prepareForPresentation(
-                candidate,
-                source: "network",
-                timeout: networkMediaPreparationTimeout
-            )
-            guard isCurrentLoad(generation) else {
-                return
-            }
-
-            if FeedMediaCommitPolicy.decision(
-                hasPresentedFeed: feed != nil,
-                preparation: preparation
-            ) == .commit {
-                commitFeed(candidate, source: "network", preparation: preparation)
+            if feed == nil {
+                commitFeedImmediately(candidate, source: "network")
                 mediaEngine.preheat(feed: candidate, priority: .visible)
             } else {
-                MediaPerformance.mark(
-                    "feed_media_deferred source=network ready=\(preparation.readyCount) requested=\(preparation.requestedCount)"
-                )
-                scheduleDeferredFeedCommit(
-                    candidate,
-                    generation: generation,
-                    mediaEngine: mediaEngine
-                )
+                // Keep the old card and its overlays together while the new
+                // generation prepares. Refresh work never blocks first content.
+                scheduleDeferredFeedCommit(candidate, generation: generation, mediaEngine: mediaEngine)
             }
             MediaPerformance.endInterval(networkInterval, event: "feed_load source=network")
             restoreInitialStoryStacks(
@@ -183,18 +151,9 @@ final class FeedStore: ObservableObject {
             if let statusCode = (error as? APIClientError)?.statusCode {
                 authenticationFailed = statusCode == 401 || statusCode == 403
             }
-            if feed == nil, let cachedFallback {
-                let preparation = await prepareForPresentation(
-                    cachedFallback,
-                    source: "disk_fallback",
-                    timeout: .milliseconds(300)
-                )
-                guard isCurrentLoad(generation) else {
-                    return
-                }
-                commitFeed(cachedFallback, source: "disk_fallback", preparation: preparation)
-                mediaEngine.preheat(feed: cachedFallback, priority: .visible)
-            } else if feed == nil {
+            await restoreTask.value
+            guard isCurrentLoad(generation), api.feedSessionIdentity == namespace else { return }
+            if feed == nil {
                 self.error = error.localizedDescription
             } else {
                 MediaPerformance.mark("feed_refresh_failed")
@@ -258,15 +217,19 @@ final class FeedStore: ObservableObject {
             return
         }
 
+        let generation = loadGeneration
+        let namespace = api.feedSessionIdentity
         isLoadingNextPage = true
         nextPageError = nil
         defer { isLoadingNextPage = false }
 
         do {
-            let page = try await api.mobileFeed(cursor: cursor)
+            let page = try await api.mobileFeedPage(cursor: cursor)
+            guard isCurrentLoad(generation), api.feedSessionIdentity == namespace,
+                  let current = feed, current.nextCursor == cursor else { return }
             let existingStories = current.followingTimelineStories ?? current.followingStories
-            let existingIds = Set(existingStories.map(\.id))
-            let appendedStories = page.verticalFollowingStories.filter { !existingIds.contains($0.id) }
+            let existingHandles = Set(existingStories.map(\.handle))
+            let appendedStories = page.followingTimelineStories.filter { !existingHandles.contains($0.handle) }
             let mergedStories = existingStories + appendedStories
 
             feed = MobileFeedResponse(
@@ -347,6 +310,11 @@ final class FeedStore: ObservableObject {
             event: "feed_media_preparation source=\(source) ready=\(result.readyCount) requested=\(result.requestedCount) timed_out=\(result.timedOut)"
         )
         return result
+    }
+
+    private func commitFeedImmediately(_ candidate: MobileFeedResponse, source: String) {
+        withTransaction(Transaction(animation: nil)) { feed = candidate }
+        MediaPerformance.mark("feed_media_commit source=\(source) initial=true")
     }
 
     private func commitFeed(

@@ -345,6 +345,12 @@ extension MyStorySummary {
     }
 }
 
+struct MobileFeedPageResponse: Decodable {
+    let ok: Bool
+    let followingTimelineStories: [StoryCard]
+    let nextCursor: String?
+}
+
 struct MobileFeedResponse: Codable {
     let ok: Bool
     let session: SessionPreview

@@ -278,7 +278,7 @@ describe("story upload and mobile feed API", () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get("Cache-Control")).toBe(
-      "private, max-age=5, stale-while-revalidate=30",
+      "private, no-cache",
     )
     expect(payload).toMatchObject({
       ok: true,
@@ -333,7 +333,7 @@ describe("story upload and mobile feed API", () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get("Cache-Control")).toBe(
-      "private, max-age=5, stale-while-revalidate=30",
+      "private, no-cache",
     )
   })
 })

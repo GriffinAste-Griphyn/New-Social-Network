@@ -1,0 +1,2 @@
+ALTER TYPE "public"."mobile_performance_event_name" ADD VALUE 'api_decode' BEFORE 'api_server_timing';--> statement-breakpoint
+CREATE INDEX "stories_creator_latest_visible_idx" ON "stories" USING btree ("creator_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST) WHERE status = 'live' AND moderation_status = 'approved';

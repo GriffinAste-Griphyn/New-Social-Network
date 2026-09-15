@@ -229,6 +229,7 @@ final class APIClient: ObservableObject {
     private let blobMultipartPartSizeOverride: Int64?
     private let blobMultipartConcurrencyOverride: Int?
     private let session: URLSession
+    private let transport: APITransport
     private let tusChunkUploader: TusChunkUploader?
     private let foregroundBlobFileUploader: (URLRequest, URL, (@Sendable () -> Void)?) async throws -> (Data, URLResponse)
     private let foregroundBlobDataUploader: (URLRequest, Data, (@Sendable () -> Void)?) async throws -> (Data, URLResponse)
@@ -253,6 +254,7 @@ final class APIClient: ObservableObject {
     ) {
         MediaPreheater.configureURLCache()
         self.session = session
+        self.transport = APITransport(session: session)
         blobMultipartThresholdOverride = blobMultipartThresholdBytes
         blobMultipartPartSizeOverride = blobMultipartPartBytes
         blobMultipartConcurrencyOverride = blobMultipartConcurrency
@@ -374,12 +376,24 @@ final class APIClient: ObservableObject {
             return nil
         }
 
+        guard self.cacheNamespace == cacheNamespace else { return nil }
         MediaPerformance.mark(allowExpired ? "feed_disk_cache_restore" : "feed_disk_cache_hit")
         cacheInitialStoryStacks(response.initialStoryStacks, source: allowExpired ? "feed_disk_restore" : "feed_disk")
         return response
     }
 
+    var feedSessionIdentity: String { "\(baseURL?.absoluteString ?? "")|\(authToken ?? "")" }
+
+    func mobileFeedPage(cursor: String, limit: Int = 20) async throws -> MobileFeedPageResponse {
+        try await get("/api/mobile/feed", queryItems: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50))),
+            URLQueryItem(name: "format", value: "timeline-v1"),
+        ])
+    }
+
     func mobileFeed(cursor: String? = nil, limit: Int = 20) async throws -> MobileFeedResponse {
+        let namespace = cacheNamespace
         Task { @MainActor [weak self] in
             await self?.refreshMediaConfigIfNeeded()
         }
@@ -399,9 +413,9 @@ final class APIClient: ObservableObject {
                 return
             }
 
-            if cursor == nil {
-                await saveFeedToDisk(response)
-                await saveInitialStoryStacksToDisk(response.initialStoryStacks)
+            if cursor == nil, let namespace, self.cacheNamespace == namespace {
+                await saveFeedToDisk(response, namespace: namespace)
+                await saveInitialStoryStacksToDisk(response.initialStoryStacks, namespace: namespace)
             }
         }
 
@@ -2127,10 +2141,7 @@ final class APIClient: ObservableObject {
         return response
     }
 
-    private func saveFeedToDisk(_ response: MobileFeedResponse) async {
-        guard let cacheNamespace else {
-            return
-        }
+    private func saveFeedToDisk(_ response: MobileFeedResponse, namespace cacheNamespace: String) async {
 
         await responseCache.write(response, namespace: cacheNamespace, key: "feed")
         MediaPerformance.mark("feed_disk_cache_write")
@@ -2150,8 +2161,8 @@ final class APIClient: ObservableObject {
         MediaPerformance.mark("story_stack_manifest_cache source=\(source) count=\(stacks.count)")
     }
 
-    private func saveInitialStoryStacksToDisk(_ stacks: [String: StoryStackResponse]?) async {
-        guard let cacheNamespace, let stacks, !stacks.isEmpty else {
+    private func saveInitialStoryStacksToDisk(_ stacks: [String: StoryStackResponse]?, namespace cacheNamespace: String) async {
+        guard let stacks, !stacks.isEmpty else {
             return
         }
 
@@ -2209,10 +2220,9 @@ final class APIClient: ObservableObject {
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
         let startedAt = Date()
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw APIClientError.invalidResponse
-        }
+        let identity = feedSessionIdentity
+        let (data, http) = try await transport.data(for: request)
+        guard identity == feedSessionIdentity else { throw CancellationError() }
         let requestPath = request.url?.path ?? "unknown"
         if requestPath != "/api/mobile/performance-events" {
             MediaPerformance.measure("api_request path=\(requestPath) status=\(http.statusCode)", since: startedAt)
@@ -2221,12 +2231,18 @@ final class APIClient: ObservableObject {
             }
         }
 
-        if !(200..<300).contains(http.statusCode) {
-            let envelope = try? decoder.decode(APIErrorEnvelope.self, from: data)
+        if !(200..<300).contains(http.statusCode) && http.statusCode != 304 {
+            let envelope = try? await transport.decode(APIErrorEnvelope.self, from: data)
             throw APIClientError.server(envelope?.error ?? "The server returned HTTP \(http.statusCode).", http.statusCode)
         }
 
-        return try decoder.decode(T.self, from: data)
+        let decodeStartedAt = Date()
+        let value = try await transport.decode(T.self, from: data)
+        guard identity == feedSessionIdentity else { throw CancellationError() }
+        if requestPath != "/api/mobile/performance-events" {
+            MediaPerformance.measure("api_decode path=\(requestPath) bytes=\(data.count)", since: decodeStartedAt)
+        }
+        return value
     }
 
     private func deviceId() -> String {

@@ -9,6 +9,7 @@ export const mobilePerformanceEventNames = [
   "media_delivery_ready",
   "media_delivery_observed",
   "api_request",
+    "api_decode",
   "api_server_timing",
   "feed_disk_cache_clear",
   "feed_disk_cache_hit",

@@ -50,6 +50,7 @@
 		8EEF12AD65B7A84BDFA8DB66 /* CreatorScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21255BE86F573D35C67EFC00 /* CreatorScreens.swift */; };
 		97114F957FFAED7D81A6A33F /* MediaPlaybackQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B57991CDEC6ED6639A348C /* MediaPlaybackQuality.swift */; };
 		9A7C136B1E52B4EC743C9234 /* StoryUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 647BEC924990E8681DB0CA40 /* StoryUploadCoordinator.swift */; };
+		9B0CEC34971756B140C8D576 /* FeedPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B8C9CFBA6B1EEE9B8EECE18 /* FeedPerformanceTests.swift */; };
 		9C4A8F1A50B6CEDCBAB2FFEC /* StoryDraftVideoUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 829F0C7AFE594070A2CFF85B /* StoryDraftVideoUpload.swift */; };
 		9CA5A9B3D5FE8330AC5ED8D6 /* StoryUploadReadinessMeasurements.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7CAD6E4C4AA5BB78B26F94F /* StoryUploadReadinessMeasurements.swift */; };
 		A568877D03BE1B88C4C2A89A /* StoryComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C0DC50B03C28C21CC9545F /* StoryComposerView.swift */; };
@@ -64,6 +65,7 @@
 		C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062A37DAD69C5C404DA9C8D2 /* AppDelegate.swift */; };
 		C80B078E7758D5D0F2533B16 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F80B664DE03B04CDF6C29A /* DiscoverView.swift */; };
 		D332F8951451CC28A923E548 /* StoryUploadFastPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A431BA98870D8BD0ACE234F /* StoryUploadFastPathTests.swift */; };
+		D7269293956316183928E419 /* APITransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2317D2354B9E1155E4D910BA /* APITransport.swift */; };
 		D8ADCF2266D33D884794B2D5 /* PlaybackPolishTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE098CB7B2E04DFD97BBEB8E /* PlaybackPolishTests.swift */; };
 		E23E54125AFDA67FEFFBFFF1 /* MediaImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D59043B2CB8338919912AD /* MediaImagePipeline.swift */; };
 		E5567A1AC1AEA8AC9B617A99 /* DailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534A0877FD4FC81764C849C9 /* DailyView.swift */; };
@@ -105,6 +107,7 @@
 		1F642B0FF1CB9B1D2CEAED06 /* UBEYEApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UBEYEApp.swift; sourceTree = "<group>"; };
 		1F6903BE5F5D3EECA910C5BB /* InteractionPolish.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPolish.swift; sourceTree = "<group>"; };
 		21255BE86F573D35C67EFC00 /* CreatorScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorScreens.swift; sourceTree = "<group>"; };
+		2317D2354B9E1155E4D910BA /* APITransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APITransport.swift; sourceTree = "<group>"; };
 		28486780B71D96C7D6EE5C30 /* MobileModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModels.swift; sourceTree = "<group>"; };
 		296A5B5A93AD5EBAD0F4DC21 /* StoryUploadStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryUploadStateMachine.swift; sourceTree = "<group>"; };
 		2AC3ED4ED7CFB613A0BAFD16 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -127,6 +130,7 @@
 		710268FDA93888F910A7780F /* StoryVideoGeometryNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoGeometryNormalizer.swift; sourceTree = "<group>"; };
 		73BDBCA8966387ED9F236329 /* UBEYE.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = UBEYE.entitlements; sourceTree = "<group>"; };
 		78085C32E4F7CCB340157B82 /* HLSOfflineCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSOfflineCache.swift; sourceTree = "<group>"; };
+		7B8C9CFBA6B1EEE9B8EECE18 /* FeedPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedPerformanceTests.swift; sourceTree = "<group>"; };
 		7D20DEE6AA8A9209B9B46030 /* StoryStackViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryStackViewer.swift; sourceTree = "<group>"; };
 		829F0C7AFE594070A2CFF85B /* StoryDraftVideoUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryDraftVideoUpload.swift; sourceTree = "<group>"; };
 		82D68BE60F4E8A0802A97DA8 /* StoryVideoQualityGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryVideoQualityGate.swift; sourceTree = "<group>"; };
@@ -218,6 +222,7 @@
 			isa = PBXGroup;
 			children = (
 				C2BD6709CE19C8AAD11B13A0 /* APIClient.swift */,
+				2317D2354B9E1155E4D910BA /* APITransport.swift */,
 				161928B19D52546865034586 /* MediaUploadTransport.swift */,
 				28486780B71D96C7D6EE5C30 /* MobileModels.swift */,
 				2B7D8584AB053B5BF1C89BE6 /* MobileResponseDiskCache.swift */,
@@ -269,6 +274,7 @@
 		84F6358C01848CD49999082A /* UBEYETests */ = {
 			isa = PBXGroup;
 			children = (
+				7B8C9CFBA6B1EEE9B8EECE18 /* FeedPerformanceTests.swift */,
 				4FF0753F45EF0E26F9ED7724 /* MediaPerformanceTests.swift */,
 				FE098CB7B2E04DFD97BBEB8E /* PlaybackPolishTests.swift */,
 				0914DB9555A87A180325E811 /* StoryBatchTransferQueueTests.swift */,
@@ -458,6 +464,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7B321A79564A1C8F36C29E1B /* APIClient.swift in Sources */,
+				D7269293956316183928E419 /* APITransport.swift in Sources */,
 				C1C28364D02826CDD5AEDE7A /* AppDelegate.swift in Sources */,
 				1711D1E6D918705F3AD50112 /* AuthStore.swift in Sources */,
 				209C07B0805239729E7550C9 /* AuthView.swift in Sources */,
@@ -520,6 +527,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B0CEC34971756B140C8D576 /* FeedPerformanceTests.swift in Sources */,
 				2E652C712BBBCCC2AAC54C34 /* MediaPerformanceTests.swift in Sources */,
 				D8ADCF2266D33D884794B2D5 /* PlaybackPolishTests.swift in Sources */,
 				354B89CD6D57C2E8C6E9A836 /* StoryBatchTransferQueueTests.swift in Sources */,
@@ -553,7 +561,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 447;
+				CURRENT_PROJECT_VERSION = 448;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;
@@ -654,7 +662,7 @@
 				CODE_SIGN_ENTITLEMENTS = UBEYE/UBEYE.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 447;
+				CURRENT_PROJECT_VERSION = 448;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = UBEYE/Info.plist;

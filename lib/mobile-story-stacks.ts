@@ -7,6 +7,8 @@ import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
 import {
   getMyStoryStack,
   getStoryStackForStory,
+  getStoryStacksForStories,
+  type MyStorySummary,
   type StoryStack,
 } from "@/lib/story-store"
 import {
@@ -235,9 +237,9 @@ async function mobileStoryRenditions(
   }
 }
 
-async function getMobileMyStoryStack(userId: string): Promise<MobileStoryStack | null> {
+async function getMobileMyStoryStack(userId: string, summary?: MyStorySummary): Promise<MobileStoryStack | null> {
   const [myStory, creatorStats] = await Promise.all([
-    getMyStoryStack(userId),
+    summary ?? getMyStoryStack(userId),
     getCreatorStats(userId),
   ])
   const statsByStoryId = new Map(
@@ -302,6 +304,10 @@ export async function getMobileStoryStackResponse(
     return null
   }
 
+  return serializeMobileStoryStack(story, request)
+}
+
+async function serializeMobileStoryStack(story: MobileStoryStack, request: Request): Promise<MobileStoryStackResponse | null> {
   const storyItems = await Promise.all(
     story.items.filter(storyItemAvailable).map(async (item) => {
       const cloudflareUid =
@@ -364,6 +370,7 @@ export async function getMobileInitialStoryStacks(input: {
   viewerId: string
   request: Request
   limit?: number
+  myStory?: MyStorySummary
 }) {
   const limit = input.limit ?? 4
   const seen = new Set<string>()
@@ -379,26 +386,27 @@ export async function getMobileInitialStoryStacks(input: {
     })
     .slice(0, limit)
 
-  const entries = await Promise.all(
-    storyIds.map(async (storyId) => {
-      try {
-        const response = await getMobileStoryStackResponse(
-          storyId,
-          input.viewerId,
-          input.request,
-        )
+  const [stacks, ownerStack] = await Promise.all([
+    getStoryStacksForStories(storyIds.filter(id => id !== "my-story"), input.viewerId),
+    storyIds.includes("my-story") ? getMobileMyStoryStack(input.viewerId, input.myStory) : null,
+  ])
+  const entries = await Promise.all(storyIds.map(async id => {
+    const stack = id === "my-story" ? ownerStack : stacks.get(id)
+    if (!stack) return null
+    try {
+      const response = await serializeMobileStoryStack(stack, input.request)
+      return response ? ([id, response] as const) : null
+    } catch { return null }
+  }))
 
-        return response ? ([storyId, response] as const) : null
-      } catch {
-        return null
-      }
-    }),
-  )
-
-  return Object.fromEntries(
-    entries.filter(
-      (entry): entry is readonly [string, MobileStoryStackResponse] =>
-        entry !== null,
-    ),
-  )
+  // Omit an oversized complete stack, rather than silently truncating stories.
+  // The viewer falls back to its dedicated endpoint when a stack is absent.
+  let bytes = 0
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, MobileStoryStackResponse] => {
+    if (!entry) return false
+    const size = Buffer.byteLength(JSON.stringify(entry))
+    if (bytes + size > 128 * 1024) return false
+    bytes += size
+    return true
+  }))
 }

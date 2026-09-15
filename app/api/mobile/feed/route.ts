@@ -1,15 +1,15 @@
-import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 
 import { getCompleteMobileSession } from "@/lib/auth"
-import { readFeedCacheBatch } from "@/lib/feed-snapshot-store"
+import { readFeedSnapshot, usableFeedSnapshot } from "@/lib/feed-snapshot-store"
+import { feedResponseEtag, feedResponseHeaders, matchesFeedEtag } from "@/lib/feed-response-cache"
 import {
   isVercelBlobAccessDisabled,
   isVercelBlobMediaReference,
 } from "@/lib/media-availability"
 import { getMobileInitialStoryStacks } from "@/lib/mobile-story-stacks"
 import { publicProfileAvatarUrl } from "@/lib/profile-avatar-storage"
-import { getFeedData } from "@/lib/story-store"
+import { getFeedData, getFollowingTimelinePage } from "@/lib/story-store"
 import {
   createCloudflareStreamThumbnailMediaUrl,
   publicStoryMediaUrl,
@@ -33,7 +33,7 @@ function parsePageRequest(request: Request) {
     : defaultPageSize
   const encodedCursor = url.searchParams.get("cursor")
 
-  if (!encodedCursor) {
+  if (!encodedCursor || encodedCursor.length > 1024) {
     return { cursor: null, limit }
   }
 
@@ -43,7 +43,7 @@ function parsePageRequest(request: Request) {
     ) as Partial<FeedCursor>
     return {
       cursor:
-        typeof parsed.lastSeenAt === "string" && typeof parsed.id === "string"
+        typeof parsed.lastSeenAt === "string" && typeof parsed.id === "string" && parsed.id.length > 0 && parsed.id.length <= 128
           ? { lastSeenAt: parsed.lastSeenAt, id: parsed.id }
           : null,
       limit,
@@ -273,40 +273,41 @@ function hlsPreconnectLinks(stories: Array<{
   return links
 }
 
-function jsonResponse(
-  payload: unknown,
-  request: Request,
-  userId: string,
-  linkValues: string[],
-) {
-  const body = JSON.stringify(payload)
-  const etag = `"${createHash("sha256").update(body).digest("base64url")}"`
-  const cacheControl = "private, max-age=5, stale-while-revalidate=30"
-  const vary = "Authorization, X-Device-Id, X-UBEYE-App-Build"
-  const headers = new Headers({
-    "Cache-Control": cacheControl,
-    "CDN-Cache-Control": "s-maxage=5",
-    "Content-Type": "application/json",
-    ETag: etag,
-    "Surrogate-Key": `feed:${userId}`,
-    "Vercel-Cache-Tag": `feed:${userId}`,
-    Vary: vary,
-  })
-  if (linkValues.length > 0) headers.set("Link", linkValues.join(", "))
+function jsonResponse(payload: unknown, request: Request, etag: string | undefined, linkValues: string[]) {
+  const headers = feedResponseHeaders(etag)
+  if (linkValues.length) headers.set("Link", linkValues.join(", "))
+  if (etag && matchesFeedEtag(request, etag)) return new Response(null, { status: 304, headers })
+  return new Response(JSON.stringify(payload), { headers })
+}
 
-  if (request.headers.get("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers })
-  }
-
-  return new Response(body, { headers })
+async function initialStacksWithinBudget(input: Parameters<typeof getMobileInitialStoryStacks>[0]) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    // This deadline bounds the response, not database execution. Missing stacks
+    // use the viewer's existing dedicated endpoint and request coalescing.
+    return await Promise.race([
+      getMobileInitialStoryStacks(input).catch(() => ({})),
+      new Promise<Record<string, never>>(resolve => { timer = setTimeout(() => resolve({}), 750) }),
+    ])
+  } finally { clearTimeout(timer) }
 }
 
 async function feedResponse(
   request: Request,
 ) {
   const startedAt = performance.now()
+  const timings: string[] = []
+  const timed = async <T,>(name: string, operation: () => Promise<T>) => {
+    const start = performance.now()
+    try { return await operation() }
+    finally { timings.push(`${name};dur=${(performance.now() - start).toFixed(1)}`) }
+  }
+  const finish = (response: Response) => {
+    response.headers.set("Server-Timing", [...timings, `mobile-feed;dur=${(performance.now() - startedAt).toFixed(1)}`].join(", "))
+    return response
+  }
   const pageRequest = parsePageRequest(request)
-  const user = await getCompleteMobileSession(request)
+  const user = await timed("auth", () => getCompleteMobileSession(request))
 
   if (!user) {
     return NextResponse.json(
@@ -322,18 +323,33 @@ async function feedResponse(
     cursorDate && Number.isFinite(cursorDate.getTime())
       ? { createdAt: cursorDate, id: pageRequest.cursor!.id }
       : null
-  const cacheBatch = await readFeedCacheBatch(
-    user.id,
-    Math.min((pageRequest.limit + 1) * 3, 50),
-    validCursor?.createdAt.getTime(),
-  )
-  const timelineStoryIds = cacheBatch?.timelineIds ?? []
-  const feed = await getFeedData(user.id, {
-    timelineStoryIds,
+  const wantsTimelinePage = !!validCursor && new URL(request.url).searchParams.get("format") === "timeline-v1"
+  if (wantsTimelinePage) {
+    const rows = await timed("timeline", () => getFollowingTimelinePage(user.id, { timelineCursor: validCursor, timelineLimit: pageRequest.limit + 1 }))
+    const available = rows.filter(storyCardAvailable)
+    const page = available.slice(0, pageRequest.limit)
+    const response = jsonResponse({
+      ok: true,
+      followingTimelineStories: page.map(story => absoluteStoryCardMedia(story, request)),
+      nextCursor: available.length > pageRequest.limit && page.length ? encodeCursor(page[page.length - 1]) : null,
+    }, request, undefined, [])
+    return finish(response)
+  }
+  const snapshot = !validCursor ? await timed("cache", () => readFeedSnapshot(user.id).catch(() => null)) : null
+  const fresh = usableFeedSnapshot(snapshot, pageRequest.limit + 1)
+  if (fresh) {
+    const etag = feedResponseEtag(fresh, request, user, pageRequest.limit)
+    if (matchesFeedEtag(request, etag)) {
+      const response = new Response(null, { status: 304, headers: feedResponseHeaders(etag) })
+      return finish(response)
+    }
+  }
+  const feed = await timed("feed", () => getFeedData(user.id, {
+    preloadedSnapshot: snapshot,
     timelineCursor: validCursor,
     timelineLimit: pageRequest.limit + 1,
     useSnapshot: !validCursor,
-  })
+  }))
   const followingStories = collapseStoryCardsByCreator(
     feed.followingStories
       .filter(storyCardAvailable)
@@ -358,7 +374,7 @@ async function feedResponse(
       .filter(storyCardAvailable)
       .map((story) => absoluteStoryCardMedia(story, request)),
   ).filter((story) => !followedCreatorNames.has(story.creator.toLowerCase()))
-  const initialStoryStacks = await getMobileInitialStoryStacks({
+  const initialStoryStacks = await timed("stacks", () => initialStacksWithinBudget({
     storyIds: initialStoryStackIds({
       hasActiveMyStory: feed.myStory.items.some(storyCardAvailable),
       followingStories,
@@ -368,7 +384,8 @@ async function feedResponse(
     viewerId: user.id,
     request,
     limit: initialStoryStackLimit,
-  })
+    myStory: feed.myStory,
+  }))
   const availableMyStoryItems = feed.myStory.items.filter(storyCardAvailable)
   const latestMyStoryItem =
     availableMyStoryItems.length > 0
@@ -438,15 +455,10 @@ async function feedResponse(
   const response = jsonResponse(
     payload,
     request,
-    user.id,
+    !validCursor ? feedResponseEtag(feed, request, user, pageRequest.limit) : undefined,
     hlsPreconnectLinks(followingTimelineStories),
   )
-  response.headers.set(
-    "Server-Timing",
-    `mobile-feed;dur=${Math.max(performance.now() - startedAt, 0).toFixed(1)}`,
-  )
-
-  return response
+  return finish(response)
 }
 
 export async function GET(request: Request) {

@@ -94,6 +94,7 @@ export const mobilePerformanceEventName = pgEnum(
     "media_delivery_ready",
     "media_delivery_observed",
     "api_request",
+    "api_decode",
     "api_server_timing",
     "feed_disk_cache_clear",
     "feed_disk_cache_hit",
@@ -1009,6 +1010,9 @@ export const stories = pgTable(
       table.expiresAt,
       table.createdAt,
     ),
+    index("stories_creator_latest_visible_idx")
+      .on(table.creatorId, table.createdAt.desc(), table.id.desc())
+      .where(sql`status = 'live' AND moderation_status = 'approved'`),
     index("stories_creator_live_idx").on(
       table.creatorId,
       table.status,

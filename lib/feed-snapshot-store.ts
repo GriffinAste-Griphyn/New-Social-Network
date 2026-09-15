@@ -1,28 +1,35 @@
+import { randomUUID } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { invalidateByTag } from "@vercel/functions"
 
 import { getDb } from "@/lib/db"
 import { follows } from "@/lib/db/schema"
 import type { FeedData } from "@/lib/story-store"
-import { hasRedisCache, redisCommand, redisPipeline } from "@/lib/upstash-redis"
+import { hasRedisCache, redisCommand } from "@/lib/upstash-redis"
 
 const freshSnapshotTtlMs = 60 * 1000
 const staleSnapshotTtlSeconds = 5 * 60
 
-type CachedFeedSnapshot = {
+export type CachedFeedSnapshot = {
+  timelineLimit: number
   cachedAt: number
   payload: FeedData
 }
 
 function snapshotKey(viewerId: string) {
-  return `mobile-feed:snapshot:v2:${viewerId}`
+  return `mobile-feed:snapshot:v3:${viewerId}`
 }
 
-function serializeFeedData(feed: FeedData) {
-  return JSON.parse(JSON.stringify(feed)) as FeedData
+function revisionKey(viewerId: string) { return `mobile-feed:revision:v3:${viewerId}` }
+
+// null means Redis is unavailable: serve relational data but do not cache it.
+export async function readFeedSnapshotRevision(viewerId: string): Promise<string | null> {
+  if (!hasRedisCache()) return null
+  try { return await redisCommand<string>(["GET", revisionKey(viewerId)]) ?? "" }
+  catch { return null }
 }
 
-async function readSnapshot(viewerId: string) {
+export async function readFeedSnapshot(viewerId: string) {
   if (!hasRedisCache()) {
     return null
   }
@@ -42,57 +49,28 @@ async function readSnapshot(viewerId: string) {
   }
 }
 
-export async function readMobileFeedSnapshot(viewerId: string) {
-  const snapshot = await readSnapshot(viewerId)
-  if (!snapshot) {
-    return null
-  }
-
-  const staleAt =
-    snapshot.cachedAt + staleSnapshotTtlSeconds * 1000
-  return staleAt > Date.now() ? snapshot.payload : null
-}
-
-export async function readFeedCacheBatch(viewerId: string, timelineLimit: number, beforeScore?: number | null) {
-  if (!hasRedisCache()) return { snapshot: null, timelineIds: null as string[] | null }
-  const snapKey = snapshotKey(viewerId)
-  const tlKey = `mobile-feed:timeline:v1:${viewerId}`
-  const res = await redisPipeline([
-    ["GET", snapKey],
-    ["ZREVRANGEBYSCORE", tlKey, beforeScore ? String(beforeScore) : "+inf", "-inf", "LIMIT", 0, Math.max(1, Math.min(timelineLimit, 500))],
-  ]).catch(() => null) as Array<string | string[] | null> | null
-  const snapRaw = (res?.[0] ?? null) as string | null
-  let snapshot: CachedFeedSnapshot | null = null
-  if (snapRaw) { try { snapshot = JSON.parse(snapRaw) as CachedFeedSnapshot } catch { snapshot = null } }
-  const tlIds = (res?.[1] ?? null) as string[] | null
-  return { snapshot, timelineIds: tlIds }
-}
-
-export async function readFreshMobileFeedSnapshot(viewerId: string) {
-  const snapshot = await readSnapshot(viewerId)
-  if (!snapshot || snapshot.cachedAt + freshSnapshotTtlMs <= Date.now()) {
-    return null
-  }
-
+export function usableFeedSnapshot(snapshot: CachedFeedSnapshot | null, timelineLimit = 21, stale = false) {
+  if (!snapshot || !snapshot.payload || snapshot.timelineLimit !== timelineLimit ||
+      !Number.isFinite(snapshot.cachedAt) || snapshot.cachedAt > Date.now() ||
+      snapshot.cachedAt + (stale ? staleSnapshotTtlSeconds * 1000 : freshSnapshotTtlMs) <= Date.now()) return null
+  if (snapshot.payload.snapshotExpiresAt && Date.parse(snapshot.payload.snapshotExpiresAt) <= Date.now()) return null
   return snapshot.payload
 }
 
-export async function writeMobileFeedSnapshot(viewerId: string, feed: FeedData) {
+export async function writeMobileFeedSnapshot(viewerId: string, feed: FeedData, timelineLimit: number, expectedRevision: string | null) {
   const snapshot: CachedFeedSnapshot = {
+    timelineLimit,
     cachedAt: Date.now(),
-    payload: serializeFeedData(feed),
+    payload: feed,
   }
 
-  if (!hasRedisCache()) {
-    return
-  }
-
+  if (!hasRedisCache() || expectedRevision === null) return
+  // Atomically refuse to resurrect a snapshot invalidated during the rebuild.
   await redisCommand([
-    "SET",
-    snapshotKey(viewerId),
-    JSON.stringify(snapshot),
-    "EX",
-    staleSnapshotTtlSeconds,
+    "EVAL",
+    "if (redis.call('GET', KEYS[2]) or '') ~= ARGV[1] then return 0 end; redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]); return 1",
+    2, snapshotKey(viewerId), revisionKey(viewerId), expectedRevision,
+    JSON.stringify(snapshot), staleSnapshotTtlSeconds,
   ])
 }
 
@@ -104,8 +82,10 @@ export async function invalidateMobileFeedSnapshots(viewerIds: string[]) {
 
   if (hasRedisCache()) {
     await redisCommand([
-      "DEL",
-      ...uniqueViewerIds.map(snapshotKey),
+      "EVAL",
+      "for i = 1, #KEYS, 2 do redis.call('SET', KEYS[i + 1], ARGV[1], 'EX', 600); redis.call('DEL', KEYS[i]); end; return 1",
+      uniqueViewerIds.length * 2,
+      ...uniqueViewerIds.flatMap(id => [snapshotKey(id), revisionKey(id)]), randomUUID(),
     ]).catch(() => undefined)
   }
 

@@ -16,6 +16,7 @@ enum MediaPerformance {
         "media_delivery_ready",
         "media_delivery_observed",
         "api_request",
+    "api_decode",
         "api_server_timing",
         "feed_disk_cache_clear",
         "feed_disk_cache_hit",
@@ -319,8 +320,49 @@ final class AppReliabilityMonitor: NSObject, MXMetricManagerSubscriber {
     }
 
     func didReceive(_ payloads: [MXMetricPayload]) {
-        MediaPerformance.mark("metric_kit_payload event=received count=\(payloads.count)")
+        for payload in payloads {
+            let window = Int(payload.timeStampEnd.timeIntervalSince1970)
+            // MetricKit may aggregate several app versions; keep its attribution
+            // explicit rather than assigning old measurements to the running build.
+            let context = "window_end=\(window) mixed_versions=\(payload.includesMultipleApplicationVersions) metric_build=\(payload.latestApplicationVersion)"
+            if let launch = payload.applicationLaunchMetrics {
+                recordHistogram(launch.histogrammedTimeToFirstDraw, metric: "launch", context: context)
+                recordHistogram(launch.histogrammedApplicationResumeTime, metric: "resume", context: context)
+            }
+            if let memory = payload.memoryMetrics {
+                MediaPerformance.mark("metric_kit_payload metric=peak_memory bytes=\(Int(memory.peakMemoryUsage.converted(to: .bytes).value)) \(context)")
+            }
+            if let cpu = payload.cpuMetrics {
+                MediaPerformance.mark("metric_kit_payload metric=cpu milliseconds=\(Int(cpu.cumulativeCPUTime.converted(to: .milliseconds).value)) \(context)")
+            }
+            if let disk = payload.diskIOMetrics {
+                MediaPerformance.mark("metric_kit_payload metric=disk_writes bytes=\(Int(disk.cumulativeLogicalWrites.converted(to: .bytes).value)) \(context)")
+            }
+            if let animation = payload.animationMetrics {
+                MediaPerformance.mark("metric_kit_payload metric=scroll_hitch milliseconds_per_second=\(animation.scrollHitchTimeRatio.value) \(context)")
+            }
+        }
         MediaPerformance.flushUploadEvents()
+    }
+
+    private func recordHistogram(_ histogram: MXHistogram<UnitDuration>, metric: String, context: String) {
+        let buckets = histogram.bucketEnumerator.allObjects.compactMap { $0 as? MXHistogramBucket<UnitDuration> }
+        let samples = buckets.reduce(0) { $0 + $1.bucketCount }
+        guard samples > 0 else { return }
+        var cumulative = 0
+        var p50: Double?
+        var p95: Double?
+        for bucket in buckets {
+            cumulative += bucket.bucketCount
+            let upperMs = bucket.bucketEnd.converted(to: .milliseconds).value
+            if p50 == nil, Double(cumulative) >= Double(samples) * 0.5 { p50 = upperMs }
+            if p95 == nil, Double(cumulative) >= Double(samples) * 0.95 { p95 = upperMs }
+        }
+        // Bucket upper bounds are deliberately labelled; they are estimates,
+        // not precise individual launch durations.
+        if let p50, let p95 {
+            MediaPerformance.mark("metric_kit_payload metric=\(metric) samples=\(samples) p50_upper_ms=\(p50) p95_upper_ms=\(p95) \(context)")
+        }
     }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
