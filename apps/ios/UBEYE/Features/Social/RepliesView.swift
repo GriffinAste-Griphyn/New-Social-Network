@@ -1,82 +1,7 @@
 import Foundation
 import SwiftUI
 
-@MainActor
-final class RepliesStore: ObservableObject {
-    @Published var inbox: StoryInteractionInboxResponse?
-    @Published var isLoading = false
-    @Published var error: String?
-    @Published var deletingReplyIds: Set<String> = []
-    private var loadGeneration = 0
-
-    func load(api: APIClient) async {
-        loadGeneration += 1
-        let generation = loadGeneration
-        isLoading = true
-        error = nil
-        defer {
-            if generation == loadGeneration {
-                isLoading = false
-            }
-        }
-
-        do {
-            let response: StoryInteractionInboxResponse = try await api.get("/api/mobile/stories/inbox/interactions")
-            guard generation == loadGeneration, !Task.isCancelled else {
-                return
-            }
-            inbox = response
-        } catch {
-            guard generation == loadGeneration, !error.isCancellation else {
-                return
-            }
-            self.error = error.localizedDescription
-        }
-    }
-
-    func deleteReply(id: String, api: APIClient) async {
-        guard !deletingReplyIds.contains(id) else {
-            return
-        }
-
-        let previousInbox = inbox
-        deletingReplyIds.insert(id)
-        error = nil
-        removeReply(id: id)
-        UBEYEFeedback.impact(.light)
-
-        do {
-            try await api.deleteStoryInteraction(id: id)
-        } catch {
-            if !NetworkQualityMonitor.shared.isConnected {
-                PendingSocialActionQueue.shared.enqueue(.deleteReply, targetId: id)
-                deletingReplyIds.remove(id)
-                return
-            }
-            inbox = previousInbox
-            if !error.isCancellation {
-                self.error = error.localizedDescription
-                UBEYEFeedback.error()
-            }
-        }
-
-        deletingReplyIds.remove(id)
-    }
-
-    private func removeReply(id: String) {
-        guard let inbox else {
-            return
-        }
-
-        self.inbox = StoryInteractionInboxResponse(
-            ok: inbox.ok,
-            interactions: inbox.interactions.filter { $0.id != id },
-            sentInteractions: inbox.sentInteractions.filter { $0.id != id }
-        )
-    }
-}
-
-private extension Error {
+extension Error {
     var isCancellation: Bool {
         if self is CancellationError {
             return true
@@ -90,6 +15,8 @@ private extension Error {
 struct RepliesView: View {
     @EnvironmentObject private var api: APIClient
     @StateObject private var store = RepliesStore()
+    @StateObject private var refreshController = TabRefreshController()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSegment = "Received"
     @State private var navigationPath = NavigationPath()
     var onQuoteReply: (QuotedStoryReply) -> Void = { _ in }
@@ -125,11 +52,12 @@ struct RepliesView: View {
                         )
                         .padding(.top, 18)
                     } else {
-                        VStack(spacing: 10) {
+                        LazyVStack(spacing: 10) {
                             ForEach(displayedReplyThreads) { thread in
                                 NavigationLink(
                                     destination: ReplyThreadView(
                                         thread: thread,
+                                        store: store,
                                         onQuote: onQuoteReply,
                                         onDelete: { interactionId in
                                             await store.deleteReply(id: interactionId, api: api)
@@ -142,16 +70,7 @@ struct RepliesView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(store.deletingReplyIds.contains(thread.id))
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        Task {
-                                            await store.deleteReply(id: thread.id, api: api)
-                                        }
-                                    } label: {
-                                        Label("Delete Reply", systemImage: "trash")
-                                    }
-                                }
+
                             }
                         }
                     }
@@ -162,9 +81,8 @@ struct RepliesView: View {
             .scrollIndicators(.hidden)
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
-            .task {
-                await store.load(api: api)
-            }
+            .activeTabRefresh(refreshController) { _ in await store.load(api: api) }
+            .onReceive(NotificationCenter.default.publisher(for: .replyInboxDidChange)) { _ in refreshController.request() }
             .refreshable {
                 await store.load(api: api)
             }
@@ -177,7 +95,7 @@ struct RepliesView: View {
                 }
 
                 navigationPath = NavigationPath()
-                withAnimation(.snappy(duration: 0.28)) {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) {
                     scrollProxy.scrollTo("replies-top", anchor: .top)
                 }
                 Task {
@@ -189,103 +107,8 @@ struct RepliesView: View {
     }
 
     private var displayedReplyThreads: [ReplyThreadData] {
-        if let inbox = store.inbox {
-            if selectedSegment == "Sent" {
-                return inbox.sentInteractions.map { interaction in
-                    let creator = FixtureCreator(
-                        id: interaction.target.id,
-                        name: interaction.target.name,
-                        handle: interaction.target.handle,
-                        imageUrl: interaction.target.imageUrl,
-                        initials: String(interaction.target.name.prefix(2)).uppercased(),
-                        isFollowing: true
-                    )
-                    let row = ExpoReplyRowData(
-                        id: interaction.id,
-                        creator: creator,
-                        timestamp: displayTimestamp(interaction.createdAt),
-                        message: interaction.body ?? interaction.reaction ?? "Sent a reply."
-                    )
-                    let items = inbox.sentInteractions
-                        .filter { $0.target.id == interaction.target.id }
-                        .map { ReplyThreadItem(sent: $0) }
-                        .sortedByCreatedAt()
-
-                    return ReplyThreadData(id: interaction.id, creator: creator, row: row, items: items)
-                }
-            }
-
-            if !inbox.interactions.isEmpty {
-                return inbox.interactions.map { interaction in
-                    let creator = FixtureCreator(
-                        id: interaction.actor.id,
-                        name: interaction.actor.name,
-                        handle: interaction.actor.handle,
-                        imageUrl: interaction.actor.imageUrl,
-                        initials: String(interaction.actor.name.prefix(2)).uppercased(),
-                        isFollowing: true
-                    )
-                    let row = ExpoReplyRowData(
-                        id: interaction.id,
-                        creator: creator,
-                        timestamp: displayTimestamp(interaction.createdAt),
-                        message: interaction.body ?? interaction.reaction ?? "Sent a photo reply."
-                    )
-                    let items = inbox.interactions
-                        .filter { $0.actor.id == interaction.actor.id }
-                        .map { ReplyThreadItem(received: $0) }
-                        .sortedByCreatedAt()
-
-                    return ReplyThreadData(id: interaction.id, creator: creator, row: row, items: items)
-                }
-            }
-        }
-
-        return []
+        selectedSegment == "Sent" ? store.sentThreads : store.receivedThreads
     }
-
-    private var displayedReplyRows: [ExpoReplyRowData] {
-        if let inbox = store.inbox {
-            if selectedSegment == "Sent" {
-                return inbox.sentInteractions.map { interaction in
-                    ExpoReplyRowData(
-                        id: interaction.id,
-                        creator: FixtureCreator(
-                            id: interaction.target.id,
-                            name: interaction.target.name,
-                            handle: interaction.target.handle,
-                            imageUrl: interaction.target.imageUrl,
-                            initials: String(interaction.target.name.prefix(2)).uppercased(),
-                            isFollowing: true
-                        ),
-                        timestamp: interaction.createdAt,
-                        message: interaction.body ?? interaction.reaction ?? "Sent a reply."
-                    )
-                }
-            }
-
-            if !inbox.interactions.isEmpty {
-                return inbox.interactions.map { interaction in
-                    ExpoReplyRowData(
-                        id: interaction.id,
-                        creator: FixtureCreator(
-                            id: interaction.actor.id,
-                            name: interaction.actor.name,
-                            handle: interaction.actor.handle,
-                            imageUrl: interaction.actor.imageUrl,
-                            initials: String(interaction.actor.name.prefix(2)).uppercased(),
-                            isFollowing: true
-                        ),
-                        timestamp: interaction.createdAt,
-                        message: interaction.body ?? interaction.reaction ?? "Sent a photo reply."
-                    )
-                }
-            }
-        }
-
-        return []
-    }
-
 }
 
 private struct RepliesLoadingSkeleton: View {
@@ -455,306 +278,7 @@ struct ReplyThreadItem: Identifiable, Hashable {
     }
 }
 
-struct ReplyThreadView: View {
-    @Environment(\.dismiss) private var dismiss
-    let thread: ReplyThreadData
-    let onQuote: (QuotedStoryReply) -> Void
-    let onDelete: (String) async -> Void
-    @State private var message = ""
-    @State private var visibleItems: [ReplyThreadItem]
-
-    init(
-        thread: ReplyThreadData,
-        onQuote: @escaping (QuotedStoryReply) -> Void,
-        onDelete: @escaping (String) async -> Void
-    ) {
-        self.thread = thread
-        self.onQuote = onQuote
-        self.onDelete = onDelete
-        _visibleItems = State(initialValue: thread.items)
-    }
-
-    init(creator: FixtureCreator) {
-        let row = ExpoReplyRowData(
-            id: "fixture-thread-\(creator.id)",
-            creator: creator,
-            timestamp: "Now",
-            message: "No story replies in this chat yet."
-        )
-        let story = DesignFixtures.stories.first
-        self.thread = ReplyThreadData(
-            id: row.id,
-            creator: creator,
-            row: row,
-            items: [
-                ReplyThreadItem(
-                    id: row.id,
-                    storyId: story?.id ?? row.id,
-                    title: "\(creator.name) replied to your Story",
-                    message: row.message,
-                    createdAt: row.timestamp,
-                    assetKind: .image,
-                    mediaUrl: story?.imageUrl,
-                    thumbnailUrl: story?.imageUrl,
-                    quotedReply: nil
-                )
-            ]
-        )
-        self.onQuote = { _ in }
-        self.onDelete = { _ in }
-        _visibleItems = State(initialValue: self.thread.items)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(Color.ubeyeInk)
-                }
-                .buttonStyle(.plain)
-
-                RemoteAvatar(url: thread.creator.imageUrl, size: 42, name: thread.creator.name)
-                Text(thread.creator.handle)
-                    .font(.system(size: 18, weight: .bold))
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: "camera")
-                    .font(.system(size: 17, weight: .bold))
-                    .frame(width: 38, height: 38)
-                    .foregroundStyle(Color.ubeyeMuted)
-                    .background(Color.ubeyeSubtle, in: Circle())
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.white)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        ForEach(visibleItems) { item in
-                            ReplyThreadStoryCard(
-                                item: item,
-                                onQuote: {
-                                    quote(item)
-                                },
-                                onDelete: {
-                                    delete(item)
-                                }
-                            )
-                            .id(item.id)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, 20)
-                }
-                .scrollIndicators(.hidden)
-                .onAppear {
-                    scrollToBottom(proxy)
-                }
-                .onChange(of: visibleItems.count) { _, _ in
-                    scrollToBottom(proxy)
-                }
-            }
-
-            HStack(spacing: 14) {
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .frame(width: 46, height: 46)
-                    .foregroundStyle(.white)
-                    .background(Color.ubeyeNavy, in: Circle())
-
-                TextField("Send a chat", text: $message)
-                    .font(.system(size: 16, weight: .regular))
-                    .padding(.horizontal, 16)
-                    .frame(height: 44)
-                    .background(Color.ubeyeSubtle, in: Capsule())
-                    .overlay(Capsule().stroke(Color.ubeyeBorder, lineWidth: 1))
-
-                Image(systemName: "face.smiling")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(Color.ubeyeMuted)
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(Color.ubeyeMuted)
-            }
-            .padding(12)
-            .background(.white)
-            .overlay(alignment: .top) { Divider() }
-        }
-        .background(Color.ubeyeBackground.ignoresSafeArea())
-        .navigationBarBackButtonHidden()
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    private func quote(_ item: ReplyThreadItem) {
-        guard let quotedReply = item.quotedReply else {
-            return
-        }
-
-        dismiss()
-        onQuote(quotedReply)
-    }
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        guard let last = visibleItems.last else {
-            return
-        }
-
-        Task {
-            try? await Task.sleep(for: .milliseconds(120))
-            await MainActor.run {
-                withAnimation(.snappy) {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
-            }
-        }
-    }
-
-    private func delete(_ item: ReplyThreadItem) {
-        withAnimation(.snappy) {
-            visibleItems.removeAll { $0.id == item.id }
-        }
-
-        Task {
-            await onDelete(item.id)
-            await MainActor.run {
-                if visibleItems.isEmpty {
-                    dismiss()
-                }
-            }
-        }
-    }
-}
-
-private struct ReplyThreadStoryCard: View {
-    let item: ReplyThreadItem
-    let onQuote: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(item.title)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.ubeyeInk)
-                    .lineLimit(2)
-
-                Spacer(minLength: 8)
-
-                Text(displayTimestamp(item.createdAt))
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.ubeyeMuted.opacity(0.7))
-                    .lineLimit(1)
-
-                if item.quotedReply != nil {
-                    Button(action: onQuote) {
-                        Image(systemName: "quote.bubble")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Color.ubeyeInk)
-                            .frame(width: 30, height: 30)
-                            .background(Color.ubeyeSubtle, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Quote reply")
-                }
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.ubeyeRed)
-                        .frame(width: 30, height: 30)
-                        .background(Color.ubeyeRed.opacity(0.08), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Delete reply")
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-
-            ZStack(alignment: .bottomLeading) {
-                ZStack(alignment: .bottom) {
-                    ReplyStoryMedia(url: item.thumbnailUrl ?? item.mediaUrl)
-                        .frame(width: 218, height: 318)
-
-                    LinearGradient(
-                        colors: [
-                            .black.opacity(0),
-                            .black.opacity(0.48),
-                            .black.opacity(0.70)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 145)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                }
-                .frame(width: 218, height: 318)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                ReplyMessageOverlay(message: item.message)
-                    .frame(width: 214, alignment: .leading)
-                    .offset(x: 148, y: -32)
-            }
-            .frame(maxWidth: .infinity, minHeight: 318, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 12)
-            .padding(.bottom, 14)
-        }
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.ubeyeBorder.opacity(0.9), lineWidth: 1)
-        )
-        .shadow(color: Color.ubeyeInk.opacity(0.055), radius: 10, y: 3)
-    }
-}
-
-private struct ReplyMessageOverlay: View {
-    let message: String
-
-    var body: some View {
-        Text(message)
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.leading)
-            .lineLimit(5)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.22), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
-    }
-}
-
-private struct ReplyStoryMedia: View {
-    let url: URL?
-
-    var body: some View {
-        ZStack {
-            Color.ubeyeSubtle
-
-            CachedAsyncImage(url: url) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                UBEYESkeletonBlock()
-            }
-        }
-    }
-}
-
-private func displayTimestamp(_ value: String) -> String {
+func displayTimestamp(_ value: String) -> String {
     guard let date = parseReplyDate(value) else {
         return value
     }
@@ -762,19 +286,21 @@ private func displayTimestamp(_ value: String) -> String {
     return DateFormatter.ubeyeReplyTime.string(from: date)
 }
 
-private func parseReplyDate(_ value: String) -> Date? {
+func parseReplyDate(_ value: String) -> Date? {
     ISO8601DateFormatter.ubeyeWithFractionalSeconds.date(from: value) ??
         ISO8601DateFormatter.ubeye.date(from: value)
 }
 
-private extension Array where Element == ReplyThreadItem {
+extension Array where Element == ReplyThreadItem {
     func sortedByCreatedAt() -> [ReplyThreadItem] {
-        sorted { left, right in
-            let leftDate = parseReplyDate(left.createdAt) ?? .distantPast
-            let rightDate = parseReplyDate(right.createdAt) ?? .distantPast
-
-            return leftDate < rightDate
+        var dated: [(item: ReplyThreadItem, date: Date)] = map { item in
+            (item: item, date: parseReplyDate(item.createdAt) ?? Date.distantPast)
         }
+        dated.sort { left, right in
+            if left.date == right.date { return left.item.id < right.item.id }
+            return left.date < right.date
+        }
+        return dated.map { $0.item }
     }
 }
 

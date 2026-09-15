@@ -307,6 +307,7 @@ final class StoryStackStore: ObservableObject {
     }
 
     func sendReaction(_ reaction: String, item: StoryStackItem, api: APIClient) async {
+        let actionScope = api.accountScope
         guard !sendingReactionIds.contains(item.id) else {
             return
         }
@@ -322,7 +323,8 @@ final class StoryStackStore: ObservableObject {
                 PendingSocialActionQueue.shared.enqueue(
                     .reaction,
                     targetId: item.id,
-                    value: reaction
+                    value: reaction,
+                    accountScope: actionScope
                 )
                 return
             }
@@ -332,6 +334,7 @@ final class StoryStackStore: ObservableObject {
     }
 
     func followCreator(api: APIClient) async {
+        let actionScope = api.accountScope
         guard let creatorId = stack?.creatorId else {
             return
         }
@@ -354,7 +357,7 @@ final class StoryStackStore: ObservableObject {
             UBEYEFeedback.success()
         } catch {
             if !NetworkQualityMonitor.shared.isConnected {
-                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId)
+                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId, accountScope: actionScope)
                 return
             }
             followedIds.remove(creatorId)
@@ -364,6 +367,7 @@ final class StoryStackStore: ObservableObject {
     }
 
     func unfollowCreator(api: APIClient) async {
+        let actionScope = api.accountScope
         guard let creatorId = stack?.creatorId else {
             return
         }
@@ -386,7 +390,7 @@ final class StoryStackStore: ObservableObject {
             UBEYEFeedback.success()
         } catch {
             if !NetworkQualityMonitor.shared.isConnected {
-                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: creatorId)
+                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: creatorId, accountScope: actionScope)
                 return
             }
             followedIds.insert(creatorId)
@@ -475,4 +479,3 @@ final class StoryStackStore: ObservableObject {
 }
 
 struct EmptyPayload: Encodable {}
-

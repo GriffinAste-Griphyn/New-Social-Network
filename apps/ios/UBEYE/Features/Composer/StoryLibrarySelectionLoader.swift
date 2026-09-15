@@ -47,13 +47,16 @@ final class StoryLibrarySelectionLoader: ObservableObject {
         }
     }
 
-    func cancel() {
+    @discardableResult
+    func cancel() -> Task<Void, Never>? {
+        let cancelledTask = task
         requestID = UUID()
         task?.cancel()
         task = nil
         isLoading = false
         completedCount = 0
         totalCount = 0
+        return cancelledTask
     }
 
     deinit { task?.cancel() }

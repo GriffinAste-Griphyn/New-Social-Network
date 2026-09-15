@@ -38,6 +38,7 @@ final class AuthStore: ObservableObject {
         if let stored = loadStoredAccount() {
             applySession(stored, api: api)
         } else {
+            api.accountIdentifier = nil
             api.authToken = nil
         }
 
@@ -296,6 +297,7 @@ final class AuthStore: ObservableObject {
         Task {
             await MediaFileDiskCache.shared.removeAll()
         }
+        api.accountIdentifier = nil
         api.authToken = nil
         stage = .landing
         pendingEmail = ""
@@ -321,6 +323,7 @@ final class AuthStore: ObservableObject {
 
     private func applySession(_ next: MobileAccount, api: APIClient) {
         account = next
+        api.accountIdentifier = next.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         api.authToken = next.mobileToken
     }
 

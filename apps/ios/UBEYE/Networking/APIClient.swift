@@ -32,136 +32,6 @@ enum APIClientError: LocalizedError {
     }
 }
 
-@MainActor
-final class PendingSocialActionQueue {
-    static let shared = PendingSocialActionQueue()
-
-    enum Kind: String, Codable {
-        case follow
-        case unfollow
-        case reaction
-        case deleteReply
-    }
-
-    struct Action: Codable, Identifiable, Equatable {
-        let id: String
-        let kind: Kind
-        let targetId: String
-        let value: String?
-        let createdAt: Date
-    }
-
-    private struct CreatorPayload: Encodable {
-        let creatorId: String
-    }
-
-    private let defaultsKey = "ubeye.pending-social-actions.v1"
-    private var actions: [Action]
-    private var isFlushing = false
-
-    private init() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let decoded = try? JSONDecoder().decode([Action].self, from: data) {
-            actions = decoded
-        } else {
-            actions = []
-        }
-    }
-
-    func enqueue(_ kind: Kind, targetId: String, value: String? = nil) {
-        let action = Action(
-            id: UUID().uuidString.lowercased(),
-            kind: kind,
-            targetId: targetId,
-            value: value,
-            createdAt: Date()
-        )
-        actions = Self.coalescing(action, into: actions)
-        persist()
-        MediaPerformance.mark("social_action_queued kind=\(kind.rawValue)")
-    }
-
-    static func coalescing(_ action: Action, into existing: [Action]) -> [Action] {
-        if action.kind == .follow || action.kind == .unfollow {
-            return existing.filter {
-                !(($0.kind == .follow || $0.kind == .unfollow) && $0.targetId == action.targetId)
-            } + [action]
-        }
-
-        guard !existing.contains(where: {
-            $0.kind == action.kind && $0.targetId == action.targetId && $0.value == action.value
-        }) else {
-            return existing
-        }
-
-        return existing + [action]
-    }
-
-    func flush(api: APIClient) async {
-        guard !isFlushing, NetworkQualityMonitor.shared.isConnected, !actions.isEmpty else {
-            return
-        }
-
-        isFlushing = true
-        defer { isFlushing = false }
-        var retained: [Action] = []
-
-        for action in actions {
-            guard NetworkQualityMonitor.shared.isConnected else {
-                retained.append(action)
-                continue
-            }
-
-            do {
-                try await perform(action, api: api)
-                MediaPerformance.mark("social_action_flushed kind=\(action.kind.rawValue)")
-            } catch {
-                let statusCode = (error as? APIClientError)?.statusCode
-                if statusCode == nil || statusCode.map({ $0 >= 500 }) == true {
-                    retained.append(action)
-                }
-                MediaPerformance.mark(
-                    "social_action_flush_failed kind=\(action.kind.rawValue) status=\(statusCode ?? 0)"
-                )
-            }
-        }
-
-        actions = retained
-        persist()
-    }
-
-    private func perform(_ action: Action, api: APIClient) async throws {
-        switch action.kind {
-        case .follow:
-            let _: BasicOkResponse = try await api.post(
-                "/api/mobile/follows",
-                body: CreatorPayload(creatorId: action.targetId)
-            )
-        case .unfollow:
-            let _: BasicOkResponse = try await api.delete(
-                "/api/mobile/follows",
-                body: CreatorPayload(creatorId: action.targetId)
-            )
-        case .reaction:
-            let _: StoryInteractionResponse = try await api.sendStoryReply(
-                storyId: action.targetId,
-                body: nil,
-                reaction: action.value ?? "❤️"
-            )
-        case .deleteReply:
-            try await api.deleteStoryInteraction(id: action.targetId)
-        }
-    }
-
-    private func persist() {
-        if actions.isEmpty {
-            UserDefaults.standard.removeObject(forKey: defaultsKey)
-        } else if let data = try? JSONEncoder().encode(actions) {
-            UserDefaults.standard.set(data, forKey: defaultsKey)
-        }
-    }
-}
-
 private struct BlobUploadErrorEnvelope: Decodable {
     struct BlobError: Decodable {
         let code: String?
@@ -206,6 +76,15 @@ final class APIClient: ObservableObject {
         didSet {
             UserDefaults.standard.set(baseURLString, forKey: Self.baseURLKey)
         }
+    }
+
+    // Set by AuthStore from the authenticated account; never persisted as plaintext here.
+    var accountIdentifier: String?
+    var accountScope: String? {
+        guard let authToken, !authToken.isEmpty else { return nil }
+        let identity = accountIdentifier ?? authToken
+        return SHA256.hash(data: Data("\(baseURLString)|\(identity)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
     }
 
     var authToken: String? {
@@ -2293,4 +2172,3 @@ final class APIClient: ObservableObject {
         "story-stack-\(storyId)"
     }
 }
-

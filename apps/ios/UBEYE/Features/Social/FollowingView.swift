@@ -4,6 +4,9 @@ struct FollowingView: View {
     @EnvironmentObject private var api: APIClient
     @EnvironmentObject private var mediaEngine: MediaEngine
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isTabActive) private var isTabActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var refreshController = TabRefreshController()
     @StateObject private var store = FeedStore()
     @State private var selectedStory: StoryRoute?
     @State private var navigationPath = NavigationPath()
@@ -65,6 +68,7 @@ struct FollowingView: View {
                                     selectedStory = StoryRoute(id: story.id, source: .followingFeed)
                                 }
                                 .onAppear {
+                                    guard isTabActive, scenePhase == .active else { return }
                                     mediaEngine.prefetchStoryStacks(
                                         ids: [story.id],
                                         api: api,
@@ -109,19 +113,17 @@ struct FollowingView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
-            .task {
-                await store.load(api: api, mediaEngine: mediaEngine)
+            .activeTabRefresh(refreshController) { force in
+                if store.feed == nil { await store.load(api: api, mediaEngine: mediaEngine) }
+                else if force { await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false) }
+                else { await store.refreshIfStale(api: api, mediaEngine: mediaEngine) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
-                Task {
-                    api.invalidateStoryStacks()
-                    await store.load(api: api, mediaEngine: mediaEngine, useDiskCache: false)
-                }
+                api.invalidateStoryStacks()
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { _ in
-                Task {
-                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
-                }
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
                 let storyId = notification.object as? String
@@ -129,11 +131,9 @@ struct FollowingView: View {
                     store.removeDeletedStory(storyId)
                 }
 
-                Task {
-                    api.invalidateMobileFeedCache()
-                    api.invalidateStoryStacks(ids: [storyId].compactMap { $0 })
-                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
-                }
+                api.invalidateMobileFeedCache()
+                api.invalidateStoryStacks(ids: [storyId].compactMap { $0 })
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
                 guard notification.object as? String == AppTab.following.rawValue else {
@@ -141,26 +141,10 @@ struct FollowingView: View {
                 }
 
                 navigationPath = NavigationPath()
-                withAnimation(.snappy(duration: 0.28)) {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) {
                     scrollProxy.scrollTo("following-feed-top", anchor: .top)
                 }
-                Task {
-                    await store.load(
-                        api: api,
-                        mediaEngine: mediaEngine,
-                        showsLoading: false,
-                        useDiskCache: false
-                    )
-                }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active, store.feed != nil else {
-                    return
-                }
-
-                Task {
-                    await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false)
-                }
+                refreshController.request()
             }
             .fullScreenCover(item: $selectedStory) { route in
                 StoryStackViewer(route: route)

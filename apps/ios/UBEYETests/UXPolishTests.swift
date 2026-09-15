@@ -41,29 +41,18 @@ final class UXPolishTests: XCTestCase {
 
     @MainActor
     func testStoryComposerPersistsTheMostRecentExactOverlayText() {
-        let draftKey = "ubeye.story-composer-text-draft.v1"
-        let defaults = UserDefaults.standard
-        let previousDraft = defaults.data(forKey: draftKey)
-        defer {
-            if let previousDraft {
-                defaults.set(previousDraft, forKey: draftKey)
-            } else {
-                defaults.removeObject(forKey: draftKey)
-            }
-        }
-        defaults.removeObject(forKey: draftKey)
-
-        let store = StoryComposerStore()
+        let suite = "composer-test-\(UUID())"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let store = StoryComposerStore(preferences: preferences)
+        store.configureDraft(accountScope: "test-account")
         store.textOverlay = "First sentence.  Second sentence."
         store.persistTextDraft()
         store.textOverlay = "First sentence. Second sentence."
         store.persistTextDraft()
-
-        let restoredStore = StoryComposerStore()
-        XCTAssertEqual(
-            restoredStore.textOverlay,
-            "First sentence. Second sentence."
-        )
+        let restoredStore = StoryComposerStore(preferences: preferences)
+        restoredStore.configureDraft(accountScope: "test-account")
+        XCTAssertEqual(restoredStore.textOverlay, "First sentence. Second sentence.")
     }
 
     func testTabSelectionDistinguishesSwitchFromReselect() {

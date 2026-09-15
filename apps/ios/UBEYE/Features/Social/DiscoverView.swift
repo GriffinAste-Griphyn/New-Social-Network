@@ -19,6 +19,7 @@ final class DiscoverStore: ObservableObject {
         searchGeneration += 1
         let generation = searchGeneration
         isLoading = true
+        defer { if generation == searchGeneration { isLoading = false } }
         error = nil
         do {
             let response: DiscoverSearchResponse = try await api.get(
@@ -35,10 +36,7 @@ final class DiscoverStore: ObservableObject {
             guard generation == searchGeneration else {
                 return
             }
-            self.error = error.localizedDescription
-        }
-        if generation == searchGeneration {
-            isLoading = false
+            if !error.isCancellation { self.error = error.localizedDescription }
         }
     }
 
@@ -47,11 +45,12 @@ final class DiscoverStore: ObservableObject {
             let response: FollowStateResponse = try await api.get("/api/mobile/follows")
             followedIds = Set(response.followedCreatorIds)
         } catch {
-            self.error = error.localizedDescription
+            if !error.isCancellation { self.error = error.localizedDescription }
         }
     }
 
     func follow(creatorId: String, api: APIClient) async -> Bool {
+        let actionScope = api.accountScope
         struct Body: Encodable {
             let creatorId: String
         }
@@ -71,7 +70,7 @@ final class DiscoverStore: ObservableObject {
             return true
         } catch {
             if !NetworkQualityMonitor.shared.isConnected {
-                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId)
+                PendingSocialActionQueue.shared.enqueue(.follow, targetId: creatorId, accountScope: actionScope)
                 return true
             }
             followedIds.remove(creatorId)
@@ -108,6 +107,10 @@ private enum DiscoverDestination: Identifiable {
 
 struct DiscoverView: View {
     @EnvironmentObject private var api: APIClient
+    @Environment(\.isTabActive) private var isTabActive
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var refreshController = TabRefreshController()
     @EnvironmentObject private var mediaEngine: MediaEngine
     @Environment(\.dismiss) private var dismiss
     var searchFocusRequest = 0
@@ -200,24 +203,23 @@ struct DiscoverView: View {
         .scrollIndicators(.hidden)
         .toolbar(.hidden, for: .navigationBar)
         .ubeyeScreen()
-        .task {
-            await store.load(api: api)
-            focusSearchIfNeeded()
-        }
-        .task(id: store.query) {
-            try? await Task.sleep(for: .milliseconds(280))
-            guard !Task.isCancelled else {
-                return
+        .activeTabRefresh(refreshController) { _ in await store.loadFollows(api: api) }
+        .task(id: "\(isTabActive && scenePhase == .active)|\(store.query)") {
+            guard isTabActive, scenePhase == .active else { return }
+            if !store.query.isEmpty {
+                do { try await Task.sleep(for: .milliseconds(280)) } catch { return }
             }
+            guard !Task.isCancelled else { return }
             await store.search(api: api)
         }
-        .onChange(of: searchFocusRequest) { _, _ in
+        .task(id: "\(isTabActive)|\(searchFocusRequest)") {
+            guard isTabActive else { isSearchFocused = false; return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             focusSearchIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
-            Task {
-                await store.loadFollows(api: api)
-            }
+            refreshController.request()
         }
         .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
             guard notification.object as? String == AppTab.discover.rawValue else {
@@ -226,7 +228,7 @@ struct DiscoverView: View {
 
             navigationPath = NavigationPath()
             isSearchFocused = false
-            withAnimation(.snappy(duration: 0.28)) {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) {
                 scrollProxy.scrollTo("discover-top", anchor: .top)
             }
         }
@@ -279,12 +281,7 @@ struct DiscoverView: View {
         }
 
         handledSearchFocusRequest = searchFocusRequest
-        Task {
-            try? await Task.sleep(for: .milliseconds(180))
-            await MainActor.run {
-                isSearchFocused = true
-            }
-        }
+        isSearchFocused = true
     }
 
     private var displayedCreators: [DiscoverCreator] {
@@ -366,7 +363,7 @@ private struct DiscoverCreatorList: View {
     let onTap: (DiscoverCreator) -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
+        LazyVStack(spacing: 10) {
             ForEach(creators) { creator in
                 Button {
                     onTap(creator)

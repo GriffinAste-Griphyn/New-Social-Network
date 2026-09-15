@@ -100,13 +100,19 @@ final class StoryLibrarySelectionTests: XCTestCase {
         let loader = StoryLibrarySelectionLoader()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("cancelled-pick-\(UUID()).mp4")
         try Data([1, 2, 3]).write(to: file)
+        let started = expectation(description: "provider import started")
+        var finishImport: CheckedContinuation<Void, Never>?
         loader.load(count: 1, importItem: { _ in
-            await Task.detached { try? await Task.sleep(for: .milliseconds(80)) }.value
+            await withCheckedContinuation { continuation in
+                finishImport = continuation
+                started.fulfill()
+            }
             return .video(StoryVideoUpload(url: file, source: .library))
         }, onMediaLoaded: { _ in XCTFail("Discarded selection appeared") }, onComplete: { _, _ in XCTFail("Discarded selection completed") })
-        try await Task.sleep(for: .milliseconds(20))
-        loader.cancel()
-        try await Task.sleep(for: .milliseconds(120))
+        await fulfillment(of: [started], timeout: 2)
+        let cancelledImport = loader.cancel()
+        finishImport?.resume()
+        await cancelledImport?.value
         XCTAssertFalse(loader.isLoading)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }

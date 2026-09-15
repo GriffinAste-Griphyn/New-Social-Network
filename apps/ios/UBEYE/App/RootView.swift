@@ -11,6 +11,7 @@ struct RootView: View {
                 AuthView()
             } else {
                 MainTabView()
+                    .id(auth.account?.email)
             }
         }
         .transaction { transaction in
@@ -58,6 +59,7 @@ struct MainTabView: View {
                 if visitedTabs.contains(tab) {
                     ZStack {
                         tabContent(tab)
+                            .environment(\.isTabActive, selectedTab == tab)
                     }
                         .opacity(selectedTab == tab ? 1 : 0)
                         .allowsHitTesting(selectedTab == tab)

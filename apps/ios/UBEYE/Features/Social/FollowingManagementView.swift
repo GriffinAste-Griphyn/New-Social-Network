@@ -29,6 +29,7 @@ final class FollowingManagementStore: ObservableObject {
     }
 
     func removeFromFollowing(_ profile: FollowingProfile, api: APIClient) async {
+        let actionScope = api.accountScope
         struct Body: Encodable {
             let creatorId: String
         }
@@ -48,7 +49,7 @@ final class FollowingManagementStore: ObservableObject {
             UBEYEFeedback.success()
         } catch {
             if !NetworkQualityMonitor.shared.isConnected {
-                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: profile.id)
+                PendingSocialActionQueue.shared.enqueue(.unfollow, targetId: profile.id, accountScope: actionScope)
                 return
             }
             if let previousIndex, !following.contains(where: { $0.id == profile.id }) {

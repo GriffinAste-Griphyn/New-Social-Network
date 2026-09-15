@@ -540,6 +540,9 @@ struct HomeView: View {
     @EnvironmentObject private var pendingStoryUploads: PendingStoryUploadStore
     @EnvironmentObject private var storyUploadNotice: StoryUploadNoticeStore
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isTabActive) private var isTabActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var refreshController = TabRefreshController()
     @ObservedObject private var resourceMonitor = UBEYEResourceMonitor.shared
     var uploadedStoryRegistrations: [StoryUploadResponse] = []
     var onSearchTap: () -> Void = {}
@@ -603,8 +606,10 @@ struct HomeView: View {
 
                 storyUploadNotice.showFailed(message: upload.displayErrorMessage)
             }
-            .task {
-                await store.load(api: api, mediaEngine: mediaEngine)
+            .activeTabRefresh(refreshController) { force in
+                if store.feed == nil { await store.load(api: api, mediaEngine: mediaEngine) }
+                else if force { await store.load(api: api, mediaEngine: mediaEngine, showsLoading: false, useDiskCache: false) }
+                else { await store.refreshIfStale(api: api, mediaEngine: mediaEngine) }
             }
             .onChange(of: store.authenticationFailed) { _, authenticationFailed in
                 guard authenticationFailed else {
@@ -617,10 +622,8 @@ struct HomeView: View {
                 applyUploadedStoryRegistrations()
             }
             .onReceive(NotificationCenter.default.publisher(for: .followingQueueDidChange)) { _ in
-                Task {
-                    api.invalidateStoryStacks()
-                    await store.refresh(api: api, mediaEngine: mediaEngine)
-                }
+                api.invalidateStoryStacks()
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidRegister)) { notification in
                 guard let response = notification.object as? StoryUploadResponse else {
@@ -629,9 +632,7 @@ struct HomeView: View {
 
                 store.registerUploadedStory(response)
                 if response.processingStatus == "ready" {
-                    Task {
-                        await store.refresh(api: api, mediaEngine: mediaEngine)
-                    }
+                    refreshController.request()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyUploadDidComplete)) { notification in
@@ -639,10 +640,8 @@ struct HomeView: View {
                     store.markUploadedStoryLive(storyId)
                 }
 
-                Task {
-                    api.invalidateStoryStacks(ids: ["my-story"])
-                    await store.refresh(api: api, mediaEngine: mediaEngine)
-                }
+                api.invalidateStoryStacks(ids: ["my-story"])
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .storyDidDelete)) { notification in
                 let storyId = notification.object as? String
@@ -650,11 +649,9 @@ struct HomeView: View {
                     store.removeDeletedStory(storyId)
                 }
 
-                Task {
-                    api.invalidateMobileFeedCache()
-                    api.invalidateStoryStacks(ids: ["my-story"] + [storyId].compactMap { $0 })
-                    await store.refresh(api: api, mediaEngine: mediaEngine)
-                }
+                api.invalidateMobileFeedCache()
+                api.invalidateStoryStacks(ids: ["my-story"] + [storyId].compactMap { $0 })
+                refreshController.request()
             }
             .onReceive(NotificationCenter.default.publisher(for: .appTabReselected)) { notification in
                 guard notification.object as? String == AppTab.home.rawValue else {
@@ -663,21 +660,10 @@ struct HomeView: View {
 
                 navigationPath = NavigationPath()
                 homeScrollAnchor = "home-feed-top"
-                withAnimation(.snappy(duration: 0.28)) {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) {
                     scrollProxy.scrollTo("home-feed-top", anchor: .top)
                 }
-                Task {
-                    await store.refresh(api: api, mediaEngine: mediaEngine)
-                }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active, store.feed != nil else {
-                    return
-                }
-
-                Task {
-                    await store.refreshIfStale(api: api, mediaEngine: mediaEngine)
-                }
+                refreshController.request()
             }
             .fullScreenCover(item: $selectedStory) { route in
                 StoryStackViewer(route: route)
@@ -877,6 +863,7 @@ struct HomeView: View {
     }
 
     private func prefetchDiscoverTile(_ tile: DiscoverTile) {
+        guard isTabActive, scenePhase == .active else { return }
         guard let feed = store.feed,
               let visibleIndex = feed.discoverTiles.firstIndex(where: { $0.id == tile.id }) else {
             return
@@ -903,6 +890,7 @@ struct HomeView: View {
     }
 
     private func prefetchFollowingStory(_ story: StoryCard, in feed: MobileFeedResponse) {
+        guard isTabActive, scenePhase == .active else { return }
         guard let visibleIndex = feed.followingStories.firstIndex(where: { $0.id == story.id }) else {
             return
         }
