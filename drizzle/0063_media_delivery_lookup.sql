@@ -1,0 +1,1 @@
+CREATE INDEX "mobile_performance_events_delivery_story_idx" ON "mobile_performance_events" USING btree (("metadata"->>'story'),"name","created_at") WHERE "mobile_performance_events"."metadata" ? 'story';

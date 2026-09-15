@@ -1,3 +1,4 @@
+import { timeMediaCompletion, type CompletionPhaseObserver } from "@/lib/media-completion-timing"
 import { randomUUID } from "node:crypto"
 
 import {
@@ -364,6 +365,7 @@ type CreateStoryInput = {
   moderationMediaUrl?: string | null
   moderationThumbnailUrl?: string | null
   deferModeration?: boolean
+  observePhase?: CompletionPhaseObserver
 }
 
 type StoredAssetStory = {
@@ -1522,14 +1524,14 @@ export async function getMobileCreatorProfile(
 
 export async function createStory(input: CreateStoryInput) {
   const db = getDb()
-  const [creator] = await db
+  const [creator] = await timeMediaCompletion("creator_validation", async () => db
     .select({
       id: users.id,
       creatorStatus: users.creatorStatus,
     })
     .from(users)
     .where(eq(users.id, input.session.id))
-    .limit(1)
+    .limit(1), input.observePhase)
 
   if (!creator) {
     throw new Error("Your session is out of sync. Sign in again.")
@@ -1539,17 +1541,13 @@ export async function createStory(input: CreateStoryInput) {
     throw new Error("Turn on posting before creating a story.")
   }
 
-  await db
-    .insert(creatorProfiles)
-    .values({
-      userId: creator.id,
-    })
-    .onConflictDoNothing()
-
-  const elements = await resolveStoryElementsForOwner({
-    ownerId: input.session.id,
-    elements: input.elements,
-  })
+  const [elements] = await Promise.all([
+    timeMediaCompletion("element_validation", () => resolveStoryElementsForOwner({
+      ownerId: input.session.id,
+      elements: input.elements,
+    }), input.observePhase),
+    db.insert(creatorProfiles).values({ userId: creator.id }).onConflictDoNothing(),
+  ])
   const textMentions = extractCaptionMentions(input.caption)
   const mergedMentions = [
     ...input.explicitBrandTags.map((brandSlug) => ({
@@ -1573,11 +1571,11 @@ export async function createStory(input: CreateStoryInput) {
   )
   const storyId = randomUUID()
   const now = new Date()
-  const mediaAsset = await createMediaAssetFromStoredStoryAsset({
+  const mediaAsset = await timeMediaCompletion("asset_database", () => createMediaAssetFromStoredStoryAsset({
     ownerUserId: input.session.id,
     purpose: "story",
     storedAsset: input.storedAsset,
-  })
+  }), input.observePhase)
   const mediaModerationReason =
     mediaAsset.scanStatus === "flagged" || mediaAsset.scanStatus === "failed"
       ? mediaAsset.scanReason ?? "Media upload was flagged by safety scanning."
@@ -1589,7 +1587,7 @@ export async function createStory(input: CreateStoryInput) {
     input.moderationThumbnailUrl ?? input.storedAsset.thumbnailUrl
   const contentModeration = input.deferModeration
     ? null
-    : await moderateUserContent({
+    : await timeMediaCompletion("moderation", () => moderateUserContent({
         textParts: storyModerationTextParts({ ...input, elements }),
         linkUrls: storyModerationLinkUrls(elements),
         media: {
@@ -1600,7 +1598,7 @@ export async function createStory(input: CreateStoryInput) {
           mediaUrl: mediaModerationUrl,
           thumbnailUrl: mediaModerationThumbnailUrl,
         },
-      })
+      }), input.observePhase)
   const moderation: ContentModerationResult | null = contentModeration
     ? mediaModerationReason
       ? {
@@ -1656,7 +1654,7 @@ export async function createStory(input: CreateStoryInput) {
     })
     .onConflictDoNothing()
 
-  await db.insert(stories).values({
+  await timeMediaCompletion("story_database", async () => db.insert(stories).values({
     id: storyId,
     creatorId: input.session.id,
     assetKind: input.storedAsset.assetKind,
@@ -1693,20 +1691,21 @@ export async function createStory(input: CreateStoryInput) {
     moderationReason: moderation?.reason ?? null,
     brandSignalScore: brandSignalScore.toFixed(2),
     createdAt: input.createdAt ?? now,
-  })
+  }), input.observePhase)
 
+  const completionWrites: PromiseLike<unknown>[] = []
   if (moderation) {
-    await recordModerationCheck({
+    completionWrites.push(recordModerationCheck({
       targetKind: "story",
       targetId: storyId,
       actorUserId: input.session.id,
       mediaAssetId: mediaAsset.id,
       result: moderation,
-    }).catch(() => undefined)
+    }).catch(() => undefined))
   }
 
   if (mergedMentions.length > 0) {
-    await db.insert(storyMentions).values(
+    completionWrites.push(db.insert(storyMentions).values(
       mergedMentions.map((mention) => ({
         id: randomUUID(),
         storyId,
@@ -1714,11 +1713,11 @@ export async function createStory(input: CreateStoryInput) {
         mentionType: mention.mentionType,
         confidence: mention.mentionType === "tag" ? "1.00" : "0.72",
       })),
-    )
+    ))
   }
 
   if (elements.length > 0) {
-    await db.insert(storyElements).values(
+    completionWrites.push(db.insert(storyElements).values(
       elements.map((element) => ({
         id: randomUUID(),
         storyId,
@@ -1732,8 +1731,11 @@ export async function createStory(input: CreateStoryInput) {
         positionX: element.positionX ?? "50.00",
         positionY: element.positionY ?? "74.00",
       })),
-    )
+    ))
   }
+  // All reference the durable story row, but do not depend on each other.
+  // Await every write before acknowledging completion or dispatching publication.
+  await Promise.all(completionWrites)
 
   if (
     !moderation &&

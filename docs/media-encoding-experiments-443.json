@@ -1,0 +1,481 @@
+{
+  "generatedAt": "2026-09-14T19:17:53.892Z",
+  "vmaf": true,
+  "productionChanged": false,
+  "limitations": "Offline matched-reference experiments. Device playback, energy, startup and real camera acceptance are required before rollout. Audio uses the unchanged separate rendition pipeline.",
+  "reports": [
+    {
+      "clip": "audit-dark.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 8725002,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 58045,
+          "encodingMs": 217,
+          "ssim": 0.996168,
+          "vmaf": 92.413202,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 47198,
+          "encodingMs": 224,
+          "ssim": 0.995147,
+          "vmaf": 91.013909,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 29598,
+          "encodingMs": 1285,
+          "ssim": 0.995252,
+          "vmaf": 89.093544,
+          "valid": true
+        }
+      ],
+      "selected": "baseline-h264"
+    },
+    {
+      "clip": "audit-detail.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 7593690,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 27374,
+          "encodingMs": 424,
+          "ssim": 0.996057,
+          "vmaf": 92.472297,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 13702,
+          "encodingMs": 424,
+          "ssim": 0.995716,
+          "vmaf": 92.336337,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 11018,
+          "encodingMs": 1247,
+          "ssim": 0.996339,
+          "vmaf": 91.390784,
+          "valid": true
+        }
+      ],
+      "selected": "efficient-h264"
+    },
+    {
+      "clip": "audit-motion.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 16658304,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 154391,
+          "encodingMs": 393,
+          "ssim": 0.994575,
+          "vmaf": 95.566029,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 110688,
+          "encodingMs": 1157,
+          "ssim": 0.993189,
+          "vmaf": 94.594214,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 112490,
+          "encodingMs": 3639,
+          "ssim": 0.994331,
+          "vmaf": 93.925444,
+          "valid": true
+        }
+      ],
+      "selected": "efficient-h264"
+    },
+    {
+      "clip": "audit-skin-palette.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 23152,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 3924,
+          "encodingMs": 809,
+          "ssim": 0.999853,
+          "vmaf": 98.306938,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 3924,
+          "encodingMs": 953,
+          "ssim": 0.999808,
+          "vmaf": 98.222625,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 9904,
+          "encodingMs": 3163,
+          "ssim": 0.999819,
+          "vmaf": 96.122064,
+          "valid": true
+        }
+      ],
+      "selected": "baseline-h264"
+    },
+    {
+      "clip": "reference-fine-text.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 372202,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 39021,
+          "encodingMs": 679,
+          "ssim": 0.996575,
+          "vmaf": 96.092737,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 29019,
+          "encodingMs": 393,
+          "ssim": 0.994812,
+          "vmaf": 94.278965,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 23310,
+          "encodingMs": 3196,
+          "ssim": 0.99769,
+          "vmaf": 95.458976,
+          "valid": true
+        }
+      ],
+      "selected": "baseline-h264"
+    },
+    {
+      "clip": "reference-gradient.mp4",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 1746757,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 19683,
+          "encodingMs": 287,
+          "ssim": 0.997896,
+          "vmaf": 91.752602,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 16421,
+          "encodingMs": 340,
+          "ssim": 0.997814,
+          "vmaf": 91.421328,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 14714,
+          "encodingMs": 1279,
+          "ssim": 0.997673,
+          "vmaf": 90.624984,
+          "valid": true
+        }
+      ],
+      "selected": "efficient-h264"
+    },
+    {
+      "clip": "reference-hdr-pq.mp4",
+      "selected": null,
+      "reason": "HDR/rotation requires a separately approved normalized reference; retain existing delivery"
+    },
+    {
+      "clip": "reference-high-frame-rate.mp4",
+      "source": {
+        "width": 720,
+        "height": 1280,
+        "durationMs": 1500,
+        "frameRate": 60,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 12760272,
+        "videoProfile": "High",
+        "videoLevel": 32
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 276373,
+          "encodingMs": 350,
+          "ssim": 0.990436,
+          "vmaf": 93.756007,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 201423,
+          "encodingMs": 317,
+          "ssim": 0.988637,
+          "vmaf": 92.132659,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 182971,
+          "encodingMs": 2952,
+          "ssim": 0.989188,
+          "vmaf": 91.434465,
+          "valid": true
+        }
+      ],
+      "selected": "baseline-h264"
+    },
+    {
+      "clip": "reference-landscape.mp4",
+      "source": {
+        "width": 1920,
+        "height": 1080,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 15526021,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 49803,
+          "encodingMs": 288,
+          "ssim": 0.998242,
+          "vmaf": 96.67845,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 39080,
+          "encodingMs": 336,
+          "ssim": 0.997686,
+          "vmaf": 96.68547,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 41160,
+          "encodingMs": 1703,
+          "ssim": 0.998161,
+          "vmaf": 96.594597,
+          "valid": true
+        }
+      ],
+      "selected": "efficient-h264"
+    },
+    {
+      "clip": "reference-slow-motion.mp4",
+      "source": {
+        "width": 720,
+        "height": 1280,
+        "durationMs": 1500,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": null,
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 7135792,
+        "videoProfile": "High",
+        "videoLevel": 31
+      },
+      "candidates": [
+        {
+          "name": "baseline-h264",
+          "codec": "h264",
+          "bytes": 200795,
+          "encodingMs": 424,
+          "ssim": 0.993037,
+          "vmaf": 95.056048,
+          "valid": true
+        },
+        {
+          "name": "efficient-h264",
+          "codec": "h264",
+          "bytes": 143882,
+          "encodingMs": 428,
+          "ssim": 0.991085,
+          "vmaf": 94.320864,
+          "valid": true
+        },
+        {
+          "name": "efficient-hevc",
+          "codec": "hevc",
+          "bytes": 154452,
+          "encodingMs": 2620,
+          "ssim": 0.991744,
+          "vmaf": 93.41548,
+          "valid": true
+        }
+      ],
+      "selected": "efficient-h264"
+    }
+  ]
+}

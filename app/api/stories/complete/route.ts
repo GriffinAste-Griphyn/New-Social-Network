@@ -6,7 +6,7 @@ import { getSession, isProfileComplete } from "@/lib/auth"
 import {
   claimMediaUploadSessionForCompletion,
   cloudflareDetailsFromUploadSession,
-  isCloudflareStreamFullyReady,
+  isCloudflareStreamPublicationReady,
   markMediaUploadSessionCompleted,
   MediaUploadSessionError,
   mergeCloudflareStreamProviderDetails,
@@ -286,14 +286,11 @@ export async function POST(request: Request) {
         width: parsed.data.width ?? cloudflareDetails?.width ?? null,
         height: parsed.data.height ?? cloudflareDetails?.height ?? null,
         processingStatus:
-          cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+          cloudflareDetails && isCloudflareStreamPublicationReady(cloudflareDetails)
             ? "ready"
             : "processing",
         providerPctComplete:
-          cloudflareDetails?.pctComplete ??
-          (cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
-            ? 100
-            : null),
+          cloudflareDetails?.pctComplete ?? null,
       })
     }
 

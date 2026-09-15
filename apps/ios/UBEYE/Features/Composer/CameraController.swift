@@ -31,7 +31,10 @@ enum StoryCaptureQuality {
     }
 
     static func videoBitrate(for codec: AVVideoCodecType, is4K: Bool) -> Int {
-        return codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
+        // The normal delivery preset remains 1080p. If a fallback/configuration
+        // uses 4K, keep its four times greater pixel budget instead of starving it.
+        let base = codec == .hevc ? hevcVideoBitrate : h264VideoBitrate
+        return base * (is4K ? 4 : 1)
     }
 }
 

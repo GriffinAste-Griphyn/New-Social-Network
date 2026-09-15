@@ -13,6 +13,10 @@ const configDir = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig: NextConfig = {
   serverExternalPackages: ["ffmpeg-static", "@ffprobe-installer/ffprobe"],
   outputFileTracingIncludes: {
+    "/api/queues/media-video-*": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/@ffprobe-installer/**/*",
+    ],
     // The media processor can be entered by upload/status recovery, the cron,
     // or its authenticated continuation route. These native binaries are
     // loaded through platform-specific packages, so every server trace that

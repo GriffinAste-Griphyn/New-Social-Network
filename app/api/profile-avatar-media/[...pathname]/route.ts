@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 
 import { readCloudflareR2Original } from "@/lib/cloudflare-r2"
 import {
+  blobMediaUnavailableResponse,
   isVercelBlobAccessDisabled,
 } from "@/lib/media-availability"
 
@@ -104,9 +105,7 @@ export async function GET(
   }
 
   if (isVercelBlobAccessDisabled()) {
-    const response = notFound()
-    response.headers.set("Cache-Control", "private, no-store")
-    return response
+    return blobMediaUnavailableResponse("This profile photo is temporarily unavailable.")
   }
 
   const blobMetadata = await getBlobMetadata(blobPathname)

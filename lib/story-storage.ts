@@ -1,3 +1,4 @@
+import { verifyProviderPlayback } from "@/lib/media-provider-playback"
 import { createHash, createPrivateKey, createSign, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -968,7 +969,7 @@ export async function getCloudflareStreamVideoDetails(uid: string) {
     )
   }
 
-  return {
+  const details = {
     readyToStream: detailsPayload.result?.readyToStream === true,
     state: detailsPayload.result?.status?.state ?? null,
     pctComplete: parseCloudflarePctComplete(
@@ -999,6 +1000,13 @@ export async function getCloudflareStreamVideoDetails(uid: string) {
         ? Math.round(detailsPayload.result.input.height)
         : null,
   }
+  if (process.env.MEDIA_VERIFIED_PLAYBACK_PUBLICATION_ENABLED !== "false" && details.readyToStream &&
+      details.state === "ready" && (details.pctComplete ?? 0) < 100 && details.width && details.height) {
+    const proof = await createCloudflareStreamPlaybackUrl(uid)
+      .then(url => verifyProviderPlayback(url, details.width!, details.height!)).catch(() => null)
+    if (proof) return { ...details, verifiedPlayback: proof }
+  }
+  return details
 }
 
 async function saveCloudflareStreamVideo(
@@ -1159,8 +1167,7 @@ export function createCloudflareStreamStoredVideoAsset(input: {
     durationMs: input.durationMs ?? null,
     processingStatus: input.processingStatus ?? "ready",
     providerPctComplete:
-      input.providerPctComplete ??
-      (input.processingStatus === "processing" ? null : 100),
+      input.providerPctComplete ?? null,
   }
 }
 

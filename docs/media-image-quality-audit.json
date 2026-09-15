@@ -1,0 +1,20 @@
+{
+  "synthetic": true,
+  "platform": "darwin",
+  "fixture": "deterministic-12mp-detail",
+  "metric": "PSNR against the same resized, sharpened sRGB canvas",
+  "results": [
+    {
+      "threads": 1,
+      "bytes": 909411,
+      "format": "image/avif",
+      "psnrDb": 26.894277748410083
+    },
+    {
+      "threads": 2,
+      "bytes": 905381,
+      "format": "image/avif",
+      "psnrDb": 26.8812142792047
+    }
+  ]
+}

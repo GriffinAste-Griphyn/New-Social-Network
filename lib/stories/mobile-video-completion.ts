@@ -1,3 +1,4 @@
+import { timeMediaCompletion, type CompletionPhaseObserver } from "@/lib/media-completion-timing"
 import type { CompleteAuthSession } from "@/lib/auth"
 import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import {
@@ -41,6 +42,7 @@ type CompleteMobileVideoStoryInput = {
   providerStatusFallback?: string | null
   providerErrorFallback?: string | null
   deferModeration?: boolean
+  observePhase?: CompletionPhaseObserver
   onStoryCreated?: (storyId: string) => void | Promise<void>
 }
 
@@ -75,6 +77,7 @@ type MobileVideoStoryResponseInput = {
   }
   providerStatusFallback?: string | null
   providerErrorFallback?: string | null
+  observePhase?: CompletionPhaseObserver
   completionState: "created" | "reused"
 }
 
@@ -99,14 +102,13 @@ function mobileVideoFieldsToFormData(fields: MobileVideoStoryCompletionFields) {
 }
 
 async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
-  const storyStatus = await getStoryUploadStatusForOwner(
-    input.storyId,
-    input.session.id,
-  )
-  const textOverlays = await getStoryTextOverlaysForOwner(
-    input.storyId,
-    input.session.id,
-  )
+  const [storyStatus, textOverlays] = await timeMediaCompletion("response_reads", () => Promise.all([
+    // Completion acknowledges durable receipt. The upload route has just read
+    // provider state; refreshing it again here delays the acknowledgement.
+    // Authenticated status polling/webhooks still perform reconciliation.
+    getStoryUploadStatusForOwner(input.storyId, input.session.id, { refreshProvider: false }),
+    getStoryTextOverlaysForOwner(input.storyId, input.session.id),
+  ]), input.observePhase)
 
   return {
     ok: true,
@@ -180,7 +182,13 @@ async function mobileVideoStoryResponse(input: MobileVideoStoryResponseInput) {
               : null,
       },
     },
-    processingStatus: storyStatus?.processingStatus ?? input.asset.processingStatus,
+    // Media readiness alone is not proof of viewer publication. A prepared
+    // Cloudflare draft can finish encoding before its Post registration.
+    processingStatus: input.asset.storageProvider === "cloudflare-stream"
+      && storyStatus?.processingStatus === "ready"
+      && storyStatus.isLive === false
+      && storyStatus.moderationStatus === "approved"
+        ? "processing" : storyStatus?.processingStatus ?? input.asset.processingStatus,
     providerStatus:
       storyStatus?.providerStatus ?? input.providerStatusFallback ?? null,
     providerPctComplete: storyStatus?.providerPctComplete ?? null,
@@ -247,6 +255,7 @@ export async function completeMobileVideoStory(
     moderationThumbnailUrl,
     createdAt: input.createdAt,
     deferModeration: input.deferModeration,
+    observePhase: input.observePhase,
   })
 
   await input.onStoryCreated?.(storyId)
@@ -255,6 +264,7 @@ export async function completeMobileVideoStory(
     request: input.request,
     session: input.session,
     storyId,
+    observePhase: input.observePhase,
     asset: {
       assetKind: input.storedAsset.assetKind,
       mediaUrl: input.storedAsset.mediaUrl,

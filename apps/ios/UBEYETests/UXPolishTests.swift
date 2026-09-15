@@ -128,7 +128,7 @@ final class UXPolishTests: XCTestCase {
         )
         XCTAssertFalse(
             StoryDismissGesturePolicy.shouldDismiss(
-                translation: 60,
+                translation: 24,
                 predictedTranslation: 100,
                 viewportHeight: 800
             )
@@ -143,6 +143,34 @@ final class UXPolishTests: XCTestCase {
                 viewportHeight: 800
             )
         )
+        XCTAssertEqual(
+            StoryDismissGesturePolicy.outcome(axis: .vertical, translation: 42,
+                predictedTranslation: 260, viewportHeight: 800),
+            .dismiss,
+            "The end handler must not reject flicks shorter than 58 points"
+        )
+    }
+
+    func testShortDeliberateDownwardSwipeDismissesAcrossPhoneSizes() {
+        for height: CGFloat in [667, 800, 932] {
+            XCTAssertEqual(
+                StoryDismissGesturePolicy.outcome(axis: .vertical, translation: 72,
+                    predictedTranslation: 72, viewportHeight: height), .dismiss
+            )
+        }
+    }
+
+    func testDismissIgnoresHorizontalMotionAndCancelsReversedOrAccidentalDrags() {
+        XCTAssertEqual(StoryDismissGesturePolicy.outcome(axis: .undecided, translation: 4,
+            predictedTranslation: 300, viewportHeight: 800), .ignored)
+        XCTAssertEqual(StoryDismissGesturePolicy.outcome(axis: .horizontal, translation: 72,
+            predictedTranslation: 300, viewportHeight: 800), .ignored)
+        XCTAssertEqual(StoryDismissGesturePolicy.outcome(axis: .vertical, translation: 4,
+            predictedTranslation: 300, viewportHeight: 800), .cancel)
+        XCTAssertEqual(StoryDismissGesturePolicy.outcome(axis: .vertical, translation: -20,
+            predictedTranslation: 300, viewportHeight: 800), .cancel)
+        XCTAssertEqual(StoryDismissGesturePolicy.outcome(axis: .vertical, translation: -72,
+            predictedTranslation: -300, viewportHeight: 800), .swipeUp)
     }
 
     func testGestureIntentWaitsForDominanceBeforeClaimingAxis() {
@@ -164,7 +192,7 @@ final class UXPolishTests: XCTestCase {
         )
     }
 
-    func testStoryDismissProgressIsClampedAndRubberBandsPastViewport() {
+    func testStoryDismissProgressIsClampedAndMovementFollowsFinger() {
         XCTAssertEqual(
             StoryDismissGesturePolicy.progress(translation: -30, viewportHeight: 800),
             0
@@ -173,10 +201,10 @@ final class UXPolishTests: XCTestCase {
             StoryDismissGesturePolicy.progress(translation: 800, viewportHeight: 800),
             1
         )
-        XCTAssertLessThan(
-            StoryDismissGesturePolicy.displayedOffset(translation: 900, viewportHeight: 800),
-            900
-        )
+        for translation: CGFloat in [-30, 0, 24, 72, 500, 900] {
+            XCTAssertEqual(StoryDismissGesturePolicy.displayedOffset(
+                translation: translation, viewportHeight: 800), max(translation, 0))
+        }
     }
 
     func testAdaptivePolicyEscalatesForPowerThermalAndMemoryPressure() {

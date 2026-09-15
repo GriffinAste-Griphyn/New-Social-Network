@@ -1,7 +1,5 @@
-import {
-  aggregateCreatorFeedScores,
-  rollupRecentMediaQoe,
-} from "@/lib/media-operations"
+import { collectMediaOperations } from "@/lib/media-operations-monitor"
+import { checkMediaQueueDelivery } from "@/lib/media-queue-self-check"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -18,12 +16,13 @@ export async function GET(request: Request) {
     )
   }
 
-  const [qoe, feed] = await Promise.all([
-    rollupRecentMediaQoe(),
-    aggregateCreatorFeedScores(),
-  ])
+  const qoe = await collectMediaOperations()
+  const queues = await checkMediaQueueDelivery().catch((error) => {
+    console.error("media_queue_self_check_failed", { error })
+    return { status: "error" as const }
+  })
   return Response.json(
-    { ok: true, qoe, feed },
+    { ok: true, qoe, queues },
     { headers: { "Cache-Control": "private, no-store" } },
   )
 }

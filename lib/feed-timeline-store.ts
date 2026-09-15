@@ -1,7 +1,8 @@
-import { and, desc, eq, gt } from "drizzle-orm"
+import { and, asc, desc, eq, gt } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { follows, stories } from "@/lib/db/schema"
+import { invalidateMobileFeedSnapshots } from "@/lib/feed-snapshot-store"
 import { redisCommand, redisPipeline } from "@/lib/upstash-redis"
 
 const timelineRetentionSeconds = 48 * 60 * 60
@@ -27,6 +28,26 @@ export async function readTimelineStoryIds(
   ]).catch(() => null)
 
   return result ?? []
+}
+
+/** One keyset page per durable job. Redis writes are idempotent on retry. */
+export async function fanoutStoryFollowerBatch(input: {
+  creatorId: string; storyId: string; createdAt: Date; cursor: string | null
+}) {
+  const followers = await getDb().select({ followerId: follows.followerId }).from(follows)
+    .where(and(eq(follows.followeeId, input.creatorId),
+      input.cursor ? gt(follows.followerId, input.cursor) : undefined))
+    .orderBy(asc(follows.followerId)).limit(250)
+  const viewers = [...(!input.cursor ? [input.creatorId] : []), ...followers.map(row => row.followerId)]
+  if (viewers.length) {
+    await redisPipeline(viewers.flatMap(id => [
+      ["ZADD", timelineKey(id), input.createdAt.getTime(), input.storyId],
+      ["ZREMRANGEBYRANK", timelineKey(id), 0, -(timelineMaxStories + 1)],
+      ["EXPIRE", timelineKey(id), timelineRetentionSeconds],
+    ]))
+  }
+  await invalidateMobileFeedSnapshots(viewers)
+  return { viewerCount: viewers.length, nextCursor: followers.length === 250 ? followers[249].followerId : null }
 }
 
 export async function fanoutStoryToFollowers(input: {

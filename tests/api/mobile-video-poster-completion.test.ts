@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { get, head } from "@vercel/blob"
 import { getCompleteMobileSession } from "@/lib/auth"
@@ -9,6 +9,8 @@ import { scheduleMediaProcessing } from "@/lib/media-pipeline/schedule"
 import {
   claimMediaUploadSessionForCompletion,
   markMediaUploadSessionCompleted,
+  releaseMediaUploadSessionCompletion,
+  recordCloudflareStreamUploadStatus,
 } from "@/lib/media-upload-sessions"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
@@ -55,7 +57,7 @@ vi.mock("@/lib/request-security", () => ({
 vi.mock("@/lib/media-upload-sessions", () => ({
   claimMediaUploadSessionForCompletion: vi.fn(),
   cloudflareDetailsFromUploadSession: vi.fn(() => null),
-  isCloudflareStreamFullyReady: vi.fn(() => false),
+  isCloudflareStreamPublicationReady: vi.fn(() => false),
   markMediaUploadSessionCompleted: vi.fn(),
   MediaUploadSessionError: class MediaUploadSessionError extends Error {
     constructor(
@@ -127,6 +129,7 @@ function completionRequest(input: {
 }
 
 describe("mobile video poster completion", () => {
+  afterEach(() => vi.unstubAllEnvs())
   beforeEach(() => {
     vi.clearAllMocks()
     delete process.env.VERCEL_BLOB_SUSPENDED_MODE
@@ -170,6 +173,8 @@ describe("mobile video poster completion", () => {
       moderationStatus: "approved",
     } as never)
     vi.mocked(markMediaUploadSessionCompleted).mockResolvedValue(undefined)
+    vi.mocked(releaseMediaUploadSessionCompletion).mockResolvedValue(undefined)
+    vi.mocked(recordCloudflareStreamUploadStatus).mockResolvedValue(null)
     vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockResolvedValue(undefined)
     vi.mocked(enqueueMediaProcessing).mockResolvedValue({
       jobId: "media-job-1",
@@ -182,6 +187,100 @@ describe("mobile video poster completion", () => {
     })
   })
 
+  it("overlaps provider status with poster verification after ownership checks", async () => {
+    let releasePoster!: (value: string) => void
+    vi.mocked(createDirectBlobStoryVideoPosterUrl).mockReturnValueOnce(
+      new Promise<string>((resolve) => { releasePoster = resolve }),
+    )
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const pending = POST(completionRequest({ build: 425, includePoster: true }))
+    try {
+      await vi.waitFor(() => {
+        expect(getCloudflareStreamVideoDetails).toHaveBeenCalledWith(uid)
+        expect(createDirectBlobStoryVideoPosterUrl).toHaveBeenCalled()
+      })
+      expect(claimMediaUploadSessionForCompletion).toHaveBeenCalled()
+      expect(completeMobileVideoStory).not.toHaveBeenCalled()
+    } finally { releasePoster(posterUrl) }
+    expect((await pending).status).toBe(200)
+  })
+
+  it("returns an existing completion without provider work", async () => {
+    vi.mocked(getExistingMobileVideoStoryCompletion).mockResolvedValueOnce({
+      ok: true, storyId: "existing-story", processingStatus: "ready",
+    } as never)
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(completionRequest({ build: 425, includePoster: true }))
+    expect(response.status).toBe(200)
+    expect(getCloudflareStreamVideoDetails).not.toHaveBeenCalled()
+    expect(createDirectBlobStoryVideoPosterUrl).not.toHaveBeenCalled()
+    expect(setCloudflareStreamThumbnailAtDefaultTime).not.toHaveBeenCalled()
+    expect(completeMobileVideoStory).not.toHaveBeenCalled()
+  })
+
+  it.each([[431, true], [363, true], [305, false]])(
+    "uses durable asynchronous moderation for eligible Cloudflare build %s",
+    async (build, deferred) => {
+      const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+      const response = await POST(completionRequest({ build, includePoster: true }))
+      expect(response.status).toBe(200)
+      expect(completeMobileVideoStory).toHaveBeenCalledWith(expect.objectContaining({ deferModeration: deferred }))
+      expect(markMediaUploadSessionCompleted).toHaveBeenCalled()
+    },
+  )
+
+  it("preserves the asynchronous completion rollback for Cloudflare", async () => {
+    vi.stubEnv("MEDIA_ASYNC_COMPLETION_ENABLED", "false")
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    expect((await POST(completionRequest({ build: 431, includePoster: true }))).status).toBe(200)
+    expect(completeMobileVideoStory).toHaveBeenCalledWith(expect.objectContaining({ deferModeration: false }))
+  })
+
+  it("keeps publication blocked when concurrent poster verification fails", async () => {
+    vi.mocked(createDirectBlobStoryVideoPosterUrl).mockRejectedValueOnce(new Error("Checksum mismatch"))
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(completionRequest({ build: 425, includePoster: true }))
+    expect(response.status).toBe(400)
+    expect(completeMobileVideoStory).not.toHaveBeenCalled()
+    expect(setCloudflareStreamThumbnailAtDefaultTime).not.toHaveBeenCalled()
+    expect(markMediaUploadSessionCompleted).not.toHaveBeenCalled()
+  })
+
+  it("overlaps healthy status persistence and thumbnail configuration", async () => {
+    vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValueOnce({
+      state: "inprogress", readyToStream: false,
+    } as never)
+    let releaseStatus!: () => void
+    vi.mocked(recordCloudflareStreamUploadStatus).mockReturnValueOnce(
+      new Promise<null>((resolve) => { releaseStatus = () => resolve(null) }),
+    )
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const pending = POST(completionRequest({ build: 305, includePoster: false }))
+    try {
+      await vi.waitFor(() => {
+        expect(recordCloudflareStreamUploadStatus).toHaveBeenCalled()
+        expect(setCloudflareStreamThumbnailAtDefaultTime).toHaveBeenCalledWith(uid)
+      })
+      expect(completeMobileVideoStory).not.toHaveBeenCalled()
+    } finally { releaseStatus() }
+    expect((await pending).status).toBe(200)
+  })
+
+  it("persists provider failure before releasing completion for recovery", async () => {
+    vi.mocked(getCloudflareStreamVideoDetails).mockResolvedValueOnce({
+      state: "error", errorReason: "Provider processing failed", readyToStream: false,
+    } as never)
+    const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
+    const response = await POST(completionRequest({ build: 425, includePoster: true }))
+    expect(response.status).toBe(410)
+    expect(recordCloudflareStreamUploadStatus).toHaveBeenCalledWith({
+      uid, details: expect.objectContaining({ state: "error" }),
+    })
+    expect(releaseMediaUploadSessionCompletion).toHaveBeenCalled()
+    expect(completeMobileVideoStory).not.toHaveBeenCalled()
+    expect(setCloudflareStreamThumbnailAtDefaultTime).not.toHaveBeenCalled()
+  })
+
   it("requires a poster from builds that implement the poster contract", async () => {
     const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
     const response = await POST(
@@ -192,16 +291,14 @@ describe("mobile video poster completion", () => {
     expect(claimMediaUploadSessionForCompletion).not.toHaveBeenCalled()
   })
 
-  it("persists the verified client poster even if Cloudflare thumbnail configuration fails", async () => {
-    vi.mocked(setCloudflareStreamThumbnailAtDefaultTime).mockRejectedValueOnce(
-      new Error("Cloudflare unavailable"),
-    )
+  it("completes with the verified client poster without requesting a provider thumbnail", async () => {
     const { POST } = await import("@/app/api/mobile/stories/video-complete/route")
     const response = await POST(
       completionRequest({ build: 306, includePoster: true }),
     )
 
     expect(response.status).toBe(200)
+    expect(setCloudflareStreamThumbnailAtDefaultTime).not.toHaveBeenCalled()
     expect(createDirectBlobStoryVideoPosterUrl).toHaveBeenCalledWith({
       uid,
       poster: expect.objectContaining({ pathname: posterPathname }),

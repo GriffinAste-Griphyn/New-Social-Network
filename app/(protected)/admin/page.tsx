@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import Link from "next/link"
 import {
   AlertTriangle,
   BadgeDollarSign,
@@ -613,6 +614,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps) {
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link href="/admin/media" className="rounded-[8px] border px-4 py-2 text-sm">Media performance</Link>
             <span className="rounded-full bg-[#f3f4f6] px-3 py-1 text-sm text-[#4b5563]">
               {session.email}
             </span>

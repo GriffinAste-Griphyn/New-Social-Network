@@ -80,6 +80,12 @@ final class PushNotificationStore: ObservableObject {
         _ userInfo: [AnyHashable: Any],
         api: APIClient
     ) async -> UIBackgroundFetchResult {
+        if api.authToken != nil,
+           userInfo["type"] as? String == "story_upload_ready",
+           let storyId = userInfo["storyId"] as? String, !storyId.isEmpty {
+            StoryReadinessSignals.shared.signal(storyId: storyId)
+            return .newData
+        }
         guard api.authToken != nil,
               userInfo["type"] as? String == "creator_story_posted",
               let storyId = userInfo["storyId"] as? String,

@@ -11,6 +11,7 @@ import { and, eq } from "drizzle-orm"
 import sharp from "sharp"
 import { rgbaToThumbHash } from "thumbhash"
 
+import { canRepackageSourceVideo } from "@/lib/media-pipeline/source-repackaging"
 import { getDb } from "@/lib/db"
 import {
   mediaAssets,
@@ -30,7 +31,7 @@ import {
   type MediaSourceMetadata,
   validateSourceMetadata,
 } from "@/lib/media-pipeline/contracts"
-import { mediaDeliveryAccess } from "@/lib/media-pipeline/features"
+import { isAudioLoudnessNormalizationEnabled, mediaDeliveryAccess } from "@/lib/media-pipeline/features"
 import {
   encodeMediaAudioRenditionFile,
   encodeMediaRendition,
@@ -437,9 +438,14 @@ async function encodeMediaRenditionCore(
   try {
     const outputDirectory = path.join(tempDirectory, profile.label)
     await mkdir(outputDirectory, { recursive: true })
-    const encoded = stagedSourcePath
+    let inputPath = stagedSourcePath
+    if (!inputPath && canRepackageSourceVideo(sourceMetadata, profile)) {
+      inputPath = path.join(tempDirectory, "source.mp4")
+      await stagePrivateSource(job.sourcePathname, inputPath)
+    }
+    const encoded = inputPath
       ? await encodeMediaRenditionFile({
-          inputPath: stagedSourcePath,
+          inputPath,
           profile,
           outputDirectory,
           sourceMetadata,
@@ -528,6 +534,7 @@ async function encodeMediaRenditionCore(
       status: "ready" as const,
       qualityStatus: "passed" as const,
       qualityDetails: {
+        repackaged: "repackaged" in encoded && encoded.repackaged === true,
         segmentCount,
         encodingMs: encoded.encodingMs,
         initByteSize: initFile.body.byteLength,
@@ -743,6 +750,7 @@ async function encodeMediaAudioRenditionCore(
       status: "ready" as const,
       qualityStatus: "passed" as const,
       qualityDetails: {
+        repackaged: "repackaged" in encoded && encoded.repackaged === true,
         segmentCount,
         encodingMs: encoded.encodingMs,
         initByteSize: initFile.body.byteLength,
@@ -754,7 +762,7 @@ async function encodeMediaAudioRenditionCore(
         measuredBitrate,
         measuredPeakBitrate: measuredBandwidth.peakBandwidth,
         mediaByteSize: measuredBandwidth.mediaByteSize,
-        loudnessNormalization: false,
+        loudnessNormalization: isAudioLoudnessNormalizationEnabled(),
       },
       encoderVersion: job.encoderVersion,
       createdAt: now,

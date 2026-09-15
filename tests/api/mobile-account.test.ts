@@ -59,6 +59,36 @@ describe("mobile account API", () => {
     })
   })
 
+  it("refreshes the signed-in profile with its current absolute avatar URL", async () => {
+    vi.mocked(getMobileSession).mockResolvedValue({
+      ...session,
+      avatarUrl: "/api/profile-avatar-media/avatars/current.jpg",
+    })
+    const { GET } = await import("@/app/api/mobile/account/route")
+    const response = await GET(new Request("https://app.example.com/api/mobile/account"))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toBe("private, no-store")
+    expect(await responseJson(response)).toEqual({
+      ok: true,
+      user: {
+        email: session.email,
+        displayName: session.displayName,
+        handle: session.handle,
+        avatarUrl: "https://app.example.com/api/profile-avatar-media/avatars/current.jpg",
+      },
+    })
+  })
+
+  it("requires a mobile session to read the current profile", async () => {
+    vi.mocked(getMobileSession).mockResolvedValue(null)
+    const { GET } = await import("@/app/api/mobile/account/route")
+    const response = await GET(new Request("https://app.example.com/api/mobile/account"))
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get("cache-control")).toBe("private, no-store")
+  })
+
   it("deletes the signed-in account", async () => {
     const { DELETE } = await import("@/app/api/mobile/account/route")
     const response = await DELETE(deleteRequest())

@@ -141,6 +141,9 @@ struct MainTabView: View {
         .onChange(of: network.isConnected) { wasConnected, isConnected in
             handleConnectivityChange(wasConnected: wasConnected, isConnected: isConnected)
         }
+        .onReceive(NotificationCenter.default.publisher(for: PendingStoryUploadStore.recoveredCompletionAvailable)) { _ in
+            if scenePhase == .active { presentRecoveredStoryUploads() }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 return
@@ -243,13 +246,15 @@ struct MainTabView: View {
     }
 
     private func presentRecoveredStoryUploads() {
-        for response in pendingStoryUploads.takeRecoveredCompletions() {
-            storyUploadCoordinator.register(
-                response,
-                api: api,
-                notice: storyUploadNotice,
-                pendingUploads: pendingStoryUploads
-            )
+        Task { @MainActor in
+            for response in await pendingStoryUploads.takeRecoveredCompletions() {
+                storyUploadCoordinator.register(
+                    response,
+                    api: api,
+                    notice: storyUploadNotice,
+                    pendingUploads: pendingStoryUploads
+                )
+            }
         }
     }
 
@@ -464,13 +469,17 @@ private struct GlobalStoryUploadActivitySurface: View {
         if batch.failedCount > 0 {
             return "\(batch.failedCount) stor\(batch.failedCount == 1 ? "y" : "ies") need attention"
         }
-        return "Posting \(batch.completedCount + 1) of \(batch.totalCount)"
+        return "Posting \(min(batch.completedCount + 1, batch.totalCount)) of \(batch.totalCount)"
     }
 
     private func batchMessage(_ batch: PendingStoryUploadBatchSummary) -> String {
-        batch.failedCount > 0
-            ? "Tap to retry. Your original media is still safe."
-            : "You can keep using UBEYE or leave the app."
+        if batch.failedCount > 0 {
+            return "Tap to retry. Your original media is still safe."
+        }
+        if batch.unavailableCount > 0 {
+            return "Some stories could not be queued or are no longer pending. Other stories will continue uploading."
+        }
+        return "You can keep using UBEYE or leave the app."
     }
 }
 

@@ -13,8 +13,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { StoryFramingControl } from "@/components/app/story-framing-control"
-import { storyMediaContract, type StoryImageContentMode, storyMediaInputAccept } from "@/lib/story-media-contract"
+import { storyMediaInputAccept } from "@/lib/story-media-contract"
 import { cn } from "@/lib/utils"
 
 const overlayBounds = {
@@ -36,7 +35,6 @@ function isVideoFile(file: File) {
 }
 
 export function StoryCreateForm() {
-  const [imageContentMode, setImageContentMode] = useState<StoryImageContentMode>(storyMediaContract.imageFraming.defaultContentMode)
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [overlayText, setOverlayText] = useState("")
@@ -65,7 +63,6 @@ export function StoryCreateForm() {
     }
 
     setFile(selectedFile)
-    setImageContentMode(storyMediaContract.imageFraming.defaultContentMode)
 
     if (!selectedFile) {
       setPreviewUrl(null)
@@ -113,7 +110,7 @@ export function StoryCreateForm() {
       encType="multipart/form-data"
       className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_390px]"
     >
-      <input type="hidden" name="imageContentMode" value={imageContentMode} />
+      <input type="hidden" name="imageContentMode" value="fit" />
       <input type="hidden" name="caption" value="" />
       <input type="hidden" name="brandTags" value="" />
       <input type="hidden" name="stickers" value="" />
@@ -137,7 +134,7 @@ export function StoryCreateForm() {
               <img
                 src={previewUrl}
                 alt="Selected story preview"
-                className={cn("absolute inset-0 h-full w-full", imageContentMode === "fill" ? "object-cover" : "object-contain")}
+                className="absolute inset-0 h-full w-full object-contain"
               />
             )
           ) : (
@@ -274,10 +271,6 @@ export function StoryCreateForm() {
               onChange={(event) => handleMediaChange(event.target.files?.[0] ?? null)}
             />
           </div>
-
-          {file && !isVideoFile(file) ? (
-            <StoryFramingControl value={imageContentMode} onChange={setImageContentMode} />
-          ) : null}
 
           <div className="rounded-[8px] bg-[#f5f6f8] p-3">
             <button

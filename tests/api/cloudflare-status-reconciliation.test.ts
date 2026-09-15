@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getDb } from "@/lib/db"
 import { recordCloudflareStreamUploadStatus } from "@/lib/media-upload-sessions"
@@ -27,6 +27,7 @@ vi.mock("@/lib/story-storage", () => ({
 }))
 
 describe("Cloudflare upload reconciliation", () => {
+  afterEach(() => vi.unstubAllEnvs())
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -144,7 +145,16 @@ describe("Cloudflare upload reconciliation", () => {
     expect(enqueueStoryPublication).not.toHaveBeenCalled()
   })
 
-  it("enqueues durable publication only after the ready transition commits", async () => {
+  it.each([
+    ["false", 100, "approved", "passed", "live"],
+    ["true", 80, "approved", "passed", "live"],
+    ["false", 80, "approved", "passed", "processing"],
+    ["true", 80, "pending", "passed", "processing"],
+    ["true", 80, "approved", "pending", "processing"],
+    ["false", 80, "approved", "passed", "live", "live", "ready"],
+    ["false", 100, "approved", "passed", "processing", "processing", "ready", 100, false],
+  ])("publication flag=%s completion=%s moderation=%s scan=%s yields %s", async (flag, percentage, moderation, scan, expected, initialStatus = "processing", initialReady = "processing", initialPercentage = 75, observedReady = true) => {
+    vi.stubEnv("MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED", flag)
     const story = {
       id: "story_ready",
       mediaAssetId: "media_ready",
@@ -155,12 +165,12 @@ describe("Cloudflare upload reconciliation", () => {
       width: 1080,
       height: 1920,
       expiresAt: new Date(Date.now() + 60_000),
-      status: "processing" as const,
-      processingStatus: "processing",
-      moderationStatus: "approved",
-      assetProcessingStatus: "processing" as const,
-      assetScanStatus: "passed",
-      previousProviderPctComplete: 75,
+      status: initialStatus as "processing" | "live",
+      processingStatus: initialReady,
+      moderationStatus: moderation,
+      assetProcessingStatus: initialReady,
+      assetScanStatus: scan,
+      previousProviderPctComplete: initialPercentage,
     }
     const limit = vi.fn().mockResolvedValue([story])
     const storyQuery = {
@@ -172,10 +182,11 @@ describe("Cloudflare upload reconciliation", () => {
     const storyReturning = vi.fn().mockResolvedValue([{ id: story.id }])
     const storyWhere = vi.fn(() => ({ returning: storyReturning }))
     const mediaWhere = vi.fn().mockResolvedValue(undefined)
+    const assetSet = vi.fn(() => ({ where: mediaWhere }))
     const update = vi
       .fn()
       .mockReturnValueOnce({ set: vi.fn(() => ({ where: storyWhere })) })
-      .mockReturnValueOnce({ set: vi.fn(() => ({ where: mediaWhere })) })
+      .mockReturnValueOnce({ set: assetSet })
     vi.mocked(getDb).mockReturnValue({ select, update } as never)
     vi.mocked(recordCloudflareStreamUploadStatus).mockResolvedValue(null)
     vi.mocked(createCloudflareStreamThumbnailMediaUrl).mockReturnValue(
@@ -192,9 +203,9 @@ describe("Cloudflare upload reconciliation", () => {
     const result = await syncCloudflareStreamStoryStatus({
       uid: story.storageKey,
       details: {
-        readyToStream: true,
-        state: "ready",
-        pctComplete: 100,
+        readyToStream: observedReady,
+        state: observedReady ? "ready" : "queued",
+        pctComplete: percentage,
         errorReason: null,
         byteSize: 123_456,
         durationMs: 7_200,
@@ -204,10 +215,12 @@ describe("Cloudflare upload reconciliation", () => {
     })
 
     expect(result).toEqual({
-      status: "live",
-      processingStatus: "ready",
+      status: expected,
+      processingStatus: (observedReady && (flag === "true" || percentage === 100)) || initialStatus === "live" ? "ready" : "processing",
       storyId: story.id,
     })
-    expect(enqueueStoryPublication).toHaveBeenCalledWith(story.id)
+    if (expected === "live" && initialStatus !== "live") expect(enqueueStoryPublication).toHaveBeenCalledWith(story.id)
+    else expect(enqueueStoryPublication).not.toHaveBeenCalled()
+    expect(assetSet).toHaveBeenCalledWith(expect.objectContaining({ providerPctComplete: percentage }))
   })
 })

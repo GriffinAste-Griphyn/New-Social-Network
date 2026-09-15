@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import {
   forwardCloudflarePlaybackOptions,
+  publicStoryMediaUrl,
   verifyStoryMediaAccessToken,
 } from "@/lib/story-media/access"
 import { rewriteHlsPlaylistForStoryMedia } from "@/lib/story-media/hls"
@@ -24,6 +25,17 @@ describe("signed HLS media delivery", () => {
   beforeEach(() => {
     process.env.DATABASE_URL = "postgresql://test:test@localhost/test"
     process.env.AUTH_SECRET = "story-media-hls-test-secret-at-least-32-characters"
+  })
+
+  it("advertises exact selection to new builds across feed and story URLs without changing old builds", () => {
+    for (const pathname of ['cloudflare-stream/0123456789abcdef0123456789abcdef/manifest/video.m3u8', 'media/hls/asset/master.m3u8']) {
+      const source = `/api/story-media/${pathname}`
+      const modern = publicStoryMediaUrl(source, new Request('https://www.ubeye.ai/api/mobile/feed', { headers: { 'x-ubeye-app-build': '447' } }), { signed: true })!
+      expect(new URL(modern).searchParams.get('selection')).toBe('exact-v1')
+      expect(signedPathname(modern).valid).toBe(true)
+      const old = publicStoryMediaUrl(source, new Request('https://www.ubeye.ai/api/mobile/feed', { headers: { 'x-ubeye-app-build': '446' } }), { signed: true })!
+      expect(new URL(old).searchParams.has('selection')).toBe(false)
+    }
   })
 
   it("signs master variants, CMAF maps, and segments independently", () => {

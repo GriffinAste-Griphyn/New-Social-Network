@@ -22,6 +22,7 @@ import {
   verifyStoryMediaAccessToken,
 } from "@/lib/story-storage"
 import { rewriteHlsPlaylistForStoryMedia } from "@/lib/story-media/hls"
+import { fetchStoryMaster, renditionResponse, requestedRendition } from "@/lib/story-media/renditions"
 
 export const runtime = "nodejs"
 
@@ -249,6 +250,16 @@ export async function GET(
       cloudflareStreamMedia.kind === "thumbnail"
         ? await createCloudflareStreamThumbnailUrl(cloudflareStreamMedia.uid)
         : await createCloudflareStreamPlaybackUrl(cloudflareStreamMedia.uid)
+    const target = requestedRendition(request.url)
+    if (cloudflareStreamMedia.kind === "playback" && target) {
+      try {
+        return renditionResponse(await fetchStoryMaster(baseRemoteUrl), baseRemoteUrl, target)
+      } catch {
+        // Do not silently return a low ABR frame for an exact-quality request.
+        // The client owns the bounded 1080 -> 720 -> adaptive fallback sequence.
+        return new Response(null, { status: 503, headers: { "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store" } })
+      }
+    }
     const remoteUrl =
       cloudflareStreamMedia.kind === "playback"
         ? forwardCloudflarePlaybackOptions(baseRemoteUrl, request.url)
@@ -334,6 +345,11 @@ export async function GET(
       await new Response(result.stream).text(),
       blobPathname,
     )
+    const target = requestedRendition(request.url)
+    if (target && playlist.includes("#EXT-X-STREAM-INF:")) {
+      try { return renditionResponse(playlist, request.url, target) }
+      catch { return new Response(null, { status: 503, headers: { "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store" } }) }
+    }
     const body = Buffer.from(playlist, "utf8")
     const isMaster = /\/master(?:-[a-z0-9-]+)?\.m3u8$/i.test(blobPathname)
     headers.delete("ETag")

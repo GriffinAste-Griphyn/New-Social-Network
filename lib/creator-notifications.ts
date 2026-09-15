@@ -36,10 +36,11 @@ type ExpoPushMessage = {
 type ApnsPushMessage = {
   token: string
   environment: "sandbox" | "production"
-  title: string
-  body: string
+  title?: string
+  body?: string
+  background?: boolean
   data: {
-    type: "creator_story_posted"
+    type: "creator_story_posted" | "story_upload_ready"
     creatorId: string
     storyId: string
   }
@@ -149,17 +150,19 @@ async function sendApnsMessage(input: {
       [http2Constants.HTTP2_HEADER_PATH]: `/3/device/${input.message.token}`,
       authorization: `bearer ${input.jwt}`,
       "apns-topic": input.config.bundleId,
-      "apns-push-type": "alert",
-      "apns-priority": "10",
+      "apns-push-type": input.message.background ? "background" : "alert",
+      "apns-priority": input.message.background ? "5" : "10",
     })
 
     request.setEncoding("utf8")
+    // A stalled APNs connection must not hold the publication workflow open.
+    request.setTimeout(10_000, () => { request.close(); resolve() })
     request.once("error", () => resolve())
     request.once("response", () => undefined)
     request.once("end", () => resolve())
     request.end(
       JSON.stringify({
-        aps: {
+        aps: input.message.background ? { "content-available": 1 } : {
           alert: {
             title: input.message.title,
             body: input.message.body,
@@ -327,6 +330,28 @@ export async function setCreatorNotificationPreference(input: {
         updatedAt: now,
       },
     })
+}
+
+// Called only after the publication workflow verifies live, approved, unexpired.
+// This is a silent hint to the creator's own devices, independent of follower
+// notification preferences. The client rechecks ownership and publication status.
+export async function notifyStoryUploadReady(input: { creatorId: string; storyId: string }) {
+  const tokens = await getDb().select({
+    apnsDeviceToken: mobilePushTokens.apnsDeviceToken,
+    apnsEnvironment: mobilePushTokens.apnsEnvironment,
+  }).from(mobilePushTokens).where(and(
+    eq(mobilePushTokens.userId, input.creatorId),
+    eq(mobilePushTokens.pushProvider, "apns"),
+    eq(mobilePushTokens.enabled, true),
+  ))
+  await sendApnsPushNotifications(tokens.filter((token) =>
+    token.apnsDeviceToken && isApnsDeviceToken(token.apnsDeviceToken),
+  ).map((token) => ({
+    token: token.apnsDeviceToken as string,
+    environment: token.apnsEnvironment === "sandbox" ? "sandbox" as const : "production" as const,
+    background: true,
+    data: { type: "story_upload_ready" as const, creatorId: input.creatorId, storyId: input.storyId },
+  })))
 }
 
 export async function notifyCreatorStoryPosted(input: {

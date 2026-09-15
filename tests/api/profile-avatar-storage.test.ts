@@ -72,6 +72,7 @@ describe("profile avatar storage", () => {
     } = await import("@/lib/cloudflare-r2")
     const { saveProfileAvatar } = await import("@/lib/profile-avatar-storage")
     process.env.STORY_IMAGE_STORAGE_PROVIDER = "cloudflare-r2"
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
     sharpToBuffer
       .mockResolvedValueOnce(normalizedSourceBuffer)
       .mockResolvedValueOnce(normalizedAvatarBuffer)
@@ -194,6 +195,7 @@ describe("profile avatar storage", () => {
   })
 
   it("serves private R2 avatar sources through the app media route", async () => {
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
     const { readCloudflareR2Original } = await import("@/lib/cloudflare-r2")
     const { GET } = await import("@/app/api/profile-avatar-media/[...pathname]/route")
     vi.mocked(readCloudflareR2Original).mockResolvedValue(
@@ -216,7 +218,7 @@ describe("profile avatar storage", () => {
     await expect(response.text()).resolves.toBe("r2-avatar-source")
   })
 
-  it("keeps the legacy media URL for an initials fallback and refuses Blob writes in recovery mode", async () => {
+  it("preserves the legacy media URL and refuses Blob writes in recovery mode", async () => {
     const { put } = await import("@vercel/blob")
     const {
       publicProfileAvatarUrl,
@@ -237,6 +239,22 @@ describe("profile avatar storage", () => {
       ),
     ).rejects.toThrow("temporarily unavailable")
     expect(put).not.toHaveBeenCalled()
+  })
+
+  it("reports a suspended avatar store as retryable without pretending the photo was deleted", async () => {
+    const { head, get } = await import("@vercel/blob")
+    const { GET } = await import("@/app/api/profile-avatar-media/[...pathname]/route")
+    process.env.VERCEL_BLOB_SUSPENDED_MODE = "true"
+
+    const response = await GET(new Request("https://app.example.com/avatar"), {
+      params: Promise.resolve({ pathname: ["avatars", "existing.jpg"] }),
+    })
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get("cache-control")).toBe("private, no-store")
+    expect(await response.json()).toMatchObject({ retryable: true })
+    expect(head).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
   })
 
   it("returns 404 when a private avatar blob is missing", async () => {

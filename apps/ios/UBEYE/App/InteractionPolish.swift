@@ -71,7 +71,7 @@ final class UBEYEResourceMonitor: ObservableObject {
     }
 
     var allowsRichMotion: Bool { mode == .standard }
-    var allowsSpeculativeMedia: Bool { mode != .critical }
+    var allowsSpeculativeMedia: Bool { mode != .critical && !StoryUploadPriority.shared.isUploading }
 
     private init(processInfo: ProcessInfo = .processInfo) {
         isLowPowerModeEnabled = processInfo.isLowPowerModeEnabled
@@ -136,6 +136,7 @@ final class UBEYEResourceMonitor: ObservableObject {
 
     private func reportModeChange(from previousMode: UBEYEAdaptiveMode) {
         guard previousMode != mode else { return }
+        NotificationCenter.default.post(name: NetworkQualityMonitor.playbackBudgetChanged, object: nil)
         MediaPerformance.mark(
             "resource_mode from=\(previousMode.rawValue) to=\(mode.rawValue) low_power=\(isLowPowerModeEnabled) thermal=\(thermalState.rawValue)"
         )
@@ -264,7 +265,8 @@ final class ProgressiveImageLoader: ObservableObject {
         placeholderURL: URL?,
         thumbnailURL: URL?,
         fullURL: URL?,
-        correctsAsymmetricTransparentPadding: Bool = false
+        correctsAsymmetricTransparentPadding: Bool = false,
+        maxPixelDimension: CGFloat? = nil
     ) async {
         generation &+= 1
         let currentGeneration = generation
@@ -295,7 +297,7 @@ final class ProgressiveImageLoader: ObservableObject {
         }
 
         for candidate in bestStagesByURL.sorted(by: { $0.value < $1.value }) {
-            if let cached = MediaImageCache.shared.cachedImage(for: candidate.key) {
+            if let cached = MediaImageCache.shared.cachedImage(for: candidate.key, maxPixelDimension: candidate.value == .full ? maxPixelDimension : MediaImagePixelBudget.thumbnail) {
                 promote(
                     cached,
                     to: candidate.value,
@@ -309,9 +311,9 @@ final class ProgressiveImageLoader: ObservableObject {
 
         await withTaskGroup(of: (ProgressiveImageStage, UIImage?).self) { group in
             for (url, candidateStage) in bestStagesByURL {
-                if MediaImageCache.shared.cachedImage(for: url) != nil { continue }
+                if MediaImageCache.shared.cachedImage(for: url, maxPixelDimension: candidateStage == .full ? maxPixelDimension : MediaImagePixelBudget.thumbnail) != nil { continue }
                 group.addTask {
-                    let loaded = await MediaImageCache.shared.loadImage(for: url)
+                    let loaded = await MediaImageCache.shared.loadImage(for: url, maxPixelDimension: candidateStage == .full ? maxPixelDimension : MediaImagePixelBudget.thumbnail)
                     return (candidateStage, loaded)
                 }
             }
@@ -396,7 +398,7 @@ struct ProgressiveCachedImage<Content: View, Placeholder: View>: View {
             (thumbnailURL, .thumbnail),
             (placeholderURL, .placeholder),
         ] {
-            if let image = MediaImageCache.shared.cachedImage(for: url) {
+            if let image = MediaImageCache.shared.cachedImage(for: url, maxPixelDimension: stage == .full ? nil : MediaImagePixelBudget.thumbnail) {
                 return (image, stage)
             }
         }
@@ -484,46 +486,93 @@ struct UBEYEContextualHint: View {
     }
 }
 
+/// Callback cadence is a diagnostic signal, not a measurement of rendered GPU frames.
+struct FramePacingAccumulator {
+    private var previousTimestamp: TimeInterval?
+    private var previousExpected: TimeInterval?
+    private(set) var frames = 0
+    private(set) var hitches = 0
+    private(set) var elapsed: TimeInterval = 0
+    private(set) var hitchTime: TimeInterval = 0
+    private(set) var maximumGap: TimeInterval = 0
+    private(set) var lastGap: TimeInterval = 0
+
+    mutating func sample(timestamp: TimeInterval, expected: TimeInterval) -> Bool {
+        guard timestamp.isFinite, expected.isFinite, expected > 0 else { return false }
+        defer { previousTimestamp = timestamp; previousExpected = expected }
+        guard let previousTimestamp, let previousExpected else { return false }
+        let gap = timestamp - previousTimestamp
+        // Suspension explicitly interrupts the sample stream; refresh changes start a new interval.
+        guard gap > 0, abs(expected - previousExpected) < min(expected, previousExpected) * 0.2 else { return false }
+        lastGap = gap
+        frames += 1
+        elapsed += gap
+        maximumGap = max(maximumGap, gap)
+        let hitch = gap > max(previousExpected * 1.75, 0.012)
+        if hitch { hitches += 1; hitchTime += max(0, gap - previousExpected) }
+        return hitch
+    }
+    mutating func interrupt() { previousTimestamp = nil; previousExpected = nil }
+}
+
 @MainActor
 final class InteractionFrameMonitor: NSObject {
     static let shared = InteractionFrameMonitor()
-
     private var displayLink: CADisplayLink?
     private var activeSurfaces = Set<String>()
-    private var lastTimestamp: CFTimeInterval = 0
+    private var cadence = FramePacingAccumulator()
     private var lastReportedHitchAt = Date.distantPast
+    private var windowNetwork = "unknown"
+    private var windowMode = UBEYEAdaptiveMode.standard
+    private var lifecycleObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        lifecycleObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.cadence.interrupt() }
+        }
+    }
+    deinit {
+        if let lifecycleObserver { NotificationCenter.default.removeObserver(lifecycleObserver) }
+    }
 
     func start(surface: String) {
+        if !activeSurfaces.contains(surface), !activeSurfaces.isEmpty { flush() }
         activeSurfaces.insert(surface)
         guard displayLink == nil else { return }
-        lastTimestamp = 0
+        cadence = FramePacingAccumulator()
+        windowNetwork = NetworkQualityMonitor.shared.telemetryNetworkClass
+        windowMode = UBEYEResourceMonitor.shared.mode
         let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
-
     func stop(surface: String) {
+        guard activeSurfaces.contains(surface) else { return }
+        flush()
         activeSurfaces.remove(surface)
         guard activeSurfaces.isEmpty else { return }
         displayLink?.invalidate()
         displayLink = nil
-        lastTimestamp = 0
     }
-
-    @objc private func tick(_ link: CADisplayLink) {
-        defer { lastTimestamp = link.timestamp }
-        guard lastTimestamp > 0 else { return }
-        let elapsed = link.timestamp - lastTimestamp
-        let expected = max(link.targetTimestamp - link.timestamp, 1.0 / 120.0)
-        let hitchThreshold = max(expected * 1.75, 0.025)
-        guard elapsed > hitchThreshold,
-              Date().timeIntervalSince(lastReportedHitchAt) > 1.5 else {
-            return
+    private func flush() {
+        if cadence.frames >= 30 {
+            let surfaces = activeSurfaces.sorted().joined(separator: ",")
+            MediaPerformance.mark("frame_pacing surface=\(surfaces) frames=\(cadence.frames) hitches=\(cadence.hitches) elapsed_ms=\(Int(cadence.elapsed * 1000)) hitch_ms=\(Int(cadence.hitchTime * 1000)) max_gap_ms=\(Int(cadence.maximumGap * 1000)) mode=\(windowMode.rawValue) network_class=\(windowNetwork)")
         }
-        lastReportedHitchAt = Date()
-        let surfaces = activeSurfaces.sorted().joined(separator: ",")
-        MediaPerformance.mark(
-            "frame_hitch surface=\(surfaces) elapsed_ms=\(Int(elapsed * 1000)) expected_ms=\(Int(expected * 1000))"
-        )
+        cadence = FramePacingAccumulator()
+        windowNetwork = NetworkQualityMonitor.shared.telemetryNetworkClass
+        windowMode = UBEYEResourceMonitor.shared.mode
+    }
+    @objc private func tick(_ link: CADisplayLink) {
+        guard UIApplication.shared.applicationState == .active else { cadence.interrupt(); return }
+        if windowNetwork != NetworkQualityMonitor.shared.telemetryNetworkClass || windowMode != UBEYEResourceMonitor.shared.mode { flush() }
+        let expected = link.targetTimestamp - link.timestamp
+        let hitch = cadence.sample(timestamp: link.timestamp, expected: expected)
+        if hitch, Date().timeIntervalSince(lastReportedHitchAt) > 1.5 {
+            lastReportedHitchAt = Date()
+            MediaPerformance.mark("frame_hitch surface=\(activeSurfaces.sorted().joined(separator: ",")) elapsed_ms=\(Int(cadence.lastGap * 1000)) expected_ms=\(Int(expected * 1000))")
+        }
+        if cadence.elapsed >= 60 { flush() }
     }
 }

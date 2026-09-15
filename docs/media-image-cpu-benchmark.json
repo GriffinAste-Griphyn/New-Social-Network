@@ -1,0 +1,95 @@
+{
+  "fixture": "synthetic deterministic 12MP detail",
+  "serialJobs": true,
+  "mediansMs": [
+    14360,
+    14225,
+    6724
+  ],
+  "reports": [
+    {
+      "tier": "standard",
+      "url": "https://new-social-network-mow7erask-griffin-astes-projects.vercel.app",
+      "fixture": "deterministic-12mp-detail",
+      "region": "iad1",
+      "cpu": 2,
+      "sharpConcurrency": 1,
+      "rounds": [
+        {
+          "ms": 14391,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 14360,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 14334,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        }
+      ]
+    },
+    {
+      "tier": "performance",
+      "url": "https://new-social-network-7lh28rx2e-griffin-astes-projects.vercel.app",
+      "fixture": "deterministic-12mp-detail",
+      "region": "iad1",
+      "cpu": 3,
+      "sharpConcurrency": 1,
+      "rounds": [
+        {
+          "ms": 14366,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 14225,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 14208,
+          "displayBytes": 909393,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        }
+      ]
+    },
+    {
+      "tier": "performance-threads",
+      "url": "https://new-social-network-8ccmz3ykj-griffin-astes-projects.vercel.app",
+      "fixture": "deterministic-12mp-detail",
+      "region": "iad1",
+      "cpu": 3,
+      "sharpConcurrency": 2,
+      "rounds": [
+        {
+          "ms": 6761,
+          "displayBytes": 904136,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 6724,
+          "displayBytes": 904136,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        },
+        {
+          "ms": 6648,
+          "displayBytes": 904136,
+          "thumbnailBytes": 71342,
+          "format": "image/avif"
+        }
+      ]
+    }
+  ]
+}

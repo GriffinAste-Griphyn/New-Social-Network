@@ -1,11 +1,11 @@
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm"
 
 import { processStoryCreatorEarnings } from "@/lib/creator-earnings"
-import { notifyCreatorStoryPosted } from "@/lib/creator-notifications"
+import { notifyCreatorStoryPosted, notifyStoryUploadReady } from "@/lib/creator-notifications"
 import { getDb } from "@/lib/db"
 import { stories, storyPublishJobs, users } from "@/lib/db/schema"
-import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
-import { fanoutStoryToFollowers } from "@/lib/feed-timeline-store"
+import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
+import { enqueueFeedFanout } from "@/lib/media-background-dispatch"
 
 async function readPublication(storyId: string) {
   const [publication] = await getDb()
@@ -82,11 +82,8 @@ export async function fanoutStoryPublicationStep(storyId: string) {
   ])
   if (dispatch?.fanoutCompletedAt || !publication) return
 
-  await fanoutStoryToFollowers({
-    creatorId: publication.creatorId,
-    storyId,
-    createdAt: publication.createdAt,
-  })
+  // Completion here means the follower batches are durably enqueued.
+  await enqueueFeedFanout(storyId)
   await getDb()
     .update(storyPublishJobs)
     .set({ fanoutCompletedAt: new Date(), updatedAt: new Date() })
@@ -119,12 +116,16 @@ export async function notifyStoryPublicationStep(storyId: string) {
   if (!claim) return
 
   try {
-    await notifyCreatorStoryPosted({
+    await Promise.all([notifyStoryUploadReady({ creatorId: publication.creatorId, storyId }).catch((error) => {
+      // The readiness hint is best effort; its failure must not duplicate or
+      // block existing follower notifications. Authenticated polling recovers.
+      console.warn("story_upload_ready_push_failed", { storyId, error })
+    }), notifyCreatorStoryPosted({
       creatorId: publication.creatorId,
       creatorName: publication.creatorName ?? "Creator",
       storyId,
       caption: publication.caption,
-    })
+    })])
     await getDb()
       .update(storyPublishJobs)
       .set({ notificationCompletedAt: new Date(), updatedAt: new Date() })
@@ -153,7 +154,7 @@ export async function invalidateStoryPublicationSnapshotsStep(storyId: string) {
   ])
   if (dispatch?.snapshotInvalidatedAt || !publication) return
 
-  await invalidateMobileFeedSnapshotsForCreator(publication.creatorId)
+  await invalidateMobileFeedSnapshot(publication.creatorId)
   await getDb()
     .update(storyPublishJobs)
     .set({ snapshotInvalidatedAt: new Date(), updatedAt: new Date() })

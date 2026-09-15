@@ -286,7 +286,9 @@ extension StoryCard {
         StoryVideoPlaybackSource(
             identity: playbackIdentity,
             url: playbackMediaUrl,
-            durationSeconds: durationSeconds
+            durationSeconds: durationSeconds,
+            pixelWidth: activeVideoRendition?.width,
+            pixelHeight: activeVideoRendition?.height
         )
     }
 }
@@ -333,6 +335,13 @@ struct MyStorySummary: Codable, Hashable {
 extension MyStorySummary {
     var cardThumbnailUrl: URL? {
         items.last?.cardThumbnailUrl ?? latestThumbnailUrl
+    }
+
+    var cardTextOverlays: [StoryTextOverlay]? {
+        // Derive both fields from the same story, including partial feed updates.
+        // A story with no text must not inherit the summary's previous overlays.
+        if let item = items.last { return item.textOverlays }
+        return latestTextOverlays
     }
 }
 
@@ -548,6 +557,13 @@ struct StoryStackItem: Codable, Identifiable, Hashable {
 }
 
 extension StoryStackItem {
+    var playbackVideoContentMode: StoryImageContentMode {
+        StoryVideoFramingPolicy.contentMode(
+            width: activeVideoRendition?.width,
+            height: activeVideoRendition?.height
+        )
+    }
+
     private var activeVideoRendition: StoryMediaRendition? {
         if assetKind == .video,
            processingStatus != nil,
@@ -596,7 +612,9 @@ extension StoryStackItem {
         StoryVideoPlaybackSource(
             identity: playbackIdentity,
             url: playbackMediaUrl,
-            durationSeconds: durationSeconds
+            durationSeconds: durationSeconds,
+            pixelWidth: activeVideoRendition?.width,
+            pixelHeight: activeVideoRendition?.height
         )
     }
 }
@@ -848,10 +866,16 @@ struct MobileMediaConfigResponse: Codable {
 
         let version: String
         let rolloutProfile: String?
+        let startupMode: String?
+        let startupExperiment: String?
         let blobUploadsAvailable: Bool?
+        let profilePhotoUploadsAvailable: Bool?
         let storyImageUploadsAvailable: Bool?
         let imageDerivativeUploadEnabled: Bool
         let qoeAccessLogSampleRate: Double
+        var uploadExperiment: String? = nil
+        var adaptiveUploadEncodingEnabled: Bool? = nil
+        var adaptiveUploadChunksEnabled: Bool? = nil
         let uploadChunkBytes: Int
         let blobMultipartThresholdBytes: LimitPair?
         let blobMultipartPartBytes: LimitPair?
@@ -881,6 +905,7 @@ struct VideoUploadResponse: Codable, Hashable {
     let uploadProtocol: String?
     let poster: ImageUploadPart?
     var source: ImageUploadPart? = nil
+    var freshUpload: Bool? = nil
 
     var supportsDirectVideoUpload: Bool {
         switch uploadProtocol {

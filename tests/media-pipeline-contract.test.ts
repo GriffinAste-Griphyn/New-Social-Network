@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
 
-import { isCloudflareStreamFullyReady } from "@/lib/media-upload-sessions"
+import { isCloudflareStreamFullyReady, isCloudflareStreamPublicationReady } from "@/lib/media-upload-sessions"
 import { getMobileMediaConfig } from "@/lib/mobile-media-config"
 import {
   isSupportedStoryImageInputContentType,
@@ -183,4 +183,18 @@ describe("aggressive media pipeline contract", () => {
     expect(config.offlineHLSPreheatLimit).toEqual({ constrained: 0, standard: 1 })
     expect(config.offlineHLSCacheMaxAssets).toBe(2)
   })
+})
+
+it("separates playable availability from full quality without relaxing provider readiness", () => {
+  const prior = process.env.MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED
+  try {
+    process.env.MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED = "true"
+    expect(isCloudflareStreamPublicationReady({ state: "ready", readyToStream: true, pctComplete: null })).toBe(true)
+    expect(isCloudflareStreamFullyReady({ state: "ready", readyToStream: true, pctComplete: 80 })).toBe(false)
+    expect(isCloudflareStreamPublicationReady({ state: "error", readyToStream: true, pctComplete: 100 })).toBe(false)
+    expect(isCloudflareStreamPublicationReady({ state: "ready", readyToStream: false, pctComplete: 100 })).toBe(false)
+  } finally {
+    if (prior === undefined) delete process.env.MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED
+    else process.env.MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED = prior
+  }
 })

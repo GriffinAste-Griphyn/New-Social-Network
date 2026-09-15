@@ -8,6 +8,8 @@ import { z } from "zod"
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
   createMediaUploadSession,
+  deleteMediaUploadSessionForCleanup,
+  expirePrivateDraftUpload,
   getReusableMediaUploadSession,
   MediaUploadSessionError,
   retireMediaUploadSession,
@@ -39,6 +41,34 @@ import {
 import { isVercelBlobAccessDisabled } from "@/lib/media-availability"
 
 export const runtime = "nodejs"
+
+// Cancel private draft bytes without touching a completing or published story.
+export async function DELETE(request: Request) {
+  const session = await getCompleteMobileSession(request)
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const rateLimit = await enforceRequestRateLimits(request, [{
+    bucket: "mobile:story-video-upload:user", subject: session.id,
+    options: mutationRateLimits.storyUploadUser,
+  }])
+  if (rateLimit) return rateLimit
+  const parsed = z.object({ clientUploadId: z.string().uuid(),
+    uploadSessionId: z.string().trim().min(1).max(100),
+  }).safeParse(await request.json().catch(() => null))
+  if (!parsed.success) return NextResponse.json({ error: "Invalid upload session." }, { status: 400 })
+  try {
+    const expired = await expirePrivateDraftUpload({ ownerUserId: session.id, ...parsed.data })
+    // Retain the expired row when storage is unavailable so the cleanup cron
+    // can retry. Expiration prevents completion racing with provider deletion.
+    if (expired && await removeAbandonedVideoUpload(expired.storageKey)) {
+      await deleteMediaUploadSessionForCleanup(expired)
+    }
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    return NextResponse.json({ error: "Could not cancel that upload." }, {
+      status: error instanceof MediaUploadSessionError ? error.statusCode : 500,
+    })
+  }
+}
 
 const maxMobileStoryVideoDurationSeconds =
   storyMediaContract.upload.maxVideoDurationSeconds
@@ -190,7 +220,8 @@ async function removeAbandonedVideoUpload(uid: string) {
   } else {
     removals.push(removeCloudflareStreamVideoByUid(uid))
   }
-  await Promise.allSettled(removals)
+  const results = await Promise.allSettled(removals)
+  return results.every((result) => result.status === "fulfilled")
 }
 
 export async function POST(request: Request) {
@@ -315,6 +346,7 @@ export async function POST(request: Request) {
         uid: reusableSession.storageKey,
         uploadUrl: reusableSession.uploadUrl,
         uploadProtocol: reusableSession.uploadProtocol,
+        freshUpload: false,
         poster,
         source,
       })
@@ -432,6 +464,9 @@ export async function POST(request: Request) {
       uploadProtocol: uploadSession.uploadProtocol,
       poster,
       source: null,
+      // Only the session we just created is known to contain zero bytes. A
+      // concurrent idempotent request may have won and already started it.
+      freshUpload: uploadSession.storageKey === upload.uid,
     })
   } catch (error) {
     logVideoUploadEvent("prepare_failed", {

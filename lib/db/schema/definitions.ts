@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import {
   type AnyPgColumn,
   boolean,
@@ -12,6 +13,13 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core"
+
+export const mediaWorkerLeases = pgTable("media_worker_leases", {
+  lane: text("lane").notNull(),
+  slot: integer("slot").notNull(),
+  ownerToken: text("owner_token").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [primaryKey({ columns: [table.lane, table.slot] })])
 
 export const storyAssetKind = pgEnum("story_asset_kind", ["image", "video"])
 export const mediaAssetPurpose = pgEnum("media_asset_purpose", [
@@ -82,6 +90,9 @@ export const userNotificationPreferenceType = pgEnum(
 export const mobilePerformanceEventName = pgEnum(
   "mobile_performance_event_name",
   [
+    "media_delivery_accepted",
+    "media_delivery_ready",
+    "media_delivery_observed",
     "api_request",
     "api_server_timing",
     "feed_disk_cache_clear",
@@ -118,6 +129,7 @@ export const mobilePerformanceEventName = pgEnum(
     "keyboard_latency",
     "gesture_outcome",
     "frame_hitch",
+    "frame_pacing",
     "prefetch_intent",
     "resource_mode",
     "undo_action",
@@ -155,6 +167,8 @@ export const mobilePerformanceEventName = pgEnum(
     "video_upload_phase",
     "video_upload_retry",
     "video_upload_succeeded",
+    "video_upload_encoding",
+    "video_upload_chunk",
     "video_first_frame",
     "video_item_ready",
     "video_stalled",
@@ -616,6 +630,15 @@ export const mediaAuditEvents = pgTable(
   ],
 )
 
+export const mediaOperationsSnapshots = pgTable("media_operations_snapshots", {
+  windowEnd: timestamp("window_end", { withTimezone: true }).primaryKey(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  segments: jsonb("segments").$type<import("@/lib/media-slo").MediaQoeSegment[]>().notNull(),
+  pipeline: jsonb("pipeline").$type<import("@/lib/media-slo").MediaPipelineHealth>().notNull(),
+  alerts: jsonb("alerts").$type<import("@/lib/media-slo").MediaSloAlert[]>().notNull(),
+  collectedAt: timestamp("collected_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const moderationChecks = pgTable(
   "moderation_checks",
   {
@@ -755,6 +778,7 @@ export const follows = pgTable(
     }),
     index("follows_follower_id_idx").on(table.followerId, table.createdAt),
     index("follows_followee_id_idx").on(table.followeeId, table.createdAt),
+    index("follows_fanout_cursor_idx").on(table.followeeId, table.followerId),
   ],
 )
 
@@ -1300,6 +1324,10 @@ export const mobilePerformanceEvents = pgTable(
       table.name,
       table.createdAt,
     ),
+
+    index("mobile_performance_events_delivery_story_idx").on(
+      sql`(${table.metadata}->>'story')`, table.name, table.createdAt,
+    ).where(sql`${table.metadata} ? 'story'`),
   ],
 )
 
@@ -1889,3 +1917,20 @@ export const dailyWinners = pgTable(
     index("daily_winners_user_created_idx").on(table.userId, table.createdAt),
   ],
 )
+
+// Durable outbox for optional image enhancement and bounded follower batches.
+export const mediaBackgroundJobs = pgTable("media_background_jobs", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  mediaAssetId: text("media_asset_id").references(() => mediaAssets.id, { onDelete: "cascade" }),
+  storyId: text("story_id").references(() => stories.id, { onDelete: "cascade" }),
+  payload: jsonb("payload").$type<Record<string, string>>().notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  ownerToken: text("owner_token"),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [index("media_background_jobs_due_idx").on(table.status, table.availableAt)])

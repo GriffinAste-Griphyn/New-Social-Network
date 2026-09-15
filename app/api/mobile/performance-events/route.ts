@@ -39,7 +39,7 @@ function trimMetadata(
     return {}
   }
 
-  return Object.fromEntries(Object.entries(metadata).slice(0, 20))
+  return Object.fromEntries(Object.entries(metadata).slice(0, 32))
 }
 
 export async function POST(request: Request) {

@@ -25,6 +25,10 @@ import {
   type StoredStoryAsset,
 } from "@/lib/story-storage"
 
+// Explicit opt-in for the measured 4 GB / 2 vCPU image-processing configuration.
+// Leave platform defaults intact on every other deployment and bound native workers.
+if (process.env.MEDIA_IMAGE_PROCESSING_THREADS === "2") sharp.concurrency(2)
+
 export type DirectStoryImageSourceInput = {
   pathname: string
   contentType: string
@@ -166,6 +170,72 @@ async function encodeWithinBudget(input: {
   })
 }
 
+export async function encodeStoryImageDelivery(sourceBody: Buffer, contentMode: StoryImageContentMode = "fit", delivery: "avif" | "fast-webp" = "avif") {
+  const originalDimensions = await storyImageDisplayDimensions(sourceBody)
+  const canvas = await createStoryCanvasImage(sourceBody, contentMode)
+  // Decode, orient, resize and sharpen once for every output/quality attempt.
+  const { data, info } = await canvas.raw().toBuffer({ resolveWithObject: true })
+  const image = sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } })
+  const displayAvif = delivery === "fast-webp" ? null : await encodeWithinBudget({
+    qualities: storyMediaContract.imageEncoding.displayAvifQualities.map(
+      (quality) => Math.round(quality * 100),
+    ),
+    maxByteSize: maxStoryImageDisplayDerivativeBytes,
+    encode: (quality) =>
+      image
+        .clone()
+        .avif({ quality, effort: 4, chromaSubsampling: "4:2:0", bitdepth: 8 })
+        .toBuffer(),
+  }).catch(() => null)
+  const displayWebp = displayAvif
+    ? null
+    : await encodeWithinBudget({
+        qualities: storyMediaContract.imageEncoding.displayWebpQualities.map(
+          (quality) => Math.round(quality * 100),
+        ),
+        maxByteSize: maxStoryImageDisplayDerivativeBytes,
+        encode: (quality) =>
+          image.clone().webp({ quality, effort: 4, smartSubsample: true }).toBuffer(),
+      })
+  const display = displayAvif ?? displayWebp
+  if (!display) {
+    throw new StoryUploadError("The image could not fit the delivery budget.")
+  }
+
+  const thumbnailImage = image.clone().resize(
+    storyMediaContract.thumbnail.width,
+    storyMediaContract.thumbnail.height,
+    { fit: "fill", kernel: sharp.kernel.lanczos3 },
+  )
+  const thumbnail = await encodeWithinBudget({
+    qualities: storyMediaContract.imageEncoding.thumbnailWebpQualities.map(
+      (quality) => Math.round(quality * 100),
+    ),
+    maxByteSize: maxStoryImageThumbnailDerivativeBytes,
+    encode: (quality) =>
+      thumbnailImage
+        .clone()
+        .webp({ quality, effort: 4, smartSubsample: true })
+        .toBuffer(),
+  })
+  if (!thumbnail) {
+    throw new StoryUploadError("The image thumbnail could not be generated.")
+  }
+
+  const { data: placeholderPixels, info: placeholderInfo } =
+    await thumbnailImage
+      .clone()
+      .resize(18, 32, { fit: "fill" })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true })
+  const thumbHash = Buffer.from(
+    rgbaToThumbHash(placeholderInfo.width, placeholderInfo.height, placeholderPixels),
+  ).toString("base64url")
+
+  return { originalDimensions, display, thumbnail, thumbHash, displayContentType: displayAvif ? "image/avif" as const : "image/webp" as const }
+}
+
 export async function createServerEncodedStoryImageAsset(input: {
   basePathname: string
   ownerUserId: string
@@ -173,6 +243,7 @@ export async function createServerEncodedStoryImageAsset(input: {
   storageProvider?: "vercel-blob" | "cloudflare-r2"
   source: DirectStoryImageSourceInput
   deleteSourceAfterProcessing?: boolean
+  delivery?: "avif" | "fast-webp"
 }): Promise<StoredStoryAsset> {
   const storageProvider = input.storageProvider ?? "vercel-blob"
   if (storageProvider === "vercel-blob" && isVercelBlobAccessDisabled()) {
@@ -236,71 +307,13 @@ export async function createServerEncodedStoryImageAsset(input: {
     throw new StoryUploadError("The uploaded image failed its integrity check.")
   }
 
-  const originalDimensions = await storyImageDisplayDimensions(sourceBody)
-  const image = await createStoryCanvasImage(sourceBody, input.contentMode)
-  const displayAvif = await encodeWithinBudget({
-    qualities: storyMediaContract.imageEncoding.displayAvifQualities.map(
-      (quality) => Math.round(quality * 100),
-    ),
-    maxByteSize: maxStoryImageDisplayDerivativeBytes,
-    encode: (quality) =>
-      image
-        .clone()
-        .avif({ quality, effort: 4, chromaSubsampling: "4:2:0", bitdepth: 8 })
-        .toBuffer(),
-  }).catch(() => null)
-  const displayWebp = displayAvif
-    ? null
-    : await encodeWithinBudget({
-        qualities: storyMediaContract.imageEncoding.displayWebpQualities.map(
-          (quality) => Math.round(quality * 100),
-        ),
-        maxByteSize: maxStoryImageDisplayDerivativeBytes,
-        encode: (quality) =>
-          image.clone().webp({ quality, effort: 4, smartSubsample: true }).toBuffer(),
-      })
-  const display = displayAvif ?? displayWebp
-  if (!display) {
-    throw new StoryUploadError("The image could not fit the delivery budget.")
-  }
-
-  const thumbnailImage = image.clone().resize(
-    storyMediaContract.thumbnail.width,
-    storyMediaContract.thumbnail.height,
-    { fit: "fill", kernel: sharp.kernel.lanczos3 },
-  )
-  const thumbnail = await encodeWithinBudget({
-    qualities: storyMediaContract.imageEncoding.thumbnailWebpQualities.map(
-      (quality) => Math.round(quality * 100),
-    ),
-    maxByteSize: maxStoryImageThumbnailDerivativeBytes,
-    encode: (quality) =>
-      thumbnailImage
-        .clone()
-        .webp({ quality, effort: 4, smartSubsample: true })
-        .toBuffer(),
-  })
-  if (!thumbnail) {
-    throw new StoryUploadError("The image thumbnail could not be generated.")
-  }
-
-  const { data: placeholderPixels, info: placeholderInfo } =
-    await thumbnailImage
-      .clone()
-      .resize(18, 32, { fit: "fill" })
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-  const thumbHash = Buffer.from(
-    rgbaToThumbHash(placeholderInfo.width, placeholderInfo.height, placeholderPixels),
-  ).toString("base64url")
-
-  const displayContentType = displayAvif ? "image/avif" : "image/webp"
+  const { originalDimensions, display, thumbnail, thumbHash, displayContentType } = await encodeStoryImageDelivery(sourceBody, input.contentMode, input.delivery)
+  const deliveryBase = input.delivery === "fast-webp" ? `${input.basePathname}-fast-v1` : input.basePathname
   const displayPathname = directStoryImageDisplayPathname(
-    input.basePathname,
+    deliveryBase,
     displayContentType,
   )
-  const thumbnailPathname = directStoryImageThumbnailPathname(input.basePathname)
+  const thumbnailPathname = directStoryImageThumbnailPathname(deliveryBase)
   const outputPathnames = [displayPathname, thumbnailPathname]
   try {
     const [displayStored, thumbnailStored] =

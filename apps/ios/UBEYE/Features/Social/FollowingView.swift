@@ -235,24 +235,23 @@ private struct FollowingStoryFeedCard: View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: story.playbackThumbnailUrl ?? story.playbackMediaUrl) { image in
-                    image.resizable().scaledToFill()
+                    ZStack(alignment: .bottomLeading) {
+                        image.resizable().scaledToFill()
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.12), .black.opacity(0.82)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        if let overlays = story.textOverlays, !overlays.isEmpty {
+                            StoryThumbnailOverlayView(overlays: overlays, fontSize: 11, horizontalPadding: 8, verticalPadding: 5)
+                        }
+                    }
                 } placeholder: {
                     FollowingStoryCardSkeleton()
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 238)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.12), .black.opacity(0.82)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if let overlays = story.textOverlays, !overlays.isEmpty {
-                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 11, horizontalPadding: 8, verticalPadding: 5)
-                }
 
                 HStack(alignment: .bottom, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {

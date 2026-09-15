@@ -5,9 +5,13 @@ import { and, asc, eq, gt, isNull, lte, or } from "drizzle-orm"
 import { getDb } from "@/lib/db"
 import { mediaUploadSessions, stories } from "@/lib/db/schema"
 import { storyMediaContract } from "@/lib/story-media-contract"
+import { providerReadinessObservations } from "@/lib/media-provider-readiness"
+
+import { isVerifiedProviderPlayback, type VerifiedProviderPlayback } from "@/lib/media-provider-playback"
 
 export type CloudflareStreamProviderDetails = {
   readyToStream: boolean
+  verifiedPlayback?: VerifiedProviderPlayback
   state: string | null
   pctComplete: number | null
   errorReason: string | null
@@ -140,6 +144,21 @@ export function isCloudflareStreamFullyReady(
   )
 }
 
+// Playback availability and completion of every quality level are separate states.
+// Keep the full-quality predicate for diagnostics and the reversible publication gate.
+export function isCloudflareStreamPublicationReady(
+  details: Pick<CloudflareStreamProviderDetails, "readyToStream" | "state" | "pctComplete"> &
+    Partial<Pick<CloudflareStreamProviderDetails, "width" | "height" | "verifiedPlayback">>,
+) {
+  if (process.env.MEDIA_VERIFIED_PLAYBACK_PUBLICATION_ENABLED !== "false" &&
+      details.readyToStream && details.state?.toLowerCase() === "ready" &&
+      isVerifiedProviderPlayback({ width: details.width ?? null, height: details.height ?? null,
+        verifiedPlayback: details.verifiedPlayback })) return true
+  return process.env.MEDIA_EARLY_VIDEO_PUBLICATION_ENABLED === "true"
+    ? details.readyToStream && details.state?.toLowerCase() === "ready"
+    : isCloudflareStreamFullyReady(details)
+}
+
 export async function getReusableMediaUploadSession(input: {
   ownerUserId: string
   clientUploadId?: string | null
@@ -234,6 +253,22 @@ export async function createMediaUploadSession(input: {
     "Could not reserve this provider upload. Prepare a new upload.",
     409,
   )
+}
+
+export async function expirePrivateDraftUpload(input: {
+  ownerUserId: string; clientUploadId: string; uploadSessionId: string
+}) {
+  const [expired] = await getDb().update(mediaUploadSessions)
+    .set({ expiresAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(mediaUploadSessions.id, input.uploadSessionId),
+      eq(mediaUploadSessions.ownerUserId, input.ownerUserId),
+      eq(mediaUploadSessions.clientUploadId, input.clientUploadId),
+      eq(mediaUploadSessions.assetKind, "video"),
+      eq(mediaUploadSessions.purpose, "story"),
+      eq(mediaUploadSessions.status, "prepared")))
+    .returning({ id: mediaUploadSessions.id, status: mediaUploadSessions.status,
+      storageProvider: mediaUploadSessions.storageProvider, storageKey: mediaUploadSessions.storageKey })
+  return expired ?? null
 }
 
 export async function retireMediaUploadSession(input: {
@@ -378,6 +413,9 @@ export async function claimMediaUploadSessionForCompletion(input: {
     .where(
       and(
         eq(mediaUploadSessions.id, session.id),
+        // Cancellation can expire a draft after the preceding read. Recheck
+        // under the UPDATE lock before allowing completion to claim its bytes.
+        gt(mediaUploadSessions.expiresAt, new Date()),
         or(
           eq(mediaUploadSessions.status, "prepared"),
           and(
@@ -407,6 +445,10 @@ export async function claimMediaUploadSessionForCompletion(input: {
 
   if (latest?.completedStoryId) {
     return { state: "completed" as const, session: latest }
+  }
+
+  if (latest && latest.expiresAt.getTime() <= Date.now()) {
+    throw new MediaUploadSessionError("This video upload session expired. Prepare a new upload.", 410)
   }
 
   throw new MediaUploadSessionError(
@@ -485,7 +527,7 @@ export async function releaseMediaUploadSessionCompletion(input: {
 export async function recordCloudflareStreamUploadStatus(input: {
   uid: string
   details: CloudflareStreamProviderDetails
-}) {
+}, attempt = 0): Promise<MediaUploadSession | null> {
   const db = getDb()
   const [existing] = await db
     .select()
@@ -514,14 +556,36 @@ export async function recordCloudflareStreamUploadStatus(input: {
       providerStatus: details.state,
       providerPctComplete: details.pctComplete,
       providerError: details.errorReason,
-      providerPayload: details,
+      providerPayload: {
+        ...details,
+        readinessObservations: providerReadinessObservations({
+          previous: (existing.providerPayload as { readinessObservations?: unknown } | null)?.readinessObservations,
+          playable: details.readyToStream && details.state?.toLowerCase() === "ready",
+          fullQuality: isCloudflareStreamFullyReady(details),
+          now,
+        }),
+      },
       providerEventAt: now,
       updatedAt: now,
     })
-    .where(eq(mediaUploadSessions.id, existing.id))
+    .where(and(
+      eq(mediaUploadSessions.id, existing.id),
+      existing.providerEventAt
+        ? eq(mediaUploadSessions.providerEventAt, existing.providerEventAt)
+        : isNull(mediaUploadSessions.providerEventAt),
+      existing.providerPayload
+        ? eq(mediaUploadSessions.providerPayload, existing.providerPayload)
+        : isNull(mediaUploadSessions.providerPayload),
+    ))
     .returning()
 
-  return session ?? null
+  if (session) return session
+  // A webhook and a poll may race. Re-read and merge rather than overwriting
+  // newer progress, terminal errors or the first readiness observation.
+  if (attempt < 2) return recordCloudflareStreamUploadStatus(input, attempt + 1)
+  const [latest] = await db.select().from(mediaUploadSessions)
+    .where(eq(mediaUploadSessions.id, existing.id)).limit(1)
+  return latest ?? null
 }
 
 export function mergeCloudflareStreamProviderDetails(
@@ -567,6 +631,8 @@ export function mergeCloudflareStreamProviderDetails(
     durationMs: observed.durationMs ?? previous?.durationMs ?? null,
     width: observed.width ?? previous?.width ?? null,
     height: observed.height ?? previous?.height ?? null,
+    ...((observed.verifiedPlayback ?? previous?.verifiedPlayback) ?
+      { verifiedPlayback: observed.verifiedPlayback ?? previous?.verifiedPlayback } : {}),
   }
 }
 
@@ -612,5 +678,7 @@ export function cloudflareDetailsFromUploadSession(
       typeof details.durationMs === "number" ? details.durationMs : null,
     width: typeof details.width === "number" ? details.width : null,
     height: typeof details.height === "number" ? details.height : null,
+    ...(isVerifiedProviderPlayback({ width: details.width ?? null, height: details.height ?? null,
+      verifiedPlayback: details.verifiedPlayback }) ? { verifiedPlayback: details.verifiedPlayback } : {}),
   }
 }

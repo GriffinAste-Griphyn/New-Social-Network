@@ -1,0 +1,34 @@
+{
+  "synthetic": true,
+  "encoder": "actual Apple AVAssetExportSession on iOS Simulator",
+  "reports": [
+    {
+      "clip": "source-detail.mp4",
+      "targetBitsPerSecond": 6500000,
+      "bytes": 2608030,
+      "exportMs": 32065,
+      "ssim": 0.641472
+    },
+    {
+      "clip": "source-detail.mp4",
+      "targetBitsPerSecond": 8200000,
+      "bytes": 3331441,
+      "exportMs": 41312,
+      "ssim": 0.646311
+    },
+    {
+      "clip": "source-motion.mp4",
+      "targetBitsPerSecond": 6500000,
+      "bytes": 2947516,
+      "exportMs": 16744,
+      "ssim": 0.996598
+    },
+    {
+      "clip": "source-motion.mp4",
+      "targetBitsPerSecond": 8200000,
+      "bytes": 3598923,
+      "exportMs": 17274,
+      "ssim": 0.997969
+    }
+  ]
+}

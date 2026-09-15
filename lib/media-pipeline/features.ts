@@ -27,6 +27,10 @@ export function isWorkflowDispatchEnabled() {
   return process.env.MEDIA_WORKFLOW_DISPATCH_ENABLED === "true"
 }
 
+export function isAudioLoudnessNormalizationEnabled() {
+  return process.env.MEDIA_AUDIO_LOUDNESS_NORMALIZATION_ENABLED === "true"
+}
+
 export function isAsyncMediaCompletionEnabled(clientBuild: number) {
   return (
     Number.isFinite(clientBuild) &&

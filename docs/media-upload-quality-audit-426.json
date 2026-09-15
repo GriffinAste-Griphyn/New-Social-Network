@@ -1,0 +1,40 @@
+{
+  "encoder": "actual Apple AVAssetExportSession on iOS Simulator",
+  "reports": [
+    {
+      "audioPreserved": true,
+      "candidateBytes": 760799,
+      "clip": "audit-dark.mp4",
+      "rec709Preserved": true,
+      "sourceBytes": 1662044,
+      "visualGateAccepted": true
+    },
+    {
+      "audioPreserved": true,
+      "candidateBytes": 1256191,
+      "clip": "audit-detail.mp4",
+      "rec709Preserved": true,
+      "sourceBytes": 1440228,
+      "visualGateAccepted": true
+    },
+    {
+      "audioPreserved": true,
+      "candidateBytes": 1947938,
+      "clip": "audit-motion.mp4",
+      "rec709Preserved": true,
+      "sourceBytes": 3121280,
+      "visualGateAccepted": true
+    },
+    {
+      "audioPreserved": true,
+      "candidateBytes": 24161,
+      "clip": "audit-skin-palette.mp4",
+      "rec709Preserved": true,
+      "sourceBytes": 20760,
+      "visualGateAccepted": true
+    }
+  ],
+  "synthetic": true,
+  "regressionFixtureRejected": "source-detail-8200000.mp4: verified by actual matched-frame test",
+  "acceptanceBranch": "Validated source with synthetic MP4 free-atom padding: accepted; source SHA-256 unchanged"
+}

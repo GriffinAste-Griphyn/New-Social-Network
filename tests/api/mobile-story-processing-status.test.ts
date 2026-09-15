@@ -29,6 +29,7 @@ const processingStatus = {
   assetKind: "video" as const,
   storageProvider: "vercel-blob",
   status: "processing" as const,
+  processingStartedAt: new Date(),
   processingStatus: "processing",
   hasOriginalRendition: true,
   moderationStatus: "approved",
@@ -128,6 +129,19 @@ describe("mobile story processing status", () => {
 
     expect(enqueueMediaProcessing).not.toHaveBeenCalled()
     expect(scheduleMediaProcessing).not.toHaveBeenCalled()
+  })
+
+  it("polls short Cloudflare clips promptly without scheduling our encoders", async () => {
+    vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
+      ...processingStatus, storageProvider: "cloudflare-stream", processingStartedAt: new Date(),
+    })
+    const { GET } = await import("@/app/api/mobile/stories/[id]/status/route")
+    const response = await GET(new Request("https://app.example/api/mobile/stories/story-1/status"),
+      { params: Promise.resolve({ id: "story-1" }) })
+    const payload = await response.json()
+    expect(payload.story.pollAfterMs).toBe(750)
+    expect(payload.story.processingStartedAt).toBeUndefined()
+    expect(enqueueMediaProcessing).not.toHaveBeenCalled()
   })
 
   it("keeps early playback live while scheduling quality enrichment", async () => {

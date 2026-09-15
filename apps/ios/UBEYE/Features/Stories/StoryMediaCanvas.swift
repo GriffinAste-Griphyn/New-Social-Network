@@ -5,6 +5,20 @@ enum StoryImageContentMode: String, Codable, Hashable {
     case fill
 }
 
+enum StoryVideoFramingPolicy {
+    static func contentMode(width: Int?, height: Int?) -> StoryImageContentMode {
+        guard let width, let height, width > 0, height > 0 else {
+            // Preserve the whole frame when legacy playback dimensions are absent.
+            return .fit
+        }
+
+        // Extend story-shaped portrait video to the top. Wider video must retain
+        // its composition instead of being cropped into the tall viewer frame.
+        let aspectRatio = CGFloat(width) / CGFloat(height)
+        return aspectRatio <= StoryMediaContract.aspectRatio + 0.01 ? .fill : .fit
+    }
+}
+
 enum StoryMediaContract {
     static let defaultImageContentMode: StoryImageContentMode = .fit
     static let aspectRatio: CGFloat = 9 / 16
@@ -36,7 +50,8 @@ struct StoryCanvasLayout: Equatable {
     init(
         containerSize: CGSize,
         reservedTopHeight: CGFloat = 0,
-        reservedBottomHeight: CGFloat = 0
+        reservedBottomHeight: CGFloat = 0,
+        extendsToTop: Bool = false
     ) {
         let containerWidth = max(containerSize.width, 0)
         let containerHeight = max(containerSize.height, 0)
@@ -56,13 +71,17 @@ struct StoryCanvasLayout: Equatable {
         let canvasHeight = canvasWidth > 0
             ? canvasWidth / Self.aspectRatio
             : 0
+        let centeredY = (containerHeight - canvasHeight) / 2
+        let maximumY = topHeight + availableHeight - canvasHeight
+        let fittedY = max(topHeight, min(centeredY, maximumY))
 
         frame = CGRect(
             x: (containerWidth - canvasWidth) / 2,
-            // Center on the screen regardless of source orientation or chrome.
-            y: (containerHeight - canvasHeight) / 2,
+            // The viewer extends upward while preserving the fitted bottom edge.
+            // Composer canvases keep their canonical 9:16 geometry.
+            y: extendsToTop ? topHeight : fittedY,
             width: canvasWidth,
-            height: canvasHeight
+            height: canvasHeight + (extendsToTop ? fittedY - topHeight : 0)
         )
     }
 }
@@ -107,15 +126,13 @@ extension View {
 struct StoryCanvasForegroundImage: View {
     let image: Image
     var verticalContentOffsetFraction: CGFloat = 0
+    var contentMode: StoryImageContentMode = .fit
 
     var body: some View {
         GeometryReader { proxy in
             image
                 .resizable()
-                // Uploaded story images are normalized to the 9:16 canvas.
-                // Fit is deliberately used here so the viewer never applies a
-                // second crop if a legacy or transient rendition differs.
-                .scaledToFit()
+                .aspectRatio(contentMode: contentMode == .fill ? .fill : .fit)
                 .frame(
                     width: proxy.size.width,
                     height: proxy.size.height,
@@ -135,13 +152,15 @@ struct StoryCanvasBackground: View {
 struct StoryCanvasImage: View {
     let image: Image
     var verticalContentOffsetFraction: CGFloat = 0
+    var contentMode: StoryImageContentMode = .fit
 
     var body: some View {
         StoryCanvasBackground()
             .overlay {
                 StoryCanvasForegroundImage(
                     image: image,
-                    verticalContentOffsetFraction: verticalContentOffsetFraction
+                    verticalContentOffsetFraction: verticalContentOffsetFraction,
+                    contentMode: contentMode
                 )
             }
             .clipped()

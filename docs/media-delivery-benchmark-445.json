@@ -1,0 +1,102 @@
+{
+  "generatedAt": "2026-09-14T20:51:11.414Z",
+  "synthetic": true,
+  "vmafAvailable": true,
+  "reports": [
+    {
+      "clip": "synthetic-motion.mp4",
+      "provider": "cloudflare-stream",
+      "source": {
+        "width": 1080,
+        "height": 1920,
+        "durationMs": 2000,
+        "frameRate": 30,
+        "videoCodec": "h264",
+        "audioCodec": "aac",
+        "audioChannels": 1,
+        "hasAudio": true,
+        "rotation": 0,
+        "colorTransfer": "bt709",
+        "colorPrimaries": "bt709",
+        "fieldOrder": "progressive",
+        "pixelFormat": "yuv420p",
+        "sampleAspectRatio": "1:1",
+        "videoBitrate": 16629212,
+        "videoProfile": "High",
+        "videoLevel": 40
+      },
+      "sourceBytes": 4178600,
+      "renditions": [
+        {
+          "width": 1080,
+          "height": 1920,
+          "bandwidth": 3456960,
+          "actualWidth": 1080,
+          "actualHeight": 1920,
+          "downloadMs": 2036,
+          "bytes": 866667,
+          "durationDeltaMs": 0,
+          "audioPresent": true,
+          "ssim": 0.988074,
+          "vmaf": 91.026168
+        },
+        {
+          "width": 720,
+          "height": 1280,
+          "bandwidth": 1496972,
+          "actualWidth": 720,
+          "actualHeight": 1280,
+          "downloadMs": 1421,
+          "bytes": 376604,
+          "durationDeltaMs": 0,
+          "audioPresent": true,
+          "ssim": 0.970333,
+          "vmaf": 84.807728
+        },
+        {
+          "width": 480,
+          "height": 852,
+          "bandwidth": 657304,
+          "actualWidth": 480,
+          "actualHeight": 852,
+          "downloadMs": 1138,
+          "bytes": 166624,
+          "durationDeltaMs": 0,
+          "audioPresent": true,
+          "ssim": 0.955802,
+          "vmaf": 77.10019
+        },
+        {
+          "width": 360,
+          "height": 640,
+          "bandwidth": 439984,
+          "actualWidth": 360,
+          "actualHeight": 640,
+          "downloadMs": 1035,
+          "bytes": 112358,
+          "durationDeltaMs": 0,
+          "audioPresent": true,
+          "ssim": 0.947131,
+          "vmaf": 68.046967
+        },
+        {
+          "width": 240,
+          "height": 426,
+          "bandwidth": 319536,
+          "actualWidth": 240,
+          "actualHeight": 426,
+          "downloadMs": 1394,
+          "bytes": 82133,
+          "durationDeltaMs": 0,
+          "audioPresent": true,
+          "ssim": 0.928811,
+          "vmaf": 51.802814
+        }
+      ],
+      "uploadMs": 1646,
+      "uploadToReadyMs": 17158
+    }
+  ],
+  "comparison": "Exact advertised variant, full-clip scoring at a common source-sized viewport (up to 1080p); lower renditions are upscaled, not given easier downscaled references.",
+  "limitations": "Provider roundtrip; excludes iOS capture/export, physical display, battery and user-perceived first-frame latency."
+}

@@ -37,7 +37,7 @@ import { resultFromSignals } from "@/lib/safety/policy"
 import {
   deriveStoryPublicationStatus,
 } from "@/lib/stories/cloudflare-status"
-import { isCloudflareStreamFullyReady as isProviderReady } from "@/lib/media-upload-sessions"
+import { isCloudflareStreamPublicationReady as isProviderReady } from "@/lib/media-upload-sessions"
 
 type DbNumber = bigint | number | string | null
 

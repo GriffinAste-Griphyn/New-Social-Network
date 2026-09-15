@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto"
+import { timeMediaCompletion } from "@/lib/media-completion-timing"
+import { videoStoryReservationTime } from "@/lib/media-draft-submission"
 import { get, head } from "@vercel/blob"
 import { eq } from "drizzle-orm"
 import { NextResponse } from "next/server"
@@ -13,7 +16,7 @@ import {
 import {
   claimMediaUploadSessionForCompletion,
   cloudflareDetailsFromUploadSession,
-  isCloudflareStreamFullyReady,
+  isCloudflareStreamPublicationReady,
   markMediaUploadSessionCompleted,
   MediaUploadSessionError,
   mergeCloudflareStreamProviderDetails,
@@ -75,6 +78,7 @@ const completeVideoSchema = z.object({
         (value.startsWith("media-originals/") && !value.includes("..")),
     ),
   uploadSessionId: z.string().trim().min(1).max(100).optional(),
+  draftSubmittedAt: z.string().datetime().optional(),
   contentType: z
     .string()
     .trim()
@@ -154,8 +158,18 @@ export async function POST(request: Request) {
       >["session"]
     | undefined
 
+  const completionStartedAt = performance.now()
+  const completionTraceId = randomUUID()
+  const observeCompletionPhase = (phase: string, durationMs: number) => {
+    try {
+      logVideoCompleteEvent("complete_phase", { phase, durationMs, completionTraceId,
+        clientBuild: Number.parseInt(request.headers.get("x-ubeye-app-build") ?? "", 10) || null })
+    } catch { /* Tracing cannot change the completion response. */ }
+  }
+  const timeCompletionPhase = <T>(phase: string, work: () => Promise<T>) =>
+    timeMediaCompletion(phase, work, observeCompletionPhase)
   try {
-    const session = await getCompleteMobileSession(request)
+    const session = await timeCompletionPhase("authentication", () => getCompleteMobileSession(request))
 
     if (!session) {
       return NextResponse.json(
@@ -164,7 +178,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const rateLimitResponse = await enforceRequestRateLimits(request, [
+    const rateLimitResponse = await timeCompletionPhase("rate_limits", () => enforceRequestRateLimits(request, [
       {
         bucket: "mobile:story-video-complete:user",
         subject: session.id,
@@ -175,7 +189,7 @@ export async function POST(request: Request) {
         subject: requestIpSubject(request),
         options: mutationRateLimits.storyUploadIp,
       },
-    ])
+    ]))
     if (rateLimitResponse) {
       return rateLimitResponse
     }
@@ -239,29 +253,29 @@ export async function POST(request: Request) {
       ? ("vercel-blob" as const)
       : ("cloudflare-stream" as const)
 
-    const uploadClaim = await claimMediaUploadSessionForCompletion({
+    const uploadClaim = await timeCompletionPhase("upload_claim", () => claimMediaUploadSessionForCompletion({
       ownerUserId: session.id,
       uploadSessionId: parsed.data.uploadSessionId,
       storageProvider,
       storageKey: parsed.data.uid,
       contentType: parsed.data.contentType,
       byteSize: parsed.data.byteSize,
-    })
+    }))
     claimedUploadSession = uploadClaim.session
 
-    const existingCompletion = await getExistingMobileVideoStoryCompletion({
+    const existingCompletion = await timeCompletionPhase("duplicate_lookup", () => getExistingMobileVideoStoryCompletion({
       request,
       session,
       storageProvider,
       storageKey: parsed.data.uid,
-    })
+    }))
 
     if (existingCompletion) {
-      await markMediaUploadSessionCompleted({
+      await timeCompletionPhase("claim_persistence", () => markMediaUploadSessionCompleted({
         uploadSessionId: uploadClaim.session.id,
         ownerUserId: session.id,
         storyId: existingCompletion.storyId,
-      })
+      }))
       claimedUploadSession = undefined
 
       if (useVercelHls && existingCompletion.processingStatus !== "ready") {
@@ -304,12 +318,27 @@ export async function POST(request: Request) {
       )
     }
 
-    const posterUrl = !blobAccessDisabled && parsed.data.poster
-      ? await createDirectBlobStoryVideoPosterUrl({
-          uid: parsed.data.uid,
-          poster: parsed.data.poster,
-        })
-      : null
+    const retainedCloudflareDetails = useVercelHls
+      ? null
+      : cloudflareDetailsFromUploadSession(uploadClaim.session)
+    // Ownership and duplicate completion checks finish before provider work.
+    // Poster verification and the provider status read are independent.
+    const [posterUrl, observedCloudflareDetails] = await Promise.all([
+      !blobAccessDisabled && parsed.data.poster
+        ? timeCompletionPhase("poster_verification", () =>
+            createDirectBlobStoryVideoPosterUrl({
+              uid: parsed.data.uid,
+              poster: parsed.data.poster!,
+            }),
+          )
+        : Promise.resolve(null),
+      useVercelHls
+        ? Promise.resolve(null)
+        : timeCompletionPhase("provider_status", () =>
+            getCloudflareStreamVideoDetails(parsed.data.uid)
+              .catch(() => retainedCloudflareDetails),
+          ),
+    ])
 
     if (useVercelHls) {
       if (!parsed.data.checksum) {
@@ -418,20 +447,22 @@ export async function POST(request: Request) {
         width: verifiedWidth,
         height: verifiedHeight,
       })
-      const completion = await completeMobileVideoStory({
+      const completionAsset = storedAsset
+      const completion = await timeCompletionPhase("story_completion", () => completeMobileVideoStory({
         request,
         session,
         fields: parsed.data,
-        storedAsset,
-        createdAt: uploadClaim.session.createdAt,
+        storedAsset: completionAsset,
+        observePhase: observeCompletionPhase,
+        createdAt: videoStoryReservationTime(uploadClaim.session.createdAt, parsed.data.draftSubmittedAt),
         providerStatusFallback: "queued",
         deferModeration: useAsyncCompletion,
-      })
-      await markMediaUploadSessionCompleted({
+      }))
+      await timeCompletionPhase("claim_persistence", () => markMediaUploadSessionCompleted({
         uploadSessionId: uploadClaim.session.id,
         ownerUserId: session.id,
         storyId: completion.storyId,
-      })
+      }))
       claimedUploadSession = undefined
 
       const [createdStory] = await getDb()
@@ -463,12 +494,6 @@ export async function POST(request: Request) {
       return NextResponse.json(completion)
     }
 
-    const retainedCloudflareDetails = cloudflareDetailsFromUploadSession(
-      uploadClaim.session,
-    )
-    const observedCloudflareDetails = await getCloudflareStreamVideoDetails(
-      parsed.data.uid,
-    ).catch(() => retainedCloudflareDetails)
     const cloudflareDetails = observedCloudflareDetails
       ? mergeCloudflareStreamProviderDetails(
           retainedCloudflareDetails,
@@ -476,14 +501,19 @@ export async function POST(request: Request) {
         )
       : retainedCloudflareDetails
 
-    if (cloudflareDetails) {
-      await recordCloudflareStreamUploadStatus({
-        uid: parsed.data.uid,
-        details: cloudflareDetails,
-      }).catch(() => undefined)
-    }
+    const persistCloudflareStatus = () => cloudflareDetails
+      ? timeCompletionPhase("provider_status_persistence", () =>
+          recordCloudflareStreamUploadStatus({
+            uid: parsed.data.uid,
+            details: cloudflareDetails,
+          }).catch(() => undefined),
+        )
+      : Promise.resolve()
 
     if (cloudflareDetails?.state === "error") {
+      // Keep failed provider status durable so retry/session replacement retains
+      // the same recovery behavior as the sequential completion path.
+      await persistCloudflareStatus()
       throw new MediaUploadSessionError(
         cloudflareDetails.errorReason ??
           "Cloudflare Stream could not process the video.",
@@ -491,15 +521,18 @@ export async function POST(request: Request) {
       )
     }
 
-    try {
-      await setCloudflareStreamThumbnailAtDefaultTime(parsed.data.uid)
-    } catch (error) {
-      logVideoCompleteEvent("cloudflare_thumbnail_configuration_failed", {
-        userId: session.id,
-        uid: parsed.data.uid,
-        reason: error instanceof Error ? error.message : "unknown",
-      })
-    }
+    await Promise.all([
+      persistCloudflareStatus(),
+      posterUrl ? Promise.resolve() : timeCompletionPhase("provider_thumbnail", () =>
+        setCloudflareStreamThumbnailAtDefaultTime(parsed.data.uid).catch((error) => {
+          logVideoCompleteEvent("cloudflare_thumbnail_configuration_failed", {
+            userId: session.id,
+            uid: parsed.data.uid,
+            reason: error instanceof Error ? error.message : "unknown",
+          })
+        }),
+      ),
+    ])
 
     storedAsset = createCloudflareStreamStoredVideoAsset({
       uid: parsed.data.uid,
@@ -510,30 +543,30 @@ export async function POST(request: Request) {
       width: parsed.data.width ?? cloudflareDetails?.width ?? null,
       height: parsed.data.height ?? cloudflareDetails?.height ?? null,
       processingStatus:
-        cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
+        cloudflareDetails && isCloudflareStreamPublicationReady(cloudflareDetails)
           ? "ready"
           : "processing",
       providerPctComplete:
-        cloudflareDetails?.pctComplete ??
-        (cloudflareDetails && isCloudflareStreamFullyReady(cloudflareDetails)
-          ? 100
-          : null),
+        cloudflareDetails?.pctComplete ?? null,
     })
-    const completion = await completeMobileVideoStory({
+    const completionAsset = storedAsset
+    const completion = await timeCompletionPhase("story_completion", () => completeMobileVideoStory({
       request,
       session,
       fields: parsed.data,
-      storedAsset,
-      createdAt: uploadClaim.session.createdAt,
+      storedAsset: completionAsset,
+      observePhase: observeCompletionPhase,
+      createdAt: videoStoryReservationTime(uploadClaim.session.createdAt, parsed.data.draftSubmittedAt),
       providerStatusFallback: cloudflareDetails?.state ?? null,
       providerErrorFallback: cloudflareDetails?.errorReason ?? null,
-    })
+      deferModeration: useAsyncCompletion,
+    }))
 
-    await markMediaUploadSessionCompleted({
+    await timeCompletionPhase("claim_persistence", () => markMediaUploadSessionCompleted({
       uploadSessionId: uploadClaim.session.id,
       ownerUserId: session.id,
       storyId: completion.storyId,
-    })
+    }))
     claimedUploadSession = undefined
 
     logVideoCompleteEvent("complete_succeeded", {
@@ -544,6 +577,7 @@ export async function POST(request: Request) {
       readyToStream: cloudflareDetails?.readyToStream ?? null,
       processingStatus: completion.processingStatus,
       moderationStatus: completion.moderationStatus ?? null,
+      asyncCompletion: useAsyncCompletion,
     })
 
     return NextResponse.json(completion)
@@ -556,10 +590,11 @@ export async function POST(request: Request) {
           : "unknown",
     })
     if (claimedUploadSession) {
-      await releaseMediaUploadSessionCompletion({
-        uploadSessionId: claimedUploadSession.id,
-        ownerUserId: claimedUploadSession.ownerUserId,
-      }).catch(() => undefined)
+      const failedClaim = claimedUploadSession
+      await timeCompletionPhase("claim_release", () => releaseMediaUploadSessionCompletion({
+        uploadSessionId: failedClaim.id,
+        ownerUserId: failedClaim.ownerUserId,
+      })).catch(() => undefined)
     }
 
     return NextResponse.json(
@@ -571,5 +606,7 @@ export async function POST(request: Request) {
       },
       { status: error instanceof MediaUploadSessionError ? error.statusCode : 400 },
     )
+  } finally {
+    observeCompletionPhase("total", Math.round(performance.now() - completionStartedAt))
   }
 }

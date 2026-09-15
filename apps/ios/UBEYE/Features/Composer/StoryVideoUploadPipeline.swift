@@ -6,6 +6,7 @@ enum StoryVideoUploadStrategy: String {
     case streamPassthrough
     case streamRemux
     case normalized
+    case adaptiveNormalized
 }
 
 struct PreparedStoryVideo {
@@ -25,6 +26,14 @@ struct StoryVideoInspection {
     let preferredTransform: CGAffineTransform?
     let codecTypes: [String]
     let hasFastStart: Bool
+    var frameRate: Float? = nil
+    var isExplicitRec709: Bool = false
+    var hasAudio: Bool = false
+
+    var isEligibleForAdaptiveEncoding: Bool {
+        guard isExplicitRec709, let size = naturalSize, let fps = frameRate else { return false }
+        return max(abs(size.width), abs(size.height)) <= 1920 && min(abs(size.width), abs(size.height)) <= 1080 && fps >= 24 && fps <= 30.1
+    }
 
     var hasStreamSupportedContainer: Bool {
         switch originalURL.pathExtension.lowercased() {
@@ -74,7 +83,6 @@ struct StoryVideoInspection {
             "fastStart=\(hasFastStart)",
             "streamContainer=\(hasStreamSupportedContainer)",
             "streamCompatible=\(isStreamCompatibleInput)",
-            "qualityPreserved=true",
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -129,6 +137,8 @@ enum StoryVideoUploadPhase: String, CaseIterable, Hashable {
 struct StoryVideoUploadAttempt {
     let id = UUID().uuidString.lowercased()
     let startedAt = Date()
+    let uploadExperiment = MediaControlConfig.shared.uploadExperiment
+    let initialResidentBytes = StoryUploadMemoryProbe.residentBytes
     var phaseStartedAt = Date()
     var phase: StoryVideoUploadPhase = .inspect
     var uploadUid: String?
@@ -180,7 +190,7 @@ struct StoryVideoUploadAttempt {
             }
         }
         MediaPerformance.measure(
-            "video_upload_succeeded attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") strategy=\(strategy?.rawValue ?? "unknown") retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") effective_mbps=\(effectiveMbps.map { String(format: "%.2f", $0) } ?? "unknown")",
+            "video_upload_succeeded resident_bytes=\(StoryUploadMemoryProbe.residentBytes ?? 0) initial_resident_bytes=\(initialResidentBytes ?? 0) upload_experiment=\(uploadExperiment) attempt=\(id) phase=\(phase.rawValue) status=\(processingStatus ?? "unknown") strategy=\(strategy?.rawValue ?? "unknown") retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") effective_mbps=\(effectiveMbps.map { String(format: "%.2f", $0) } ?? "unknown")",
             since: startedAt
         )
         MediaPerformance.flushUploadEvents()
@@ -191,7 +201,7 @@ struct StoryVideoUploadAttempt {
         let message = error.localizedDescription
         lastError = message
         MediaPerformance.measure(
-            "video_upload_failed attempt=\(id) phase=\(phase.rawValue) retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") reason=\(Self.sanitize(message))",
+            "video_upload_failed upload_experiment=\(uploadExperiment) attempt=\(id) phase=\(phase.rawValue) retries=\(retries) bytes=\(byteSize ?? 0) protocol=\(uploadProtocol ?? "unknown") provider=\(uploadProvider ?? "unknown") reason=\(Self.sanitize(message))",
             since: startedAt
         )
         MediaPerformance.flushUploadEvents()
@@ -244,19 +254,18 @@ struct StoryVideoUploadAttempt {
 }
 
 enum StoryVideoUploadNormalizer {
-    // Cloudflare's final 1080p rendition does not benefit from a much larger
-    // upload master. This envelope includes room for high-quality audio and
-    // container overhead while keeping the visible 1080p/30 fps ceiling.
-    static let normalizedTargetBitsPerSecond = 6_500_000
+    // Preserve detail in files that actually require a lossy export. Compatible
+    // sources still pass through unchanged. Includes ~8 Mbps video plus AAC and
+    // container overhead; AVAssetExportSession treats this as a size hint.
+    static let normalizedTargetBitsPerSecond = 8_200_000
+    static let adaptiveTargetBitsPerSecond = 6_000_000
 
-    static func normalizedFileLengthLimit(durationSeconds: TimeInterval) -> Int64? {
-        guard durationSeconds.isFinite, durationSeconds > 0 else {
+    static func normalizedFileLengthLimit(durationSeconds: TimeInterval, targetBitsPerSecond: Int = normalizedTargetBitsPerSecond) -> Int64? {
+        guard durationSeconds.isFinite, durationSeconds > 0, targetBitsPerSecond > 0 else {
             return nil
         }
 
-        return Int64(
-            ceil(durationSeconds * Double(normalizedTargetBitsPerSecond) / 8)
-        )
+        return Int64(min(Double(maxUploadBytes), ceil(durationSeconds * Double(targetBitsPerSecond) / 8)))
     }
 
     private static let maxUploadBytes = StoryMediaContract.maximumVideoUploadBytes
@@ -264,9 +273,12 @@ enum StoryVideoUploadNormalizer {
     static func prepare(
         url: URL,
         source: StoryVideoUpload.Source,
-        maxDurationSeconds: Int
+        maxDurationSeconds: Int,
+        adaptiveEncoding: StoryAdaptiveEncodingContext = .disabled
     ) async throws -> PreparedStoryVideo {
+        try Task.checkCancellation()
         let inspection = try await inspect(url: url, source: source)
+        try Task.checkCancellation()
         MediaPerformance.mark("video_upload_inspected \(inspection.diagnosticSummary)")
 
         if let durationMs = inspection.durationMs, durationMs > maxDurationSeconds * 1_000 {
@@ -311,6 +323,15 @@ enum StoryVideoUploadNormalizer {
                 try? FileManager.default.removeItem(at: remuxedURL)
                 MediaPerformance.mark("video_upload_remux_validation_failed")
             }
+        }
+
+        // A compatible source is always passed through or remuxed above, even
+        // when an older cached configuration enables lossy upload optimization.
+        // Only consider another encode when a compatible upload could not be made.
+        if inspection.byteSize <= maxUploadBytes, inspection.canRemuxForStream,
+           adaptiveEncoding.shouldTry(bytes: inspection.byteSize, durationMs: inspection.durationMs),
+           let candidate = try await adaptiveCandidate(inspection: inspection, context: adaptiveEncoding) {
+            return candidate
         }
 
         let reason: String
@@ -359,7 +380,7 @@ enum StoryVideoUploadNormalizer {
         }
     }
 
-    private static func inspect(url: URL, source: StoryVideoUpload.Source) async throws -> StoryVideoInspection {
+    static func inspect(url: URL, source: StoryVideoUpload.Source) async throws -> StoryVideoInspection {
         let asset = AVURLAsset(url: url)
         let byteSize = try await StoryUploadFileIO.fileSize(at: url)
         let hasFastStart = try await StoryUploadFileIO.hasFastStartMoov(at: url)
@@ -368,6 +389,9 @@ enum StoryVideoUploadNormalizer {
         let naturalSize: CGSize?
         let preferredTransform: CGAffineTransform?
         let codecTypeNames: [String]
+        var frameRate: Float?
+        var isExplicitRec709 = false
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
 
         if let videoTrack {
             if #available(iOS 16.0, *) {
@@ -375,6 +399,13 @@ enum StoryVideoUploadNormalizer {
                 preferredTransform = try? await videoTrack.load(.preferredTransform)
                 let formatDescriptions = (try? await videoTrack.load(.formatDescriptions)) ?? []
                 codecTypeNames = codecTypes(from: formatDescriptions)
+                frameRate = try? await videoTrack.load(.nominalFrameRate)
+                isExplicitRec709 = !formatDescriptions.isEmpty && formatDescriptions.allSatisfy {
+                    let primaries = CMFormatDescriptionGetExtension($0, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String
+                    let transfer = CMFormatDescriptionGetExtension($0, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String
+                    return primaries == (kCMFormatDescriptionColorPrimaries_ITU_R_709_2 as String) &&
+                        transfer == (kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String)
+                }
             } else {
                 naturalSize = videoTrack.naturalSize
                 preferredTransform = videoTrack.preferredTransform
@@ -402,19 +433,96 @@ enum StoryVideoUploadNormalizer {
             naturalSize: naturalSize,
             preferredTransform: preferredTransform,
             codecTypes: codecTypeNames.sorted(),
-            hasFastStart: hasFastStart
+            hasFastStart: hasFastStart, frameRate: frameRate, isExplicitRec709: isExplicitRec709, hasAudio: !audioTracks.isEmpty
         )
     }
 
-    private static func normalizedVideoURL(
+    /// Opt-in SDR-only export. Unknown color metadata, HDR, 4K and high frame rates
+    /// stay on the existing upload path until a separate quality audit approves them.
+    private static func adaptiveCandidate(
+        inspection: StoryVideoInspection, context: StoryAdaptiveEncodingContext
+    ) async throws -> PreparedStoryVideo? {
+        guard inspection.isEligibleForAdaptiveEncoding, let size = inspection.naturalSize,
+              let fps = inspection.frameRate, let durationMs = inspection.durationMs else { return nil }
+        let started = ProcessInfo.processInfo.systemUptime
+        guard let export = await adaptiveExportSession(for: inspection.originalURL, durationMs: durationMs) else { return nil }
+        guard ProcessInfo.processInfo.systemUptime - started < StoryAdaptiveEncodingContext.preparationBudgetSeconds else { return nil }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("story-adaptive-\(UUID().uuidString).mp4")
+        var keep = false
+        defer { if !keep { try? FileManager.default.removeItem(at: url) } }
+        do {
+            let cancellation = ExportCancellationHandle(export)
+            let deadline = started + StoryAdaptiveEncodingContext.preparationBudgetSeconds
+            // One deadline covers export, inspection AND visual validation.
+            // Cancellation reaches the native exporter and frame generators.
+            let candidate: StoryVideoInspection = try await withTaskCancellationHandler {
+                try await withThrowingTaskGroup(of: StoryVideoInspection.self) { group in
+                    group.addTask {
+                        try await export.export(to: url, as: .mp4)
+                        try Task.checkCancellation()
+                        let candidate = try await inspect(url: url, source: inspection.source)
+                        let sourceBounds = CGRect(origin: .zero, size: size).applying(inspection.preferredTransform ?? .identity)
+                        let candidateBounds = CGRect(origin: .zero, size: candidate.naturalSize ?? .zero).applying(candidate.preferredTransform ?? .identity)
+                        let quality = try await StoryVideoQualityGate.compare(source: inspection.originalURL,
+                            candidate: url, durationMs: durationMs, deadline: deadline)
+                        guard quality, candidate.isStreamCompatibleInput, candidate.isExplicitRec709,
+                              candidate.hasAudio == inspection.hasAudio,
+                              abs((candidate.durationMs ?? 0) - durationMs) <= 100,
+                              abs((candidate.frameRate ?? 0) - fps) <= 0.2,
+                              abs(abs(sourceBounds.width) - abs(candidateBounds.width)) <= 2,
+                              abs(abs(sourceBounds.height) - abs(candidateBounds.height)) <= 2,
+                              context.isWorthKeeping(sourceBytes: inspection.byteSize, candidateBytes: candidate.byteSize,
+                                exportSeconds: ProcessInfo.processInfo.systemUptime - started) else {
+                            throw APIClientError.invalidResponse
+                        }
+                        return candidate
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(max(0, deadline - ProcessInfo.processInfo.systemUptime)))
+                        export.cancelExport()
+                        throw URLError(.timedOut)
+                    }
+                    defer { group.cancelAll() }
+                    return try await group.next()!
+                }
+            } onCancel: { cancellation.cancel() }
+            let seconds = ProcessInfo.processInfo.systemUptime - started
+            keep = true
+            MediaPerformance.mark("video_upload_encoding result=accepted network_class=\(context.network) source_bytes=\(inspection.byteSize) candidate_bytes=\(candidate.byteSize) export_ms=\(Int(seconds * 1000))")
+            return PreparedStoryVideo(url: url, durationMs: candidate.durationMs, byteSize: candidate.byteSize,
+                                      strategy: .adaptiveNormalized, inspection: inspection)
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            MediaPerformance.mark("video_upload_encoding result=fallback")
+            return nil
+        }
+    }
+
+    static func adaptiveExportSession(for url: URL, durationMs: Int) async -> AVAssetExportSession? {
+        let asset = AVURLAsset(url: url)
+        let preset = AVAssetExportPresetHEVC1920x1080
+        // Eligibility is already checked from source metadata. Creating the one
+        // requested preset avoids probing three unrelated presets before the timer.
+        // Unsupported exports fail closed to the original in adaptiveCandidate.
+        guard let export = AVAssetExportSession(asset: asset, presetName: preset),
+              export.supportedFileTypes.contains(.mp4) else { return nil }
+        export.shouldOptimizeForNetworkUse = true
+        export.fileLengthLimit = Int64(Double(durationMs) / 1000 * Double(adaptiveTargetBitsPerSecond) / 8)
+        return export
+    }
+
+    static func normalizedVideoURL(
         for url: URL,
-        mirrorsHorizontally: Bool
+        mirrorsHorizontally: Bool,
+        targetBitsPerSecond: Int = normalizedTargetBitsPerSecond
     ) async throws -> URL? {
         let asset = AVURLAsset(url: url)
         let presets = await compatibleExportPresets(for: asset)
         let timeRange = await alignedPlayableTimeRange(for: asset)
 
         for preset in presets {
+            try Task.checkCancellation()
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("story-upload-\(UUID().uuidString).mp4")
 
@@ -423,7 +531,8 @@ enum StoryVideoUploadNormalizer {
                 preset: preset,
                 outputURL: outputURL,
                 timeRange: timeRange,
-                mirrorsHorizontally: mirrorsHorizontally
+                mirrorsHorizontally: mirrorsHorizontally,
+                targetBitsPerSecond: targetBitsPerSecond
             ) else {
                 continue
             }
@@ -436,6 +545,10 @@ enum StoryVideoUploadNormalizer {
             }
 
             await exportVideo(export)
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: outputURL)
+                throw CancellationError()
+            }
 
             if export.status == .completed {
                 let byteSize = try await StoryUploadFileIO.fileSize(at: outputURL)
@@ -506,7 +619,8 @@ enum StoryVideoUploadNormalizer {
         preset: String,
         outputURL: URL,
         timeRange: CMTimeRange?,
-        mirrorsHorizontally: Bool
+        mirrorsHorizontally: Bool,
+        targetBitsPerSecond: Int
     ) async throws -> AVAssetExportSession? {
         let exportAsset: AVAsset
         let videoComposition: AVVideoComposition?
@@ -548,7 +662,7 @@ enum StoryVideoUploadNormalizer {
             export.timeRange = exportTimeRange
             let durationSeconds = CMTimeGetSeconds(exportTimeRange.duration)
             if let fileLengthLimit = normalizedFileLengthLimit(
-                durationSeconds: durationSeconds
+                durationSeconds: durationSeconds, targetBitsPerSecond: targetBitsPerSecond
             ) {
                 export.fileLengthLimit = fileLengthLimit
             }
@@ -616,11 +730,27 @@ enum StoryVideoUploadNormalizer {
         return CMTimeRange(start: .zero, duration: shortest)
     }
 
+    // AVFoundation supports cancelling an asynchronous export from another thread.
+    // This handle exposes only that operation; configuration stays with the caller.
+    private final class ExportCancellationHandle: @unchecked Sendable {
+        private let session: AVAssetExportSession
+        init(_ session: AVAssetExportSession) { self.session = session }
+        func cancel() { session.cancelExport() }
+    }
+
     private static func exportVideo(_ export: AVAssetExportSession) async {
-        await withCheckedContinuation { continuation in
-            export.exportAsynchronously {
-                continuation.resume()
+        let cancellation = ExportCancellationHandle(export)
+        await withTaskCancellationHandler {
+            let deadline = Task {
+                do { try await Task.sleep(for: .seconds(180)) } catch { return }
+                cancellation.cancel()
             }
+            defer { deadline.cancel() }
+            await withCheckedContinuation { continuation in
+                export.exportAsynchronously { continuation.resume() }
+            }
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 
@@ -672,7 +802,7 @@ enum StoryVideoUploadNormalizer {
     }
 }
 
-private extension StoryVideoUpload.Source {
+extension StoryVideoUpload.Source {
     var diagnosticName: String {
         switch self {
         case .cameraFront:

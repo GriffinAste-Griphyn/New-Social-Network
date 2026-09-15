@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readdir, readFile } from "node:fs/promises"
+import { readdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Readable } from "node:stream"
 
 import ffmpegStaticPath from "ffmpeg-static"
 import ffprobeInstaller from "@ffprobe-installer/ffprobe"
+import { isAudioLoudnessNormalizationEnabled } from "./features"
+import { canRepackageSourceVideo, repackageVideoArguments, hasBoundedIndependentSegments, verifyProgressiveAvcHeaders, firstAvcPacketIsIdr } from "./source-repackaging"
 
 import {
   maximumRenditionFrameRate,
@@ -29,6 +31,10 @@ type ProbeStream = {
   color_transfer?: string
   color_primaries?: string
   field_order?: string
+  pix_fmt?: string
+  profile?: string
+  level?: number
+  sample_aspect_ratio?: string
   tags?: { rotate?: string }
   side_data_list?: Array<{ rotation?: number }>
 }
@@ -205,6 +211,11 @@ function parseProbeResult(result: Buffer): MediaSourceMetadata {
     colorTransfer: video.color_transfer ?? null,
     colorPrimaries: video.color_primaries ?? null,
     fieldOrder: video.field_order ?? null,
+    pixelFormat: video.pix_fmt ?? null,
+    sampleAspectRatio: video.sample_aspect_ratio ?? null,
+    videoBitrate: Number(video.bit_rate) > 0 ? Number(video.bit_rate) : null,
+    videoProfile: video.profile ?? null,
+    videoLevel: video.level ?? null,
   } satisfies MediaSourceMetadata
 }
 
@@ -450,6 +461,7 @@ export function audioRenditionFfmpegArguments(input: {
     String(mediaAudioProfile.sampleRate),
     "-ac",
     input.audioChannels === 1 ? "1" : "2",
+    ...(isAudioLoudnessNormalizationEnabled() ? ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"] : []),
     "-hls_time",
     String(mediaPipelineLimits.segmentDurationSeconds),
     "-hls_playlist_type",
@@ -500,15 +512,43 @@ export async function encodeMediaRenditionFile(input: {
   outputDirectory: string
   sourceMetadata?: MediaSourceMetadata
 }) {
-  const { ffmpeg } = mediaBinaryPaths()
+  const { ffmpeg, ffprobe } = mediaBinaryPaths()
   const startedAt = Date.now()
-  await runCommand(
-    ffmpeg,
-    renditionFfmpegArguments({
-      ...input,
-      inputPath: input.inputPath,
-    }),
-  )
+  let repackaged = false
+  if (input.sourceMetadata && canRepackageSourceVideo(input.sourceMetadata, input.profile) &&
+      await verifyProgressiveAvcHeaders(ffmpeg, input.inputPath)) {
+    try {
+      await runCommand(ffmpeg, repackageVideoArguments(input))
+      const playlist = await readFile(path.join(input.outputDirectory, "index.m3u8"), "utf8")
+      const output = await inspectMediaFile(path.join(input.outputDirectory, "index.m3u8"))
+      const segments = playlist.split(/\r?\n/).filter(line => line && !line.startsWith("#"))
+      const init = await readFile(path.join(input.outputDirectory, "init.mp4"))
+      let independent = true
+      const validationPath = path.join(input.outputDirectory, "validate-fragment.mp4")
+      try {
+        for (const segment of segments) {
+          await writeFile(validationPath, Buffer.concat([init, await readFile(path.join(input.outputDirectory, segment))]))
+          const packet = await runCommand(ffprobe, ["-v", "error", "-read_intervals", "%+#1", "-select_streams", "v:0",
+            "-show_packets", "-show_entries", "packet=data", "-show_data", "-of", "json", validationPath])
+          const data = JSON.parse(packet.stdout.toString("utf8")) as { packets?: { data?: string }[] }
+          if (!firstAvcPacketIsIdr(data.packets?.[0]?.data ?? "")) { independent = false; break }
+        }
+      } finally { await rm(validationPath, { force: true }) }
+      repackaged = independent && hasBoundedIndependentSegments(playlist) &&
+        output.width === input.profile.width && output.height === input.profile.height &&
+        output.videoCodec === "h264" && !output.hasAudio &&
+        Math.abs(output.durationMs - input.sourceMetadata.durationMs) <= 100 &&
+        output.frameRate != null && input.sourceMetadata.frameRate != null &&
+        Math.abs(output.frameRate - input.sourceMetadata.frameRate) <= 0.01
+    } catch { /* Unsupported bitstream packaging retains the ordinary encode path. */ }
+    if (!repackaged) {
+      const names = await readdir(input.outputDirectory)
+      await Promise.all(names.map(name => rm(path.join(input.outputDirectory, name), { force: true })))
+    }
+  }
+  if (!repackaged) {
+    await runCommand(ffmpeg, renditionFfmpegArguments({ ...input, inputPath: input.inputPath }))
+  }
   const fileNames = (await readdir(input.outputDirectory)).sort()
   const files = await Promise.all(
     fileNames.map(async (fileName) => {
@@ -520,7 +560,7 @@ export async function encodeMediaRenditionFile(input: {
       }
     }),
   )
-  return { files, encodingMs: Date.now() - startedAt }
+  return { files, encodingMs: Date.now() - startedAt, repackaged }
 }
 
 export async function encodeMediaAudioRenditionFile(input: {

@@ -271,6 +271,25 @@ final class AuthStore: ObservableObject {
         persist(next, api: api)
     }
 
+    func refreshAccount(api: APIClient) async {
+        guard let current = account else { return }
+        struct Response: Decodable {
+            let user: MobileAuthUser
+        }
+
+        do {
+            let response: Response = try await api.get("/api/mobile/account")
+            guard account == current else { return }
+            updateAccount({ account in
+                account.displayName = response.user.displayName ?? account.displayName
+                account.handle = response.user.handle ?? account.handle
+                account.avatarUrl = response.user.avatarUrl
+            }, api: api)
+        } catch {
+            // Keep the saved account available when a refresh cannot complete.
+        }
+    }
+
     func signOut(api: APIClient) {
         account = nil
         api.clearCurrentUserMediaCache()

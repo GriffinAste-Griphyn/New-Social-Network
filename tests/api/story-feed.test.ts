@@ -133,6 +133,7 @@ describe("story upload and mobile feed API", () => {
     vi.mocked(saveStoryAsset).mockResolvedValue(storedAsset)
     vi.mocked(createStory).mockResolvedValue(createdStoryId)
     vi.mocked(getStoryUploadStatusForOwner).mockResolvedValue({
+      processingStartedAt: new Date(),
       id: createdStoryId,
       mediaAssetId: "media-123",
       assetKind: "image",

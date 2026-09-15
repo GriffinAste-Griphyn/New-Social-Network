@@ -68,6 +68,7 @@ describe("image processing dispatch", () => {
     expect(completeImageProcessingStep).toHaveBeenCalledWith(
       "image-job-1",
       expect.anything(),
+      expect.stringMatching(/^direct-/),
     )
   })
 

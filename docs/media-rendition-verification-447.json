@@ -1,0 +1,23 @@
+{
+  "assetId": "e64a82e83e21ed607da8c324a40d4e81",
+  "reports": [
+    {
+      "target": 1080,
+      "selectedWidth": 1080,
+      "selectedHeight": 1920,
+      "actualWidth": 1080,
+      "actualHeight": 1920,
+      "durationMs": 8008,
+      "audio": true
+    },
+    {
+      "target": 720,
+      "selectedWidth": 720,
+      "selectedHeight": 1280,
+      "actualWidth": 720,
+      "actualHeight": 1280,
+      "durationMs": 8008,
+      "audio": true
+    }
+  ]
+}

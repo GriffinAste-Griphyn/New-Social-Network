@@ -8,6 +8,7 @@ import { userFacingModerationReason } from "@/lib/safety/user-facing"
 import { isRetryableStoryModeration } from "@/lib/safety/moderation-retry"
 import { enqueueStoryModeration } from "@/lib/story-moderation"
 import { getStoryUploadStatusForOwner } from "@/lib/story-store"
+import { cloudflareReadinessPollDelay } from "@/lib/story-readiness-polling"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -36,7 +37,7 @@ export async function GET(
     )
   }
 
-  const { mediaAssetId, storageProvider, assetKind, ...publicStoryStatus } =
+  const { mediaAssetId, storageProvider, assetKind, processingStartedAt, ...publicStoryStatus } =
     storyStatus
   if (
     assetKind === "video" &&
@@ -97,7 +98,9 @@ export async function GET(
               ? publicStoryStatus.providerStatus?.startsWith("queued:")
                 ? 650
                 : 1_000
-              : publicStoryStatus.providerStatus === "queued"
+              : storageProvider === "cloudflare-stream"
+                ? cloudflareReadinessPollDelay({ createdAt: processingStartedAt })
+                : publicStoryStatus.providerStatus === "queued"
                 ? 1_500
                 : 3_000,
         moderationReason: userFacingModerationReason({

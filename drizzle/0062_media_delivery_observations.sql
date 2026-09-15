@@ -1,0 +1,3 @@
+ALTER TYPE "public"."mobile_performance_event_name" ADD VALUE IF NOT EXISTS 'media_delivery_accepted' BEFORE 'api_request';--> statement-breakpoint
+ALTER TYPE "public"."mobile_performance_event_name" ADD VALUE IF NOT EXISTS 'media_delivery_ready' BEFORE 'api_request';--> statement-breakpoint
+ALTER TYPE "public"."mobile_performance_event_name" ADD VALUE IF NOT EXISTS 'media_delivery_observed' BEFORE 'api_request';

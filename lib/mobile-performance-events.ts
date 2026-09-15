@@ -5,6 +5,9 @@ import { getDb } from "@/lib/db"
 import { mobilePerformanceEvents } from "@/lib/db/schema"
 
 export const mobilePerformanceEventNames = [
+  "media_delivery_accepted",
+  "media_delivery_ready",
+  "media_delivery_observed",
   "api_request",
   "api_server_timing",
   "feed_disk_cache_clear",
@@ -41,6 +44,7 @@ export const mobilePerformanceEventNames = [
   "metric_kit_payload",
   "gesture_outcome",
   "frame_hitch",
+  "frame_pacing",
   "prefetch_intent",
   "resource_mode",
   "undo_action",
@@ -78,6 +82,8 @@ export const mobilePerformanceEventNames = [
   "video_upload_phase",
   "video_upload_retry",
   "video_upload_succeeded",
+  "video_upload_encoding",
+  "video_upload_chunk",
   "video_first_frame",
   "video_item_ready",
   "video_stalled",

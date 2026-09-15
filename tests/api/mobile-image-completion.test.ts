@@ -240,7 +240,7 @@ describe("mobile image completion", () => {
     expect(createServerEncodedStoryImageAsset).toHaveBeenCalledWith({
       basePathname: reservedBasePathname,
       ownerUserId: session.id,
-      contentMode: "fill",
+      contentMode: "fit",
       storageProvider: "vercel-blob",
       source: sourceUpload,
     })

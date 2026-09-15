@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import XCTest
+import UIKit
 @testable import UBEYE
 
 final class StoryVideoGeometryNormalizerTests: XCTestCase {
@@ -229,11 +230,11 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .hevc, is4K: true),
-            6_000_000
+            24_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.videoBitrate(for: .h264, is4K: true),
-            7_500_000
+            30_000_000
         )
         XCTAssertEqual(
             StoryCaptureQuality.preferredCodec(from: [.h264, .hevc]),
@@ -557,12 +558,217 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             poster: nil
         )
 
-        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload, maxChunkBytes: 5)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload, maxChunkBytes: 5)
 
         let requests = recorder.requests
         XCTAssertEqual(requests.map(\.httpMethod), ["HEAD", "PATCH"])
         XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Upload-Offset"), "4")
         XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Tus-Resumable"), "1.0.0")
+    }
+
+    func testDurableVideoStagingSurvivesRemovingComposerSource() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("stage-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("composer.mp4")
+        let pending = root.appendingPathComponent("pending.mp4")
+        let poster = root.appendingPathComponent("poster.jpg")
+        let bytes = Data("original encoded video bytes".utf8)
+        try bytes.write(to: source)
+        _ = try await StoryUploadFileIO.stageVideo(sourceURL: source, destinationURL: pending,
+            thumbnailData: Data("clean poster".utf8), thumbnailURL: poster)
+        try FileManager.default.removeItem(at: source)
+        XCTAssertEqual(try Data(contentsOf: pending), bytes)
+        XCTAssertEqual(try Data(contentsOf: poster), Data("clean poster".utf8))
+    }
+
+    func testTusChunkLimitsRespectProviderBoundsAndAlignment() {
+        XCTAssertEqual(TusUploadChunkPolicy.limit(1), 5_242_880)
+        XCTAssertEqual(TusUploadChunkPolicy.limit(Int64.max), 209_715_200)
+        XCTAssertEqual(TusUploadChunkPolicy.limit(6_000_000) % 262_144, 0)
+    }
+
+    @MainActor
+    func testTusChunksContainExactSequentialSourceRanges() async throws {
+        let chunk = Int(TusUploadChunkPolicy.minimum)
+        let source = Data(repeating: 0x11, count: chunk) + Data(repeating: 0x22, count: chunk) + Data(repeating: 0x33, count: 17)
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent("tus-bounded-\(UUID()).mp4")
+        try source.write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+        var acknowledged: Int64 = 0
+        var offsets: [Int64] = []
+        var bodies: [URL] = []
+        let session = makeSession { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                             headerFields: ["Upload-Offset": String(acknowledged)])!, Data())
+        }
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, tusChunkUploader: { request, bodyURL in
+            let offset = Int64(request.value(forHTTPHeaderField: "Upload-Offset")!)!
+            let bytes = try Data(contentsOf: bodyURL)
+            XCTAssertLessThanOrEqual(bytes.count, chunk)
+            XCTAssertEqual(bytes, source.subdata(in: Int(offset)..<(Int(offset) + bytes.count)))
+            XCTAssertEqual(offset, acknowledged)
+            offsets.append(offset)
+            bodies.append(bodyURL)
+            acknowledged += Int64(bytes.count)
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                                           headerFields: ["Upload-Offset": String(acknowledged)])!)
+        })
+        let upload = VideoUploadResponse(ok: true, uid: "bounded", uploadSessionId: "session",
+            uploadUrl: URL(string: "https://upload.example.test/bounded")!, uploadProtocol: "tus", poster: nil)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload, maxChunkBytes: Int64(chunk))
+        XCTAssertEqual(offsets, [0, Int64(chunk), Int64(chunk * 2)])
+        XCTAssertEqual(acknowledged, Int64(source.count))
+        XCTAssertTrue(bodies.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        XCTAssertEqual(try Data(contentsOf: sourceURL), source)
+    }
+
+    @MainActor
+    func testTusRetryUsesNewServerOffsetAfterPartialAcceptance() async throws {
+        let chunk = Int(TusUploadChunkPolicy.minimum)
+        let source = Data(repeating: 0x51, count: chunk * 2 + 17)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("partial-tus-\(UUID()).mp4")
+        try source.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var acknowledged: Int64 = 0
+        var offsets: [Int64] = []
+        var headCount = 0
+        let session = makeSession { request in
+            headCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                headerFields: ["Upload-Offset": String(acknowledged)])!, Data())
+        }
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, tusChunkUploader: { request, body in
+            let offset = Int64(request.value(forHTTPHeaderField: "Upload-Offset")!)!
+            offsets.append(offset)
+            if offsets.count == 1 {
+                acknowledged = 1_024
+                throw APIClientError.server("Interrupted after partial acceptance", 503)
+            }
+            XCTAssertEqual(offset, acknowledged)
+            let bytes = try Data(contentsOf: body)
+            XCTAssertEqual(bytes, source.subdata(in: Int(offset)..<(Int(offset) + bytes.count)))
+            acknowledged = offset + Int64(bytes.count)
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                headerFields: ["Upload-Offset": String(acknowledged)])!)
+        })
+        let upload = VideoUploadResponse(ok: true, uid: "partial", uploadSessionId: "session",
+            uploadUrl: URL(string: "https://upload.example.test/partial")!, uploadProtocol: "tus", poster: nil)
+        _ = try await api.uploadVideoFile(fileURL: file, upload: upload, maxChunkBytes: Int64(chunk))
+        XCTAssertEqual(headCount, 2)
+        XCTAssertEqual(offsets, [0, 1_024, Int64(chunk) + 1_024])
+        XCTAssertEqual(acknowledged, Int64(source.count))
+    }
+
+    @MainActor
+    func testBackgroundTusDelegateContinuesMultipleChunksWithoutForegroundLoop() async throws {
+        let chunk = TusUploadChunkPolicy.minimum
+        let total = chunk * 2 + 19
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent("tus-delegate-\(UUID()).mp4")
+        let bodyURL = FileManager.default.temporaryDirectory.appendingPathComponent("tus-first-\(UUID()).upload")
+        try Data(repeating: 0x44, count: Int(total)).write(to: sourceURL)
+        try Data(repeating: 0x44, count: Int(chunk)).write(to: bodyURL)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? FileManager.default.removeItem(at: bodyURL)
+        }
+        let recorder = UploadRequestRecorder()
+        let mockSession = makeSession { request in
+            recorder.append(request)
+            let offset = Int64(request.value(forHTTPHeaderField: "Upload-Offset")!)!
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                headerFields: ["Upload-Offset": String(min(total, offset + chunk))])!, Data())
+        }
+        defer { mockSession.invalidateAndCancel() }
+        let transport = BackgroundTusUploadTransport(configuration: mockSession.configuration)
+        let uploadURL = URL(string: "https://upload.example.test/delegate")!
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "PATCH"
+        request.setValue("0", forHTTPHeaderField: "Upload-Offset")
+        let (_, response) = try await transport.upload(request: request, bodyFileURL: bodyURL,
+            chain: .init(sourceURL: sourceURL, uploadURL: uploadURL, totalBytes: total,
+                         offset: 0, length: chunk, limit: chunk, bufferBytes: 262_144))
+        XCTAssertEqual(recorder.requests.map { $0.value(forHTTPHeaderField: "Upload-Offset") }, ["0", String(chunk), String(chunk * 2)])
+        XCTAssertEqual((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Upload-Offset"), String(total))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bodyURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+    }
+
+    @MainActor
+    func testAdaptiveBackgroundTusDelegateUsesMeasuredChunkSize() async throws {
+        let chunk = TusUploadChunkPolicy.minimum
+        let total = chunk * 3 + 19
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent("adaptive-chain-\(UUID()).mp4")
+        let bodyURL = FileManager.default.temporaryDirectory.appendingPathComponent("adaptive-first-\(UUID()).upload")
+        try Data(repeating: 0x44, count: Int(total)).write(to: sourceURL)
+        try Data(repeating: 0x44, count: Int(chunk)).write(to: bodyURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL); try? FileManager.default.removeItem(at: bodyURL) }
+        let recorder = UploadRequestRecorder()
+        let mockSession = makeSession { request in
+            recorder.append(request)
+            Thread.sleep(forTimeInterval: 0.15)
+            let offset = Int64(request.value(forHTTPHeaderField: "Upload-Offset")!)!
+            let length = offset == 0 ? chunk : offset == chunk ? chunk * 2 : 19
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                headerFields: ["Upload-Offset": String(offset + length)])!, Data())
+        }
+        defer { mockSession.invalidateAndCancel() }
+        let transport = BackgroundTusUploadTransport(configuration: mockSession.configuration)
+        let controller = AdaptiveTusChunkController(maximum: chunk * 4, initial: chunk, enabled: true)
+        let url = URL(string: "https://upload.example.test/adaptive-delegate")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"; request.setValue("0", forHTTPHeaderField: "Upload-Offset")
+        let (_, response) = try await transport.upload(request: request, bodyFileURL: bodyURL,
+            chain: .init(sourceURL: sourceURL, uploadURL: url, totalBytes: total,
+                offset: 0, length: chunk, limit: chunk, bufferBytes: 262_144, controller: controller))
+        XCTAssertEqual(recorder.requests.map { $0.value(forHTTPHeaderField: "Upload-Offset") }, ["0", String(chunk), String(chunk * 3)])
+        XCTAssertEqual((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Upload-Offset"), String(total))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bodyURL.path))
+    }
+
+    @MainActor
+    func testTusCancellationDoesNotRetryOrDeletePendingSource() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent("tus-cancel-\(UUID()).mp4")
+        try Data("source".utf8).write(to: sourceURL)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+        var calls = 0
+        let session = makeSession { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil,
+                             headerFields: ["Upload-Offset": "0"])!, Data())
+        }
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, tusChunkUploader: { _, _ in
+            calls += 1
+            throw CancellationError()
+        })
+        let upload = VideoUploadResponse(ok: true, uid: "cancel", uploadSessionId: "session",
+            uploadUrl: URL(string: "https://upload.example.test/cancel")!, uploadProtocol: "tus", poster: nil)
+        do { _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload); XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+    }
+
+    @MainActor
+    func testComposerReusesPreparationAndInvalidatesChangedSource() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent("draft-prep-\(UUID()).mov")
+        try await writeVideoWithDistinctFirstFrame(to: sourceURL, firstFrame: (red: 200, green: 10, blue: 10), laterFrame: (red: 10, green: 10, blue: 200))
+        let store = StoryComposerStore()
+        let selected = StoryVideoUpload(url: sourceURL, source: .library)
+        store.selectedMedia = .video(selected)
+        let first = try await store.preparedVideo(for: selected)
+        store.textOverlay = "Edited caption"
+        let reused = try await store.preparedVideo(for: selected)
+        XCTAssertEqual(first.url, reused.url)
+        XCTAssertEqual(first.byteSize, reused.byteSize)
+        try appendFreeAtom(byteCount: 512, to: sourceURL)
+        let refreshed = try await store.preparedVideo(for: selected)
+        XCTAssertEqual(refreshed.inspection.byteSize, first.inspection.byteSize + 512)
+        store.selectedMedia = nil
+        try? FileManager.default.removeItem(at: sourceURL)
     }
 
     @MainActor
@@ -605,7 +811,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         )
         XCTAssertTrue(upload.supportsDirectVideoUpload)
 
-        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
 
         let request = try XCTUnwrap(recorder.requests.first)
         XCTAssertEqual(request.httpMethod, "PUT")
@@ -664,7 +870,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             access: "private"
         )
 
-        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
 
         XCTAssertEqual(stagedFileURLs.count, 2)
         XCTAssertNotEqual(stagedFileURLs[0], stagedFileURLs[1])
@@ -754,7 +960,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             access: "private"
         )
 
-        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
 
         let partRequests = partRecorder.requests.sorted {
             ($0.value(forHTTPHeaderField: "x-mpu-part-number") ?? "") <
@@ -859,12 +1065,12 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         )
 
         do {
-            try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+            _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
             XCTFail("The interrupted part should fail the first upload attempt.")
         } catch {
             XCTAssertEqual((error as? APIClientError)?.statusCode, 400)
         }
-        try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
+        _ = try await api.uploadVideoFile(fileURL: sourceURL, upload: upload)
 
         XCTAssertEqual(
             partRecorder.requests.compactMap {
@@ -878,6 +1084,89 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
             },
             ["create", "complete"]
         )
+    }
+
+    @MainActor
+    func testDecodedFirstFrameSurvivesPersistentLayerHandoff() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("persistent-layer-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await writeVideoWithDistinctFirstFrame(to: url, firstFrame: (180, 10, 10), laterFrame: (20, 230, 240))
+        let player = AVPlayer(url: url)
+        player.isMuted = true
+        let surface = AspectFitPlayerView(frame: CGRect(x: 0, y: 0, width: 360, height: 640))
+        surface.attach(player)
+        let first = StoryVideoSurfaceHost(frame: surface.bounds)
+        let second = StoryVideoSurfaceHost(frame: surface.bounds)
+        let root = UIViewController()
+        root.view.addSubview(first)
+        root.view.addSubview(second)
+        let window: UIWindow
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+        } else { window = UIWindow(frame: surface.bounds) }
+        window.frame = surface.bounds
+        window.rootViewController = root
+        window.isHidden = false
+        defer { window.isHidden = true; surface.attach(nil); player.replaceCurrentItem(with: nil) }
+        first.install(surface)
+        root.view.layoutIfNeeded()
+        for _ in 0..<250 {
+            if player.currentItem?.status == .readyToPlay { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(player.currentItem?.status, .readyToPlay)
+        let didPreroll = await player.preroll(atRate: 1)
+        XCTAssertTrue(didPreroll)
+        player.pause()
+        for _ in 0..<250 {
+            if surface.playerLayer.isReadyForDisplay { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(surface.playerLayer.isReadyForDisplay, "The fixture must have an actual decoded first frame")
+        let originalLayer = surface.playerLayer
+        let started = ContinuousClock.now
+        second.install(surface)
+        first.install(nil)
+        root.view.layoutIfNeeded()
+        XCTAssertTrue(surface.playerLayer === originalLayer)
+        XCTAssertTrue(surface.playerLayer.isReadyForDisplay, "Handoff must not clear the decoded first frame")
+        XCTAssertTrue(surface.player === player)
+        XCTAssertEqual(player.currentTime().seconds, 0, accuracy: 0.01)
+        print("PERSISTENT_LAYER_HANDOFF ready=true elapsed=\(started.duration(to: .now))")
+        let source = StoryVideoPlaybackSource.urlBacked(url)
+        var builds = 0
+        let pool = StoryVideoPlaybackPool(maxPreparedPlayers: 1) { url in
+            builds += 1
+            return .init(player: player, playbackURL: url, cacheState: "hit", wasPrerolled: true, displaySurface: surface)
+        }
+        pool.prepare(sources: [source], activeIdentity: nil)
+        for _ in 0..<10 { await Task.yield() }
+        let controller = AutoPlayVideoPlaybackController()
+        controller.setVisible(false)
+        controller.play(source: source, expectedDuration: 3, playerPool: pool, refreshSource: { nil }, isPaused: true, onReadyForPlayback: {}, onProgress: { _ in }, onFinished: {})
+        for _ in 0..<100 {
+            if controller.player != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(controller.player === player)
+        XCTAssertTrue(controller.displaySurface === surface)
+        controller.playerDidAttach(player)
+        controller.revealVideo(player: player, reason: "test_prepared_layer")
+        XCTAssertTrue(controller.isReadyForPlayback)
+        XCTAssertEqual(player.rate, 0)
+        controller.setMuted(false)
+        XCTAssertTrue(player.isMuted, "A prepared hidden frame must stay silent")
+        controller.setVisible(true)
+        controller.setPaused(false)
+        XCTAssertTrue(controller.player === player)
+        XCTAssertTrue(controller.isReadyForPlayback)
+        XCTAssertFalse(player.isMuted)
+        pool.prepare(sources: [source], activeIdentity: nil)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(builds, 1)
+        controller.stop(reason: "test_cleanup")
+        pool.removeAll()
+
     }
 
     private func makeInspection(
@@ -905,6 +1194,7 @@ final class StoryVideoUploadPipelineTests: XCTestCase {
         let width = 64
         let height = 64
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        writer.shouldOptimizeForNetworkUse = true
         let input = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: [

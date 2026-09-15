@@ -1,4 +1,5 @@
-import { and, eq, sql } from "drizzle-orm"
+import { enqueueImageEnhancement } from "@/lib/media-background-dispatch"
+import { and, eq, isNull, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import {
@@ -6,7 +7,7 @@ import {
   mediaAssets,
   stories,
 } from "@/lib/db/schema"
-import { invalidateMobileFeedSnapshotsForCreator } from "@/lib/feed-snapshot-store"
+import { invalidateMobileFeedSnapshot } from "@/lib/feed-snapshot-store"
 import { moderatePendingStory } from "@/lib/story-moderation-core"
 import {
   createServerEncodedStoryImageAsset,
@@ -121,6 +122,7 @@ export async function processImageAssetStep(jobId: string) {
       checksum: asset.checksum,
     },
     deleteSourceAfterProcessing: false,
+    delivery: process.env.MEDIA_IMAGE_FAST_PUBLICATION_ENABLED === "false" ? "avif" : "fast-webp",
   })
 }
 
@@ -129,12 +131,18 @@ processImageAssetStep.maxRetries = 5
 export async function completeImageProcessingStep(
   jobId: string,
   output: Awaited<ReturnType<typeof processImageAssetStep>>,
+  ownerRunId?: string,
 ) {
   "use step"
 
-  const job = await readJob(jobId)
-  const db = getDb()
   const now = new Date()
+  const completed = await getDb().transaction(async db => {
+    const [job] = await db.select().from(imageProcessingJobs)
+      .where(eq(imageProcessingJobs.id, jobId)).for("update").limit(1)
+    if (!job) throw new Error(`Image processing job ${jobId} was not found.`)
+    // Serialize initial completion and reject expired owners before any media writes.
+    if (job.status === "ready") return null
+    if (ownerRunId && job.workflowRunId !== ownerRunId) return null
   await db
     .update(mediaAssets)
     .set({
@@ -201,11 +209,6 @@ export async function completeImageProcessingStep(
       })
       .where(eq(stories.id, story.id))
 
-    if (status === "live" && story.status !== "live") {
-      await enqueueStoryPublication(story.id)
-    } else {
-      await invalidateMobileFeedSnapshotsForCreator(story.creatorId)
-    }
   }
 
   await db
@@ -217,6 +220,18 @@ export async function completeImageProcessingStep(
       updatedAt: now,
     })
     .where(eq(imageProcessingJobs.id, job.id))
+
+    return linkedStories
+  })
+  if (!completed) return { status: "completed" as const, storyCount: 0 }
+  const linkedStories = completed
+  for (const story of linkedStories) {
+    const status = deriveStoryPublicationStatus({ currentStatus: story.status,
+      moderationStatus: story.moderationStatus, providerReady: true,
+      structuralReady: true, expiresAt: story.expiresAt, now })
+    if (status === "live" && story.status !== "live") await enqueueStoryPublication(story.id)
+    else await invalidateMobileFeedSnapshot(story.creatorId)
+  }
 
   // Moderation is deliberately deferred until the verified display image is
   // available. Keep moderation failures separate from image-processing state:
@@ -237,19 +252,24 @@ export async function completeImageProcessingStep(
     }
   })
 
+  await enqueueImageEnhancement(jobId).catch(error => console.error("image_enhancement_enqueue_failed", { jobId, error }))
   return { status: "completed" as const, storyCount: linkedStories.length }
 }
 
-export async function failImageProcessingStep(jobId: string, message: string) {
+export async function failImageProcessingStep(jobId: string, message: string, ownerRunId: string | null) {
   "use step"
 
   const job = await readJob(jobId)
+  // A late error from a previous worker must never downgrade a ready image.
+  if (job.status === "ready" || job.workflowRunId !== ownerRunId) return
   const now = new Date()
   const willRetry = job.attempts < maximumImageProcessingAttempts
-  await getDb()
+  const [failed] = await getDb()
     .update(imageProcessingJobs)
     .set({ status: "error", lastError: message.slice(0, 2_000), updatedAt: now })
-    .where(eq(imageProcessingJobs.id, job.id))
+    .where(and(eq(imageProcessingJobs.id, job.id), eq(imageProcessingJobs.status, job.status), eq(imageProcessingJobs.attempts, job.attempts), ownerRunId ? eq(imageProcessingJobs.workflowRunId, ownerRunId) : isNull(imageProcessingJobs.workflowRunId)))
+    .returning({ id: imageProcessingJobs.id })
+  if (!failed) return
   await getDb()
     .update(mediaAssets)
     .set({
@@ -261,9 +281,9 @@ export async function failImageProcessingStep(jobId: string, message: string) {
       lastCheckedAt: now,
       updatedAt: now,
     })
-    .where(eq(mediaAssets.id, job.mediaAssetId))
+    .where(and(eq(mediaAssets.id, job.mediaAssetId), eq(mediaAssets.processingStatus, "processing")))
   await getDb()
     .update(stories)
     .set({ processingStatus: willRetry ? "processing" : "error" })
-    .where(eq(stories.mediaAssetId, job.mediaAssetId))
+    .where(and(eq(stories.mediaAssetId, job.mediaAssetId), eq(stories.processingStatus, "processing")))
 }

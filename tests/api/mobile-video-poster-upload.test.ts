@@ -4,12 +4,15 @@ import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client"
 import { getCompleteMobileSession } from "@/lib/auth"
 import {
   createMediaUploadSession,
+  expirePrivateDraftUpload,
+  deleteMediaUploadSessionForCleanup,
   getReusableMediaUploadSession,
 } from "@/lib/media-upload-sessions"
 import { enforceRequestRateLimits } from "@/lib/request-security"
 import {
   createCloudflareStreamTusUpload,
   directStoryVideoPosterPathname,
+  removeCloudflareStreamVideoByUid,
 } from "@/lib/story-storage"
 
 vi.mock("@vercel/blob/client", () => ({
@@ -45,6 +48,8 @@ vi.mock("@/lib/media-upload-sessions", () => ({
     }
   },
   retireMediaUploadSession: vi.fn(),
+  expirePrivateDraftUpload: vi.fn(),
+  deleteMediaUploadSessionForCleanup: vi.fn(),
 }))
 
 vi.mock("@/lib/story-storage", () => ({
@@ -120,6 +125,7 @@ describe("mobile video poster upload preparation", () => {
     const payload = await response.json()
 
     expect(response.status).toBe(200)
+    expect(payload.freshUpload).toBe(true)
     expect(payload.poster).toMatchObject({
       pathname: `stories/video-posters/${uid}-poster.jpg`,
       contentType: "image/jpeg",
@@ -134,6 +140,34 @@ describe("mobile video poster upload preparation", () => {
         addRandomSuffix: false,
       }),
     )
+  })
+
+  it("never marks a reused or concurrently won session fresh", async () => {
+    const reused = { id: "reused", storageKey: "e".repeat(32), uploadUrl: "https://upload.invalid/reused", uploadProtocol: "tus" }
+    vi.mocked(getReusableMediaUploadSession).mockResolvedValueOnce(reused as never)
+    const { POST } = await import("@/app/api/mobile/stories/video-upload/route")
+    expect((await (await POST(uploadRequest())).json()).freshUpload).toBe(false)
+    expect(createCloudflareStreamTusUpload).not.toHaveBeenCalled()
+    vi.mocked(createMediaUploadSession).mockResolvedValueOnce(reused as never)
+    expect((await (await POST(uploadRequest())).json()).freshUpload).toBe(false)
+  })
+
+  it("expires only owner-bound private drafts and retains failed cleanup for cron recovery", async () => {
+    const expired = { id: "lease", status: "prepared", storageProvider: "cloudflare-stream", storageKey: uid }
+    vi.mocked(expirePrivateDraftUpload).mockResolvedValueOnce(expired as never)
+    vi.mocked(removeCloudflareStreamVideoByUid).mockRejectedValueOnce(new Error("provider unavailable"))
+    const { DELETE } = await import("@/app/api/mobile/stories/video-upload/route")
+    const request = () => new Request("https://app.example.com/api/mobile/stories/video-upload", {
+      method: "DELETE", body: JSON.stringify({ clientUploadId: "d8f95cd5-a079-47ef-b46b-4122f40ce766", uploadSessionId: "lease" }),
+    })
+    expect((await DELETE(request())).status).toBe(200)
+    expect(expirePrivateDraftUpload).toHaveBeenCalledWith({ ownerUserId: "creator-1", clientUploadId: "d8f95cd5-a079-47ef-b46b-4122f40ce766", uploadSessionId: "lease" })
+    expect(deleteMediaUploadSessionForCleanup).not.toHaveBeenCalled()
+    vi.mocked(expirePrivateDraftUpload).mockResolvedValueOnce(expired as never)
+    expect((await DELETE(request())).status).toBe(200)
+    expect(deleteMediaUploadSessionForCleanup).toHaveBeenCalledWith(expired)
+    vi.mocked(getCompleteMobileSession).mockResolvedValueOnce(null)
+    expect((await DELETE(request())).status).toBe(401)
   })
 
   it("fails before allocating Cloudflare media when private poster storage is unavailable", async () => {

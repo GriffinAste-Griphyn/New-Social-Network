@@ -2,27 +2,78 @@
   "crons": [
     {
       "path": "/api/cron/media-upload-cleanup",
-      "schedule": "20 3 * * *"
+      "schedule": "20 * * * *"
     },
     {
       "path": "/api/cron/media-processing-reconcile",
-      "schedule": "5 0 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/image-processing-reconcile",
-      "schedule": "15 0 * * *"
+      "schedule": "1-59/5 * * * *"
     },
     {
       "path": "/api/cron/story-moderation-reconcile",
-      "schedule": "25 0 * * *"
+      "schedule": "2-59/5 * * * *"
     },
     {
       "path": "/api/cron/story-publication-reconcile",
-      "schedule": "35 0 * * *"
+      "schedule": "3-59/5 * * * *"
     },
     {
       "path": "/api/cron/media-operations-rollup",
-      "schedule": "45 0 * * *"
+      "schedule": "4-59/5 * * * *"
+    },
+    {
+      "path": "/api/cron/feed-score-rollup",
+      "schedule": "45 * * * *"
     }
-  ]
+  ],
+  "functions": {
+    "app/api/queues/media-video-first-playable/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "media-video-first-playable",
+          "retryAfterSeconds": 60
+        }
+      ]
+    },
+    "app/api/queues/media-video-enhancement/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "media-video-enhancement",
+          "retryAfterSeconds": 60
+        }
+      ]
+    },
+    "app/api/queues/media-image-first-playable/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "media-image-first-playable",
+          "retryAfterSeconds": 60
+        }
+      ]
+    },
+    "app/api/queues/media-image-enhancement/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "media-image-enhancement",
+          "retryAfterSeconds": 5
+        }
+      ]
+    },
+    "app/api/queues/media-feed-fanout/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "media-feed-fanout",
+          "retryAfterSeconds": 5
+        }
+      ]
+    }
+  }
 }

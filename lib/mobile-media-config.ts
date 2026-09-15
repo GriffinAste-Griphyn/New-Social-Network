@@ -6,10 +6,16 @@ import {
 export type RuntimeMediaConfig = {
   version: string
   rolloutProfile: "baseline" | "preheat-canary"
+  startupMode: "focused" | "adaptive"
+  startupExperiment: "quality-first" | "adaptive-canary"
   blobUploadsAvailable: boolean
+  profilePhotoUploadsAvailable: boolean
   storyImageUploadsAvailable: boolean
   imageDerivativeUploadEnabled: boolean
   qoeAccessLogSampleRate: number
+  uploadExperiment: "baseline" | "adaptive-canary"
+  adaptiveUploadEncodingEnabled: boolean
+  adaptiveUploadChunksEnabled: boolean
   uploadChunkBytes: number
   blobMultipartThresholdBytes: {
     constrained: number
@@ -115,6 +121,7 @@ export function getMobileMediaConfig(input: {
   canaryBucket?: number | null
 } = {}): RuntimeMediaConfig {
   const supportsSafePlayerPreparation = (input.clientBuild ?? 0) >= 255
+  const supportsPersistentDisplayPreparation = (input.clientBuild ?? 0) >= 424
   const supportsOfflineHLSCaching = (input.clientBuild ?? 0) >= 320
   const supportsCloudflareR2ImageUploads =
     (input.clientBuild ?? 0) >= minimumCloudflareR2ImageBuild
@@ -122,12 +129,35 @@ export function getMobileMediaConfig(input: {
     "MOBILE_AGGRESSIVE_MEDIA_CONFIG_ENABLED",
     true,
   )
+  const adaptiveCanary = (input.clientBuild ?? 0) >= 422 &&
+    input.canaryBucket != null && input.canaryBucket >= 0 &&
+    input.canaryBucket < ((input.clientBuild ?? 0) >= 440
+      ? integerEnv("MOBILE_ADAPTIVE_START_PERCENT_BUILD_440", 100, { min: 0, max: 100 })
+      : integerEnv("MOBILE_ADAPTIVE_START_CANARY_PERCENT", 20, { min: 0, max: 100 }))
+
+  // Retain adaptive playback without the older experiment's 720p startup ceiling.
+  const conservativeStartup = adaptiveCanary && (input.clientBuild ?? 0) < 445
+
+  const uploadCanary = (input.clientBuild ?? 0) >= 426 &&
+    input.canaryBucket != null && input.canaryBucket >= 0 &&
+    input.canaryBucket < integerEnv("MOBILE_ADAPTIVE_UPLOAD_CANARY_PERCENT", 10, { min: 0, max: 100 })
+  const adaptiveUploadEncodingEnabled = (uploadCanary || (input.clientBuild ?? 0) >= 433) &&
+    booleanEnv("MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED", false)
+  const adaptiveUploadChunksEnabled = uploadCanary && booleanEnv("MOBILE_ADAPTIVE_UPLOAD_CHUNKS_ENABLED", false)
 
   return {
-    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-09-10.1",
+    uploadExperiment: adaptiveUploadEncodingEnabled || adaptiveUploadChunksEnabled ? "adaptive-canary" : "baseline",
+    adaptiveUploadEncodingEnabled,
+    adaptiveUploadChunksEnabled,
+    version: process.env.MOBILE_MEDIA_CONFIG_VERSION?.trim() || "2026-09-13.6",
     rolloutProfile: aggressiveConfigEnabled ? "preheat-canary" : "baseline",
+    startupMode: adaptiveCanary ? "adaptive" : "focused",
+    startupExperiment: adaptiveCanary ? "adaptive-canary" : "quality-first",
     blobUploadsAvailable:
       process.env.VERCEL_BLOB_SUSPENDED_MODE?.trim().toLowerCase() !== "true",
+    profilePhotoUploadsAvailable:
+      process.env.VERCEL_BLOB_SUSPENDED_MODE?.trim().toLowerCase() !== "true" ||
+      isCloudflareR2StoryImageStorageEnabled(),
     storyImageUploadsAvailable:
       process.env.VERCEL_BLOB_SUSPENDED_MODE?.trim().toLowerCase() !== "true" ||
       (supportsCloudflareR2ImageUploads &&
@@ -140,9 +170,9 @@ export function getMobileMediaConfig(input: {
       min: 0,
       max: 1,
     }),
-    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 5 * 1024 * 1024, {
-      min: 256 * 1024,
-      max: 32 * 1024 * 1024,
+    uploadChunkBytes: integerEnv("MOBILE_UPLOAD_CHUNK_BYTES", 50 * 1024 * 1024, {
+      min: 5 * 1024 * 1024,
+      max: 200 * 1024 * 1024,
     }),
     blobMultipartThresholdBytes: {
       constrained: integerEnv(
@@ -200,7 +230,7 @@ export function getMobileMediaConfig(input: {
         min: 1,
         max: 4,
       }),
-      standard: integerEnv("MOBILE_STACK_PREHEAT_LIMIT_STANDARD", aggressiveConfigEnabled ? 4 : 2, {
+      standard: integerEnv(adaptiveCanary ? "MOBILE_STACK_PREHEAT_LIMIT_STANDARD_CANARY" : "MOBILE_STACK_PREHEAT_LIMIT_STANDARD", adaptiveCanary ? 2 : aggressiveConfigEnabled ? 4 : 2, {
         min: 1,
         max: 8,
       }),
@@ -218,8 +248,8 @@ export function getMobileMediaConfig(input: {
         : 0,
       standard: supportsSafePlayerPreparation
         ? integerEnv(
-          "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
-            3,
+          adaptiveCanary ? "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD_CANARY" : "MOBILE_PREPARED_PLAYER_LIMIT_STANDARD",
+            adaptiveCanary && !supportsPersistentDisplayPreparation ? 2 : 3,
             {
               min: 0,
               max: 4,
@@ -228,11 +258,11 @@ export function getMobileMediaConfig(input: {
         : 0,
     },
     persistentVideoPreheatLimit: {
-      constrained: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", aggressiveConfigEnabled ? 2 : 1, {
+      constrained: integerEnv(adaptiveCanary ? "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED_CANARY" : "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_CONSTRAINED", adaptiveCanary ? 0 : aggressiveConfigEnabled ? 2 : 1, {
         min: 0,
         max: 4,
       }),
-      standard: integerEnv("MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", 2, {
+      standard: integerEnv(adaptiveCanary ? "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD_CANARY" : "MOBILE_PERSISTENT_VIDEO_PREHEAT_LIMIT_STANDARD", adaptiveCanary ? 1 : 2, {
         min: 0,
         max: 6,
       }),
@@ -241,8 +271,8 @@ export function getMobileMediaConfig(input: {
       constrained: 0,
       standard: supportsOfflineHLSCaching
         ? integerEnv(
-            "MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD",
-            aggressiveConfigEnabled ? 1 : 0,
+            adaptiveCanary ? "MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD_CANARY" : "MOBILE_OFFLINE_HLS_PREHEAT_LIMIT_STANDARD",
+            adaptiveCanary ? 0 : aggressiveConfigEnabled ? 1 : 0,
             { min: 0, max: 1 },
           )
         : 0,
@@ -255,38 +285,38 @@ export function getMobileMediaConfig(input: {
       : 0,
     startupStreamingPeakBitRate: {
       constrained: integerEnv(
-        "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
-        aggressiveConfigEnabled ? constrainedQualityVideoBitRate : 2_000_000,
+        conservativeStartup ? "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED_CANARY" : "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_CONSTRAINED",
+        conservativeStartup ? 1_600_000 : aggressiveConfigEnabled ? constrainedQualityVideoBitRate : 2_000_000,
         { min: 1_500_000, max: 16_000_000 },
       ),
       standard: integerEnv(
-        "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
-        aggressiveConfigEnabled ? fullQualityVideoBitRate : 4_000_000,
+        conservativeStartup ? "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD_CANARY" : "MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD",
+        conservativeStartup ? 4_000_000 : aggressiveConfigEnabled ? fullQualityVideoBitRate : 4_000_000,
         { min: 1_500_000, max: 20_000_000 },
       ),
     },
     startupStreamingMaximumResolution: {
       constrained: {
         width: integerEnv(
-          "MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED",
-          aggressiveConfigEnabled ? 720 : 540,
+          conservativeStartup ? "MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED_CANARY" : "MOBILE_STARTUP_MAX_WIDTH_CONSTRAINED",
+          conservativeStartup ? 540 : aggressiveConfigEnabled ? 720 : 540,
           { min: 360, max: 1080 },
         ),
         height: integerEnv(
-          "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED",
-          aggressiveConfigEnabled ? 1280 : 960,
+          conservativeStartup ? "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED_CANARY" : "MOBILE_STARTUP_MAX_HEIGHT_CONSTRAINED",
+          conservativeStartup ? 960 : aggressiveConfigEnabled ? 1280 : 960,
           { min: 640, max: 1920 },
         ),
       },
       standard: {
         width: integerEnv(
-          "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
-          aggressiveConfigEnabled ? fullQualityVideoWidth : 720,
+          conservativeStartup ? "MOBILE_STARTUP_MAX_WIDTH_STANDARD_CANARY" : "MOBILE_STARTUP_MAX_WIDTH_STANDARD",
+          conservativeStartup ? 720 : aggressiveConfigEnabled ? fullQualityVideoWidth : 720,
           { min: 540, max: 2160 },
         ),
         height: integerEnv(
-          "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
-          aggressiveConfigEnabled ? fullQualityVideoHeight : 1280,
+          conservativeStartup ? "MOBILE_STARTUP_MAX_HEIGHT_STANDARD_CANARY" : "MOBILE_STARTUP_MAX_HEIGHT_STANDARD",
+          conservativeStartup ? 1280 : aggressiveConfigEnabled ? fullQualityVideoHeight : 1280,
           { min: 960, max: 3840 },
         ),
       },

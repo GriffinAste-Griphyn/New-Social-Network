@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto"
 
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm"
-import { after } from "next/server"
+import { and, asc, eq, gte, inArray, isNull, lt } from "drizzle-orm"
+import { dispatchMediaTask } from "@/lib/media-dispatch"
+import { areMediaPriorityQueuesEnabled, sendMediaQueueJob } from "@/lib/media-priority-queue"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { imageProcessingJobs, mediaAssets, stories } from "@/lib/db/schema"
-import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
 import type { StoryImageContentMode } from "@/lib/story-image-processing"
 import { processImageWorkflow } from "@/workflows/image-processing"
 import {
@@ -56,40 +56,36 @@ export async function createImageProcessingJob(input: {
 const staleImageProcessingLeaseMs = 5 * 60 * 1_000
 const failedImageProcessingRetryDelayMs = 60 * 1_000
 
-async function processImageDirect(jobId: string, source: string) {
+export async function processImageDirect(jobId: string, source: string) {
   const runId = `direct-${randomUUID()}`
   const claimed = await claimImageProcessingStep(jobId, runId)
   if (!claimed) return { jobId, runId: null }
 
   try {
     const output = await processImageAssetStep(jobId)
-    const result = await completeImageProcessingStep(jobId, output)
+    const result = await completeImageProcessingStep(jobId, output, runId)
     console.info("image_processing_direct_finished", { jobId, source, result })
     return { jobId, runId }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await failImageProcessingStep(jobId, message)
+    await failImageProcessingStep(jobId, message, runId)
     throw error
   }
 }
 
 export async function scheduleImageProcessing(jobId: string, source: string) {
-  if (!isWorkflowDispatchEnabled()) {
-    after(async () => {
-      try {
-        await processImageDirect(jobId, source)
-      } catch (error) {
-        console.error("image_processing_direct_failed", {
-          jobId,
-          source,
-          error,
-        })
-      }
-    })
-    return { jobId, runId: null }
-  }
-
-  const run = await start(processImageWorkflow, [jobId])
+  const run = await dispatchMediaTask({
+    label: source,
+    identity: jobId,
+    startQueue: async () => {
+      if (!areMediaPriorityQueuesEnabled()) return false
+      await sendMediaQueueJob("imageInitial", jobId)
+      return true
+    },
+    startDurable: () => start(processImageWorkflow, [jobId]),
+    runDirect: () => processImageDirect(jobId, source),
+  })
+  if (!run) return { jobId, runId: null }
   console.info("image_processing_workflow_started", {
     jobId,
     source,
@@ -195,6 +191,12 @@ export async function reconcileImageProcessingJobs(
   input: { limit?: number } = {},
 ) {
   const staleBefore = new Date(Date.now() - staleImageProcessingLeaseMs)
+  const limit = Math.min(Math.max(input.limit ?? 10, 1), 25)
+  const exhausted = await getDb().select({ id: imageProcessingJobs.id, runId: imageProcessingJobs.workflowRunId })
+    .from(imageProcessingJobs)
+    .where(and(eq(imageProcessingJobs.status, "processing"), lt(imageProcessingJobs.updatedAt, staleBefore), gte(imageProcessingJobs.attempts, 6)))
+    .limit(limit)
+  await Promise.all(exhausted.map(({ id, runId }) => failImageProcessingStep(id, "The final image worker lease expired; automatic retries are exhausted.", runId)))
   const releasedLeases = await getDb()
     .update(imageProcessingJobs)
     .set({
@@ -257,11 +259,12 @@ export async function reconcileImageProcessingJobs(
 
   const jobIds = [
     ...new Set([...releasedLeases, ...rows].map(({ id }) => id)),
-  ]
+  ].slice(0, limit)
   const results = await Promise.allSettled(
     jobIds.map((id) => scheduleImageProcessing(id, "scheduled_reconciliation")),
   )
   return {
+    exhausted: exhausted.length,
     scanned: jobIds.length,
     scheduled: results.filter(({ status }) => status === "fulfilled").length,
     failed: results.filter(({ status }) => status === "rejected").length,

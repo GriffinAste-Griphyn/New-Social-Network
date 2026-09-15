@@ -1,10 +1,11 @@
-import { and, asc, eq, gt, inArray } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { mediaAssets, stories } from "@/lib/db/schema"
 import { enqueueStoryPublication } from "@/lib/story-publication"
 import {
-  isCloudflareStreamFullyReady,
+  isCloudflareStreamPublicationReady,
+  cloudflareDetailsFromUploadSession,
   recordCloudflareStreamUploadStatus,
   type CloudflareStreamProviderDetails,
 } from "@/lib/media-upload-sessions"
@@ -67,16 +68,21 @@ export async function refreshProcessingCloudflareStories(input: {
   const pendingStories = await getDb()
     .select({ uid: stories.storageKey })
     .from(stories)
+    .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
     .where(
       and(
         eq(stories.storageProvider, "cloudflare-stream"),
-        eq(stories.processingStatus, "processing"),
+        or(
+          eq(stories.status, "processing"),
+          eq(stories.processingStatus, "processing"),
+          and(eq(mediaAssets.processingStatus, "ready"), or(lt(mediaAssets.providerPctComplete, 100), isNull(mediaAssets.providerPctComplete))),
+        ),
         inArray(stories.status, ["processing", "live"]),
         gt(stories.expiresAt, new Date()),
         input.creatorId ? eq(stories.creatorId, input.creatorId) : undefined,
       ),
     )
-    .orderBy(asc(stories.createdAt))
+    .orderBy(asc(stories.processingStatus), asc(mediaAssets.lastCheckedAt))
     .limit(input.limit ?? 50)
 
   for (let index = 0; index < pendingStories.length; index += 10) {
@@ -117,6 +123,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
       assetProcessingStatus: mediaAssets.processingStatus,
       assetScanStatus: mediaAssets.scanStatus,
       previousProviderPctComplete: mediaAssets.providerPctComplete,
+      readyAt: mediaAssets.readyAt,
     })
     .from(stories)
     .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
@@ -197,12 +204,12 @@ export async function syncCloudflareStreamStoryStatus(input: {
     observedProviderPercentages.length > 0
       ? Math.max(...observedProviderPercentages)
       : null
-  const providerReady = isCloudflareStreamFullyReady({
-    readyToStream:
-      story.assetProcessingStatus === "ready" || details.readyToStream,
-    state: details.state,
-    pctComplete: providerPctComplete,
-  })
+  // Rolling the publication experiment back must not hide a video already live.
+  // Provider errors are handled above; moderation/deletion/scan checks still apply.
+  const publicationDetails = retainedSession
+    ? cloudflareDetailsFromUploadSession(retainedSession) ?? details : details
+  const providerReady = (story.status === "live" && story.assetProcessingStatus === "ready")
+    || isCloudflareStreamPublicationReady(publicationDetails)
 
   if (!providerReady) {
     const nextStatus = deriveCloudflareStoryStatus({
@@ -271,7 +278,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
     scanStatus: story.assetScanStatus,
   })
 
-  if (story.storageKey) {
+  if (story.storageKey && !story.thumbnailUrl && story.processingStatus !== "ready") {
     await setCloudflareStreamThumbnailAtDefaultTime(story.storageKey).catch(
       () => undefined,
     )
@@ -310,7 +317,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
     .set({
       processingStatus: "ready",
       providerStatus: details.state ?? "ready",
-      providerPctComplete: Math.max(100, providerPctComplete ?? 0),
+      providerPctComplete,
       providerError: null,
       byteSize: byteSize ?? undefined,
       thumbnailUrl,
@@ -318,7 +325,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
       durationMs,
       width,
       height,
-      readyAt: checkedAt,
+      readyAt: story.readyAt ?? checkedAt,
       lastCheckedAt: checkedAt,
       updatedAt: checkedAt,
     })
@@ -338,6 +345,7 @@ export async function syncCloudflareStreamStoryStatus(input: {
 export async function getStoryUploadStatusForOwner(
   storyId: string,
   ownerId: string,
+  options: { refreshProvider?: boolean } = {},
 ) {
   const db = getDb()
 
@@ -360,6 +368,7 @@ export async function getStoryUploadStatusForOwner(
         providerError: mediaAssets.providerError,
         lastCheckedAt: mediaAssets.lastCheckedAt,
         readyAt: mediaAssets.readyAt,
+        createdAt: stories.createdAt,
       })
       .from(stories)
       .innerJoin(mediaAssets, eq(stories.mediaAssetId, mediaAssets.id))
@@ -376,9 +385,10 @@ export async function getStoryUploadStatusForOwner(
   }
 
   if (
+    options.refreshProvider !== false &&
     story.storageProvider === "cloudflare-stream" &&
     story.storageKey &&
-    story.processingStatus !== "ready"
+    (story.status === "processing" || story.processingStatus !== "ready" || (story.providerPctComplete ?? 0) < 100)
   ) {
     await syncCloudflareStreamStoryStatus({ uid: story.storageKey }).catch(
       () => undefined,
@@ -403,14 +413,12 @@ export async function getStoryUploadStatusForOwner(
     providerStatus: story.providerStatus,
     providerPctComplete: story.providerPctComplete,
     fullQualityReady:
-      story.storageProvider === "cloudflare-stream"
-        ? story.processingStatus === "ready" &&
-          (story.providerPctComplete ?? 0) >= 100
-        : story.processingStatus === "ready" &&
-          (story.providerPctComplete ?? 0) >= 100,
+      story.processingStatus === "ready" &&
+      (story.providerPctComplete ?? 0) >= 100,
     providerError: story.providerError,
     lastCheckedAt: story.lastCheckedAt?.toISOString() ?? null,
     readyAt: story.readyAt?.toISOString() ?? null,
+    processingStartedAt: story.createdAt,
     isLive:
       story.status === "live" &&
       story.processingStatus === "ready" &&

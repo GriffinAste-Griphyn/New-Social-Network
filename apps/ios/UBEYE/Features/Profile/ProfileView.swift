@@ -60,9 +60,13 @@ struct ProfileView: View {
             .toolbar(.hidden, for: .navigationBar)
             .ubeyeScreen()
             .task {
+                await api.refreshMediaConfigIfNeeded(force: true)
+                await auth.refreshAccount(api: api)
                 await store.load(api: api)
             }
             .refreshable {
+                await api.refreshMediaConfigIfNeeded(force: true)
+                await auth.refreshAccount(api: api)
                 await store.load(api: api)
             }
             .onChange(of: avatarPickerItem) { _, item in
@@ -113,7 +117,12 @@ struct ProfileView: View {
 
     private var profileHeader: some View {
         let account = auth.account
-        let photoChangesAvailable = MediaControlConfig.shared.blobUploadsAvailable
+        let photoChangesAvailable = MediaControlConfig.shared.profilePhotoUploadsAvailable
+        let existingPhotoUnavailable = !MediaControlConfig.shared.blobUploadsAvailable &&
+            (account?.avatarUrl?.path.hasPrefix("/api/profile-avatar-media/avatars/") == true ||
+             account?.avatarUrl?.host?.hasSuffix(".blob.vercel-storage.com") == true)
+        let photoAdjustmentsAvailable = photoChangesAvailable && !existingPhotoUnavailable &&
+            account?.avatarUrl != nil
 
         return VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
@@ -123,17 +132,19 @@ struct ProfileView: View {
                     ZStack(alignment: .bottomTrailing) {
                         RemoteAvatar(url: account?.avatarUrl, size: 72, name: account?.displayName ?? "")
 
-                        Image(systemName: isUploadingAvatar ? "hourglass" : "crop")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 28, height: 28)
-                            .background(Color.ubeyeNavy, in: Circle())
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                        if photoAdjustmentsAvailable || isUploadingAvatar {
+                            Image(systemName: isUploadingAvatar ? "hourglass" : "crop")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 28, height: 28)
+                                .background(Color.ubeyeNavy, in: Circle())
+                                .overlay(Circle().stroke(.white, lineWidth: 2))
+                        }
                     }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Adjust profile photo")
-                .disabled(isUploadingAvatar || !photoChangesAvailable)
+                .disabled(isUploadingAvatar || !photoAdjustmentsAvailable)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account?.displayName ?? DesignFixtures.accountName)
@@ -169,11 +180,17 @@ struct ProfileView: View {
                     .background(Color.ubeyeSubtle, in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(isUploadingAvatar || !photoChangesAvailable)
+            .disabled(isUploadingAvatar || !photoAdjustmentsAvailable)
 
             if !photoChangesAvailable {
                 InlineNotice(
-                    message: "Profile photo changes are temporarily unavailable while media service access recovers."
+                    message: "Profile photo changes are temporarily unavailable. Please try again later.",
+                    isError: true
+                )
+            } else if existingPhotoUnavailable {
+                InlineNotice(
+                    message: "Your previous photo is temporarily unavailable. Upload a new photo to restore your profile picture.",
+                    isError: true
                 )
             }
         }

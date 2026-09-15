@@ -17,14 +17,54 @@ final class MediaEngine: ObservableObject {
     private var idleCleanupTask: Task<Void, Never>?
     private var backgroundPrefetchTask: Task<Void, Never>?
     private var visibleStackWarmTask: Task<Void, Never>?
+    private var storyOpenWarmTask: Task<Void, Never>?
+    private var storyOpenGeneration = 0
+    private var predictiveIntentKey: String?
+    private var predictiveIntentAt = Date.distantPast
+    private(set) var viewerNavigationDirection = 1
     private var offlineHLSPreheatTask: Task<Void, Never>?
     private var memoryWarningObserver: NSObjectProtocol?
+    private var playbackBudgetObserver: NSObjectProtocol?
+    private var crossStackWarmTask: Task<Void, Never>?
+    private var crossStackGeneration = 0
+    private var upcomingStacks: [StoryStack] = []
+    private var latestInitialWarmSources: [StoryVideoPlaybackSource] = []
+    private var latestViewerIntent: (stack: StoryStack, index: Int, identity: String?)?
     private var lastFeedPreheatKey: String?
     private var lastFeedPreheatAt = Date.distantPast
     private var isStoryViewerActive = false
     private var lastStoryOpenWarm: (id: String, at: Date)?
 
     init() {
+        playbackBudgetObserver = NotificationCenter.default.addObserver(forName: NetworkQualityMonitor.playbackBudgetChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let budget = NetworkQualityMonitor.shared.workBudget
+                if budget.images > 0 {
+                    MediaImageCache.shared.resumeSpeculativePreheats()
+                } else { MediaImageCache.shared.suspendSpeculativePreheats() }
+                if budget.stacks == 0 {
+                    self.crossStackWarmTask?.cancel()
+                    self.visibleStackWarmTask?.cancel()
+                }
+                if budget.players == 0 {
+                    self.storyVideoPlaybackPool.suspendSpeculativePreparations(activeIdentity: self.latestViewerIntent?.identity)
+                }
+                if budget.persistentVideos == 0 {
+                    Task(priority: .utility) { await MediaVideoPreheater.shared.cancelSpeculativePreheats() }
+                }
+                if budget.offlineHLS == 0 {
+                    self.offlineHLSPreheatTask?.cancel()
+                    Task(priority: .utility) { await HLSOfflineCache.shared.suspendSpeculativeDownloads() }
+                }
+                if !StoryUploadPriority.shared.isUploading, !self.isStoryViewerActive {
+                    self.storyVideoPlaybackPool.prepare(sources: self.latestInitialWarmSources, activeIdentity: nil)
+                    self.scheduleOfflineHLSPreheat(sources: self.latestInitialWarmSources)
+                }
+                guard self.isStoryViewerActive, let intent = self.latestViewerIntent else { return }
+                self.prepare(stack: intent.stack, around: intent.index, activeIdentity: intent.identity, promoteActiveIfNeeded: false)
+            }
+        }
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
@@ -37,6 +77,13 @@ final class MediaEngine: ObservableObject {
     }
 
     deinit {
+        storyOpenWarmTask?.cancel()
+        visibleStackWarmTask?.cancel()
+        backgroundPrefetchTask?.cancel()
+        crossStackWarmTask?.cancel()
+        offlineHLSPreheatTask?.cancel()
+        idleCleanupTask?.cancel()
+        if let playbackBudgetObserver { NotificationCenter.default.removeObserver(playbackBudgetObserver) }
         if let memoryWarningObserver {
             NotificationCenter.default.removeObserver(memoryWarningObserver)
         }
@@ -100,23 +147,30 @@ final class MediaEngine: ObservableObject {
         let uniqueIds = uniqueNonEmptyIds(ids)
         guard !uniqueIds.isEmpty else { return }
 
+        guard !isStoryViewerActive, UBEYEResourceMonitor.shared.allowsSpeculativeMedia else { return }
+        let limit = min(uniqueIds.count, NetworkQualityMonitor.shared.stackPreheatLimit)
+        let candidates = Array(uniqueIds.prefix(limit))
+        let key = direction.rawValue + "|" + candidates.joined(separator: "|")
+        guard key != predictiveIntentKey || Date().timeIntervalSince(predictiveIntentAt) >= 0.25 else { return }
+        predictiveIntentKey = key
+        predictiveIntentAt = Date()
         visibleStackWarmTask?.cancel()
         backgroundPrefetchTask?.cancel()
-        let mode = UBEYEResourceMonitor.shared.mode
-        let limit = min(uniqueIds.count, NetworkQualityMonitor.shared.stackPreheatLimit)
-        MediaPerformance.mark(
-            "prefetch_intent kind=story direction=\(direction.rawValue) velocity=\(String(format: "%.2f", velocityItemsPerSecond)) count=\(limit) mode=\(mode.rawValue)"
-        )
-
+        MediaPerformance.mark("prefetch_intent kind=story direction=\(direction.rawValue) velocity=\(String(format: "%.2f", velocityItemsPerSecond)) count=\(limit)")
         visibleStackWarmTask = Task { @MainActor [weak self, api] in
             guard let self else { return }
-            let candidates = Array(uniqueIds.prefix(limit))
             _ = await api.restoreCachedStoryStacks(ids: candidates, limit: limit)
-            guard !Task.isCancelled else { return }
-            if mode != .critical {
-                await prepareVisibleStoryStacks(ids: candidates, api: api)
+            guard !Task.isCancelled, !isStoryViewerActive,
+                  UBEYEResourceMonitor.shared.allowsSpeculativeMedia else { return }
+            // Fast scrolling settles before starting network/decoder work; disk restoration remains immediate.
+            if velocityItemsPerSecond.isFinite, abs(velocityItemsPerSecond) >= 4 {
+                try? await Task.sleep(for: .milliseconds(100))
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isStoryViewerActive,
+                  UBEYEResourceMonitor.shared.allowsSpeculativeMedia else { return }
+            await prepareVisibleStoryStacks(ids: candidates, api: api)
+            guard !Task.isCancelled, !isStoryViewerActive,
+                  UBEYEResourceMonitor.shared.allowsSpeculativeMedia else { return }
             api.prefetchStoryStacks(ids: candidates, refresh: false, limit: limit)
             visibleStackWarmTask = nil
         }
@@ -163,6 +217,7 @@ final class MediaEngine: ObservableObject {
     }
 
     func warmStoryOpen(storyId: String, adjacentIds: [String], api: APIClient) {
+        guard !isStoryViewerActive, !storyId.isEmpty else { return }
         idleCleanupTask?.cancel()
 
         if let lastStoryOpenWarm,
@@ -171,6 +226,7 @@ final class MediaEngine: ObservableObject {
             return
         }
         lastStoryOpenWarm = (storyId, Date())
+        warmUpcomingStacks(ids: adjacentIds, api: api)
 
         let ids = uniqueNonEmptyIds([storyId] + adjacentIds)
 
@@ -178,19 +234,38 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        Task { @MainActor [weak self, api] in
-            guard let self else {
-                return
-            }
-
+        storyOpenWarmTask?.cancel()
+        storyOpenGeneration += 1
+        let generation = storyOpenGeneration
+        storyOpenWarmTask = Task { @MainActor [weak self, api] in
+            guard let self else { return }
             let warmLimit = min(NetworkQualityMonitor.shared.stackPreheatLimit, 8)
             let restoredCount = await api.restoreCachedStoryStacks(ids: ids, limit: warmLimit)
-            if let cached = await api.cachedStoryStackForDisplay(storyId: storyId) {
-                prepare(stack: cached.story, around: 0, activeIdentity: nil)
-            }
+            guard !Task.isCancelled, generation == storyOpenGeneration, !isStoryViewerActive else { return }
+            let cached = await api.cachedStoryStackForDisplay(storyId: storyId)
+            guard !Task.isCancelled, generation == storyOpenGeneration, !isStoryViewerActive else { return }
+            if let cached { prepare(stack: cached.story, around: 0, activeIdentity: nil) }
             MediaPerformance.mark("media_engine_story_open_warm id=\(storyId) restored=\(restoredCount) candidates=\(ids.count)")
             api.prefetchStoryStacks(ids: ids, refresh: false, limit: warmLimit)
+            storyOpenWarmTask = nil
         }
+    }
+
+    func recordViewerNavigation(delta: Int) {
+        if delta != 0 { viewerNavigationDirection = delta > 0 ? 1 : -1 }
+    }
+
+    // Publish navigation intent before SwiftUI activates the destination. Budget
+    // notifications during player attachment must protect the destination, not
+    // the player that was visible in the preceding frame.
+    func commitViewerIntent(stack: StoryStack, index: Int, activeIdentity: String?) {
+        latestViewerIntent = (stack, index, activeIdentity)
+    }
+
+    private func cancelStoryOpenWarm() {
+        storyOpenWarmTask?.cancel()
+        storyOpenWarmTask = nil
+        storyOpenGeneration += 1
     }
 
     func prepareInitialStoryStacks(
@@ -202,7 +277,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
-        let playerLimit = min(NetworkQualityMonitor.shared.preparedPlayerLimit, 3)
+        let playerLimit = min(NetworkQualityMonitor.shared.retainedPreparedPlayerLimit, 3)
         guard playerLimit > 0 else {
             return
         }
@@ -218,6 +293,7 @@ final class MediaEngine: ObservableObject {
             return
         }
 
+        latestInitialWarmSources = sources
         storyVideoPlaybackPool.prepare(sources: sources, activeIdentity: nil)
         scheduleOfflineHLSPreheat(sources: sources)
         MediaPerformance.mark(
@@ -231,12 +307,15 @@ final class MediaEngine: ObservableObject {
         activeIdentity: String?,
         promoteActiveIfNeeded: Bool = true
     ) {
+        latestViewerIntent = (stack, index, activeIdentity)
         MediaPreheater.preheat(
             stack: stack,
             around: index,
-            preheatVideoAssets: false
+            preheatVideoAssets: false,
+            direction: viewerNavigationDirection,
+            additionalItems: index >= stack.items.count - 2 ? upcomingStacks.compactMap { $0.items.first } : []
         )
-        let sources = adjacentVideoSources(in: stack, around: index)
+        let sources = Self.viewerVideoSources(stack: stack, around: index, upcomingStacks: upcomingStacks, mode: UBEYEResourceMonitor.shared.mode, direction: viewerNavigationDirection)
         storyVideoPlaybackPool.prepare(
             sources: sources,
             activeIdentity: activeIdentity,
@@ -247,7 +326,15 @@ final class MediaEngine: ObservableObject {
         )
     }
 
-    func storyViewerDidAppear() {
+    func storyViewerDidAppear(storyId: String) {
+        cancelStoryOpenWarm()
+        viewerNavigationDirection = 1
+        if lastStoryOpenWarm?.id != storyId {
+            upcomingStacks = []
+            crossStackWarmTask?.cancel()
+            crossStackWarmTask = nil
+            crossStackGeneration += 1
+        }
         isStoryViewerActive = true
         idleCleanupTask?.cancel()
         idleCleanupTask = nil
@@ -263,7 +350,13 @@ final class MediaEngine: ObservableObject {
     }
 
     func storyViewerDidDisappear() {
+        cancelStoryOpenWarm()
+        lastStoryOpenWarm = nil
         isStoryViewerActive = false
+        latestViewerIntent = nil
+        crossStackWarmTask?.cancel()
+        crossStackWarmTask = nil
+        crossStackGeneration += 1
         idleCleanupTask?.cancel()
         idleCleanupTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(15))
@@ -280,6 +373,15 @@ final class MediaEngine: ObservableObject {
     }
 
     private func removeAll(reason: String) {
+        cancelStoryOpenWarm()
+        lastStoryOpenWarm = nil
+        predictiveIntentKey = nil
+        latestViewerIntent = nil
+        latestInitialWarmSources = []
+        upcomingStacks = []
+        crossStackWarmTask?.cancel()
+        crossStackWarmTask = nil
+        crossStackGeneration += 1
         idleCleanupTask?.cancel()
         idleCleanupTask = nil
         backgroundPrefetchTask?.cancel()
@@ -291,6 +393,42 @@ final class MediaEngine: ObservableObject {
         storyVideoPlaybackPool.removeAll()
         MediaImageCache.shared.removeAll()
         MediaPerformance.mark("media_engine_clear reason=\(reason)")
+    }
+
+    private func warmUpcomingStacks(ids: [String], api: APIClient) {
+        crossStackWarmTask?.cancel()
+        crossStackGeneration += 1
+        let generation = crossStackGeneration
+        upcomingStacks = []
+        let candidates = Array(uniqueNonEmptyIds(ids).prefix(2))
+        guard !candidates.isEmpty, UBEYEResourceMonitor.shared.allowsSpeculativeMedia, !NetworkQualityMonitor.shared.isActivePlaybackBuffering else { return }
+        crossStackWarmTask = Task { @MainActor [weak self, api] in
+            guard let self else { return }
+            for id in candidates {
+                guard !Task.isCancelled, generation == crossStackGeneration, UBEYEResourceMonitor.shared.allowsSpeculativeMedia, !NetworkQualityMonitor.shared.isActivePlaybackBuffering else { return }
+                let cached = await api.cachedStoryStackForDisplay(storyId: id)
+                let response: StoryStackResponse?
+                if let cached { response = cached }
+                else { response = try? await api.storyStack(storyId: id, refresh: false) }
+                guard !Task.isCancelled, generation == crossStackGeneration, UBEYEResourceMonitor.shared.allowsSpeculativeMedia, !NetworkQualityMonitor.shared.isActivePlaybackBuffering else { return }
+                if let response { upcomingStacks.append(response.story) }
+                if isStoryViewerActive, let intent = latestViewerIntent {
+                    prepare(stack: intent.stack, around: intent.index, activeIdentity: intent.identity, promoteActiveIfNeeded: false)
+                }
+            }
+            crossStackWarmTask = nil
+        }
+    }
+
+    static func viewerVideoSources(stack: StoryStack, around index: Int, upcomingStacks: [StoryStack], mode: UBEYEAdaptiveMode = .standard, direction: Int = 1) -> [StoryVideoPlaybackSource] {
+        let indices = StoryWarmOrder.indices(active: index, count: stack.items.count, mode: mode, direction: direction)
+        var items = indices.map { stack.items[$0] }
+        if mode == .standard, direction >= 0, index >= stack.items.count - 2 {
+            // The next creator remains ahead of the opposite-direction fallback.
+            let insertion = max(0, items.count - (index > 0 ? 1 : 0))
+            items.insert(contentsOf: upcomingStacks.compactMap { $0.items.first(where: \.isPlayableVideo) }, at: insertion)
+        }
+        return items.filter(\.isPlayableVideo).map(\.playbackSource)
     }
 
     private func adjacentVideoSources(
@@ -324,7 +462,7 @@ final class MediaEngine: ObservableObject {
         }
 
         let sources = Self.initialVideoSources(in: stacks, limit: playerLimit)
-        guard !Task.isCancelled, !isStoryViewerActive else {
+        guard !Task.isCancelled, !isStoryViewerActive, UBEYEResourceMonitor.shared.allowsSpeculativeMedia else {
             return
         }
         guard !sources.isEmpty else {
@@ -404,7 +542,7 @@ final class MediaEngine: ObservableObject {
 
         let candidates: [Int] = switch UBEYEResourceMonitor.shared.mode {
         case .standard:
-            [itemIndex, itemIndex + 1, itemIndex - 1, itemIndex + 2]
+            [itemIndex, itemIndex + 1, itemIndex + 2, itemIndex + 3, itemIndex - 1]
         case .constrained:
             [itemIndex, itemIndex + 1]
         case .critical:
@@ -446,6 +584,7 @@ final class MediaEngine: ObservableObject {
 
 @MainActor
 final class StoryVideoPlaybackPool: ObservableObject {
+    static let preparationAvailable = Notification.Name("ubeye.videoPreparationAvailable")
     nonisolated static let defaultHandoffWait: Duration = .milliseconds(300)
 
     struct PreparedPlayer {
@@ -460,19 +599,27 @@ final class StoryVideoPlaybackPool: ObservableObject {
         let cacheState: String
         let wasPrerolled: Bool
         let handoffStage: HandoffStage
+        let displaySurface: AspectFitPlayerView
+        let preparationMilliseconds: Int
 
+        @MainActor
         init(
             player: AVPlayer,
             playbackURL: URL,
             cacheState: String,
             wasPrerolled: Bool = false,
-            handoffStage: HandoffStage? = nil
+            handoffStage: HandoffStage? = nil,
+            displaySurface: AspectFitPlayerView? = nil,
+            preparationMilliseconds: Int = 0
         ) {
             self.player = player
             self.playbackURL = playbackURL
             self.cacheState = cacheState
             self.wasPrerolled = wasPrerolled
             self.handoffStage = handoffStage ?? (wasPrerolled ? .prerolled : .ready)
+            self.displaySurface = displaySurface ?? AspectFitPlayerView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            self.displaySurface.attach(player)
+            self.preparationMilliseconds = preparationMilliseconds
         }
     }
 
@@ -491,6 +638,11 @@ final class StoryVideoPlaybackPool: ObservableObject {
     private var prepareTasks: [String: Preparation] = [:]
     private var desiredIdentities = Set<String>()
     private var acquiringIdentities = Set<String>()
+    private final class CheckedOutPlayer {
+        weak var player: AVPlayer?
+        init(_ player: AVPlayer) { self.player = player }
+    }
+    private var checkedOutPlayers: [String: CheckedOutPlayer] = [:]
     private let playerBuilder: (
         StoryVideoPlaybackSource,
         @escaping @MainActor (PreparedPlayer) -> Void
@@ -528,8 +680,10 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
     func takePreparedPlayer(
         for source: StoryVideoPlaybackSource,
-        waitUpTo waitDuration: Duration = defaultHandoffWait
+        waitUpTo waitDuration: Duration = defaultHandoffWait,
+        completedOnly: Bool = false
     ) async -> PreparedPlayer? {
+        if completedOnly { return await checkOutPreparedPlayer(for: source.identity) }
         let waitStartedAt = Date()
         let identity = source.identity
         acquiringIdentities.insert(identity)
@@ -610,16 +764,36 @@ final class StoryVideoPlaybackPool: ObservableObject {
         )
     }
 
+    private func hasCheckedOutPlayer(for identity: String) -> Bool {
+        if let player = checkedOutPlayers[identity]?.player, player.currentItem != nil { return true }
+        checkedOutPlayers[identity] = nil
+        return false
+    }
+
+    func hasPreparation(for identity: String) -> Bool {
+        preparedPlayers[identity] != nil || stagedPlayers[identity] != nil || prepareTasks[identity] != nil
+    }
+
+    func suspendSpeculativePreparations(activeIdentity: String?) {
+        for identity in Array(prepareTasks.keys) where identity != activeIdentity && !acquiringIdentities.contains(identity) {
+            if let preparation = prepareTasks[identity] { cancelPreparation(preparation, for: identity) }
+        }
+    }
+
     func prepare(
         sources: [StoryVideoPlaybackSource],
         activeIdentity: String?,
-        promoteActiveIfNeeded: Bool = true
+        promoteActiveIfNeeded: Bool = true,
+        suspendNewWork: Bool = false
     ) {
+        checkedOutPlayers = checkedOutPlayers.filter { $0.value.player?.currentItem != nil }
         let desiredSources = Self.prioritizedSources(
             sources: sources,
             activeIdentity: activeIdentity,
-            limit: maxPreparedPlayers
+            limit: preparedPlayerLimitOverride.map { min($0, 3) } ?? NetworkQualityMonitor.shared.retainedPreparedPlayerLimit
         )
+        let suspendsNewWork = suspendNewWork || maxPreparedPlayers == 0
+        let preparationIdentities = Set(desiredSources.prefix(suspendsNewWork ? 0 : maxPreparedPlayers).map(\.identity))
 
         var nextDesiredIdentities = Set(desiredSources.map(\.identity))
         let promotedActiveSource = promoteActiveIfNeeded
@@ -627,11 +801,14 @@ final class StoryVideoPlaybackPool: ObservableObject {
                 sources.first(where: { $0.identity == identity })
             }
             : nil
-        if promoteActiveIfNeeded, let activeIdentity {
+        if let activeIdentity {
             if promotedActiveSource != nil ||
                 preparedPlayers[activeIdentity] != nil ||
                 stagedPlayers[activeIdentity] != nil ||
                 prepareTasks[activeIdentity] != nil {
+                // Retaining an existing destination is independent of permission to
+                // start a new active preparation. Visibility/budget observers can run
+                // before the destination controller checks out its staged player.
                 // Preserve a player that was warmed immediately before navigation long
                 // enough for the active viewer to claim it. If launch warming missed,
                 // promote the exact active source now. It does not consume the adjacent
@@ -642,11 +819,19 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         desiredIdentities = nextDesiredIdentities
         prune(keeping: desiredIdentities)
+        // Keep completed players, but cancel speculative work outside the current
+        // start budget. A one-player upload budget must not start three retained slots.
+        for identity in Array(prepareTasks.keys) where identity != activeIdentity &&
+            !acquiringIdentities.contains(identity) && !preparationIdentities.contains(identity) {
+            if let preparation = prepareTasks[identity] { cancelPreparation(preparation, for: identity) }
+        }
 
         let sourcesToPrepare = ([promotedActiveSource].compactMap { $0 } + desiredSources)
         for source in sourcesToPrepare {
             let identity = source.identity
-            guard preparedPlayers[identity] == nil,
+            guard identity == activeIdentity || preparationIdentities.contains(identity) else { continue }
+            guard !hasCheckedOutPlayer(for: identity),
+                  preparedPlayers[identity] == nil,
                   stagedPlayers[identity] == nil,
                   prepareTasks[identity] == nil else {
                 continue
@@ -677,6 +862,12 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
                 guard !Task.isCancelled,
                       self.prepareTasks[identity]?.id == preparationID else {
+                    if self.checkedOutPlayers[identity]?.player !== prepared.player {
+                        prepared.player.cancelPendingPrerolls()
+                        prepared.player.pause()
+                        prepared.player.replaceCurrentItem(with: nil)
+                        prepared.displaySurface.attach(nil)
+                    }
                     MediaPerformance.cancelInterval(
                         prepareInterval,
                         reason: "staged_handoff_or_cancelled"
@@ -687,12 +878,15 @@ final class StoryVideoPlaybackPool: ObservableObject {
                 self.finishPreparation(id: preparationID, for: identity)
                 self.stagedPlayers[identity] = nil
                 guard self.desiredIdentities.contains(identity) || self.acquiringIdentities.contains(identity) else {
+                    prepared.player.cancelPendingPrerolls()
                     prepared.player.pause()
+                    prepared.player.replaceCurrentItem(with: nil)
                     MediaPerformance.cancelInterval(prepareInterval, reason: "no_longer_adjacent")
                     return
                 }
 
                 self.preparedPlayers[identity] = prepared
+                NotificationCenter.default.post(name: Self.preparationAvailable, object: self, userInfo: ["identity": identity])
                 MediaPerformance.endInterval(
                     prepareInterval,
                     event: "video_player_prepared preroll=\(prepared.wasPrerolled ? "ready" : "asset_only") url=\(source.url.lastPathComponent)",
@@ -753,12 +947,15 @@ final class StoryVideoPlaybackPool: ObservableObject {
         prepareTasks.removeAll()
 
         for prepared in preparedPlayers.values {
+            prepared.player.cancelPendingPrerolls()
             prepared.player.pause()
+            prepared.player.replaceCurrentItem(with: nil)
         }
         preparedPlayers.removeAll()
         for staged in stagedPlayers.values {
             staged.prepared.player.cancelPendingPrerolls()
             staged.prepared.player.pause()
+            staged.prepared.player.replaceCurrentItem(with: nil)
         }
         stagedPlayers.removeAll()
         desiredIdentities.removeAll()
@@ -789,6 +986,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         for source: StoryVideoPlaybackSource,
         onStaged: @escaping @MainActor (PreparedPlayer) -> Void
     ) async -> PreparedPlayer? {
+        let preparationStartedAt = Date()
         let resolved = await resolvePlaybackURL(for: source)
         let playbackURL = MediaPlaybackQuality.startupPlaybackURL(
             for: resolved.playbackURL
@@ -804,6 +1002,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         player.actionAtItemEnd = .pause
         player.automaticallyWaitsToMinimizeStalling = true
         player.pause()
+        if #available(iOS 26.0, *) { player.networkResourcePriority = .low }
         let staged = PreparedPlayer(
             player: player,
             playbackURL: playbackURL,
@@ -819,8 +1018,16 @@ final class StoryVideoPlaybackPool: ObservableObject {
         let isReadyToPreroll = await waitUntilReadyToPreroll(player: player, item: item)
         let wasPrerolled: Bool
         if isReadyToPreroll, !Task.isCancelled {
-            wasPrerolled = await player.preroll(atRate: 1)
+            let completed = await player.preroll(atRate: 1)
             player.pause()
+            if let target = ExactVideoQualityPolicy.target(in: playbackURL) {
+                let buffered = item.loadedTimeRanges.map(\.timeRangeValue).filter {
+                    $0.start.seconds <= 0.05
+                }.map { $0.start.seconds + $0.duration.seconds }.max() ?? 0
+                wasPrerolled = completed && ExactVideoQualityPolicy.isReady(size: item.presentationSize,
+                    target: target, sourceWidth: source.pixelWidth, sourceHeight: source.pixelHeight,
+                    buffered: buffered, remaining: source.durationSeconds)
+            } else { wasPrerolled = completed }
         } else {
             wasPrerolled = false
         }
@@ -830,7 +1037,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
             playbackURL: playbackURL,
             cacheState: resolved.cacheState,
             wasPrerolled: wasPrerolled,
-            handoffStage: wasPrerolled ? .prerolled : .ready
+            handoffStage: wasPrerolled ? .prerolled : .ready,
+            displaySurface: staged.displaySurface,
+            preparationMilliseconds: Int(max(0, Date().timeIntervalSince(preparationStartedAt) * 1_000))
         )
     }
 
@@ -871,7 +1080,10 @@ final class StoryVideoPlaybackPool: ObservableObject {
     private static func resolvePlaybackURL(
         for source: StoryVideoPlaybackSource
     ) async -> (playbackURL: URL, cacheState: String) {
-        if let localHLSURL = await HLSOfflineCache.shared.cachedPlaybackURL(for: source) {
+        // An offline package may contain only a low rendition. Online playback
+        // needs the full ladder so it can recover to HD.
+        if !NetworkQualityMonitor.shared.isConnected,
+           let localHLSURL = await HLSOfflineCache.shared.cachedPlaybackURL(for: source) {
             return (localHLSURL, "hls_package")
         }
 
@@ -900,6 +1112,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         }
 
         desiredIdentities.remove(identity)
+        checkedOutPlayers[identity] = CheckedOutPlayer(prepared.player)
         prepared.player.pause()
         let currentSeconds = prepared.player.currentTime().seconds
         let neededSeek = currentSeconds.isFinite && abs(currentSeconds) > 0.001
@@ -912,6 +1125,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
 
         guard didSeek, !Task.isCancelled else {
             prepared.player.pause()
+            prepared.player.replaceCurrentItem(with: nil)
+            prepared.displaySurface.attach(nil)
+            checkedOutPlayers[identity] = nil
             MediaPerformance.mark("video_player_pool_seek_failed url=\(prepared.playbackURL.lastPathComponent)")
             return nil
         }
@@ -930,7 +1146,9 @@ final class StoryVideoPlaybackPool: ObservableObject {
             handoffStage: Self.retainsPreroll(
                 wasPrerolled: prepared.wasPrerolled,
                 neededSeek: neededSeek
-            ) ? .prerolled : .ready
+            ) ? .prerolled : .ready,
+            displaySurface: prepared.displaySurface,
+            preparationMilliseconds: prepared.preparationMilliseconds
         )
     }
 
@@ -943,6 +1161,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         prepareTasks[identity]?.task.cancel()
         prepareTasks[identity] = nil
         desiredIdentities.remove(identity)
+        checkedOutPlayers[identity] = CheckedOutPlayer(staged.prepared.player)
         staged.prepared.player.cancelPendingPrerolls()
         staged.prepared.player.pause()
         MediaPerformance.mark(
@@ -1008,6 +1227,7 @@ final class StoryVideoPlaybackPool: ObservableObject {
         prepareTasks[identity] = nil
         stagedPlayers[identity]?.prepared.player.cancelPendingPrerolls()
         stagedPlayers[identity]?.prepared.player.pause()
+        stagedPlayers[identity]?.prepared.player.replaceCurrentItem(with: nil)
         stagedPlayers[identity] = nil
     }
 
@@ -1030,11 +1250,14 @@ final class StoryVideoPlaybackPool: ObservableObject {
         for identity in Array(stagedPlayers.keys) where !retainedIdentities.contains(identity) {
             stagedPlayers[identity]?.prepared.player.cancelPendingPrerolls()
             stagedPlayers[identity]?.prepared.player.pause()
+            stagedPlayers[identity]?.prepared.player.replaceCurrentItem(with: nil)
             stagedPlayers[identity] = nil
         }
 
         for identity in Array(preparedPlayers.keys) where !retainedIdentities.contains(identity) {
+            preparedPlayers[identity]?.player.cancelPendingPrerolls()
             preparedPlayers[identity]?.player.pause()
+            preparedPlayers[identity]?.player.replaceCurrentItem(with: nil)
             preparedPlayers[identity] = nil
         }
 

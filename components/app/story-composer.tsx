@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react"
 import Image from "next/image"
-import { StoryFramingControl } from "@/components/app/story-framing-control"
 import { put } from "@vercel/blob/client"
 import { Camera, Clapperboard, Coins, Loader2 } from "lucide-react"
 import { rgbaToThumbHash } from "thumbhash"
@@ -831,7 +830,6 @@ async function uploadTusFile(input: {
 export function StoryComposer({ handle }: StoryComposerProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [imageContentMode, setImageContentMode] = useState<StoryImageContentMode>(storyMediaContract.imageFraming.defaultContentMode)
   const [isUploading, setIsUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [statusText, setStatusText] = useState("")
@@ -853,7 +851,6 @@ export function StoryComposer({ handle }: StoryComposerProps) {
     previewUrlRef.current = url
     setSelectedFile(file)
     setPreviewUrl(url)
-    setImageContentMode(storyMediaContract.imageFraming.defaultContentMode)
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -929,7 +926,7 @@ export function StoryComposer({ handle }: StoryComposerProps) {
 
       const imageDerivatives =
         assetKind === "image"
-          ? await buildBrowserImageDerivatives(mediaEntry, imageContentMode)
+          ? await buildBrowserImageDerivatives(mediaEntry, "fit")
           : null
       const videoChecksum =
         assetKind === "video" ? await sha256Hex(mediaEntry) : null
@@ -1189,19 +1186,16 @@ export function StoryComposer({ handle }: StoryComposerProps) {
             </p>
           </div>
 
-          <input type="hidden" name="imageContentMode" value={imageContentMode} />
+          <input type="hidden" name="imageContentMode" value="fit" />
           {selectedFile && previewUrl ? (
             <div className="space-y-3">
               <div className="relative mx-auto aspect-[9/16] w-full max-w-[320px] overflow-hidden rounded-[8px] bg-black">
                 {fileAssetKind(selectedFile) === "video" ? (
                   <video src={previewUrl} aria-label="Selected story preview" controls playsInline className="h-full w-full object-contain" />
                 ) : (
-                  <Image src={previewUrl} alt="Selected story preview" fill unoptimized sizes="320px" className={imageContentMode === "fill" ? "object-cover" : "object-contain"} />
+                  <Image src={previewUrl} alt="Selected story preview" fill unoptimized sizes="320px" className="object-contain" />
                 )}
               </div>
-              {fileAssetKind(selectedFile) === "image" ? (
-                <StoryFramingControl value={imageContentMode} onChange={setImageContentMode} disabled={isUploading} />
-              ) : null}
             </div>
           ) : null}
 

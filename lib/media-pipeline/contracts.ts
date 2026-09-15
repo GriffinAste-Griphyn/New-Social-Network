@@ -1,5 +1,5 @@
 export const mediaPipelineVersion = "hls-v4"
-export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-aac-v6"
+export const mediaEncoderVersion = "ffmpeg-static-5.3.0-h264-aac-v8"
 export const maximumMediaProcessingAttempts = 8
 
 export type MediaSourceMetadata = {
@@ -15,6 +15,11 @@ export type MediaSourceMetadata = {
   colorTransfer?: string | null
   colorPrimaries?: string | null
   fieldOrder?: string | null
+  pixelFormat?: string | null
+  sampleAspectRatio?: string | null
+  videoBitrate?: number | null
+  videoProfile?: string | null
+  videoLevel?: number | null
 }
 
 export type MediaRenditionProfile = {

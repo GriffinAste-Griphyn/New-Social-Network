@@ -22,10 +22,10 @@ export async function processImageWorkflow(jobId: string) {
 
   try {
     const output = await processImageAssetStep(jobId)
-    return completeImageProcessingStep(jobId, output)
+    return completeImageProcessingStep(jobId, output, workflowRunId)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await failImageProcessingStep(jobId, message)
+    await failImageProcessingStep(jobId, message, workflowRunId)
     throw error
   }
 }

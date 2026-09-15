@@ -1,10 +1,9 @@
 import { and, desc, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm"
-import { after } from "next/server"
 import { start } from "workflow/api"
 
 import { getDb } from "@/lib/db"
 import { stories, storyPublishJobs } from "@/lib/db/schema"
-import { isWorkflowDispatchEnabled } from "@/lib/media-pipeline/features"
+import { dispatchMediaTask } from "@/lib/media-dispatch"
 import {
   completeStoryPublicationStep,
   failStoryPublicationStep,
@@ -144,18 +143,13 @@ export async function enqueueStoryPublication(
     if (!claim) return null
     claimedAttempt = claim.attempts
 
-    if (!isWorkflowDispatchEnabled()) {
-      after(async () => {
-        try {
-          await processStoryPublicationDirect(storyId)
-        } catch (error) {
-          console.error("story_publication_direct_failed", { storyId, error })
-        }
-      })
-      return storyId
-    }
-
-    const run = await start(publishStoryWorkflow, [storyId])
+    const run = await dispatchMediaTask({
+      label: "story_publication",
+      identity: storyId,
+      startDurable: () => start(publishStoryWorkflow, [storyId]),
+      runDirect: () => processStoryPublicationDirect(storyId),
+    })
+    if (!run) return storyId
     await db
       .update(storyPublishJobs)
       .set({ workflowRunId: run.runId, updatedAt: new Date() })
@@ -168,6 +162,7 @@ export async function enqueueStoryPublication(
       )
     return run.runId
   } catch (error) {
+    if (claimedAttempt === null) throw error
     await db
       .update(storyPublishJobs)
       .set({
@@ -175,7 +170,7 @@ export async function enqueueStoryPublication(
         lastError: error instanceof Error ? error.message.slice(0, 2_000) : String(error),
         updatedAt: new Date(),
       })
-      .where(eq(storyPublishJobs.storyId, storyId))
+      .where(and(eq(storyPublishJobs.storyId, storyId), eq(storyPublishJobs.status, "running"), eq(storyPublishJobs.attempts, claimedAttempt)))
     if (
       claimedAttempt !== null &&
       claimedAttempt >= maxStoryPublicationAttempts
@@ -183,7 +178,7 @@ export async function enqueueStoryPublication(
       await db
         .update(storyPublishJobs)
         .set({ status: "failed", updatedAt: new Date() })
-        .where(eq(storyPublishJobs.storyId, storyId))
+        .where(and(eq(storyPublishJobs.storyId, storyId), eq(storyPublishJobs.status, "pending"), eq(storyPublishJobs.attempts, claimedAttempt)))
     }
     throw error
   }

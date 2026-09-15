@@ -282,7 +282,7 @@ function jsonResponse(
   const body = JSON.stringify(payload)
   const etag = `"${createHash("sha256").update(body).digest("base64url")}"`
   const cacheControl = "private, max-age=5, stale-while-revalidate=30"
-  const vary = "Authorization, X-Device-Id"
+  const vary = "Authorization, X-Device-Id, X-UBEYE-App-Build"
   const headers = new Headers({
     "Cache-Control": cacheControl,
     "CDN-Cache-Control": "s-maxage=5",

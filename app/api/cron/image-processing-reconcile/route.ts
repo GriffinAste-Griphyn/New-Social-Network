@@ -1,3 +1,4 @@
+import { reconcileBackgroundMediaJobs } from "@/lib/media-background-jobs"
 import { reconcileImageProcessingJobs } from "@/lib/image-processing-jobs"
 import { backfillActiveStoryFitThumbnails } from "@/lib/story-thumbnail-backfill"
 
@@ -17,9 +18,10 @@ export async function GET(request: Request) {
   }
 
   const result = await reconcileImageProcessingJobs({ limit: 10 })
+  const background = await reconcileBackgroundMediaJobs()
   const thumbnailBackfill = await backfillActiveStoryFitThumbnails({ limit: 25 })
   return Response.json(
-    { ok: true, ...result, thumbnailBackfill },
+    { ok: true, ...result, thumbnailBackfill, background },
     { headers: { "Cache-Control": "private, no-store" } },
   )
 }

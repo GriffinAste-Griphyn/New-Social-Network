@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { getMobileMediaConfig } from "@/lib/mobile-media-config"
 
@@ -6,6 +6,10 @@ const originalEnv = { ...process.env }
 
 const mediaConfigEnvironmentNames = [
   "MOBILE_MEDIA_CONFIG_VERSION",
+  "MOBILE_ADAPTIVE_START_CANARY_PERCENT",
+  "MOBILE_ADAPTIVE_UPLOAD_CANARY_PERCENT",
+  "MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED",
+  "MOBILE_ADAPTIVE_UPLOAD_CHUNKS_ENABLED",
   "VERCEL_BLOB_SUSPENDED_MODE",
   "STORY_IMAGE_STORAGE_PROVIDER",
   "CLOUDFLARE_R2_ACCOUNT_ID",
@@ -64,12 +68,13 @@ describe("mobile media runtime config", () => {
     }
 
     expect(getMobileMediaConfig()).toMatchObject({
-      version: "2026-09-10.1",
+      version: "2026-09-13.6",
       rolloutProfile: "preheat-canary",
       blobUploadsAvailable: true,
+      profilePhotoUploadsAvailable: true,
       storyImageUploadsAvailable: true,
       imageDerivativeUploadEnabled: true,
-      uploadChunkBytes: 5 * 1024 * 1024,
+      uploadChunkBytes: 50 * 1024 * 1024,
       blobMultipartThresholdBytes: {
         constrained: 32 * 1024 * 1024,
         standard: 64 * 1024 * 1024,
@@ -109,6 +114,7 @@ describe("mobile media runtime config", () => {
 
     expect(getMobileMediaConfig()).toMatchObject({
       blobUploadsAvailable: false,
+      profilePhotoUploadsAvailable: false,
       storyImageUploadsAvailable: false,
     })
   })
@@ -125,10 +131,12 @@ describe("mobile media runtime config", () => {
 
     expect(getMobileMediaConfig({ clientBuild: 399 })).toMatchObject({
       blobUploadsAvailable: false,
+      profilePhotoUploadsAvailable: true,
       storyImageUploadsAvailable: false,
     })
     expect(getMobileMediaConfig({ clientBuild: 400 })).toMatchObject({
       blobUploadsAvailable: false,
+      profilePhotoUploadsAvailable: true,
       storyImageUploadsAvailable: true,
     })
   })
@@ -228,5 +236,105 @@ describe("mobile media runtime config", () => {
       },
       offlineHLSPreheatLimit: { constrained: 0, standard: 0 },
     })
+  })
+})
+
+
+describe("adaptive startup rollout", () => {
+  afterEach(() => { process.env = { ...originalEnv } })
+
+  it("permits three prepared players for build 424 while preserving older canary limits and overrides", () => {
+    for (const name of mediaConfigEnvironmentNames) delete process.env[name]
+    expect(getMobileMediaConfig({ clientBuild: 423, canaryBucket: 0 }).preparedPlayerLimit.standard).toBe(2)
+    expect(getMobileMediaConfig({ clientBuild: 424, canaryBucket: 0 }).preparedPlayerLimit.standard).toBe(3)
+    expect(getMobileMediaConfig({ clientBuild: 424, canaryBucket: 99 }).preparedPlayerLimit.standard).toBe(3)
+    expect(getMobileMediaConfig({ clientBuild: 424, canaryBucket: 0 }).startupMode).toBe("adaptive")
+    process.env.MOBILE_PREPARED_PLAYER_LIMIT_STANDARD_CANARY = "1"
+    expect(getMobileMediaConfig({ clientBuild: 424, canaryBucket: 0 }).preparedPlayerLimit.standard).toBe(1)
+  })
+
+  it("gates the canary on supported builds and stable cohort boundaries", () => {
+    delete process.env.MOBILE_ADAPTIVE_START_CANARY_PERCENT
+    expect(getMobileMediaConfig({ clientBuild: 421, canaryBucket: 0 }).startupMode).toBe("focused")
+    expect(getMobileMediaConfig({ clientBuild: 422, canaryBucket: 19 }).startupMode).toBe("adaptive")
+    expect(getMobileMediaConfig({ clientBuild: 422, canaryBucket: 20 }).startupMode).toBe("focused")
+    expect(getMobileMediaConfig({ clientBuild: 422 }).startupMode).toBe("focused")
+    process.env.MOBILE_ADAPTIVE_START_CANARY_PERCENT = "0"
+    expect(getMobileMediaConfig({ clientBuild: 422, canaryBucket: 0 }).startupMode).toBe("focused")
+  })
+
+  it("reduces speculative work while keeping the full adaptive ladder", () => {
+    for (const name of Object.keys(process.env)) if (name.startsWith("MOBILE_")) delete process.env[name]
+    process.env.MOBILE_STARTUP_STREAMING_PEAK_BITRATE_STANDARD = "8000000"
+    expect(getMobileMediaConfig({ clientBuild: 422, canaryBucket: 0 })).toMatchObject({
+      startupExperiment: "adaptive-canary", startupMode: "adaptive",
+      stackPreheatLimit: { standard: 2 }, preparedPlayerLimit: { standard: 2 },
+      persistentVideoPreheatLimit: { constrained: 0, standard: 1 },
+      offlineHLSPreheatLimit: { standard: 0 },
+      startupStreamingPeakBitRate: { standard: 4000000 },
+      preparedStreamingPeakBitRate: { standard: 8000000 },
+    })
+  })
+})
+
+describe("adaptive upload rollout", () => {
+  it("preserves source quality by default for existing and new builds", () => {
+    delete process.env.MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED
+    expect(getMobileMediaConfig({clientBuild:433,canaryBucket:99}).adaptiveUploadEncodingEnabled).toBe(false)
+    expect(getMobileMediaConfig({clientBuild:432,canaryBucket:99}).adaptiveUploadEncodingEnabled).toBe(false)
+    process.env.MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED = "false"
+    expect(getMobileMediaConfig({clientBuild:433,canaryBucket:99}).adaptiveUploadEncodingEnabled).toBe(false)
+  })
+  afterEach(() => { process.env = { ...originalEnv } })
+  it("requires a supported build, stable cohort and explicit independent switches", () => {
+    process.env.MOBILE_ADAPTIVE_UPLOAD_CANARY_PERCENT = "10"
+    process.env.MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED = "true"
+    process.env.MOBILE_ADAPTIVE_UPLOAD_CHUNKS_ENABLED = "true"
+    expect(getMobileMediaConfig({ clientBuild: 425, canaryBucket: 0 }).adaptiveUploadEncodingEnabled).toBe(false)
+    expect(getMobileMediaConfig({ clientBuild: 426 }).adaptiveUploadEncodingEnabled).toBe(false)
+    expect(getMobileMediaConfig({ clientBuild: 426, canaryBucket: 10 }).uploadExperiment).toBe("baseline")
+    expect(getMobileMediaConfig({ clientBuild: 426, canaryBucket: 0 })).toMatchObject({
+      uploadExperiment: "adaptive-canary", adaptiveUploadEncodingEnabled: true, adaptiveUploadChunksEnabled: true,
+    })
+    process.env.MOBILE_ADAPTIVE_UPLOAD_ENCODING_ENABLED = "false"
+    expect(getMobileMediaConfig({ clientBuild: 426, canaryBucket: 0 })).toMatchObject({
+      adaptiveUploadEncodingEnabled: false, adaptiveUploadChunksEnabled: true,
+    })
+    process.env.MOBILE_ADAPTIVE_UPLOAD_CHUNKS_ENABLED = "false"
+    expect(getMobileMediaConfig({ clientBuild: 426, canaryBucket: 0 }).uploadExperiment).toBe("baseline")
+  })
+})
+
+describe("build 440 adaptive rollout", () => {
+  afterEach(() => vi.unstubAllEnvs())
+  it("uses adaptive playback for new-build buckets without expanding older cohorts", () => {
+    vi.stubEnv("MOBILE_ADAPTIVE_START_PERCENT_BUILD_440", "100")
+    vi.stubEnv("MOBILE_ADAPTIVE_START_CANARY_PERCENT", "20")
+    expect(getMobileMediaConfig({ clientBuild: 440, canaryBucket: 99 }).startupMode).toBe("adaptive")
+    expect(getMobileMediaConfig({ clientBuild: 439, canaryBucket: 99 }).startupMode).toBe("focused")
+    expect(getMobileMediaConfig({ clientBuild: 440 }).startupMode).toBe("focused")
+    vi.stubEnv("MOBILE_ADAPTIVE_START_PERCENT_BUILD_440", "0")
+    expect(getMobileMediaConfig({ clientBuild: 440, canaryBucket: 0 }).startupMode).toBe("focused")
+  })
+})
+
+describe("build 445 startup quality", () => {
+  afterEach(() => vi.unstubAllEnvs())
+  it("keeps the full adaptive ladder and starts with HD allowed in every new-build cohort", () => {
+    for (const name of Object.keys(process.env)) if (name.startsWith("MOBILE_")) vi.stubEnv(name, "")
+    for (const canaryBucket of [0, 19, 99]) {
+      expect(getMobileMediaConfig({ clientBuild: 445, canaryBucket })).toMatchObject({
+        startupMode: "adaptive", adaptiveUploadEncodingEnabled: false,
+        startupStreamingPeakBitRate: { standard: 8_000_000 },
+        startupStreamingMaximumResolution: { standard: { width: 1080, height: 1920 } },
+      })
+    }
+    expect(getMobileMediaConfig({ clientBuild: 444, canaryBucket: 0 }).startupStreamingMaximumResolution.standard).toEqual({ width: 720, height: 1280 })
+  })
+  it("keeps explicit rollback limits and low-data restrictions", () => {
+    vi.stubEnv("MOBILE_STARTUP_MAX_WIDTH_STANDARD", "720")
+    vi.stubEnv("MOBILE_STARTUP_MAX_HEIGHT_STANDARD", "1280")
+    expect(getMobileMediaConfig({ clientBuild: 445, canaryBucket: 0 }).startupStreamingMaximumResolution.standard).toEqual({ width: 720, height: 1280 })
+    expect(getMobileMediaConfig({ clientBuild: 445, canaryBucket: 0 }).startupStreamingMaximumResolution.constrained).toEqual({ width: 720, height: 1280 })
   })
 })

@@ -135,7 +135,8 @@ actor HLSOfflineCache {
         limit: Int,
         policy: Policy = Policy()
     ) async {
-        guard limit > 0, policy.maximumAssets > 0, hasStorageHeadroom else {
+        guard limit > 0, policy.maximumAssets > 0, hasStorageHeadroom,
+              await !StoryUploadPriority.shared.isUploading else {
             return
         }
 
@@ -155,6 +156,7 @@ actor HLSOfflineCache {
             .prefix(min(limit, 1))
 
         for source in candidates {
+            guard await !StoryUploadPriority.shared.isUploading else { return }
             let offlinePeakBitRate = await MediaPlaybackQuality.offlineStreamingPeakBitRate
             let asset = AVURLAsset(url: source.url)
             let configuration = AVAssetDownloadConfiguration(

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 
 import { env } from "@/lib/env"
+import { renditionSelectionVersion } from "./renditions"
 
 export const storyMediaRoutePrefix = "/api/story-media"
 export const cloudflareStreamMediaPrefix = "cloudflare-stream"
@@ -245,6 +246,10 @@ export function publicStoryMediaUrl(
 
   if (options.signed && mediaPathname) {
     url.searchParams.set("token", createStoryMediaAccessToken(mediaPathname))
+    if (Number(request.headers.get("x-ubeye-app-build")) >= 447 &&
+        (mediaPathname.endsWith("/manifest/video.m3u8") || /\/master(?:-[a-z0-9-]+)?\.m3u8$/i.test(mediaPathname))) {
+      url.searchParams.set("selection", renditionSelectionVersion)
+    }
   }
 
   return url.toString()

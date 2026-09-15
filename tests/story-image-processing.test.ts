@@ -3,6 +3,7 @@ import sharp from "sharp"
 
 import {
   createImageProcessingStoredAsset,
+  encodeStoryImageDelivery,
   createStoryCanvasImage,
   storyImageDisplayDimensions,
   storyImageResizeOptions,
@@ -182,5 +183,17 @@ describe("story image processing", () => {
 
     expect(Array.from(data.subarray(topCenterOffset, topCenterOffset + 3))).toEqual([220, 30, 30])
     expect(Array.from(data.subarray(centerOffset, centerOffset + 3))).toEqual([220, 30, 30])
+  })
+})
+
+describe("fast first-display encoding", () => {
+  it("produces WebP, a thumbnail and a placeholder within the delivery contract", async () => {
+    const source = await sharp({ create: { width: 360, height: 640, channels: 3, background: "#a47c63" } }).png().toBuffer()
+    const output = await encodeStoryImageDelivery(source, "fit", "fast-webp")
+    expect(output.displayContentType).toBe("image/webp")
+    expect(output.display.size).toBeLessThanOrEqual(1_500_000)
+    expect(output.thumbnail.size).toBeLessThanOrEqual(150_000)
+    expect(output.thumbHash.length).toBeGreaterThan(0)
+    expect(await sharp(output.display.body).metadata()).toMatchObject({ width: 1080, height: 1920, format: "webp" })
   })
 })

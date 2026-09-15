@@ -1,5 +1,6 @@
-import { and, asc, eq, inArray, lt, or } from "drizzle-orm"
+import { and, asc, eq, inArray, lt, or, sql } from "drizzle-orm"
 
+import { canRepackageSourceVideo } from "@/lib/media-pipeline/source-repackaging"
 import { getDb } from "@/lib/db"
 import {
   mediaAssets,
@@ -88,6 +89,10 @@ export function planNextMediaProcessingStage(input: {
       isFinal: readyProfiles.length === profiles.length,
     }
   }
+
+  const reusableProfile = profiles.find(profile =>
+    canRepackageSourceVideo(input.source!, profile) && !input.readyVariantLabels.has(profile.label))
+  if (reusableProfile) return { kind: "rendition", profile: reusableProfile }
 
   const priority = ["540p", "720p", "360p", "1080p"] as const
   const nextProfile = priority
@@ -465,27 +470,6 @@ async function yieldDirectMediaProcessingJob(jobId: string, attempt: number) {
     return false
   }
 
-  const [released] = await db
-    .update(mediaProcessingJobs)
-    .set({
-      status: "pending",
-      workflowRunId: null,
-      failureCode: null,
-      lastError: null,
-      finishedAt: null,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(mediaProcessingJobs.id, jobId),
-        eq(mediaProcessingJobs.attempts, attempt),
-        eq(mediaProcessingJobs.status, job.status),
-      ),
-    )
-    .returning({ id: mediaProcessingJobs.id })
-
-  if (!released) return false
-
   const [asset] = await db
     .select({ processingStatus: mediaAssets.processingStatus })
     .from(mediaAssets)
@@ -510,12 +494,24 @@ async function yieldDirectMediaProcessingJob(jobId: string, attempt: number) {
       .where(eq(stories.mediaAssetId, job.mediaAssetId))
   }
 
-  return true
+  // Release ownership last. A queued continuation must not claim the job while
+  // this worker is still updating its asset. Planned yields are not failures
+  // and must not spend the error retry budget.
+  const [released] = await db.update(mediaProcessingJobs).set({
+    status: "pending", workflowRunId: null,
+    attempts: Math.max(0, attempt - 1),
+    failureCode: null, lastError: null, finishedAt: null, updatedAt: now,
+  }).where(and(
+    eq(mediaProcessingJobs.id, jobId),
+    eq(mediaProcessingJobs.attempts, attempt),
+    eq(mediaProcessingJobs.status, job.status),
+  )).returning({ id: mediaProcessingJobs.id })
+  return Boolean(released)
 }
 
 export async function processMediaJobRun(
   jobId: string,
-  options: { budgetMs?: number; maximumSlices?: number } = {},
+  options: { budgetMs?: number; maximumSlices?: number; stopAfterPlayable?: boolean } = {},
 ): Promise<MediaProcessingRunResult> {
   const startedAt = Date.now()
   const budgetMs = Math.min(
@@ -534,7 +530,9 @@ export async function processMediaJobRun(
 
     attempt = result.attempt
     const elapsedMs = Date.now() - startedAt
-    if (elapsedMs >= budgetMs || slices === maximumSlices) {
+    const shouldYieldForEnhancement = options.stopAfterPlayable &&
+      await isMediaJobPlayable(jobId)
+    if (shouldYieldForEnhancement || elapsedMs >= budgetMs || slices === maximumSlices) {
       const yielded = await yieldDirectMediaProcessingJob(jobId, attempt)
       if (!yielded) {
         const current = await readDirectJob(jobId)
@@ -555,6 +553,7 @@ export async function recoverableMediaJobIds(input: { limit?: number } = {}) {
   return getDb()
     .select({ id: mediaProcessingJobs.id })
     .from(mediaProcessingJobs)
+    .leftJoin(mediaAssets, eq(mediaAssets.id, mediaProcessingJobs.mediaAssetId))
     .where(
       and(
         lt(mediaProcessingJobs.attempts, maximumMediaProcessingAttempts),
@@ -568,6 +567,14 @@ export async function recoverableMediaJobIds(input: { limit?: number } = {}) {
         ),
       ),
     )
-    .orderBy(asc(mediaProcessingJobs.updatedAt))
+    .orderBy(asc(sql`case when ${mediaAssets.processingStatus} = 'ready' then 1 else 0 end`), asc(mediaProcessingJobs.updatedAt))
     .limit(Math.min(Math.max(input.limit ?? 1, 1), 3))
+}
+
+export async function isMediaJobPlayable(jobId: string) {
+  const [job] = await getDb().select({ ready: mediaAssets.processingStatus })
+    .from(mediaProcessingJobs)
+    .leftJoin(mediaAssets, eq(mediaAssets.id, mediaProcessingJobs.mediaAssetId))
+    .where(eq(mediaProcessingJobs.id, jobId)).limit(1)
+  return job?.ready === "ready"
 }

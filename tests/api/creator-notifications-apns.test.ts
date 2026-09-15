@@ -24,10 +24,12 @@ vi.mock("node:http2", async () => {
           setEncoding: ReturnType<typeof vi.fn>
           end: (body: string) => void
           resume: ReturnType<typeof vi.fn>
+          setTimeout: ReturnType<typeof vi.fn>
         }
 
         stream.setEncoding = vi.fn()
         stream.resume = vi.fn()
+        stream.setTimeout = vi.fn()
         stream.end = (body: string) => {
           requestCalls.push({ headers, body, host })
           queueMicrotask(() => {
@@ -87,6 +89,16 @@ describe("APNs creator notifications", () => {
     ].join("\\n")
     process.env.APNS_ENVIRONMENT = "sandbox"
     vi.mocked(getBlockedPeerIds).mockResolvedValue(new Set())
+  })
+
+  it("sends a silent readiness hint without an alert to the creator's devices", async () => {
+    mockSelectResults([[{ apnsDeviceToken: "a".repeat(64), apnsEnvironment: "sandbox" }]])
+    const { notifyStoryUploadReady } = await import("@/lib/creator-notifications")
+    await notifyStoryUploadReady({ creatorId: "creator_1", storyId: "story_1" })
+    expect(requestCalls).toHaveLength(1)
+    expect(requestCalls[0].headers).toMatchObject({ "apns-push-type": "background", "apns-priority": "5" })
+    expect(JSON.parse(requestCalls[0].body)).toEqual({ aps: { "content-available": 1 },
+      type: "story_upload_ready", creatorId: "creator_1", storyId: "story_1" })
   })
 
   it("sends native APNs notifications for APNs tokens", async () => {

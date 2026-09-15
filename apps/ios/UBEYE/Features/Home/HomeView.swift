@@ -512,7 +512,7 @@ final class FeedStore: ObservableObject {
         }
 
         var seen = Set<Int>()
-        return [index + 1, index - 1, index + 2]
+        return [index + 1, index + 2, index - 1]
             .filter { candidate in
                 ids.indices.contains(candidate) && seen.insert(candidate).inserted
             }
@@ -849,6 +849,7 @@ struct HomeView: View {
                             selectedStory = StoryRoute(id: story.id, source: .homeFollowing)
                         }
                         .onAppear {
+                            StoryDeliveryMeasurements.shared.observe(storyID: story.id, phase: "feed_visible")
                             prefetchFollowingStory(story, in: feed)
                         }
                     }
@@ -1112,24 +1113,23 @@ struct MyStoryHomeCard: View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: myStory.cardThumbnailUrl) { image in
-                    StoryCardThumbnailImage(image: image)
+                    ZStack(alignment: .bottomLeading) {
+                        StoryCardThumbnailImage(image: image)
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.72)],
+                            startPoint: .center,
+                            endPoint: .bottom
+                        )
+                        if let overlays = myStory.cardTextOverlays, !overlays.isEmpty {
+                            StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
+                                .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
+                        }
+                    }
                 } placeholder: {
                     MyStoryCardSkeleton()
                 }
                 .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.72)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if let overlays = myStory.latestTextOverlays, !overlays.isEmpty {
-                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
-                        .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
-                }
 
                 if isAwaitingReady {
                     Color.black.opacity(0.08)
@@ -1220,24 +1220,23 @@ struct StoryThumb: View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 CachedAsyncImage(url: story.cardThumbnailUrl) { image in
-                    StoryCardThumbnailImage(image: image)
+                    ZStack(alignment: .bottomLeading) {
+                        StoryCardThumbnailImage(image: image)
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.78)],
+                            startPoint: .center,
+                            endPoint: .bottom
+                        )
+                        if let overlays = story.textOverlays, !overlays.isEmpty {
+                            StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
+                                .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
+                        }
+                    }
                 } placeholder: {
                     Color.ubeyeSubtle
                 }
                 .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.78)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if let overlays = story.textOverlays, !overlays.isEmpty {
-                    StoryThumbnailOverlayView(overlays: overlays, fontSize: 6, horizontalPadding: 3.5, verticalPadding: 2)
-                        .frame(width: HomeStoryCardMetrics.width, height: HomeStoryCardMetrics.height)
-                }
 
                 Text(story.creator)
                     .font(.system(size: 14, weight: .semibold, design: .default))

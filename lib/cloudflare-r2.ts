@@ -286,7 +286,11 @@ export async function removeCloudflareR2DeliveryUrl(value: string) {
   const key = cloudflareR2DeliveryKeyFromUrl(value)
   if (!key) return false
 
-  await removeCloudflareR2DeliveryObject(key)
+  // Both generations remain usable for cached feeds until normal story cleanup.
+  const match = key.match(/^(stories\/web-direct\/.+)-(?:fast-v1-(?:display|fit-thumb)\.webp|enhanced-v1-display\.avif)$/)
+  const keys = match ? [key, `${match[1]}-fast-v1-display.webp`,
+    `${match[1]}-fast-v1-fit-thumb.webp`, `${match[1]}-enhanced-v1-display.avif`] : [key]
+  await Promise.all([...new Set(keys)].map(objectKey => removeCloudflareR2DeliveryObject(objectKey)))
   return true
 }
 

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "build": "node scripts/media-release-preflight.mjs && next build --webpack && node scripts/media-release-verify.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -20,7 +20,11 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate-database.mjs",
     "media:migrate:avatars": "node scripts/migrate-profile-avatars-to-r2.mjs",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "media:benchmark": "tsx scripts/media-quality-benchmark.mjs",
+    "media:benchmark:delivery": "tsx scripts/media-delivery-benchmark.mjs",
+    "media:benchmark:encoding": "tsx scripts/media-encoding-experiments.mjs",
+    "media:regression": "bash scripts/media-regression.sh"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",
@@ -30,6 +34,7 @@
     "@ubeye/shared": "file:packages/shared",
     "@vercel/blob": "^2.3.3",
     "@vercel/functions": "^3.9.3",
+    "@vercel/queue": "^0.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
@@ -61,6 +66,7 @@
     "eslint-config-next": "16.2.6",
     "shadcn": "^4.3.0",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^4.1.6"
   },

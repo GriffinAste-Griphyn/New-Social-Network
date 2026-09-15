@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm"
+import { and, eq, gt, inArray, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import {
@@ -15,7 +15,7 @@ import { isRetryableStoryModeration } from "@/lib/safety/moderation-retry"
 import type { ContentModerationResult } from "@/lib/safety/policy"
 import { reviewableStoryMediaUrl } from "@/lib/story-media/access"
 import { enqueueStoryPublication } from "@/lib/story-publication"
-import { deriveStoryPublicationStatus } from "@/lib/stories/cloudflare-status"
+import { withStoryModerationLease } from "@/lib/story-moderation-lease"
 
 function moderationStatus(result: ContentModerationResult) {
   return result.action === "approve"
@@ -26,6 +26,10 @@ function moderationStatus(result: ContentModerationResult) {
 }
 
 export async function moderatePendingStory(storyId: string) {
+  return withStoryModerationLease(storyId, (lease) => moderatePendingStoryCore(storyId, lease))
+}
+
+async function moderatePendingStoryCore(storyId: string, lease: { lane: string; token: string }) {
   const db = getDb()
   const [story] = await db
     .select({
@@ -124,29 +128,35 @@ export async function moderatePendingStory(storyId: string) {
 
   const nextModerationStatus = moderationStatus(result)
   const now = new Date()
-  const nextStatus = deriveStoryPublicationStatus({
-    currentStatus: story.status,
-    moderationStatus: nextModerationStatus,
-    providerReady: story.processingStatus === "ready",
-    structuralReady: story.scanStatus === "passed",
-    expiresAt: story.expiresAt,
-    now,
-  })
   const [updated] = await db
     .update(stories)
     .set({
       moderationStatus: nextModerationStatus,
       moderationReason: result.reason,
-      status: nextStatus,
+      // Provider readiness may advance while moderation is running. Compute
+      // publication against the locked current row, not the old snapshot.
+      status: sql`CASE
+        WHEN ${nextModerationStatus} = 'rejected' THEN 'removed'
+        WHEN ${nextModerationStatus} = 'approved'
+          AND ${stories.processingStatus} = 'ready'
+          AND EXISTS (SELECT 1 FROM ${mediaAssets}
+            WHERE ${mediaAssets.id} = ${stories.mediaAssetId}
+              AND ${mediaAssets.scanStatus} = 'passed') THEN 'live'
+        ELSE 'processing'
+      END::story_status`,
     })
     .where(
       and(
         eq(stories.id, story.id),
         eq(stories.moderationStatus, story.moderationStatus),
+        inArray(stories.status, ["processing", "live"]),
+        sql`EXISTS (SELECT 1 FROM media_worker_leases
+          WHERE lane = ${lease.lane} AND slot = 0
+            AND owner_token = ${lease.token} AND expires_at > now())`,
         gt(stories.expiresAt, now),
       ),
     )
-    .returning({ id: stories.id })
+    .returning({ id: stories.id, status: stories.status })
 
   if (!updated) return { status: "stale" as const }
 
@@ -165,7 +175,7 @@ export async function moderatePendingStory(storyId: string) {
     }),
   ])
 
-  if (nextStatus === "live") {
+  if (updated.status === "live") {
     await enqueueStoryPublication(story.id)
   } else {
     await invalidateMobileFeedSnapshotsForCreator(story.creatorId)
@@ -174,6 +184,6 @@ export async function moderatePendingStory(storyId: string) {
   return {
     status: "completed" as const,
     moderationStatus: nextModerationStatus,
-    storyStatus: nextStatus,
+    storyStatus: updated.status,
   }
 }

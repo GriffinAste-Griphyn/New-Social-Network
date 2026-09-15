@@ -16,6 +16,7 @@ import {
   publicStoryMediaUrl,
 } from "@/lib/story-storage"
 import { formatStoryPostedAt } from "@/lib/story-time"
+import { renditionSelectionVersion } from "@/lib/story-media/renditions"
 
 type MobileStoryTextOverlay = {
   id: string
@@ -158,6 +159,18 @@ function parseCloudflareStoryMediaUrl(value: string | null, request: Request) {
 
 async function mobileStoryMediaUrl(value: string | null, request: Request) {
   const cloudflareMedia = parseCloudflareStoryMediaUrl(value, request)
+
+  // Keep signing and authorization on our route; media segments still go directly
+  // to the provider. Old builds retain their existing direct-provider URLs.
+  if (value && Number(request.headers.get("x-ubeye-app-build")) >= 447 &&
+      (cloudflareMedia?.kind === "playback" || /\/master(?:-[a-z0-9-]+)?\.m3u8(?:\?|$)/i.test(value))) {
+    const signed = publicStoryMediaUrl(value, request, { signed: true })
+    if (signed) {
+      const url = new URL(signed, request.url)
+      url.searchParams.set("selection", renditionSelectionVersion)
+      return url.toString()
+    }
+  }
 
   if (cloudflareMedia) {
     return cloudflareMedia.kind === "thumbnail"

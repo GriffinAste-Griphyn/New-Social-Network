@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import ImageIO
 import Photos
 import PhotosUI
@@ -12,7 +13,7 @@ enum PickedStoryMedia {
 }
 
 struct StoryVideoUpload {
-    enum Source {
+    enum Source: String, Codable {
         case cameraFront
         case cameraBack
         case library
@@ -39,6 +40,7 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
     let fileName: String
     let mimeType: String
     let contentMode: StoryImageContentMode
+    let sourceChecksum: String
     private let sourceData: Data
 
     static func prepare(
@@ -133,6 +135,7 @@ struct StoryImageUpload: Equatable, @unchecked Sendable {
 
         image = previewImage
         data = normalized.data
+        sourceChecksum = SHA256.hash(data: normalized.data).map { String(format: "%02x", $0) }.joined()
         fileName = Self.normalizedFileName(fallbackFileName, fileExtension: "jpg")
         mimeType = "image/jpeg"
         self.contentMode = contentMode
@@ -537,6 +540,31 @@ enum StoryVideoThumbnailGenerator {
         preferredTimescale: 600
     )
 
+    static func posterData(for url: URL) async throws -> Data {
+        let work = Task.detached(priority: .userInitiated) {
+            let frame = try await firstFrame(for: url)
+            let image = UIImage(cgImage: frame)
+            for quality: CGFloat in [0.9, 0.82] {
+                if let data = image.jpegData(compressionQuality: quality), !data.isEmpty, data.count <= 2 * 1024 * 1024 {
+                    return data
+                }
+            }
+            throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 400)
+        }
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(3))
+                throw APIClientError.server("Could not prepare video thumbnail. Try a different video.", 400)
+            }
+            defer { group.cancelAll() }
+            guard let data = try await group.next() else { throw APIClientError.invalidResponse }
+            return data
+        }
+    }
+
     static func firstFrame(for url: URL) async throws -> CGImage {
         let generationBox = StoryVideoThumbnailGenerationBox()
 
@@ -669,6 +697,9 @@ private func storyTextPrefix(_ value: String, maximumUTF16Length: Int) -> String
 final class StoryComposerStore: ObservableObject {
     private let maxVideoDurationSeconds = StoryMediaContract.maximumVideoDurationSeconds
     private static let textDraftKey = "ubeye.story-composer-text-draft.v1"
+    private static let earlyUploadPreferenceKey = "ubeye.story-composer-early-upload.v1"
+    private let preferences: UserDefaults
+
 
     @Published var caption = ""
     @Published var brandTags = ""
@@ -682,14 +713,234 @@ final class StoryComposerStore: ObservableObject {
     @Published var quotedReply: QuotedStoryReply?
     @Published var quoteReplyPositionX: Double = 50
     @Published var quoteReplyPositionY: Double = 58
-    @Published var selectedMedia: PickedStoryMedia?
+    @Published var selectedMedia: PickedStoryMedia? {
+        didSet {
+            guard !isUploading else { return }
+            prepareSelectionLocally(selectedMedia.map { [$0] } ?? [])
+        }
+    }
+    private struct LocalVideoPreparation {
+        let video: PreparedStoryVideo
+        let fingerprint: StoryUploadFileFingerprint
+    }
+    private struct PreparationEntry {
+        let source: String
+        let durationLimit: Int
+        let adaptiveEncodingEnabled: Bool
+        let fingerprint: StoryUploadFileFingerprint
+        let task: Task<LocalVideoPreparation, Error>
+    }
+    private var localPreparations: [URL: PreparationEntry] = [:]
+    private var selectionPreparationTask: Task<Void, Never>?
+    private var readyPreparations: [URL: LocalVideoPreparation] = [:]
+    @Published private(set) var uploadWhileEditing = false
+    private var draftUploadAPI: APIClient?
+    private var draftUploads: [URL: StoryDraftVideoTransfer] = [:]
+    private var readyDraftUploads: [URL: StoryDraftVideoUpload] = [:]
+
+    func setUploadWhileEditing(_ enabled: Bool, api: APIClient, media: [PickedStoryMedia]) {
+        preferences.set(enabled, forKey: Self.earlyUploadPreferenceKey)
+        configureEarlyUpload(enabled, api: api, media: media)
+    }
+
+    func resumeEarlyUpload(api: APIClient, media: [PickedStoryMedia]) {
+        configureEarlyUpload((preferences.object(forKey: Self.earlyUploadPreferenceKey) as? Bool ?? true), api: api, media: media)
+    }
+
+    func suspendEarlyUpload(api: APIClient) {
+        // Dismissal cancels private work, but does not revoke a saved preference.
+        configureEarlyUpload(false, api: api, media: [])
+    }
+
+    private func configureEarlyUpload(_ enabled: Bool, api: APIClient, media: [PickedStoryMedia]) {
+        uploadWhileEditing = enabled
+        draftUploadAPI = enabled ? api : nil
+        if !enabled { for url in Array(draftUploads.keys) { discardDraftUpload(for: url, api: api) } }
+        prepareSelectionLocally(media)
+    }
+
+    private func discardDraftUpload(for url: URL, api: APIClient) {
+        readyDraftUploads[url] = nil
+        guard let entry = draftUploads.removeValue(forKey: url) else { return }
+        entry.task.cancel()
+        Task {
+            if let result = try? await entry.task.value {
+                if api.authToken == entry.account, api.baseURLString == entry.origin, let session = result.upload.uploadSessionId {
+                    try? await api.cancelPrivateVideoUpload(clientUploadId: entry.clientUploadId, uploadSessionId: session)
+                }
+                await StoryUploadFileIO.remove([result.video.url])
+            }
+        }
+    }
+
+    private func startDraftUpload(for video: StoryVideoUpload, prepared: PreparedStoryVideo) async {
+        guard uploadWhileEditing, let api = draftUploadAPI, let account = api.authToken,
+              NetworkQualityMonitor.shared.isConnected, !NetworkQualityMonitor.shared.isLimitedPath,
+              UBEYEResourceMonitor.shared.mode == .standard,
+              draftUploads[video.url] == nil, !Task.isCancelled else { return }
+        let id = UUID().uuidString.lowercased()
+        let origin = api.baseURLString
+        let owned = FileManager.default.temporaryDirectory.appendingPathComponent("story-draft-upload-\(id).\(prepared.url.pathExtension)")
+        let originalFingerprint: StoryUploadFileFingerprint
+        let fingerprint: StoryUploadFileFingerprint
+        do {
+            originalFingerprint = try await StoryUploadFileFingerprint.read(video.url)
+            try await StoryUploadFileIO.stageFile(source: prepared.url, destination: owned)
+            fingerprint = try await StoryUploadFileFingerprint.read(owned)
+            try Task.checkCancellation()
+        } catch {
+            await StoryUploadFileIO.remove([owned])
+            return
+        }
+        let ownership = StoryDraftVideoOwnership()
+        let task = Task { [weak self] () throws -> StoryDraftVideoUpload in
+            var lease: VideoUploadResponse?
+            do {
+                guard try await StoryUploadFileIO.hasFastStartMoov(at: owned) else { throw APIClientError.invalidResponse }
+                try Task.checkCancellation()
+                guard api.authToken == account, api.baseURLString == origin else { throw CancellationError() }
+                try await StoryUploadPermitPool.videoTransfer.acquire()
+                defer { StoryUploadPermitPool.videoTransfer.release() }
+                let upload = try await api.prepareVideoUpload(fileName: owned.lastPathComponent,
+                    byteSize: prepared.byteSize, maxDurationSeconds: StoryMediaContract.maximumVideoDurationSeconds,
+                    clientUploadId: id)
+                lease = upload
+                try Task.checkCancellation()
+                async let checksumWork = StoryUploadFileIO.sha256Hex(at: owned)
+                let receipt = try await api.uploadVideoFile(fileURL: owned, upload: upload,
+                    maxChunkBytes: Int64(MediaControlConfig.shared.uploadChunkBytes),
+                    attemptId: "draft-\(id)", unmeteredOnly: true,
+                    onProgress: { progress in Task { @MainActor in ownership.onProgress?(progress) } })
+                let checksum = try await checksumWork
+                try Task.checkCancellation()
+                guard api.authToken == account, api.baseURLString == origin,
+                      try await StoryUploadFileFingerprint.read(owned) == fingerprint else { throw CancellationError() }
+                if !ownership.isSubmitted {
+                    guard try await StoryUploadFileFingerprint.read(video.url) == originalFingerprint else { throw CancellationError() }
+                }
+                let result = StoryDraftVideoUpload(clientUploadId: id,
+                    video: PreparedStoryVideo(url: owned, durationMs: prepared.durationMs, byteSize: prepared.byteSize,
+                        strategy: prepared.strategy, inspection: prepared.inspection),
+                    upload: upload, blobUploadId: receipt, checksum: checksum,
+                    fingerprint: fingerprint, originalFingerprint: originalFingerprint)
+                if self?.draftUploads[video.url]?.clientUploadId == id { self?.readyDraftUploads[video.url] = result }
+                return result
+            } catch {
+                // Unstructured cleanup can finish even when speculative work is cancelled.
+                let failedLease = lease
+                if !ownership.isSubmitted, self?.draftUploads[video.url]?.clientUploadId == id {
+                    self?.draftUploads[video.url] = nil
+                    self?.readyDraftUploads[video.url] = nil
+                }
+                Task {
+                    if !ownership.isSubmitted, api.authToken == account, api.baseURLString == origin, let session = failedLease?.uploadSessionId {
+                        try? await api.cancelPrivateVideoUpload(clientUploadId: id, uploadSessionId: session)
+                    }
+                    await StoryUploadFileIO.remove([owned])
+                }
+                throw error
+            }
+        }
+        draftUploads[video.url] = StoryDraftVideoTransfer(clientUploadId: id, account: account, origin: origin,
+            video: PreparedStoryVideo(url: owned, durationMs: prepared.durationMs, byteSize: prepared.byteSize,
+                strategy: prepared.strategy, inspection: prepared.inspection),
+            fingerprint: fingerprint, originalFingerprint: originalFingerprint, ownership: ownership, task: task)
+        // The task records its receipt. Preparing the next selected clip must
+        // not wait for this transfer; the shared transfer permit still serializes bytes.
+    }
+
+    private func readyDraftUpload(for video: StoryVideoUpload) async -> StoryDraftVideoUpload? {
+        guard let result = readyDraftUploads[video.url],
+              draftUploadAPI?.authToken == draftUploads[video.url]?.account,
+              draftUploadAPI?.baseURLString == draftUploads[video.url]?.origin,
+              let original = try? await StoryUploadFileFingerprint.read(video.url), original == result.originalFingerprint,
+              let uploaded = try? await StoryUploadFileFingerprint.read(result.video.url), uploaded == result.fingerprint else { return nil }
+        return result
+    }
+
+    private func transferableDraftUpload(for video: StoryVideoUpload) async -> StoryDraftVideoTransfer? {
+        guard let entry = draftUploads[video.url],
+              draftUploadAPI?.authToken == entry.account, draftUploadAPI?.baseURLString == entry.origin,
+              let original = try? await StoryUploadFileFingerprint.read(video.url), original == entry.originalFingerprint,
+              let uploaded = try? await StoryUploadFileFingerprint.read(entry.video.url), uploaded == entry.fingerprint else { return nil }
+        return entry
+    }
+
+    private func finishDraftAdoption(for url: URL) {
+        guard let result = readyDraftUploads.removeValue(forKey: url) else { return }
+        draftUploads[url] = nil
+        Task { await StoryUploadFileIO.remove([result.video.url]) }
+    }
+
+    /// Private speculative transfer respects the saved choice and unmetered-path guard.
+    func prepareSelectionLocally(_ media: [PickedStoryMedia]) {
+        selectionPreparationTask?.cancel()
+        let videos = media.prefix(10).compactMap { item -> StoryVideoUpload? in
+            guard case .video(let video) = item else { return nil }
+            return video
+        }
+        let retained = Set(videos.map(\.url))
+        for url in Array(localPreparations.keys) where !retained.contains(url) {
+            discardLocalPreparation(for: url)
+        }
+        if let api = draftUploadAPI {
+            for url in Array(draftUploads.keys) where !retained.contains(url) { discardDraftUpload(for: url, api: api) }
+        }
+        guard UBEYEResourceMonitor.shared.mode != .critical else { return }
+        selectionPreparationTask = Task { [weak self] in
+            // Serial preparation avoids competing exports for a multi-item draft.
+            for video in videos {
+                guard !Task.isCancelled, let self else { return }
+                if let prepared = try? await self.preparedVideo(for: video) {
+                    await self.startDraftUpload(for: video, prepared: prepared)
+                }
+            }
+        }
+    }
+
+    private func discardLocalPreparation(for url: URL) {
+        readyPreparations[url] = nil
+        guard let entry = localPreparations.removeValue(forKey: url) else { return }
+        entry.task.cancel()
+        Task {
+            if let result = try? await entry.task.value, result.video.url != url {
+                await StoryUploadFileIO.remove([result.video.url])
+            }
+        }
+    }
+
+    deinit {
+        selectionPreparationTask?.cancel()
+        for entry in draftUploads.values {
+            entry.task.cancel()
+            let api = draftUploadAPI
+            Task { @MainActor in
+                if let result = try? await entry.task.value {
+                    if let api, api.authToken == entry.account, api.baseURLString == entry.origin, let session = result.upload.uploadSessionId {
+                        try? await api.cancelPrivateVideoUpload(clientUploadId: entry.clientUploadId, uploadSessionId: session)
+                    }
+                    await StoryUploadFileIO.remove([result.video.url])
+                }
+            }
+        }
+        for (url, entry) in localPreparations {
+            entry.task.cancel()
+            Task {
+                if let result = try? await entry.task.value, result.video.url != url {
+                    await StoryUploadFileIO.remove([result.video.url])
+                }
+            }
+        }
+    }
     @Published var uploadStatus: String?
     @Published var error: String?
     @Published var lastUploadReport: String?
     @Published var isUploading = false
 
-    init() {
-        guard let data = UserDefaults.standard.data(forKey: Self.textDraftKey),
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        uploadWhileEditing = (preferences.object(forKey: Self.earlyUploadPreferenceKey) as? Bool ?? true)
+        guard let data = preferences.data(forKey: Self.textDraftKey),
               let draft = try? JSONDecoder().decode(StoryComposerTextDraft.self, from: data) else {
             return
         }
@@ -735,12 +986,64 @@ final class StoryComposerStore: ObservableObject {
         }
     }
 
-    private func preparedVideo(for video: StoryVideoUpload) async throws -> PreparedStoryVideo {
-        try await StoryVideoUploadNormalizer.prepare(
-            url: video.url,
-            source: video.source,
-            maxDurationSeconds: maxVideoDurationSeconds
+    func preparedVideo(for video: StoryVideoUpload) async throws -> PreparedStoryVideo {
+        let fingerprint = try await StoryUploadFileFingerprint.read(video.url)
+        try Task.checkCancellation()
+        let source = video.source.diagnosticName
+        let durationLimit = maxVideoDurationSeconds
+        let adaptiveEncoding = StoryAdaptiveEncodingContext.current()
+        if let entry = localPreparations[video.url],
+           entry.source == source, entry.durationLimit == durationLimit,
+           entry.adaptiveEncodingEnabled == adaptiveEncoding.enabled,
+           entry.fingerprint == fingerprint {
+            do {
+                let prepared = try await entry.task.value
+                if try await StoryUploadFileFingerprint.read(prepared.video.url) == prepared.fingerprint {
+                    MediaPerformance.mark("video_local_preparation_reused")
+                    return prepared.video
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch { /* A failed speculative preparation gets a fresh Post attempt. */ }
+        }
+        discardLocalPreparation(for: video.url)
+        let task = Task { [weak self] () throws -> LocalVideoPreparation in
+            guard let self else { throw CancellationError() }
+            try await StoryUploadPermitPool.videoPreparation.acquire()
+            defer { StoryUploadPermitPool.videoPreparation.release() }
+            let prepared = try await StoryVideoUploadNormalizer.prepare(
+                url: video.url, source: video.source, maxDurationSeconds: durationLimit,
+                adaptiveEncoding: adaptiveEncoding
+            )
+            do {
+                try Task.checkCancellation()
+                let result = try await LocalVideoPreparation(
+                    video: prepared, fingerprint: StoryUploadFileFingerprint.read(prepared.url)
+                )
+                try Task.checkCancellation()
+                guard try await StoryUploadFileFingerprint.read(video.url) == fingerprint else {
+                    throw APIClientError.server("The selected video changed. Please select it again.", 0)
+                }
+                self.readyPreparations[video.url] = result
+                return result
+            } catch {
+                if prepared.url != video.url { await StoryUploadFileIO.remove([prepared.url]) }
+                throw error
+            }
+        }
+        localPreparations[video.url] = PreparationEntry(
+            source: source, durationLimit: durationLimit, adaptiveEncodingEnabled: adaptiveEncoding.enabled, fingerprint: fingerprint, task: task
         )
+        return try await task.value.video
+    }
+
+    private func preparedVideoIfReady(for video: StoryVideoUpload) async -> PreparedStoryVideo? {
+        guard let result = readyPreparations[video.url],
+              let entry = localPreparations[video.url],
+              let sourceFingerprint = try? await StoryUploadFileFingerprint.read(video.url),
+              sourceFingerprint == entry.fingerprint,
+              let preparedFingerprint = try? await StoryUploadFileFingerprint.read(result.video.url),
+              preparedFingerprint == result.fingerprint else { return nil }
+        return result.video
     }
 
     private var thumbnailOverlaySpecs: [StoryThumbnailOverlaySpec] {
@@ -881,6 +1184,7 @@ final class StoryComposerStore: ObservableObject {
             return nil
         }
 
+        selectionPreparationTask?.cancel()
         isUploading = true
         uploadStatus = "Preparing upload"
         var uploadResponse: StoryUploadResponse?
@@ -900,7 +1204,8 @@ final class StoryComposerStore: ObservableObject {
                     upload: upload,
                     contentMode: upload.contentMode,
                     draft: pendingUploadDraft,
-                    textOverlays: pendingTextOverlays
+                    textOverlays: pendingTextOverlays,
+                    submittedAt: Date()
                 )
                 didCreatePendingUpload = true
                 onPendingUploadStarted(pendingUpload)
@@ -935,6 +1240,7 @@ final class StoryComposerStore: ObservableObject {
         }
 
         isUploading = false
+        if self.selectedMedia == nil { prepareSelectionLocally([]) }
         return uploadResponse
     }
 
@@ -945,8 +1251,8 @@ final class StoryComposerStore: ObservableObject {
         onPendingBatchStarted: () -> Void,
         onUploadRegistered: @escaping (StoryUploadResponse) -> Void
     ) async -> Bool {
-        guard media.count > 1 else {
-            error = "Choose at least two items for a batch."
+        guard (2...10).contains(media.count) else {
+            error = "Choose between two and ten items for a batch."
             return false
         }
 
@@ -958,22 +1264,53 @@ final class StoryComposerStore: ObservableObject {
             return false
         }
 
+        selectionPreparationTask?.cancel()
         isUploading = true
+        let submittedAt = Date()
         let batchId = UUID().uuidString.lowercased()
+        pendingUploads.beginBatch(batchId, totalCount: media.count)
         var stagedUploads: [PendingStoryUpload] = []
         var failedPreparationCount = 0
+        let transfers = StoryBatchTransferQueue(maxConcurrentPhotos:
+            NetworkQualityMonitor.shared.isLimitedPath || UBEYEResourceMonitor.shared.mode != .standard ? 1 : 2)
+        let batchDraft = pendingUploadDraft
+        let batchTextOverlays = pendingTextOverlays
 
         for (offset, item) in media.enumerated() {
-            uploadStatus = "Preparing story \(offset + 1) of \(media.count)"
+            uploadStatus = "Saving your stories…"
             do {
                 let pendingUpload = try await createPendingBatchUpload(
                     item,
                     batchId: batchId,
                     batchPosition: offset + 1,
                     batchCount: media.count,
+                    draft: batchDraft,
+                    textOverlays: batchTextOverlays,
+                    submittedAt: submittedAt,
                     pendingUploads: pendingUploads
                 )
                 stagedUploads.append(pendingUpload)
+                // The durable manifest owns this item before network work starts.
+                // Prepared metadata is resolved by the upload store after the
+                // original and draft have become durable.
+                transfers.enqueue(assetKind: pendingUpload.assetKind) { beforeCompletion in
+                    do {
+                        let response = try await pendingUploads.performUpload(
+                            id: pendingUpload.id,
+                            api: api,
+                            beforeCompletion: beforeCompletion
+                        )
+                        // Root's registration callback navigates home. Keep the
+                        // producer visible until every selected item is staged.
+                        transfers.registerAfterPreparation {
+                            onUploadRegistered(response)
+                        }
+                    } catch {
+                        MediaPerformance.mark(
+                            "story_batch_upload_failed id=\(pendingUpload.id) error=\(error.localizedDescription)"
+                        )
+                    }
+                }
             } catch {
                 failedPreparationCount += 1
                 if case .video(let video) = item {
@@ -985,6 +1322,7 @@ final class StoryComposerStore: ObservableObject {
             }
         }
 
+        pendingUploads.finishBatchPreparation(batchId)
         guard !stagedUploads.isEmpty else {
             isUploading = false
             uploadStatus = nil
@@ -994,39 +1332,17 @@ final class StoryComposerStore: ObservableObject {
             return false
         }
 
-        pendingUploads.normalizeBatch(
-            batchId,
-            orderedUploadIds: stagedUploads.map(\.id)
-        )
-
         clearUploadedDraft()
         isUploading = false
+        prepareSelectionLocally([])
         uploadStatus = nil
         onPendingBatchStarted()
+        transfers.finishPreparation()
 
         if failedPreparationCount > 0 {
             MediaPerformance.mark(
                 "story_batch_prepare_partial prepared=\(stagedUploads.count) failed=\(failedPreparationCount)"
             )
-        }
-
-        // Keep each story independent while bounding peak memory and network work.
-        // Starting several video normalizers and TUS chunks together can exceed
-        // the memory budget on physical devices even though each upload is valid.
-        Task { @MainActor in
-            for pendingUpload in stagedUploads {
-                do {
-                    let response = try await pendingUploads.performUpload(
-                        id: pendingUpload.id,
-                        api: api
-                    )
-                    onUploadRegistered(response)
-                } catch {
-                    MediaPerformance.mark(
-                        "story_batch_upload_failed id=\(pendingUpload.id) error=\(error.localizedDescription)"
-                    )
-                }
-            }
         }
 
         return true
@@ -1037,6 +1353,9 @@ final class StoryComposerStore: ObservableObject {
         batchId: String,
         batchPosition: Int,
         batchCount: Int,
+        draft: PendingStoryUploadDraft,
+        textOverlays: [StoryTextOverlay],
+        submittedAt: Date,
         pendingUploads: PendingStoryUploadStore
     ) async throws -> PendingStoryUpload {
         switch media {
@@ -1050,105 +1369,55 @@ final class StoryComposerStore: ObservableObject {
             return try await pendingUploads.createImageUpload(
                 upload: upload,
                 contentMode: upload.contentMode,
-                draft: pendingUploadDraft,
-                textOverlays: pendingTextOverlays,
+                draft: draft,
+                textOverlays: textOverlays,
+                submittedAt: submittedAt,
                 batchId: batchId,
                 batchPosition: batchPosition,
                 batchCount: batchCount
             )
         case .video(let video):
-            let preparedVideo = try await preparedVideo(for: video)
-            do {
-                let thumbnailData = try await videoThumbnailData(
-                    for: preparedVideo.url,
-                    overlays: thumbnailOverlaySpecs
-                )
-                let pendingUpload = try await pendingUploads.createVideoUpload(
-                    sourceURL: preparedVideo.url,
-                    thumbnailData: thumbnailData,
-                    durationMs: preparedVideo.durationMs,
-                    draft: pendingUploadDraft,
-                    textOverlays: pendingTextOverlays,
-                    batchId: batchId,
-                    batchPosition: batchPosition,
-                    batchCount: batchCount
-                )
-                await StoryUploadFileIO.remove([preparedVideo.url, video.url])
-                return pendingUpload
-            } catch {
-                await StoryUploadFileIO.remove([preparedVideo.url])
-                throw error
-            }
+            let draftUpload = await readyDraftUpload(for: video)
+            let transfer = draftUpload == nil ? await transferableDraftUpload(for: video) : nil
+            let localReady = await preparedVideoIfReady(for: video)
+            let ready = draftUpload?.video ?? transfer?.video ?? localReady
+            let pending = try await pendingUploads.createSubmittedVideoUpload(
+                sourceURL: video.url, source: video.source, preparedVideo: ready,
+                draftUpload: draftUpload, draftTransfer: transfer,
+                draft: draft, textOverlays: textOverlays, submittedAt: submittedAt,
+                batchId: batchId, batchPosition: batchPosition, batchCount: batchCount
+            )
+            if draftUpload != nil { finishDraftAdoption(for: video.url) }
+            else if transfer != nil { draftUploads[video.url] = nil; readyDraftUploads[video.url] = nil }
+            else if let api = draftUploadAPI { discardDraftUpload(for: video.url, api: api) }
+            discardLocalPreparation(for: video.url)
+            await StoryUploadFileIO.remove([video.url])
+            return pending
         }
     }
 
     private func uploadVideoStory(
-        video: StoryVideoUpload,
-        api: APIClient,
-        pendingUploads: PendingStoryUploadStore,
+        video: StoryVideoUpload, api: APIClient, pendingUploads: PendingStoryUploadStore,
         onPendingUploadStarted: (PendingStoryUpload) -> Void
     ) async throws -> StoryUploadResponse {
-        var attempt = StoryVideoUploadAttempt()
-
-        do {
-            attempt.begin(.inspect)
-            uploadStatus = attempt.phase.statusLabel
-            attempt.begin(.prepare)
-            uploadStatus = attempt.phase.statusLabel
-            let preparedVideo = try await preparedVideo(for: video)
-            attempt.attach(video: preparedVideo)
-            lastUploadReport = attempt.report
-
-            attempt.begin(.thumbnailGenerate)
-            uploadStatus = attempt.phase.statusLabel
-            let thumbnailData = try await videoThumbnailData(
-                for: preparedVideo.url,
-                overlays: thumbnailOverlaySpecs
-            )
-
-            attempt.begin(.prepareUpload)
-            uploadStatus = attempt.phase.statusLabel
-            let pendingUpload = try await pendingUploads.createVideoUpload(
-                sourceURL: preparedVideo.url,
-                thumbnailData: thumbnailData,
-                durationMs: preparedVideo.durationMs,
-                draft: pendingUploadDraft,
-                textOverlays: pendingTextOverlays
-            )
-            await StoryUploadFileIO.remove([preparedVideo.url, video.url])
-            onPendingUploadStarted(pendingUpload)
-            clearUploadedDraft()
-
-            let response = try await pendingUploads.performUpload(
-                id: pendingUpload.id,
-                api: api,
-                onVideoUploadPrepared: { upload in
-                    attempt.attach(upload: upload)
-                },
-                onVideoRetry: { reason in
-                    attempt.recordRetry(reason)
-                },
-                onVideoPhase: { phase in
-                    attempt.begin(phase)
-                    self.uploadStatus = phase.statusLabel
-                }
-            )
-
-            attempt.begin(.processing)
-            attempt.recordSuccess(processingStatus: response.processingStatus)
-            lastUploadReport = attempt.report
-            return response
-        } catch {
-            attempt.recordFailure(error)
-            lastUploadReport = attempt.report
-            if attempt.phase == .prepare {
-                throw APIClientError.server(
-                    "Could not prepare this video. Try a different video or record it again.",
-                    0
-                )
-            }
-            throw error
-        }
+        let submittedAt = Date()
+        let draftUpload = await readyDraftUpload(for: video)
+        let transfer = draftUpload == nil ? await transferableDraftUpload(for: video) : nil
+        let localReady = await preparedVideoIfReady(for: video)
+        let ready = draftUpload?.video ?? transfer?.video ?? localReady
+        let pending = try await pendingUploads.createSubmittedVideoUpload(
+            sourceURL: video.url, source: video.source, preparedVideo: ready,
+            draftUpload: draftUpload, draftTransfer: transfer,
+            draft: pendingUploadDraft, textOverlays: pendingTextOverlays, submittedAt: submittedAt
+        )
+        if draftUpload != nil { finishDraftAdoption(for: video.url) }
+        else if transfer != nil { draftUploads[video.url] = nil; readyDraftUploads[video.url] = nil }
+        else if let api = draftUploadAPI { discardDraftUpload(for: video.url, api: api) }
+        discardLocalPreparation(for: video.url)
+        await StoryUploadFileIO.remove([video.url])
+        onPendingUploadStarted(pending)
+        clearUploadedDraft()
+        return try await pendingUploads.performUpload(id: pending.id, api: api)
     }
 
     private func videoThumbnailData(
@@ -1598,14 +1867,13 @@ struct StoryComposerView: View {
     @StateObject private var camera = CameraController()
     @StateObject private var store = StoryComposerStore()
     @State private var photoPickerItems: [PhotosPickerItem] = []
+    @StateObject private var librarySelection = StoryLibrarySelectionLoader()
     @State private var selectedBatchMedia: [PickedStoryMedia] = []
     @State private var overlayInputMode: ComposerOverlayInputMode?
     @State private var recordingStartedAt = Date()
     @State private var recordingElapsed: TimeInterval = 0
     @State private var latestLibraryThumbnail: UIImage?
     @State private var stagedMedia: PickedStoryMedia?
-    @State private var isReframingPhotos = false
-    @State private var framingRequestID = UUID()
     @State private var composerKeyboardHeight: CGFloat = 0
     @State private var overlayFocusRequestAt: Date?
     @FocusState private var isOverlayInputFocused: Bool
@@ -1650,7 +1918,7 @@ struct StoryComposerView: View {
                             .storyComposerPillChrome(backgroundOpacity: 0.30)
 
                         HStack(alignment: .top) {
-                            if hasSelectedMedia {
+                            if hasSelectedMedia || librarySelection.isLoading {
                                 Button {
                                     UBEYEFeedback.selection()
                                     resetCapture(clearQuote: true)
@@ -1691,7 +1959,19 @@ struct StoryComposerView: View {
 
                     Spacer()
 
-                    if let uploadStatus = store.uploadStatus {
+                    if librarySelection.isLoading {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text(librarySelection.totalCount > 1
+                                 ? "Loading media \(min(librarySelection.completedCount + 1, librarySelection.totalCount)) of \(librarySelection.totalCount)"
+                                 : "Loading selected media")
+                        }
+                        .font(.system(size: 14))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .storyComposerPillChrome()
+                        .padding(.bottom, 16)
+                    } else if let uploadStatus = store.uploadStatus {
                         Text(uploadStatus)
                             .font(.system(size: 13, weight: .regular))
                             .tracking(0.1)
@@ -1734,6 +2014,7 @@ struct StoryComposerView: View {
             store.beginPresentation()
             store.applyQuotedReply(quotedReply)
             if isActive {
+                store.resumeEarlyUpload(api: api, media: selectedBatchMedia.isEmpty ? store.selectedMedia.map { [$0] } ?? [] : selectedBatchMedia)
                 await camera.requestAccessAndConfigure()
             }
             await refreshLatestLibraryThumbnail()
@@ -1742,15 +2023,24 @@ struct StoryComposerView: View {
         .onChange(of: isActive) { _, nextIsActive in
             if nextIsActive {
                 store.beginPresentation()
+                store.resumeEarlyUpload(api: api, media: selectedBatchMedia.isEmpty ? store.selectedMedia.map { [$0] } ?? [] : selectedBatchMedia)
                 camera.start()
             } else {
+                librarySelection.cancel()
+                store.suspendEarlyUpload(api: api)
                 camera.stop()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NetworkQualityMonitor.playbackBudgetChanged)) { _ in
+            guard isActive, !store.isUploading else { return }
+            store.resumeEarlyUpload(api: api, media: framingMedia)
         }
         .onChange(of: quotedReply) { _, quote in
             store.applyQuotedReply(quote)
         }
         .onDisappear {
+            librarySelection.cancel()
+            store.suspendEarlyUpload(api: api)
             store.persistTextDraft()
             camera.stop()
         }
@@ -1761,9 +2051,11 @@ struct StoryComposerView: View {
             }
         }
         .onChange(of: photoPickerItems) { _, items in
-            Task {
-                await loadPickedItems(items)
-            }
+            guard !items.isEmpty else { return }
+            loadPickedItems(items)
+            // Clear only this submitted picker selection, never a newer request
+            // from an older import task's deferred completion.
+            photoPickerItems = []
         }
         .onChange(of: camera.capturedPhoto) { _, photo in
             if let photo {
@@ -1796,9 +2088,6 @@ struct StoryComposerView: View {
     @ViewBuilder
     private var composerFooter: some View {
         VStack(spacing: 12) {
-            if hasSelectedPhotos {
-                photoFramingControls
-            }
             Group {
                 if stagedMedia == nil {
                     captureFooter
@@ -1821,7 +2110,7 @@ struct StoryComposerView: View {
             ) {
                 LibraryPickerThumbnail(image: latestLibraryThumbnail)
             }
-            .disabled(store.isUploading)
+            .disabled(store.isUploading || camera.isCapturingPhoto || camera.isRecording)
 
             Spacer()
 
@@ -1834,7 +2123,7 @@ struct StoryComposerView: View {
                 startRecording: startRecording,
                 stopRecording: stopRecording
             )
-            .disabled(store.isUploading)
+            .disabled(store.isUploading || librarySelection.isLoading)
 
             Spacer()
 
@@ -1882,84 +2171,6 @@ struct StoryComposerView: View {
         return (stagedMedia ?? store.selectedMedia).map { [$0] } ?? []
     }
 
-    private var selectedPhotoContentMode: StoryImageContentMode? {
-        for media in framingMedia {
-            if case .image(let upload) = media {
-                return upload.contentMode
-            }
-        }
-        return nil
-    }
-
-    private var hasSelectedPhotos: Bool { selectedPhotoContentMode != nil }
-
-    private var photoFramingControls: some View {
-        VStack(spacing: 5) {
-            Picker("Photo framing", selection: Binding(
-                get: { selectedPhotoContentMode ?? .fit },
-                set: { reframePhotos(to: $0) }
-            )) {
-                Text("Fit").tag(StoryImageContentMode.fit)
-                Text("Fill").tag(StoryImageContentMode.fill)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 180)
-            .background(.black.opacity(0.5), in: Capsule())
-            .disabled(store.isUploading || isReframingPhotos)
-            .accessibilityIdentifier("story-composer-photo-framing")
-
-            Text(isReframingPhotos
-                ? "Preparing photos…"
-                : selectedPhotoContentMode == .fill
-                    ? "Crop photos to fill the story frame"
-                    : "Keep whole photos with black padding")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.76))
-        }
-    }
-
-    private func reframePhotos(to contentMode: StoryImageContentMode) {
-        guard !store.isUploading, !isReframingPhotos,
-              selectedPhotoContentMode != contentMode else {
-            return
-        }
-        let media = framingMedia
-        let requestID = UUID()
-        framingRequestID = requestID
-        isReframingPhotos = true
-        store.error = nil
-
-        Task { @MainActor in
-            defer {
-                if framingRequestID == requestID {
-                    isReframingPhotos = false
-                }
-            }
-            var reframedMedia: [PickedStoryMedia] = []
-            for item in media {
-                guard framingRequestID == requestID else { return }
-                switch item {
-                case .image(let upload):
-                    guard let reframed = await upload.reframed(to: contentMode) else {
-                        if framingRequestID == requestID {
-                            store.error = "Could not frame that photo. Try again."
-                        }
-                        return
-                    }
-                    reframedMedia.append(.image(reframed))
-                case .video:
-                    reframedMedia.append(item)
-                }
-            }
-            guard framingRequestID == requestID,
-                  let firstMedia = reframedMedia.first else { return }
-            stagedMedia = firstMedia
-            store.selectedMedia = firstMedia
-            selectedBatchMedia = reframedMedia.count > 1 ? reframedMedia : []
-            UBEYEFeedback.selection()
-        }
-    }
-
     private var hasSelectedMedia: Bool {
         (stagedMedia ?? store.selectedMedia) != nil
     }
@@ -1992,7 +2203,7 @@ struct StoryComposerView: View {
             .storyComposerPillChrome(backgroundOpacity: 0.42)
         }
         .buttonStyle(UBEYEPressButtonStyle(pressedScale: 0.9))
-        .disabled(store.isUploading || isReframingPhotos)
+        .disabled(store.isUploading)
         .accessibilityLabel(
             selectedBatchMedia.count > 1
                 ? "Upload \(selectedBatchMedia.count) separate stories"
@@ -2266,7 +2477,9 @@ struct StoryComposerView: View {
                 mirrorsHorizontally: false
             )
         case nil:
-            if let photo = camera.capturedPhoto {
+            if librarySelection.isLoading {
+                Color.black
+            } else if let photo = camera.capturedPhoto {
                 storyImagePreview(photo.image)
                     .onAppear {
                         enterComposer(with: .image(photo))
@@ -2368,63 +2581,49 @@ struct StoryComposerView: View {
             .foregroundStyle(Color.ubeyeInk)
     }
 
-    private func loadPickedItems(_ items: [PhotosPickerItem]) async {
-        guard !items.isEmpty else {
-            return
-        }
-
+    private func loadPickedItems(_ items: [PhotosPickerItem]) {
+        stagedMedia = nil
+        selectedBatchMedia = []
+        store.selectedMedia = nil
         store.error = nil
         store.uploadStatus = nil
         overlayInputMode = nil
         isOverlayInputFocused = false
         camera.capturedPhoto = nil
+        camera.capturedPhotoPreview = nil
         camera.capturedVideoURL = nil
-        defer {
-            photoPickerItems = []
-        }
 
-        var loadedMedia: [PickedStoryMedia] = []
-        var failedItemCount = 0
-
-        for (offset, item) in items.enumerated() {
-            if items.count > 1 {
-                store.uploadStatus = "Loading story \(offset + 1) of \(items.count)"
+        librarySelection.load(count: items.count, importItem: { index in
+            let item = items[index]
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                guard let video = try await item.loadTransferable(type: PickedVideo.self) else { return nil }
+                return .video(StoryVideoUpload(url: video.url, source: .library))
             }
-
-            do {
-                if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
-                   let pickedVideo = try await item.loadTransferable(type: PickedVideo.self) {
-                    loadedMedia.append(
-                        .video(StoryVideoUpload(url: pickedVideo.url, source: .library))
-                    )
-                    continue
-                }
-
-                if let pickedImage = try await item.loadTransferable(type: PickedImage.self) {
-                    loadedMedia.append(.image(pickedImage.upload))
-                    continue
-                }
-
-                failedItemCount += 1
-            } catch {
-                failedItemCount += 1
+            // Some Photos providers expose image bytes rather than a file. A
+            // failed file representation must not leave a supported image blank.
+            if let image = try? await item.loadTransferable(type: PickedImage.self) {
+                return .image(image.upload)
             }
-        }
-
-        guard let firstMedia = loadedMedia.first else {
-            store.uploadStatus = nil
-            store.error = "Could not load that media. Try another photo or video."
-            return
-        }
-
-        UBEYEFeedback.success()
-        enterComposer(with: firstMedia)
-        selectedBatchMedia = loadedMedia.count > 1 ? loadedMedia : []
-        if failedItemCount > 0 {
-            store.error = failedItemCount == 1
-                ? "One item couldn’t be loaded. The others are ready."
-                : "\(failedItemCount) items couldn’t be loaded. The others are ready."
-        }
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = await StoryImageUpload.prepare(data: data) else { return nil }
+            return .image(image)
+        }, onMediaLoaded: { media in
+            if media.count == 1, let first = media.first { enterComposer(with: first) }
+            selectedBatchMedia = media.count > 1 ? media : []
+        }, onComplete: { media, failedItemCount in
+            guard !media.isEmpty else {
+                store.error = "Could not load that media. Try another photo or video."
+                return
+            }
+            UBEYEFeedback.success()
+            selectedBatchMedia = media.count > 1 ? media : []
+            store.prepareSelectionLocally(media)
+            if failedItemCount > 0 {
+                store.error = failedItemCount == 1
+                    ? "One item couldn’t be loaded. The others are ready."
+                    : "\(failedItemCount) items couldn’t be loaded. The others are ready."
+            }
+        })
     }
 
     private func refreshLatestLibraryThumbnail() async {
@@ -2519,7 +2718,7 @@ struct StoryComposerView: View {
     }
 
     private func uploadSelectedMedia() async {
-        guard !isReframingPhotos, !store.isUploading else {
+        guard !store.isUploading, !librarySelection.isLoading else {
             return
         }
 
@@ -2560,8 +2759,7 @@ struct StoryComposerView: View {
     }
 
     private func resetCapture(clearQuote: Bool = false) {
-        framingRequestID = UUID()
-        isReframingPhotos = false
+        librarySelection.cancel()
         for media in selectedBatchMedia {
             if case .video(let video) = media {
                 try? FileManager.default.removeItem(at: video.url)
@@ -2591,8 +2789,6 @@ struct StoryComposerView: View {
     }
 
     private func enterComposer(with media: PickedStoryMedia) {
-        framingRequestID = UUID()
-        isReframingPhotos = false
         selectedBatchMedia = []
         store.error = nil
         store.uploadStatus = nil
@@ -2982,26 +3178,30 @@ private struct QuoteReplyOverlayBubble: View {
     }
 }
 
-private struct PickedVideo: Transferable {
+struct PickedVideo: Transferable, Sendable {
     let url: URL
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(contentType: .movie) { video in
             SentTransferredFile(video.url)
         } importing: { received in
-            let sourceExtension = received.file.pathExtension
-            let fileExtension = sourceExtension.isEmpty ? "mov" : sourceExtension
-            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("picked-\(UUID().uuidString).\(fileExtension)")
-            if FileManager.default.fileExists(atPath: copy.path) {
-                try FileManager.default.removeItem(at: copy)
-            }
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return PickedVideo(url: copy)
+            try await importFile(received.file)
         }
     }
+
+    static func importFile(_ file: URL) async throws -> PickedVideo {
+        try await Task.detached(priority: .userInitiated) {
+            let sourceExtension = file.pathExtension
+            let fileExtension = sourceExtension.isEmpty ? "mov" : sourceExtension
+            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("picked-\(UUID().uuidString).\(fileExtension)")
+            try FileManager.default.copyItem(at: file, to: copy)
+            return PickedVideo(url: copy)
+        }.value
+    }
+
 }
 
-private struct PickedImage: Transferable {
+struct PickedImage: Transferable {
     let upload: StoryImageUpload
 
     static var transferRepresentation: some TransferRepresentation {
@@ -3011,16 +3211,17 @@ private struct PickedImage: Transferable {
             try image.upload.data.write(to: copy, options: .atomic)
             return SentTransferredFile(copy)
         } importing: { received in
-            guard let upload = StoryImageUpload(
-                fileURL: received.file,
-                fallbackFileName: received.file.lastPathComponent
-            ) else {
-                throw APIClientError.invalidResponse
-            }
-
-            return PickedImage(upload: upload)
+            try await importFile(received.file)
         }
     }
+
+    static func importFile(_ file: URL) async throws -> PickedImage {
+        guard let upload = await StoryImageUpload.prepare(fileURL: file, fallbackFileName: file.lastPathComponent) else {
+            throw APIClientError.invalidResponse
+        }
+        return PickedImage(upload: upload)
+    }
+
 }
 
 private struct StoryShutterButton: View {
